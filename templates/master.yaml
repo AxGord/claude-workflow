@@ -1,0 +1,69 @@
+name: master
+description: "Master workflow — single entry point. Analyzes task, loads knowledge skills, routes to process sub-workflows."
+initial: analyze
+max_transitions: 100
+
+states:
+  analyze:
+    prompt: |
+      Analyze the user's task. Determine type (coding/debugging/refactoring/research/simple).
+      Load knowledge skills via Skill() based on task type, file extensions, and domain.
+      Then choose the appropriate transition.
+    transitions:
+      plan: plan
+      coding: run_coding
+      debugging: run_debugging
+      refactoring: run_refactoring
+      research: run_research
+      simple: handle_simple
+      unclear: clarify
+
+  clarify:
+    prompt: "Ask the user to clarify the task type and scope."
+    transitions:
+      got_info: analyze
+
+  plan:
+    prompt: |
+      Complex task — decompose into a dynamic workflow.
+      1. Break into steps (standalone prompts or sub_workflow references to coding/testing/debugging/etc.)
+      2. Call workflow_create("task-<name>", {definition}) with the full plan
+      3. Call workflow_modify to add run_plan state (sub_workflow: "task-<name>", on_complete: "reflect", on_fail: "reflect")
+      4. Call workflow_modify to add transition from "plan" to "run_plan" named "execute"
+      5. Transition "execute"
+    transitions:
+      execute: reflect
+
+  run_coding:
+    sub_workflow: coding
+    on_complete: reflect
+    on_fail: reflect
+
+  run_debugging:
+    sub_workflow: debugging
+    on_complete: reflect
+    on_fail: reflect
+
+  run_refactoring:
+    sub_workflow: refactoring
+    on_complete: reflect
+    on_fail: reflect
+
+  run_research:
+    sub_workflow: research
+    on_complete: done
+    on_fail: done
+
+  handle_simple:
+    prompt: "Handle this simple task directly — questions, config, explanations, trivial edits."
+    transitions:
+      done: done
+
+  reflect:
+    sub_workflow: reflection
+    on_complete: done
+    on_fail: done
+
+  done:
+    prompt: "Task complete."
+    terminal: true

@@ -1,0 +1,47 @@
+name: coding
+description: "Code writing workflow — scope check, plan, write, review, verify"
+initial: scope_check
+max_transitions: 40
+
+states:
+  scope_check:
+    prompt: "Assess task scale: 1-2 files → direct, 3+ files → need_plan."
+    transitions:
+      direct: think
+      need_plan: plan_mode
+
+  plan_mode:
+    prompt: "Use EnterPlanMode to design the implementation. After approval → planned."
+    transitions:
+      planned: think
+
+  think:
+    prompt: "Verify assumptions (paths, APIs, structure). Outline approach. Check for existing utilities."
+    transitions:
+      ready: write
+
+  write:
+    prompt: "Write the implementation."
+    transitions:
+      review: mini_review
+
+  mini_review:
+    prompt: "Re-read code: typos, edge cases, ripple check, DRY check."
+    transitions:
+      ok: final_review
+      fix: write
+
+  final_review:
+    prompt: "Review complete picture: new+old fit, dead code, constants, simplification."
+    transitions:
+      verify: verify
+      fix: write
+
+  verify:
+    sub_workflow: testing
+    on_complete: done
+    on_fail: mini_review
+
+  done:
+    prompt: "Code written, reviewed, and verified."
+    terminal: true

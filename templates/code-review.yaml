@@ -1,0 +1,40 @@
+name: code-review
+description: "Code review workflow"
+initial: overview
+max_transitions: 40
+
+states:
+  overview:
+    prompt: "Read the changes. Understand the purpose and scope of the PR/commit."
+    transitions:
+      understood: check_correctness
+
+  check_correctness:
+    prompt: "Check for bugs, logic errors, edge cases, and missing error handling."
+    transitions:
+      done: check_style
+
+  check_style:
+    prompt: "Check code style, naming conventions, and project patterns compliance."
+    transitions:
+      done: check_tests
+
+  check_tests:
+    prompt: "Check test coverage. Are new behaviors tested? Are edge cases covered?"
+    transitions:
+      done: check_security
+
+  check_security:
+    prompt: "Check for security issues: injection, XSS, auth bypass, data leaks."
+    transitions:
+      done: summarize
+
+  summarize:
+    prompt: "Write a review summary with findings, suggestions, and verdict (approve/request changes)."
+    transitions:
+      approve: done
+      request_changes: done
+
+  done:
+    prompt: "Review complete."
+    terminal: true

@@ -1,0 +1,30 @@
+name: refactoring
+description: "Refactoring workflow — bring every touched file to current standards"
+initial: prepare
+max_transitions: 40
+
+states:
+  prepare:
+    prompt: "Read all files to touch. Verify skills are loaded. Core rule: refactored code must conform to ALL loaded skills."
+    transitions:
+      ready: write
+
+  write:
+    prompt: "Apply refactoring. Check each file against all loaded skill rules."
+    transitions:
+      review: review
+
+  review:
+    prompt: "Review complete refactoring: before/after, no behavior changes, dead code removal."
+    transitions:
+      verify: verify
+      fix: write
+
+  verify:
+    sub_workflow: testing
+    on_complete: done
+    on_fail: write
+
+  done:
+    prompt: "Refactoring complete. All tests pass."
+    terminal: true

@@ -1,0 +1,55 @@
+name: debugging
+description: "Debugging workflow — diagnose first, fix never (until diagnosed)"
+initial: reproduce
+max_transitions: 40
+
+states:
+  reproduce:
+    prompt: "Reproduce the bug. Build with diagnostic flags, confirm the error."
+    transitions:
+      reproduced: hypothesize
+      need_info: clarify
+
+  clarify:
+    prompt: "Ask user for more details about the bug."
+    transitions:
+      got_info: reproduce
+
+  hypothesize:
+    prompt: "Hypothesize WHERE the problem is (not why). Form 1-3 hypotheses."
+    transitions:
+      trace: trace
+
+  trace:
+    max_visits: 5
+    prompt: "Add targeted traces (3-5 with unique prefixes). Run via debugger subagent."
+    transitions:
+      found: fix
+      more_traces: trace
+      bridge: bridge_debug
+      escalate: escalated
+
+  bridge_debug:
+    prompt: "Use debug bridge for interactive state inspection."
+    transitions:
+      found: fix
+      back_to_trace: trace
+
+  fix:
+    prompt: "Apply minimal fix addressing the root cause."
+    transitions:
+      verify: verify
+
+  verify:
+    sub_workflow: testing
+    on_complete: done
+    on_fail: fix
+
+  done:
+    prompt: "Bug diagnosed, fixed, and verified."
+    terminal: true
+
+  escalated:
+    prompt: "Could not diagnose. Report findings to user."
+    terminal: true
+    outcome: fail

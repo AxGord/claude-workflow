@@ -1,0 +1,53 @@
+name: testing
+description: "Testing verification — unit tests first, then integration"
+initial: assess
+max_transitions: 30
+
+states:
+  assess:
+    prompt: "Assess what tests are needed: unit, integration, both, or none."
+    transitions:
+      has_unit: unit_tests
+      skip_to_integration: check_integration
+      skip_all: done
+
+  unit_tests:
+    max_visits: 5
+    prompt: "Write and run unit tests. Bug fixes: red-green workflow mandatory."
+    transitions:
+      pass: check_integration
+      fail: fix_unit
+
+  fix_unit:
+    prompt: "Fix failing unit tests, then retry."
+    transitions:
+      retry: unit_tests
+      give_up: failed
+
+  check_integration:
+    prompt: "Does change affect UI? If yes → need_integration, if no → skip."
+    transitions:
+      need_integration: integration
+      skip: done
+
+  integration:
+    max_visits: 5
+    prompt: "Run integration verification via debug bridge or manual testing."
+    transitions:
+      pass: done
+      fail: fix_integration
+
+  fix_integration:
+    prompt: "Fix integration failures, then retry."
+    transitions:
+      retry: integration
+      give_up: failed
+
+  done:
+    prompt: "All tests pass."
+    terminal: true
+
+  failed:
+    prompt: "Testing failed after maximum attempts."
+    terminal: true
+    outcome: fail

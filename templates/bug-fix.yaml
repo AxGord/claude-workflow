@@ -1,0 +1,57 @@
+name: bug-fix
+description: "Standard bug fix workflow"
+initial: reproduce
+max_transitions: 50
+
+states:
+  reproduce:
+    prompt: |
+      Reproduce the bug. Describe what you see.
+      When done, call workflow_transition with one of the transitions.
+    transitions:
+      reproduced: diagnose
+      cant_reproduce: clarify
+
+  diagnose:
+    prompt: "Find the root cause of the bug."
+    transitions:
+      found: fix
+      unclear: add_logging
+
+  add_logging:
+    prompt: "Add logging for diagnostics, run again."
+    max_visits: 3
+    transitions:
+      found: fix
+      still_unclear: escalate
+
+  fix:
+    prompt: "Fix the bug based on your diagnosis."
+    transitions:
+      done: test
+
+  test:
+    prompt: "Run tests. Report the result."
+    max_visits: 3
+    transitions:
+      pass: verify
+      fail: fix
+
+  verify:
+    prompt: "Verify the original bug is fixed."
+    transitions:
+      confirmed: done
+      still_broken: diagnose
+
+  clarify:
+    prompt: "Ask the user for more details about the bug."
+    transitions:
+      got_info: reproduce
+
+  escalate:
+    prompt: "Could not diagnose. Report to the user."
+    terminal: true
+
+  done:
+    prompt: "Bug fixed and verified."
+    terminal: true

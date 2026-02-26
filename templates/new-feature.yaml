@@ -1,0 +1,37 @@
+name: new-feature
+description: "New feature implementation workflow"
+initial: requirements
+max_transitions: 80
+
+states:
+  requirements:
+    prompt: "Clarify requirements with the user. What exactly should this feature do?"
+    transitions:
+      clear: design
+
+  design:
+    prompt: "Design the architecture of the solution. Identify files to change, interfaces, data flow."
+    transitions:
+      done: implement
+
+  implement:
+    prompt: "Implement the feature according to the design."
+    transitions:
+      done: test
+
+  test:
+    prompt: "Write and run tests for the new feature."
+    max_visits: 3
+    transitions:
+      pass: review
+      fail: implement
+
+  review:
+    prompt: "Review the implementation. Check for edge cases, code quality, and adherence to project conventions."
+    transitions:
+      approved: done
+      changes_needed: implement
+
+  done:
+    prompt: "Feature implemented, tested, and reviewed."
+    terminal: true

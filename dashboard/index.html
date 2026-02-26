@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Workflow Engine</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+  h1 { color: #58a6ff; margin-bottom: 20px; font-size: 24px; }
+  h2 { color: #8b949e; font-size: 16px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .grid { display: grid; grid-template-columns: 350px 1fr; gap: 20px; min-height: calc(100vh - 100px); }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .session-item { padding: 10px 12px; border: 1px solid #30363d; border-radius: 6px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.2s; }
+  .session-item:hover { border-color: #58a6ff; }
+  .session-item.active { border-color: #58a6ff; background: #1c2333; }
+  .session-id { font-weight: 600; color: #58a6ff; font-size: 14px; }
+  .session-name { font-weight: 600; color: #e6edf3; font-size: 15px; }
+  .session-uuid { font-size: 11px; color: #484f58; font-family: monospace; margin-top: 2px; }
+  .session-info { color: #8b949e; font-size: 12px; margin-top: 4px; }
+  .badge-main { background: #1a2a3a; color: #58a6ff; }
+  .badge-sub { background: #2a1a3a; color: #d2a8ff; }
+  .stack-frame { padding: 8px 12px; background: #1c2333; border-left: 3px solid #30363d; margin-bottom: 6px; font-family: monospace; font-size: 13px; }
+  .stack-frame.active-frame { border-left-color: #3fb950; background: #1a2a1a; }
+  .state-name { color: #ffa657; font-weight: 600; }
+  .workflow-name { color: #d2a8ff; }
+  .transition-list { margin-top: 12px; }
+  .transition-item { padding: 6px 10px; background: #21262d; border-radius: 4px; margin-bottom: 4px; font-family: monospace; font-size: 13px; }
+  .transition-arrow { color: #3fb950; }
+  .prompt-box { background: #1c2333; border: 1px solid #30363d; border-radius: 6px; padding: 14px; margin-top: 12px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+  .history-entry { font-family: monospace; font-size: 12px; color: #8b949e; padding: 3px 0; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+  .badge-active { background: #1a3a1a; color: #3fb950; }
+  .badge-completed { background: #1a2a3a; color: #58a6ff; }
+  .badge-abandoned { background: #3a1a1a; color: #f85149; }
+  .badge-depth { background: #3a2a1a; color: #ffa657; }
+  .badge-child { background: #2a2a1a; color: #d2a8ff; }
+  .parent-link { color: #58a6ff; cursor: pointer; text-decoration: underline; }
+  .parent-link:hover { color: #79c0ff; }
+  .graph-container { margin-top: 16px; }
+  .graph-container svg { display: block; width: 100%; height: auto; }
+  svg text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: none; user-select: none; }
+  .empty-state { text-align: center; padding: 40px; color: #484f58; }
+  .refresh-indicator { position: fixed; top: 10px; right: 10px; font-size: 11px; color: #484f58; }
+  #context-panel { margin-top: 12px; }
+  .context-entry { font-family: monospace; font-size: 12px; padding: 2px 0; }
+  .context-key { color: #ffa657; }
+  .context-value { color: #c9d1d9; }
+  .actor-tag { padding: 1px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; margin-left: 4px; }
+  .state-item { cursor: pointer; transition: border-left-color 0.2s; }
+  .state-item:hover { border-left-color: #58a6ff; }
+  .state-item.selected { border-left-color: #ffa657; background: #1a2a1a; }
+  .state-prompt { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 14px; margin: 4px 0 8px 0; font-size: 13px; line-height: 1.5; white-space: pre-wrap; color: #c9d1d9; }
+  .state-prompt-label { font-size: 11px; color: #8b949e; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .state-flags { color: #8b949e; font-size: 11px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>MCP Workflow Engine</h1>
+  <div class="grid">
+    <div>
+      <div class="panel" id="sessions-panel">
+        <h2>Sessions</h2>
+        <div id="sessions-list"><div class="empty-state">No active sessions</div></div>
+      </div>
+      <div class="panel" id="workflows-panel" style="margin-top: 16px;">
+        <h2>Workflows</h2>
+        <div id="workflows-list"><div class="empty-state">No workflows loaded</div></div>
+      </div>
+    </div>
+    <div>
+      <div class="panel" id="detail-panel">
+        <h2>Session Detail</h2>
+        <div id="detail-content"><div class="empty-state">Select a session</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="refresh-indicator" id="refresh-indicator">Auto-refresh: 2s</div>
+
+<script src="/dagre.min.js"></script>
+<script>
+let selectedSessionId = null;
+let allWorkflows = {};
+let allSessions = [];
+
+const ACTOR_COLORS = ['#58a6ff', '#3fb950', '#d2a8ff', '#ffa657', '#f85149', '#79c0ff', '#56d364', '#e3b341'];
+function actorColor(name) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  return ACTOR_COLORS[Math.abs(hash) % ACTOR_COLORS.length];
+}
+
+async function fetchJSON(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+async function refresh() {
+  const [sessions, workflows] = await Promise.all([
+    fetchJSON('/api/sessions'),
+    fetchJSON('/api/workflows'),
+  ]);
+
+  const indicator = document.getElementById('refresh-indicator');
+  if (sessions === null && workflows === null) {
+    indicator.textContent = 'Reconnecting...';
+    indicator.style.color = '#f85149';
+    return;
+  }
+  indicator.textContent = 'Auto-refresh: 2s';
+  indicator.style.color = '#484f58';
+
+  allSessions = sessions || [];
+  allWorkflows = workflows || {};
+  renderSessions(allSessions);
+  renderWorkflows(workflows || {});
+
+  if (selectedSessionId) {
+    const session = (sessions || []).find(s => s.session_id === selectedSessionId);
+    if (session) renderDetail(session);
+    else document.getElementById('detail-content').innerHTML = '<div class="empty-state">Session not found</div>';
+  }
+}
+
+function getDisplayName(s) {
+  if (s.context?.display_name) return s.context.display_name;
+  if (s.context?.cwd) return s.context.cwd.split('/').pop();
+  return s.session_id.slice(0, 8);
+}
+
+function getAgentBadge(s) {
+  const startEntry = s.history?.find(h => h.event === 'start');
+  const actor = startEntry?.actor;
+  if (!actor) return '';
+  return ` <span class="badge badge-sub">${escapeHtml(actor)}</span>`;
+}
+
+function renderSessionItem(s, depth = 0) {
+  const isActive = s.stack.length > 0;
+  const isAbandoned = !isActive && s.outcome === 'abandoned';
+  const frame = isActive ? s.stack[s.active_frame] : null;
+  const stateInfo = frame ? `${frame.workflow} @ ${frame.current_state}` : isAbandoned ? 'abandoned' : 'completed';
+  const statusBadge = isActive
+    ? `<span class="badge badge-active">active</span>`
+    : isAbandoned
+      ? `<span class="badge badge-abandoned">abandoned</span>`
+      : `<span class="badge badge-completed">done</span>`;
+  const depthBadge = s.stack.length > 1
+    ? ` <span class="badge badge-depth">depth: ${s.stack.length}</span>`
+    : '';
+  const childBadge = s.parent_session_id
+    ? ` <span class="badge badge-child">child</span>`
+    : '';
+  const selected = s.session_id === selectedSessionId ? ' active' : '';
+  const displayName = getDisplayName(s);
+  const agentBadge = getAgentBadge(s);
+  const indent = depth > 0 ? `margin-left:${depth * 20}px` : '';
+
+  return `<div class="session-item${selected}" style="${indent}" onclick="selectSession('${escapeHtml(s.session_id)}')">
+    <div class="session-name">${escapeHtml(displayName)} ${statusBadge}${agentBadge}${depthBadge}${childBadge}</div>
+    <div class="session-uuid">${escapeHtml(s.session_id)}</div>
+    <div class="session-info">${escapeHtml(stateInfo)}</div>
+  </div>`;
+}
+
+function buildChildrenMap(sessions) {
+  const map = {};
+  for (const s of sessions)
+    if (s.parent_session_id) {
+      if (!map[s.parent_session_id]) map[s.parent_session_id] = [];
+      map[s.parent_session_id].push(s);
+    }
+  return map;
+}
+
+function renderSessionTree(session, childrenMap, depth) {
+  let html = renderSessionItem(session, depth);
+  const children = childrenMap[session.session_id] || [];
+  for (const child of children)
+    html += renderSessionTree(child, childrenMap, depth + 1);
+  return html;
+}
+
+function renderSessions(sessions) {
+  const container = document.getElementById('sessions-list');
+  if (sessions.length === 0) {
+    container.innerHTML = '<div class="empty-state">No active sessions</div>';
+    return;
+  }
+
+  const childrenMap = buildChildrenMap(sessions);
+  const childIds = new Set(sessions.filter(s => s.parent_session_id).map(s => s.session_id));
+
+  const active = sessions.filter(s => s.stack.length > 0 && !childIds.has(s.session_id));
+  const inactive = sessions.filter(s => s.stack.length === 0 && !childIds.has(s.session_id));
+  inactive.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  const abandoned = inactive.filter(s => s.outcome === 'abandoned');
+  const completed = inactive.filter(s => s.outcome !== 'abandoned');
+  const recentAbandoned = abandoned.slice(0, 3);
+  const recentCompleted = completed.slice(0, 3);
+
+  let html = '';
+
+  if (active.length > 0)
+    html += active.map(s => renderSessionTree(s, childrenMap, 0)).join('');
+  else
+    html += '<div class="empty-state" style="padding:12px">No active sessions</div>';
+
+  if (recentAbandoned.length > 0) {
+    const countLabel = abandoned.length > recentAbandoned.length ? ` (${recentAbandoned.length} of ${abandoned.length})` : '';
+    html += `<h2 style="margin-top:12px">Abandoned${countLabel}</h2>`;
+    html += recentAbandoned.map(s => renderSessionTree(s, childrenMap, 0)).join('');
+  }
+
+  if (recentCompleted.length > 0) {
+    const countLabel = completed.length > recentCompleted.length ? ` (${recentCompleted.length} of ${completed.length})` : '';
+    html += `<h2 style="margin-top:12px">Recent completed${countLabel}</h2>`;
+    html += recentCompleted.map(s => renderSessionTree(s, childrenMap, 0)).join('');
+  }
+
+  container.innerHTML = html;
+}
+
+function renderWorkflows(workflows) {
+  const container = document.getElementById('workflows-list');
+  const names = Object.keys(workflows);
+  if (names.length === 0) {
+    container.innerHTML = '<div class="empty-state">No workflows loaded</div>';
+    return;
+  }
+
+  container.innerHTML = names.map(name => {
+    const wf = workflows[name];
+    const stateCount = Object.keys(wf.states).length;
+    const desc = wf.description ? ` — ${escapeHtml(wf.description)}` : '';
+    return `<div class="session-item" onclick="showWorkflowGraph('${escapeHtml(name)}')">
+      <div class="session-id">${escapeHtml(name)}</div>
+      <div class="session-info">${stateCount} states${desc}</div>
+    </div>`;
+  }).join('');
+}
+
+function selectSession(id) {
+  selectedSessionId = id;
+  refresh();
+}
+
+function renderDetail(session) {
+  const container = document.getElementById('detail-content');
+  const isActive = session.stack.length > 0;
+
+  let html = '';
+
+  // Parent/child links
+  if (session.parent_session_id) {
+    html += `<div style="margin-bottom:12px"><span style="color:#8b949e">Parent:</span> <span class="parent-link" onclick="selectSession('${escapeHtml(session.parent_session_id)}')">${escapeHtml(session.parent_session_id)}</span></div>`;
+  }
+  const children = allSessions.filter(s => s.parent_session_id === session.session_id);
+  if (children.length > 0) {
+    html += '<div style="margin-bottom:12px"><span style="color:#8b949e">Children:</span> ';
+    html += children.map(c => `<span class="parent-link" onclick="selectSession('${escapeHtml(c.session_id)}')">${escapeHtml(c.session_id)}</span>`).join(', ');
+    html += '</div>';
+  }
+
+  // Stack
+  html += '<h2 style="margin-top:0">Stack</h2>';
+  if (!isActive) {
+    const label = session.outcome === 'abandoned' ? 'Workflow abandoned' : 'Workflow completed';
+    html += `<div class="stack-frame">${label}</div>`;
+  } else {
+    html += session.stack.map((frame, i) => {
+      const cls = i === session.active_frame ? ' active-frame' : '';
+      const visits = frame.state_visits[frame.current_state] || 0;
+      const visitStr = visits > 1 ? ` (visit ${visits})` : '';
+      const marker = i === session.active_frame ? ' ← ACTIVE' : '';
+      const waiting = i < session.active_frame ? ' (waiting)' : '';
+      return `<div class="stack-frame${cls}">[${i}] <span class="workflow-name">${escapeHtml(frame.workflow)}</span> @ <span class="state-name">${escapeHtml(frame.current_state)}</span>${visitStr}${waiting}${marker}</div>`;
+    }).join('');
+  }
+
+  // Prompt
+  if (isActive) {
+    const frame = session.stack[session.active_frame];
+    const wf = allWorkflows[frame.workflow];
+    const state = wf?.states?.[frame.current_state];
+    const prompt = state?.prompt || '(sub_workflow state)';
+    html += '<h2 style="margin-top:16px">Current Prompt</h2>';
+    html += `<div class="prompt-box">${escapeHtml(prompt)}</div>`;
+
+    // Transitions
+    const transitions = state?.transitions || {};
+    const entries = Object.entries(transitions);
+    if (entries.length > 0) {
+      html += '<h2 style="margin-top:16px">Available Transitions</h2>';
+      html += '<div class="transition-list">';
+      html += entries.map(([name, target]) =>
+        `<div class="transition-item">${escapeHtml(name)} <span class="transition-arrow">→</span> ${escapeHtml(target)}</div>`
+      ).join('');
+      html += '</div>';
+    }
+  }
+
+  // Context
+  const ctxEntries = Object.entries(session.context || {});
+  if (ctxEntries.length > 0) {
+    html += '<h2 style="margin-top:16px">Context</h2>';
+    html += '<div id="context-panel">';
+    html += ctxEntries.map(([k, v]) =>
+      `<div class="context-entry"><span class="context-key">${escapeHtml(k)}</span>: <span class="context-value">${escapeHtml(JSON.stringify(v))}</span></div>`
+    ).join('');
+    html += '</div>';
+  }
+
+  // Graph
+  if (isActive) {
+    const frame = session.stack[session.active_frame];
+    html += '<h2 style="margin-top:16px">Workflow Graph</h2>';
+    html += '<div class="graph-container">';
+    html += renderGraph(frame.workflow, frame.current_state, session.stack);
+    html += '</div>';
+  }
+
+  // History
+  html += '<h2 style="margin-top:16px">History</h2>';
+  const history = (session.history || []).slice(-20);
+  html += history.map(h => {
+    const actorHtml = h.actor ? ` <span class="actor-tag" style="background:${actorColor(h.actor)}20;color:${actorColor(h.actor)}">${escapeHtml(h.actor)}</span>` : '';
+    if (h.event) return `<div class="history-entry">[${h.frame}] ${escapeHtml(h.event)}${h.workflow ? ' (' + escapeHtml(h.workflow) + ')' : ''}${actorHtml}</div>`;
+    return `<div class="history-entry">[${h.frame}] ${escapeHtml(h.from || '')} → ${escapeHtml(h.to || '')} via "${escapeHtml(h.via || '')}"${actorHtml}</div>`;
+  }).join('');
+
+  container.innerHTML = html;
+}
+
+function pointsToPath(points) {
+  if (points.length < 2) return '';
+  if (points.length === 2) {
+    return `M${points[0].x},${points[0].y}L${points[1].x},${points[1].y}`;
+  }
+  // Catmull-Rom to cubic bezier through dagre control points
+  let d = `M${points[0].x},${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    const t = 1 / 6;
+    const cp1x = p1.x + (p2.x - p0.x) * t;
+    const cp1y = p1.y + (p2.y - p0.y) * t;
+    const cp2x = p2.x - (p3.x - p1.x) * t;
+    const cp2y = p2.y - (p3.y - p1.y) * t;
+    d += `C${cp1x},${cp1y},${cp2x},${cp2y},${p2.x},${p2.y}`;
+  }
+  return d;
+}
+
+function renderGraph(workflowName, currentState, stack) {
+  const wf = allWorkflows[workflowName];
+  if (!wf) return '<div class="empty-state">Workflow definition not available</div>';
+
+  const states = Object.entries(wf.states);
+  const nodeW = 160;
+  const nodeH = 48;
+
+  // Auto-detect layout direction: wide fan-out → left-to-right
+  let maxFanOut = 0;
+  for (const [, state] of states)
+    if (state.transitions) maxFanOut = Math.max(maxFanOut, Object.keys(state.transitions).length);
+  const rankdir = maxFanOut > 4 ? 'LR' : 'TB';
+
+  // Build dagre graph
+  const g = new dagre.graphlib.Graph({ multigraph: true });
+  g.setGraph({ rankdir, nodesep: 60, ranksep: 80, marginx: 30, marginy: 30 });
+  g.setDefaultEdgeLabel(() => ({}));
+
+  for (const [name, state] of states) {
+    g.setNode(name, { width: nodeW, height: nodeH, state });
+  }
+
+  // Edges: transitions, on_complete, on_fail
+  for (const [name, state] of states) {
+    if (state.transitions) {
+      for (const [label, target] of Object.entries(state.transitions)) {
+        if (g.hasNode(target))
+          g.setEdge(name, target, { label, type: 'transition' }, `t:${name}:${label}`);
+      }
+    }
+    if (state.sub_workflow) {
+      if (state.on_complete && g.hasNode(state.on_complete))
+        g.setEdge(name, state.on_complete, { label: 'on_complete', type: 'on_complete' }, `oc:${name}`);
+      if (state.on_fail && g.hasNode(state.on_fail))
+        g.setEdge(name, state.on_fail, { label: 'on_fail', type: 'on_fail' }, `of:${name}`);
+    }
+  }
+
+  dagre.layout(g);
+
+  const graphInfo = g.graph();
+  const svgW = Math.ceil(graphInfo.width || 400);
+  const svgH = Math.ceil(graphInfo.height || 300);
+
+  // Collect active states from stack for highlighting
+  const activeStates = new Set();
+  for (const frame of stack) {
+    if (frame.workflow === workflowName) activeStates.add(frame.current_state);
+  }
+
+  // Unique ID suffix to avoid filter collisions when multiple graphs on page
+  const uid = workflowName.replace(/[^a-zA-Z0-9]/g, '');
+
+  let svg = `<svg viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" style="max-width:${svgW}px" xmlns="http://www.w3.org/2000/svg">`;
+
+  // Defs: markers and glow filters
+  svg += '<defs>';
+  svg += `<marker id="arr-${uid}" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6z" fill="#484f58"/></marker>`;
+  svg += `<marker id="arr-green-${uid}" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6z" fill="#3fb950"/></marker>`;
+  svg += `<marker id="arr-red-${uid}" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto"><path d="M0,0 L10,3 L0,6z" fill="#f85149"/></marker>`;
+  svg += `<filter id="glow-green-${uid}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4" result="blur"/><feFlood flood-color="#3fb950" flood-opacity="0.4" result="color"/><feComposite in="color" in2="blur" operator="in" result="glow"/><feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+  svg += `<filter id="glow-blue-${uid}" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="4" result="blur"/><feFlood flood-color="#58a6ff" flood-opacity="0.4" result="color"/><feComposite in="color" in2="blur" operator="in" result="glow"/><feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+  svg += '</defs>';
+
+  // Draw edges
+  for (const e of g.edges()) {
+    const edgeData = g.edge(e);
+    const points = edgeData.points || [];
+    if (points.length === 0) continue;
+
+    const isSelfLoop = e.v === e.w;
+    const edgeType = edgeData.type || 'transition';
+
+    let strokeColor = '#484f58';
+    let dash = '';
+    let markerEnd = `url(#arr-${uid})`;
+
+    if (edgeType === 'on_complete') {
+      strokeColor = '#3fb950';
+      dash = ' stroke-dasharray="4,4"';
+      markerEnd = `url(#arr-green-${uid})`;
+    } else if (edgeType === 'on_fail') {
+      strokeColor = '#f85149';
+      dash = ' stroke-dasharray="6,3"';
+      markerEnd = `url(#arr-red-${uid})`;
+    }
+
+    if (isSelfLoop) {
+      // Self-loop: arc above the node
+      const node = g.node(e.v);
+      const cx = node.x;
+      const cy = node.y - nodeH / 2;
+      const r = 22;
+      svg += `<path d="M${cx - 12},${cy} A${r},${r} 0 1,1 ${cx + 12},${cy}" fill="none" stroke="${strokeColor}" stroke-width="1.5"${dash} marker-end="${markerEnd}"/>`;
+    } else {
+      const d = pointsToPath(points);
+      svg += `<path d="${d}" fill="none" stroke="${strokeColor}" stroke-width="1.5"${dash} marker-end="${markerEnd}"/>`;
+    }
+
+    // Edge label
+    if (edgeData.label && edgeData.x != null && !isSelfLoop) {
+      const lx = edgeData.x;
+      const ly = edgeData.y;
+      svg += `<text x="${lx}" y="${ly - 5}" text-anchor="middle" fill="${strokeColor}" font-size="10" opacity="0.8">${escapeHtml(edgeData.label)}</text>`;
+    }
+  }
+
+  // Draw nodes
+  for (const name of g.nodes()) {
+    const node = g.node(name);
+    const state = node.state || wf.states[name];
+    const x = node.x;
+    const y = node.y;
+    const w = nodeW;
+    const h = nodeH;
+    const isInitial = name === wf.initial;
+    const isTerminal = !!state.terminal;
+    const hasSubWorkflow = !!state.sub_workflow;
+    const isCurrent = name === currentState;
+    const isInStack = !isCurrent && activeStates.has(name);
+
+    let fill = '#21262d';
+    let stroke = '#30363d';
+    let textColor = '#c9d1d9';
+    let strokeWidth = 2;
+    let filterAttr = '';
+
+    if (isCurrent) {
+      fill = '#1a3a1a'; stroke = '#3fb950'; textColor = '#3fb950'; strokeWidth = 2.5;
+      filterAttr = ` filter="url(#glow-green-${uid})"`;
+    } else if (isInStack) {
+      fill = '#1c2333'; stroke = '#58a6ff'; textColor = '#58a6ff'; strokeWidth = 2.5;
+      filterAttr = ` filter="url(#glow-blue-${uid})"`;
+    } else if (isTerminal) {
+      fill = '#1a2a3a'; stroke = '#58a6ff';
+    }
+
+    const rx = isTerminal ? 24 : 6;
+
+    // Initial state: outer halo rect
+    if (isInitial && !isCurrent && !isInStack) {
+      svg += `<rect x="${x - w / 2 - 4}" y="${y - h / 2 - 4}" width="${w + 8}" height="${h + 8}" rx="${rx + 2}" fill="none" stroke="#58a6ff" stroke-width="1" opacity="0.5"/>`;
+    }
+
+    // Main node rect
+    svg += `<rect id="gnode-${escapeHtml(name)}" x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${rx}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}"${filterAttr} data-fill="${fill}" data-stroke="${stroke}" style="cursor:pointer" onclick="selectGraphNode('${escapeHtml(name)}')"/>`;
+
+    // Sub-workflow: inner nested rect
+    if (hasSubWorkflow) {
+      svg += `<rect x="${x - w / 2 + 5}" y="${y - h / 2 + 5}" width="${w - 10}" height="${h - 10}" rx="3" fill="none" stroke="${stroke}" stroke-width="1" opacity="0.4"/>`;
+    }
+
+    // Node label
+    const fontSize = name.length > 16 ? 11 : 13;
+    const fontWeight = isCurrent ? '700' : '400';
+    svg += `<text x="${x}" y="${y + 1}" text-anchor="middle" dominant-baseline="middle" fill="${textColor}" font-size="${fontSize}" font-weight="${fontWeight}">${escapeHtml(name)}</text>`;
+
+    // Sub-workflow name below main label
+    if (hasSubWorkflow) {
+      svg += `<text x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle" fill="#d2a8ff" font-size="9" opacity="0.7">${escapeHtml(state.sub_workflow)}</text>`;
+    }
+  }
+
+  svg += '</svg>';
+  return svg;
+}
+
+let selectedWorkflowState = null;
+
+function showWorkflowGraph(name) {
+  selectedSessionId = null;
+  selectedWorkflowState = null;
+  const container = document.getElementById('detail-content');
+  container.innerHTML = '<h2>Workflow: ' + escapeHtml(name) + '</h2><div class="graph-container">' + renderGraph(name, null, []) + '</div>';
+
+  const wf = allWorkflows[name];
+  if (wf) {
+    let stateList = '<h2 style="margin-top:16px">States</h2>';
+    stateList += '<div id="workflow-states-list">';
+    for (const [sn, state] of Object.entries(wf.states)) {
+      const flags = [];
+      if (sn === wf.initial) flags.push('initial');
+      if (state.terminal) flags.push('terminal');
+      if (state.sub_workflow) flags.push('sub: ' + state.sub_workflow);
+      const flagStr = flags.length > 0 ? `<span class="state-flags">[${flags.join(', ')}]</span>` : '';
+      stateList += `<div class="stack-frame state-item" data-state="${escapeHtml(sn)}" data-workflow="${escapeHtml(name)}" onclick="toggleStatePrompt(this, '${escapeHtml(name)}', '${escapeHtml(sn)}')"><span class="state-name">${escapeHtml(sn)}</span>${flagStr}</div>`;
+    }
+    stateList += '</div>';
+    container.innerHTML += stateList;
+  }
+}
+
+function highlightGraphNode(stateName) {
+  // Reset all highlighted nodes
+  document.querySelectorAll('svg rect[id^="gnode-"]').forEach(rect => {
+    rect.setAttribute('stroke', rect.dataset.stroke);
+    rect.setAttribute('stroke-width', '2');
+    rect.style.filter = '';
+  });
+  if (!stateName) return;
+  const rect = document.getElementById('gnode-' + stateName);
+  if (!rect) return;
+  rect.setAttribute('stroke', '#ffa657');
+  rect.setAttribute('stroke-width', '3');
+}
+
+function selectGraphNode(stateName) {
+  const list = document.getElementById('workflow-states-list');
+  if (!list) return;
+  const item = list.querySelector(`.state-item[data-state="${stateName}"]`);
+  if (!item) return;
+
+  // If it's a sub_workflow state, open that workflow instead
+  const wfName = item.dataset.workflow;
+  const wf = allWorkflows[wfName];
+  if (wf) {
+    const state = wf.states[stateName];
+    if (state && state.sub_workflow && allWorkflows[state.sub_workflow]) {
+      showWorkflowGraph(state.sub_workflow);
+      return;
+    }
+  }
+
+  toggleStatePrompt(item, wfName, stateName);
+  item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+function toggleStatePrompt(el, workflowName, stateName) {
+  const wf = allWorkflows[workflowName];
+  if (!wf) return;
+  const state = wf.states[stateName];
+  if (!state) return;
+
+  // Deselect if clicking same state
+  if (selectedWorkflowState === stateName) {
+    selectedWorkflowState = null;
+    el.classList.remove('selected');
+    highlightGraphNode(null);
+    const existing = el.nextElementSibling;
+    if (existing && existing.classList.contains('state-prompt-wrapper'))
+      existing.remove();
+    return;
+  }
+
+  // Clear previous selection
+  const list = document.getElementById('workflow-states-list');
+  if (list) {
+    list.querySelectorAll('.state-item.selected').forEach(item => item.classList.remove('selected'));
+    list.querySelectorAll('.state-prompt-wrapper').forEach(item => item.remove());
+  }
+
+  selectedWorkflowState = stateName;
+  el.classList.add('selected');
+  highlightGraphNode(stateName);
+
+  const prompt = state.prompt || '(no prompt)';
+  const wrapper = document.createElement('div');
+  wrapper.className = 'state-prompt-wrapper';
+
+  let html = `<div class="state-prompt-label">Prompt</div><div class="state-prompt">${escapeHtml(prompt)}</div>`;
+
+  // Show transitions if any
+  const transitions = state.transitions ? Object.entries(state.transitions) : [];
+  if (transitions.length > 0) {
+    html += '<div class="transition-list">';
+    html += transitions.map(([tName, target]) =>
+      `<div class="transition-item">${escapeHtml(tName)} <span class="transition-arrow">→</span> ${escapeHtml(target)}</div>`
+    ).join('');
+    html += '</div>';
+  }
+
+  wrapper.innerHTML = html;
+  el.after(wrapper);
+}
+
+// Auto-refresh
+setInterval(refresh, 2000);
+refresh();
+</script>
+</body>
+</html>

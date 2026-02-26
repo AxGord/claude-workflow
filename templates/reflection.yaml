@@ -1,0 +1,27 @@
+name: reflection
+description: "Self-reflection after significant tasks"
+initial: evaluate
+max_transitions: 15
+
+states:
+  evaluate:
+    prompt: "Evaluate: efficiency, hallucinations, foresight, user impact, pattern recognition."
+    transitions:
+      has_lesson: classify
+      clean: done
+
+  classify:
+    prompt: "Classify lesson: enrich existing skill, create new skill, or update MEMORY.md."
+    transitions:
+      enrich_skill: action
+      create_skill: action
+      update_memory: action
+
+  action:
+    prompt: "Execute the classified action (ENRICH, CREATE, or MEMORY.md update)."
+    transitions:
+      done: done
+
+  done:
+    prompt: "Reflection complete."
+    terminal: true

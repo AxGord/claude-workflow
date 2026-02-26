@@ -1,0 +1,52 @@
+name: task-router
+description: "Meta-workflow: analyze task type and route to appropriate workflow"
+initial: analyze
+max_transitions: 100
+
+states:
+  analyze:
+    prompt: "Determine the task type. Choose one of the transitions based on what the user needs."
+    transitions:
+      bug: run_bugfix
+      feature: run_feature
+      refactor: run_refactor
+      review: run_review
+      unknown: clarify
+
+  run_bugfix:
+    sub_workflow: bug-fix
+    on_complete: retrospective
+    on_fail: escalate
+
+  run_feature:
+    sub_workflow: new-feature
+    on_complete: retrospective
+    on_fail: escalate
+
+  run_refactor:
+    sub_workflow: refactoring
+    on_complete: retrospective
+    on_fail: escalate
+
+  run_review:
+    sub_workflow: code-review
+    on_complete: retrospective
+    on_fail: escalate
+
+  retrospective:
+    prompt: "Evaluate the result. What worked well? What didn't? Save insights for future reference."
+    transitions:
+      done: done
+
+  clarify:
+    prompt: "Ask the user to clarify the task."
+    transitions:
+      got_info: analyze
+
+  escalate:
+    prompt: "Task failed. Report the reasons to the user."
+    terminal: true
+
+  done:
+    prompt: "Task completed successfully."
+    terminal: true
