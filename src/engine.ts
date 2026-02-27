@@ -48,6 +48,18 @@ export class Engine {
     this._loader = loader;
   }
 
+  /** Find the most recently updated active session for the current Claude Code PID. */
+  public resolveSessionId(sessionId?: string): string {
+    if (sessionId) return sessionId;
+    const pid = process.ppid;
+    const active = this._storage.readAll().filter(
+      s => s.context.claude_code_pid === pid && s.stack.length > 0
+    );
+    if (active.length === 0) throw new Error("No active session found. Call workflow_start first.");
+    active.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    return active[0].session_id;
+  }
+
   public async start(workflowName: string, actor?: string, parentSessionId?: string): Promise<StatusResult> {
     // Guard: prevent duplicate top-level sessions from the same Claude Code process.
     // Sub-agent sessions (with parent_session_id) are exempt — they run alongside the parent.
@@ -57,8 +69,9 @@ export class Engine {
         s => s.context.claude_code_pid === pid && !s.parent_session_id && s.stack.length > 0
       );
       if (active.length > 0) {
-        const ids = active.map(s => `${s.session_id} (${s.stack[s.active_frame].workflow} @ ${s.stack[s.active_frame].current_state})`).join(", ");
-        throw new Error(`Previous workflow not completed: ${ids}. Abort or complete it before starting a new one.`);
+        // Auto-redirect to subagent workflow as a child session
+        parentSessionId = active[0].session_id;
+        workflowName = "subagent";
       }
     }
 

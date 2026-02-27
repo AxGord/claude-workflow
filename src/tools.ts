@@ -46,7 +46,7 @@ function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): 
 
   if (!forceFullPrompt && status.visitCount > 1) {
     parts.push(`Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`);
-    parts.push(`If you don't remember them, call workflow_status("${status.sessionId}") to re-read.`);
+    parts.push(`If you don't remember them, call workflow_status() to re-read.`);
   } else {
     parts.push(status.prompt);
   }
@@ -109,7 +109,7 @@ export function registerTools(
         + "- Transitions in real-time only — never batch multiple transitions in one step.\n"
         + "- Complete each state fully before transitioning to the next.\n"
         + "- On tool errors: stop and investigate before continuing.\n"
-        + "- To advance: workflow_transition({ session_id: \"<id>\", transition: \"<name>\" })\n"
+        + "- To advance: workflow_transition({ transition: \"<name>\" })\n"
         + "---";
       return { content: [{ type: "text", text }] };
     } catch (err) {
@@ -121,11 +121,12 @@ export function registerTools(
   server.registerTool("workflow_status", {
     description: "Get current state, full stack, available transitions, and history for a session.",
     inputSchema: z.object({
-      session_id: z.string().describe("Session identifier"),
+      session_id: z.string().optional().describe("Session identifier"),
     }).strict(),
   }, async (args) => {
     try {
-      const status = engine.getStatus(args.session_id);
+      const sid = engine.resolveSessionId(args.session_id);
+      const status = engine.getStatus(sid);
       const historyLines = status.history.slice(-10).map(h => {
         const actorStr = h.actor ? ` [${h.actor}]` : "";
         if (h.event) return `  [${h.frame}] ${h.event}${h.workflow ? ` (${h.workflow})` : ""}${actorStr} at ${h.at}`;
@@ -149,13 +150,14 @@ export function registerTools(
   server.registerTool("workflow_transition", {
     description: "Transition to the next state in the active workflow. If the new state has a sub_workflow, it auto-pushes. If terminal, it auto-pops to parent.",
     inputSchema: z.object({
-      session_id: z.string().describe("Session identifier"),
+      session_id: z.string().optional().describe("Session identifier"),
       transition: z.string().describe("Name of the transition to take"),
       actor: z.string().optional().describe("Identity of the agent performing this action"),
     }).strict(),
   }, async (args) => {
     try {
-      const status = await engine.transition(args.session_id, args.transition, args.actor);
+      const sid = engine.resolveSessionId(args.session_id);
+      const status = await engine.transition(sid, args.transition, args.actor);
       return { content: [{ type: "text", text: formatStatus(status) }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
@@ -166,14 +168,15 @@ export function registerTools(
   server.registerTool("workflow_context_set", {
     description: "Save key-value data in the session context for later use.",
     inputSchema: z.object({
-      session_id: z.string().describe("Session identifier"),
+      session_id: z.string().optional().describe("Session identifier"),
       key: z.string().describe("Context key"),
       value: z.unknown().describe("Context value"),
       actor: z.string().optional().describe("Identity of the agent performing this action"),
     }).strict(),
   }, async (args) => {
     try {
-      await engine.setContext(args.session_id, args.key, args.value, args.actor);
+      const sid = engine.resolveSessionId(args.session_id);
+      await engine.setContext(sid, args.key, args.value, args.actor);
       return { content: [{ type: "text", text: `Context "${args.key}" set successfully.` }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
@@ -184,7 +187,7 @@ export function registerTools(
   server.registerTool("workflow_modify", {
     description: "Add/change/remove states and transitions in the current session's workflow (overlay, does not modify YAML).",
     inputSchema: z.object({
-      session_id: z.string().describe("Session identifier"),
+      session_id: z.string().optional().describe("Session identifier"),
       add_state: z.object({
         name: z.string(),
         prompt: z.string().optional(),
@@ -208,7 +211,8 @@ export function registerTools(
     }).strict(),
   }, async (args) => {
     try {
-      const messages = await modifier.modify(args.session_id, {
+      const sid = engine.resolveSessionId(args.session_id);
+      const messages = await modifier.modify(sid, {
         add_state: args.add_state,
         add_transition: args.add_transition,
         remove_transition: args.remove_transition,
@@ -280,12 +284,13 @@ export function registerTools(
   server.registerTool("workflow_abort", {
     description: "Abort the workflow (pop all stack frames, end session).",
     inputSchema: z.object({
-      session_id: z.string().describe("Session identifier"),
+      session_id: z.string().optional().describe("Session identifier"),
     }).strict(),
   }, async (args) => {
     try {
-      await engine.abort(args.session_id);
-      return { content: [{ type: "text", text: `Session "${args.session_id}" aborted.` }] };
+      const sid = engine.resolveSessionId(args.session_id);
+      await engine.abort(sid);
+      return { content: [{ type: "text", text: `Session "${sid}" aborted.` }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
