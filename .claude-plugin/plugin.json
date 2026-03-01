@@ -1,5 +1,11 @@
 {
   "name": "workflow",
   "version": "1.0.0",
-  "description": "Structured workflow orchestration for AI agents via finite-state machines"
+  "description": "Structured workflow orchestration for AI agents via finite-state machines",
+  "author": {
+    "name": "AxGord"
+  },
+  "homepage": "https://github.com/AxGord/claude-workflow",
+  "repository": "https://github.com/AxGord/claude-workflow",
+  "license": "MIT"
 }
