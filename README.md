@@ -1,11 +1,13 @@
-# MCP Workflow Engine
+<p align="center">
+  <img src="docs/banner.png" alt="Claude Workflow" width="100%">
+</p>
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](package.json)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178c6)](https://www.typescriptlang.org/)
-[![Claude Code Plugin](https://img.shields.io/badge/Claude_Code-Plugin-ff6600)](https://docs.anthropic.com/en/docs/claude-code)
-
-> Structured workflow orchestration for AI agents via finite-state machines.
+<p align="center">
+  <a href="package.json"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-3178c6" alt="TypeScript"></a>
+  <a href="https://code.claude.com/docs/en/plugins"><img src="https://img.shields.io/badge/Claude_Code-Plugin-ff6600" alt="Claude Code Plugin"></a>
+</p>
 
 A Claude Code plugin that drives agents through YAML-defined state machines. The engine tracks state, enforces guards, manages nested sub-workflow stacks, and visualizes everything in a web dashboard.
 
