@@ -4,9 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-An MCP server that provides structured workflow orchestration for AI agents via finite-state machines. Agents call MCP tools (`workflow_start`, `workflow_transition`, etc.) to follow state-driven processes. The engine tracks state, enforces guards (max_transitions, max_visits), and manages nested sub-workflow stacks.
+A Claude Code plugin that provides structured workflow orchestration for AI agents via finite-state machines. Bundles an MCP server + SessionStart/SessionEnd hooks. Agents call MCP tools (`workflow_start`, `workflow_transition`, etc.) to follow state-driven processes. The engine tracks state, enforces guards (max_transitions, max_visits), and manages nested sub-workflow stacks.
 
-Transport: stdio. Registered in Claude Code's MCP config.
+Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
+
+## Plugin Structure
+
+| Path | Purpose |
+|---|---|
+| `.claude-plugin/plugin.json` | Plugin manifest |
+| `.mcp.json` | MCP server registration (server name: `wf`) |
+| `hooks/hooks.json` | Hook declarations (SessionStart, SessionEnd) |
+| `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start |
+| `hooks/workflow-cleanup.sh` | Abandons active sessions on session end |
+
+**Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__workflow_start`).
+
+**Migration from standalone**: see `migrate.sh` (not yet committed) to update user configs, then install as plugin.
 
 ## Build & Run
 

@@ -1,40 +1,78 @@
 name: code-review
 description: "Code review workflow"
 initial: overview
-max_transitions: 40
+max_transitions: 50
 
 states:
   overview:
-    prompt: "Read the changes. Understand the purpose and scope of the PR/commit."
+    prompt: |
+      Determine review scope, get changed file list.
+      Output file list, then → `understood`.
     transitions:
-      understood: check_correctness
+      understood: deep_review
 
-  check_correctness:
-    prompt: "Check for bugs, logic errors, edge cases, and missing error handling."
+  deep_review:
+    prompt: "Route: `single` (1 file) or `multi` (2+ files)."
     transitions:
-      done: check_style
+      single: review_single
+      multi: review_delegate
 
-  check_style:
-    prompt: "Check code style, naming conventions, and project patterns compliance."
+  review_single:
+    sub_workflow: file-review
+    on_complete: cross_file
+    on_fail: cross_file
+
+  review_delegate:
+    prompt: |
+      Spawn one file-review agent per changed file in parallel.
+      Each agent follows the `file-review` workflow.
+      Collect reports, abort orphaned sessions, then → `done`.
     transitions:
-      done: check_tests
+      done: cross_file
 
-  check_tests:
-    prompt: "Check test coverage. Are new behaviors tested? Are edge cases covered?"
-    transitions:
-      done: check_security
-
-  check_security:
-    prompt: "Check for security issues: injection, XSS, auth bypass, data leaks."
+  cross_file:
+    prompt: |
+      Cross-file analysis — duplication, missing updates,
+      consistency, test coverage, integration, blast radius.
     transitions:
       done: summarize
 
   summarize:
-    prompt: "Write a review summary with findings, suggestions, and verdict (approve/request changes)."
+    prompt: |
+      Aggregate findings into:
+      - **Obvious fixes** — objectively correct fix.
+      - **Debatable concerns** — needs user input.
+      No issues → `approve`. Any issues → `has_issues`.
     transitions:
       approve: done
-      request_changes: done
+      has_issues: apply_fixes
+
+  apply_fixes:
+    prompt: "Apply obvious fixes. Debatable remaining → `has_concerns`. All done → `all_clear`."
+    transitions:
+      has_concerns: discuss
+      all_clear: done
+
+  discuss:
+    prompt: |
+      Present debatable concerns to user. Discuss.
+      Many/architectural → `plan`. Few small → `code`. Nothing → `skip`.
+    transitions:
+      plan: plan_changes
+      code: code_changes
+      skip: done
+
+  plan_changes:
+    sub_workflow: planning
+    on_complete: done
+    on_fail: done
+
+  code_changes:
+    sub_workflow: coding
+    on_complete: done
+    on_fail: done
 
   done:
     prompt: "Review complete."
     terminal: true
+    outcome: complete

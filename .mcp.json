@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wf": {
+      "command": "node",
+      "args": ["./build/index.js"],
+      "env": {}
+    }
+  }
+}

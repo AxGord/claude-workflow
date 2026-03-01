@@ -123,6 +123,13 @@ export class Engine {
     if (!session) throw new Error(`Session "${sessionId}" not found`);
     if (session.stack.length === 0) throw new Error(`Session "${sessionId}" has no active workflow`);
 
+    // Session is waiting for children to complete — try to resolve
+    if (session.pending_pop) {
+      const result = await this.retryPendingPop(sessionId);
+      if (result) return result;
+      throw new Error(this._formatChildrenBlockError(sessionId));
+    }
+
     const frame = session.stack[session.active_frame];
     const wf = this._getWorkflow(sessionId, frame.workflow);
     const state = this._resolveState(session, frame.workflow, frame.current_state);
@@ -238,6 +245,9 @@ export class Engine {
     await this._storage.write(sessionId, updated);
     this._snapshots.delete(sessionId);
     await this._cascadeAbandonChildren(sessionId);
+
+    // If this was a child session, try to unblock the parent's pending completion
+    if (session.parent_session_id) await this.retryPendingPop(session.parent_session_id);
   }
 
   public getStatus(sessionId: string): StatusResult {
@@ -331,6 +341,18 @@ export class Engine {
     const now = new Date().toISOString();
 
     if (session.stack.length <= 1) {
+      // Guard: block completion if child sessions are still active
+      const activeChildren = this._getActiveChildren(session.session_id);
+      if (activeChildren.length > 0) {
+        const parked: SessionState = {
+          ...session,
+          pending_pop: { outcome },
+          updated_at: now,
+        };
+        await this._storage.write(session.session_id, parked);
+        throw new Error(this._formatChildrenBlockError(session.session_id, activeChildren));
+      }
+
       // Top-level workflow completed
       const updated: SessionState = {
         ...session,
@@ -399,6 +421,20 @@ export class Engine {
     if (nextState?.terminal) {
       const hasTransitions = nextState.transitions && Object.keys(nextState.transitions).length > 0;
       if (!hasTransitions) {
+        // Pre-check: if recursive pop would reach top-level, guard children
+        if (updated.stack.length === 1) {
+          const activeChildren = this._getActiveChildren(session.session_id);
+          if (activeChildren.length > 0) {
+            const nextOutcome = nextState.outcome === "fail" ? "fail" : "complete";
+            const parked: SessionState = {
+              ...updated,
+              pending_pop: { outcome: nextOutcome },
+              updated_at: now,
+            };
+            await this._storage.write(session.session_id, parked);
+            throw new Error(this._formatChildrenBlockError(session.session_id, activeChildren));
+          }
+        }
         const nextOutcome = nextState.outcome === "fail" ? "fail" : "complete";
         return this._popStack(updated, nextOutcome, taskOps);
       }
@@ -414,11 +450,27 @@ export class Engine {
     return this._buildStatus(updated, taskOps);
   }
 
-  private async _cascadeAbandonChildren(parentSessionId: string): Promise<void> {
-    const now = new Date().toISOString();
-    const children = this._storage.readAll().filter(
+  private _formatChildrenBlockError(parentSessionId: string, activeChildren?: SessionState[]): string {
+    const children = activeChildren ?? this._getActiveChildren(parentSessionId);
+    const details = children.map(c => {
+      const f = c.stack[c.active_frame];
+      return `  - ${c.session_id}: ${f.workflow} @ ${f.current_state} (${f.total_transitions} transitions)`;
+    }).join("\n");
+    return (
+      `Cannot complete: ${children.length} child session(s) still active:\n${details}\n` +
+      `Abort them via workflow_abort or investigate why they didn't finish.`
+    );
+  }
+
+  private _getActiveChildren(parentSessionId: string): SessionState[] {
+    return this._storage.readAll().filter(
       s => s.parent_session_id === parentSessionId && s.stack.length > 0
     );
+  }
+
+  private async _cascadeAbandonChildren(parentSessionId: string): Promise<void> {
+    const now = new Date().toISOString();
+    const children = this._getActiveChildren(parentSessionId);
     for (const child of children) {
       const updated: SessionState = {
         ...child,

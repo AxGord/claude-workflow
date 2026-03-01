@@ -1,57 +1,127 @@
 name: bug-fix
 description: "Standard bug fix workflow"
-initial: reproduce
+initial: classify
 max_transitions: 50
 
 states:
-  reproduce:
-    prompt: |
-      Reproduce the bug. Describe what you see.
-      When done, call workflow_transition with one of the transitions.
+  classify:
+    prompt: "Classify: `visual` (UI/layout) or `logic` (data/crash)."
+    transitions:
+      visual: reproduce_visual
+      logic: reproduce_logic
+
+  reproduce_visual:
+    prompt: "Reproduce visually — launch app, screenshot, verify bug is visible."
     transitions:
       reproduced: diagnose
       cant_reproduce: clarify
 
-  diagnose:
-    prompt: "Find the root cause of the bug."
+  reproduce_logic:
+    prompt: "Reproduce with tests — write failing test, build, run, show output."
     transitions:
-      found: fix
+      reproduced: diagnose
+      try_visual: reproduce_visual
+      cant_reproduce: clarify
+
+  diagnose:
+    prompt: |
+      Find root cause. Assess scope:
+      `single` (1 file), `multi` (2+ files), `unclear` (need logging).
+    transitions:
+      single: fix_single
+      multi: fix_delegate
       unclear: add_logging
 
   add_logging:
     prompt: "Add logging for diagnostics, run again."
     max_visits: 3
     transitions:
-      found: fix
+      single: fix_single
+      multi: fix_delegate
       still_unclear: escalate
 
-  fix:
-    prompt: "Fix the bug based on your diagnosis."
+  fix_single:
+    sub_workflow: file-code
+    on_complete: review
+    on_fail: review
+
+  fix_delegate:
+    prompt: |
+      Spawn one file-code agent per file in parallel.
+      Include: file path, diagnosis, per-file fix plan, interface contracts.
+      Collect reports, abort orphaned sessions, then → `done`.
     transitions:
-      done: test
+      done: integrate
+
+  integrate:
+    prompt: "Cross-file integration check: contracts, imports, conflicts."
+    transitions:
+      done: review
+
+  review:
+    prompt: "Route: `single` (1 file) or `multi` (2+ files)."
+    transitions:
+      single: review_single
+      multi: review_delegate
+
+  review_single:
+    sub_workflow: file-review
+    on_complete: test
+    on_fail: write_fix
+
+  review_delegate:
+    prompt: |
+      Spawn one file-review agent per changed file in parallel.
+      Collect reports, abort orphaned sessions, then → `done`.
+    transitions:
+      done: cross_file
+
+  cross_file:
+    prompt: "Cross-file review: duplication, consistency, integration."
+    transitions:
+      ok: test
+      fix: write_fix
+
+  write_fix:
+    prompt: "Fix review issues, then → `done` to re-review."
+    transitions:
+      done: review
 
   test:
-    prompt: "Run tests. Report the result."
-    max_visits: 3
-    transitions:
-      pass: verify
-      fail: fix
+    sub_workflow: testing
+    on_complete: verify_route
+    on_fail: write_fix
 
-  verify:
-    prompt: "Verify the original bug is fixed."
+  verify_route:
+    prompt: "Route: `visual` or `logic` based on classify decision."
+    transitions:
+      visual: verify_visual
+      logic: verify_logic
+
+  verify_visual:
+    prompt: "Verify fix visually — screenshot proving bug is gone."
+    transitions:
+      confirmed: done
+      still_broken: diagnose
+
+  verify_logic:
+    prompt: "Verify fix with tests — run reproduction, confirm it passes."
     transitions:
       confirmed: done
       still_broken: diagnose
 
   clarify:
-    prompt: "Ask the user for more details about the bug."
+    prompt: "Ask user for more details."
     transitions:
-      got_info: reproduce
+      got_info_visual: reproduce_visual
+      got_info_logic: reproduce_logic
 
   escalate:
-    prompt: "Could not diagnose. Report to the user."
+    prompt: "Could not diagnose. Report to user."
     terminal: true
+    outcome: fail
 
   done:
     prompt: "Bug fixed and verified."
     terminal: true
+    outcome: complete

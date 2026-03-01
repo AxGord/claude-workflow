@@ -1,0 +1,5 @@
+{
+  "name": "workflow",
+  "version": "1.0.0",
+  "description": "Structured workflow orchestration for AI agents via finite-state machines"
+}

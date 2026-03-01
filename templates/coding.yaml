@@ -1,47 +1,76 @@
 name: coding
-description: "Code writing workflow — scope check, plan, write, review, verify"
-initial: scope_check
+description: "Code writing workflow — from thinking to verified implementation"
+initial: think
 max_transitions: 40
 
 states:
-  scope_check:
-    prompt: "Assess task scale: 1-2 files → direct, 3+ files → need_plan."
-    transitions:
-      direct: think
-      need_plan: plan_mode
-
-  plan_mode:
-    prompt: "Use EnterPlanMode to design the implementation. After approval → planned."
-    transitions:
-      planned: think
-
   think:
-    prompt: "Verify assumptions (paths, APIs, structure). Outline approach. Check for existing utilities."
+    prompt: |
+      Think before writing:
+      1. Outline the approach. Check for existing utilities.
+      2. For multi-file: produce per-file plan with interface contracts.
+      Route: `single` (1 file) or `multi` (2+ files).
     transitions:
-      ready: write
+      single: write_single
+      multi: delegate
 
-  write:
-    prompt: "Write the implementation."
-    transitions:
-      review: mini_review
+  write_single:
+    sub_workflow: file-code
+    on_complete: review
+    on_fail: review
 
-  mini_review:
-    prompt: "Re-read code: typos, edge cases, ripple check, DRY check."
+  delegate:
+    prompt: |
+      Spawn one file-code agent per file in parallel.
+      Include: file path, per-file plan, interface contracts.
+      Collect reports, abort orphaned sessions, then → `done`.
     transitions:
-      ok: final_review
-      fix: write
+      done: integrate
 
-  final_review:
-    prompt: "Review complete picture: new+old fit, dead code, constants, simplification."
+  integrate:
+    prompt: |
+      Cross-file integration check after parallel agents:
+      interface contracts, imports, conflicts, missing glue.
     transitions:
-      verify: verify
-      fix: write
+      done: review
+
+  review:
+    prompt: "Route: `single` (1 file) or `multi` (2+ files)."
+    transitions:
+      single: review_single
+      multi: review_delegate
+
+  review_single:
+    sub_workflow: file-review
+    on_complete: verify
+    on_fail: write_fix
+
+  review_delegate:
+    prompt: |
+      Spawn one file-review agent per changed file in parallel.
+      Collect reports, abort orphaned sessions, then → `done`.
+    transitions:
+      done: cross_file
+
+  cross_file:
+    prompt: |
+      Cross-file review: duplication, missing updates, consistency, integration.
+      `ok` → testing, `fix` → needs fixing.
+    transitions:
+      ok: verify
+      fix: write_fix
+
+  write_fix:
+    prompt: "Fix review issues, then → `done` to re-review."
+    transitions:
+      done: review
 
   verify:
     sub_workflow: testing
     on_complete: done
-    on_fail: mini_review
+    on_fail: write_fix
 
   done:
     prompt: "Code written, reviewed, and verified."
     terminal: true
+    outcome: complete
