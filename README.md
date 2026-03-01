@@ -58,18 +58,18 @@ claude --plugin-dir ./
 ```
 Agent                          Engine                         Storage
   │                              │                              │
-  ├─ workflow_start() ──────────►│─ snapshot workflows ────────►│ session.json
+  ├─ start() ─────────────────►│─ snapshot workflows ────────►│ session.json
   │◄──── initial state prompt ──│                              │
   │                              │                              │
-  ├─ workflow_transition() ────►│─ validate & advance ────────►│ update JSON
+  ├─ transition() ──────────────►│─ validate & advance ────────►│ update JSON
   │◄──── new state prompt ──────│  (push/pop sub-workflows)    │
   │                              │                              │
-  ├─ workflow_transition() ────►│─ terminal state? ───────────►│ mark complete
+  ├─ transition() ──────────────►│─ terminal state? ───────────►│ mark complete
   │◄──── done ──────────────────│  (auto-pop to parent)        │
 ```
 
-1. `workflow_start()` — creates a session, snapshots all workflow definitions, returns the initial state prompt
-2. `workflow_transition()` — validates the transition, advances state, handles sub-workflow push/pop, returns the new prompt
+1. `start()` — creates a session, snapshots all workflow definitions, returns the initial state prompt
+2. `transition()` — validates the transition, advances state, handles sub-workflow push/pop, returns the new prompt
 3. Every mutation is atomically persisted to JSON (temp file + rename + lockfile)
 4. Dashboard visualizes sessions and workflow graphs at `localhost:3100`
 
@@ -159,16 +159,16 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `workflow_list` | List all available workflow definitions | — |
-| `workflow_start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id` |
-| `workflow_status` | Get current state, stack, transitions, history | `session_id` |
-| `workflow_transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition` |
-| `workflow_context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
-| `workflow_modify` | Runtime overlay — add/change/remove states and transitions | `session_id`, `add_state`, `add_transition` |
-| `workflow_create` | Create new workflow definition (saves YAML) | `name`, `definition`, `scope` |
-| `workflow_delete` | Delete a workflow definition | `name`, `scope` |
-| `workflow_abort` | Abort workflow, pop all stack frames | `session_id` |
-| `workflow_sessions` | List all sessions (active first) | — |
+| `list` | List all available workflow definitions | — |
+| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id` |
+| `status` | Get current state, stack, transitions, history | `session_id` |
+| `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition` |
+| `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
+| `modify` | Runtime overlay — add/change/remove states and transitions | `session_id`, `add_state`, `add_transition` |
+| `create` | Create new workflow definition (saves YAML) | `name`, `definition`, `scope` |
+| `delete` | Delete a workflow definition | `name`, `scope` |
+| `abort` | Abort workflow, pop all stack frames | `session_id` |
+| `sessions` | List all sessions (active first) | — |
 
 ## Dashboard
 
@@ -250,7 +250,7 @@ npm start        # node build/index.js
 | `src/engine.ts` | FSM core — start, transition, abort, context, stack push/pop |
 | `src/loader.ts` | YAML loading + Zod validation + fs.watch hot-reload |
 | `src/storage.ts` | JSON persistence with atomic writes and lockfile mutex |
-| `src/modifier.ts` | Runtime overlays + workflow_create (YAML writer) |
+| `src/modifier.ts` | Runtime overlays + create (YAML writer) |
 | `src/tools.ts` | MCP tool registrations + response formatting |
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |

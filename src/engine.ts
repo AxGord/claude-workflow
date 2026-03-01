@@ -55,7 +55,7 @@ export class Engine {
     const active = this._storage.readAll().filter(
       s => s.context.claude_code_pid === pid && s.stack.length > 0
     );
-    if (active.length === 0) throw new Error("No active session found. Call workflow_start first.");
+    if (active.length === 0) throw new Error("No active session found. Call start first.");
     active.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
     return active[0].session_id;
   }
@@ -379,7 +379,7 @@ export class Engine {
     const nextStateName = outcome === "complete" ? parentState?.on_complete : parentState?.on_fail;
     if (!nextStateName) {
       // Parent doesn't have on_complete/on_fail yet — park as pending_pop.
-      // workflow_modify can add it later, which will retry the pop.
+      // modify can add it later, which will retry the pop.
       const parked: SessionState = {
         ...session,
         pending_pop: { outcome },
@@ -458,7 +458,7 @@ export class Engine {
     }).join("\n");
     return (
       `Cannot complete: ${children.length} child session(s) still active:\n${details}\n` +
-      `Abort them via workflow_abort or investigate why they didn't finish.`
+      `Abort them via abort or investigate why they didn't finish.`
     );
   }
 

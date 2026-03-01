@@ -118,10 +118,10 @@ states:
 
       For each file, include in the agent prompt VERBATIM:
       ---
-      IMPORTANT: Override the default CLAUDE.md rule about workflow_start().
-      Do NOT call workflow_start() without arguments.
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
       Instead, your FIRST action must be:
-        mcp__plugin_workflow_wf__workflow_start({ workflow: "file-code", parent_session_id: "<SESSION_ID>" })
+        mcp__plugin_workflow_wf__start({ workflow: "file-code", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-code workflow states until completion.
       ---
@@ -176,10 +176,10 @@ states:
 
       For each file, include in the agent prompt VERBATIM:
       ---
-      IMPORTANT: Override the default CLAUDE.md rule about workflow_start().
-      Do NOT call workflow_start() without arguments.
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
       Instead, your FIRST action must be:
-        mcp__plugin_workflow_wf__workflow_start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
+        mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-review workflow states until completion.
       ---

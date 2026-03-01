@@ -56,14 +56,14 @@ find_plan_session() {
 if [ -n "$TRANSCRIPT" ] && [ -s "$TRANSCRIPT" ]; then
   # Check for ExitPlanMode → plan resume after context clear
   if grep -q 'ExitPlanMode' "$TRANSCRIPT" 2>/dev/null; then
-    PLAN_SID=$(grep -oE 'workflow_transition\(\\"[a-f0-9]+\\"' "$TRANSCRIPT" | tail -1 | grep -oE '[a-f0-9]{7,}')
+    PLAN_SID=$(grep -oE 'transition\(\\"[a-f0-9]+\\"' "$TRANSCRIPT" | tail -1 | grep -oE '[a-f0-9]{7,}')
     if [ -n "$PLAN_SID" ]; then
-      echo "PLAN RESUME (same process): call workflow_transition(\"$PLAN_SID\", \"planned\") to resume planning session.$ZED_SUFFIX"
+      echo "PLAN RESUME (same process): call transition(\"$PLAN_SID\", \"planned\") to resume planning session.$ZED_SUFFIX"
       exit 0
     fi
   fi
   # Has content but no plan → context clear
-  echo "Context was cleared. Call workflow_status() to check for active session and restore context.$ZED_SUFFIX"
+  echo "Context was cleared. Call status() to check for active session and restore context.$ZED_SUFFIX"
   exit 0
 fi
 
@@ -71,9 +71,9 @@ fi
 # Check plans/ for active planning sessions (cross-process plan resume)
 PLAN_SID=$(find_plan_session)
 if [ -n "$PLAN_SID" ]; then
-  echo "PLAN RESUME (new process): active planning session $PLAN_SID found. Call workflow_transition(\"$PLAN_SID\", \"planned\") to resume.$ZED_SUFFIX"
+  echo "PLAN RESUME (new process): active planning session $PLAN_SID found. Call transition(\"$PLAN_SID\", \"planned\") to resume.$ZED_SUFFIX"
   exit 0
 fi
 
 # --- 3. Nothing found → fresh start ---
-echo "STOP. Call mcp__plugin_workflow_wf__workflow_start (no args) first.$ZED_SUFFIX"
+echo "STOP. Call mcp__plugin_workflow_wf__start (no args) first.$ZED_SUFFIX"

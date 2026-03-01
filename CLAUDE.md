@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A Claude Code plugin that provides structured workflow orchestration for AI agents via finite-state machines. Bundles an MCP server + SessionStart/SessionEnd hooks. Agents call MCP tools (`workflow_start`, `workflow_transition`, etc.) to follow state-driven processes. The engine tracks state, enforces guards (max_transitions, max_visits), and manages nested sub-workflow stacks.
+A Claude Code plugin that provides structured workflow orchestration for AI agents via finite-state machines. Bundles an MCP server + SessionStart/SessionEnd hooks. Agents call MCP tools (`start`, `transition`, etc.) to follow state-driven processes. The engine tracks state, enforces guards (max_transitions, max_visits), and manages nested sub-workflow stacks.
 
 Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 
@@ -18,7 +18,7 @@ Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 | `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start |
 | `hooks/workflow-cleanup.sh` | Abandons active sessions on session end |
 
-**Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__workflow_start`).
+**Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__start`).
 
 **Migration from standalone**: see `migrate.sh` (not yet committed) to update user configs, then install as plugin.
 
@@ -53,7 +53,7 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 | `engine.ts` | FSM core — `start()`, `transition()`, `abort()`, `setContext()`. Manages snapshot isolation and stack push/pop |
 | `loader.ts` | YAML loading + Zod validation + `fs.watch` hot-reload. Two-tier: global dir, then project dir (project wins) |
 | `storage.ts` | JSON session persistence with atomic writes (temp+rename) and `proper-lockfile` mutex |
-| `modifier.ts` | Runtime overlays via `workflow_modify` (stored in session JSON, never touches YAML). Also `workflow_create` (writes new YAML) |
+| `modifier.ts` | Runtime overlays via `modify` (stored in session JSON, never touches YAML). Also `create` (writes new YAML) |
 | `tools.ts` | 9 MCP tool registrations + text formatting for status output |
 | `dashboard.ts` | Express REST API (`/api/sessions`, `/api/session/:id`, `/api/workflows`) + static file serving |
 
@@ -63,7 +63,7 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 
 **Snapshot isolation**: Workflow definitions are snapshotted into an in-memory `Map` at session start. Hot-reloads of YAML files don't affect already-running sessions.
 
-**Overlay modifications**: `workflow_modify` stores changes in `session.overrides` (persisted JSON), never modifies source YAML. Overlays are applied at state resolution time in `_resolveState()`.
+**Overlay modifications**: `modify` stores changes in `session.overrides` (persisted JSON), never modifies source YAML. Overlays are applied at state resolution time in `_resolveState()`.
 
 **Atomic writes**: Storage uses temp file + `fs.renameSync` + `proper-lockfile` for safe concurrent access.
 
@@ -94,8 +94,8 @@ Template workflows live in `templates/` for reference. Active workflows go in `~
 
 ### Data Flow
 
-1. Agent calls `workflow_start(name, session_id)` → Engine snapshots all workflows, creates session JSON, returns initial state prompt
-2. Agent calls `workflow_transition(session_id, transition_name)` → Engine validates, updates state, handles sub-workflow push/pop, returns new prompt
+1. Agent calls `start(name, session_id)` → Engine snapshots all workflows, creates session JSON, returns initial state prompt
+2. Agent calls `transition(session_id, transition_name)` → Engine validates, updates state, handles sub-workflow push/pop, returns new prompt
 3. Session state persisted to `STATE_DIR/*.json` after every mutation
 4. Dashboard reads session/workflow data via REST API for visualization
 

@@ -18,7 +18,7 @@ states:
       2. Determine review depth from user's request:
          - "check changes" / "review diff" / default → `scope: diff` (only review changed lines)
          - "review file" / "check whole file" / "bring to order" → `scope: full` (review entire file)
-         Save the scope via `workflow_context_set(key: "review_scope", value: "diff" or "full")`.
+         Save the scope via `context_set(key: "review_scope", value: "diff" or "full")`.
       3. Get changed file names ONLY (`--name-only`). Do NOT read full diffs.
          **Git pathspec gotcha (zsh):** to exclude paths, use `-- . ':(exclude)path'`,
          NOT `-- ':!path'` — the latter silently returns empty results in zsh.
@@ -53,10 +53,10 @@ states:
 
       For each file, include in the agent prompt VERBATIM:
       ---
-      IMPORTANT: Override the default CLAUDE.md rule about workflow_start().
-      Do NOT call workflow_start() without arguments.
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
       Instead, your FIRST action must be:
-        mcp__plugin_workflow_wf__workflow_start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
+        mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-review workflow states until completion.
       ---
@@ -71,9 +71,9 @@ states:
       Wait for all to complete. Collect their reports.
 
       After ALL reports are collected:
-      1. Abort orphaned child workflow sessions — call `workflow_sessions` to find
+      1. Abort orphaned child workflow sessions — call `sessions` to find
          any active `file-review` sessions that are children of this session,
-         then `workflow_abort` each one. Agents may finish without reaching
+         then `abort` each one. Agents may finish without reaching
          the terminal workflow state, leaving zombie sessions behind.
       2. Immediately transition `done`. Do not stop to report status.
     transitions:

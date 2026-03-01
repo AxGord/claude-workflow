@@ -46,7 +46,7 @@ function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): 
 
   if (!forceFullPrompt && status.visitCount > 1) {
     parts.push(`Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`);
-    parts.push(`If you don't remember them, call workflow_status() to re-read.`);
+    parts.push(`If you don't remember them, call status() to re-read.`);
   } else {
     parts.push(status.prompt);
   }
@@ -69,8 +69,8 @@ export function registerTools(
   loader: Loader,
   storage: Storage
 ): void {
-  // 1. workflow_list
-  server.registerTool("workflow_list", {
+  // 1. list
+  server.registerTool("list", {
     description: "List all available workflow definitions in the project",
     inputSchema: z.object({}).strict(),
   }, async () => {
@@ -93,8 +93,8 @@ export function registerTools(
     };
   });
 
-  // 2. workflow_start
-  server.registerTool("workflow_start", {
+  // 2. start
+  server.registerTool("start", {
     description: "Start a workflow. Returns the first prompt, session ID, and available transitions.",
     inputSchema: z.object({
       workflow: z.string().optional().describe("Name of the workflow to start. Defaults to \"master\""),
@@ -109,7 +109,7 @@ export function registerTools(
         + "- Transitions in real-time only — never batch multiple transitions in one step.\n"
         + "- Complete each state fully before transitioning to the next.\n"
         + "- On tool errors: stop and investigate before continuing.\n"
-        + "- To advance: workflow_transition({ transition: \"<name>\" })\n"
+        + "- To advance: transition({ transition: \"<name>\" })\n"
         + "---";
       return { content: [{ type: "text", text }] };
     } catch (err) {
@@ -117,8 +117,8 @@ export function registerTools(
     }
   });
 
-  // 3. workflow_status
-  server.registerTool("workflow_status", {
+  // 3. status
+  server.registerTool("status", {
     description: "Get current state, full stack, available transitions, and history for a session.",
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
@@ -146,8 +146,8 @@ export function registerTools(
     }
   });
 
-  // 4. workflow_transition
-  server.registerTool("workflow_transition", {
+  // 4. transition
+  server.registerTool("transition", {
     description: "Transition to the next state in the active workflow. If the new state has a sub_workflow, it auto-pushes. If terminal, it auto-pops to parent.",
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
@@ -164,8 +164,8 @@ export function registerTools(
     }
   });
 
-  // 5. workflow_context_set
-  server.registerTool("workflow_context_set", {
+  // 5. context_set
+  server.registerTool("context_set", {
     description: "Save key-value data in the session context for later use.",
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
@@ -183,8 +183,8 @@ export function registerTools(
     }
   });
 
-  // 6. workflow_modify
-  server.registerTool("workflow_modify", {
+  // 6. modify
+  server.registerTool("modify", {
     description: "Add/change/remove states and transitions in the current session's workflow (overlay, does not modify YAML).",
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
@@ -223,8 +223,8 @@ export function registerTools(
     }
   });
 
-  // 7. workflow_create
-  server.registerTool("workflow_create", {
+  // 7. create
+  server.registerTool("create", {
     description: "Create a new workflow definition (saves as YAML for reuse).",
     inputSchema: z.object({
       name: z.string().min(1).describe("Workflow name"),
@@ -254,8 +254,8 @@ export function registerTools(
     }
   });
 
-  // 8. workflow_delete
-  server.registerTool("workflow_delete", {
+  // 8. delete
+  server.registerTool("delete", {
     description: "Delete a workflow definition (removes YAML file).",
     inputSchema: z.object({
       name: z.string().min(1).describe("Workflow name to delete"),
@@ -280,8 +280,8 @@ export function registerTools(
     }
   });
 
-  // 9. workflow_abort
-  server.registerTool("workflow_abort", {
+  // 9. abort
+  server.registerTool("abort", {
     description: "Abort the workflow (pop all stack frames, end session).",
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
@@ -296,8 +296,8 @@ export function registerTools(
     }
   });
 
-  // 9. workflow_sessions
-  server.registerTool("workflow_sessions", {
+  // 10. sessions
+  server.registerTool("sessions", {
     description: "List all workflow sessions (active shown first, recent inactive limited to 3).",
     inputSchema: z.object({}).strict(),
   }, async () => {

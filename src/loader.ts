@@ -33,7 +33,7 @@ export class Loader {
     return Array.from(this._workflows.keys());
   }
 
-  /** Directory where workflow_create saves new YAML files */
+  /** Directory where create saves new YAML files */
   public getWriteDir(scope?: "project" | "global"): string {
     if (scope === "global") return this._globalDir;
     if (scope === "project") {

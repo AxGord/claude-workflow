@@ -7,10 +7,10 @@ states:
   route:
     prompt: |
       STOP. This is a routing state. Do NOT perform any work. Do NOT answer the user.
-      The ONLY tool calls allowed here are workflow_list and workflow_transition.
+      The ONLY tool calls allowed here are list and transition.
 
       **Step 1 — Check for project workflows.**
-      Call `workflow_list`. Look for workflows NOT in the global set (coding, debugging,
+      Call `list`. Look for workflows NOT in the global set (coding, debugging,
       bug-fix, new-feature, refactoring, code-review, explore, web-research, planning,
       testing, reflection, investigate, master). If a project workflow exists and its description
       matches the user's task → transition `project` and set context key
@@ -44,7 +44,7 @@ states:
 
       Code reference in system-reminder → code-related (code_review, explore, or coding), NEVER chat.
 
-      → Call workflow_transition NOW.
+      → Call transition NOW.
     transitions:
       plan: plan
       project: run_project
@@ -88,7 +88,7 @@ states:
       - `feature` → plan says feature
       - `bug_fix` → plan says bug_fix
       - `project` → plan says project-specific workflow (set context key `project_workflow`)
-      - `dynamic` → plan says dynamic (complex multi-step, needs workflow_create)
+      - `dynamic` → plan says dynamic (complex multi-step, needs create)
     transitions:
       coding: run_coding
       refactoring: run_refactoring
@@ -102,7 +102,7 @@ states:
       The dynamic workflow was already created during planning.
 
       1. Read context key `dynamic_workflow` to get the workflow name
-      2. Call `workflow_modify` to add execution state:
+      2. Call `modify` to add execution state:
          - add_state: {name: "run_dynamic", sub_workflow: "<workflow name>", on_complete: "reflect", on_fail: "reflect"}
          - add_transition: {from: "create_dynamic", name: "execute", to: "run_dynamic"}
       3. Transition `execute`
@@ -114,7 +114,7 @@ states:
       A project-specific workflow was selected. Wire it up dynamically:
 
       1. Read context key `project_workflow` to get the workflow name
-      2. Call `workflow_modify` to update THIS state:
+      2. Call `modify` to update THIS state:
          - add_state: {name: "run_project_sub", sub_workflow: "<workflow name>", on_complete: "reflect", on_fail: "reflect"}
          - add_transition: {from: "run_project", name: "execute", to: "run_project_sub"}
       3. Transition `execute`

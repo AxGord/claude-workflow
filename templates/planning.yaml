@@ -40,14 +40,14 @@ states:
       1. Explore codebase (Read/Glob/Grep or Plan/Explore subagents)
       2. Design approach
       3. Write plan to the plan file specified in plan mode system prompt
-      4. Plan file MUST end with Workflow section (get session_id via `workflow_status`):
+      4. Plan file MUST end with Workflow section (get session_id via `status`):
          ```
          ## Workflow
          - **Session**: `<session_id>`
          - **Current state**: `planning @ design`
          - **After approve**: transition `planned` → returns to parent
          - **Execution workflow**: coding / refactoring / dynamic
-         - **Resume**: `workflow_transition("<session_id>", "planned")`
+         - **Resume**: `transition("<session_id>", "planned")`
          ```
       5. Call `ExitPlanMode` for user approval
 
@@ -65,11 +65,11 @@ states:
       do NOT call EnterPlanMode. Otherwise call `EnterPlanMode`.
 
       1. Design the step-by-step workflow
-      2. Call `workflow_create("task-<name>", definition)` with focused states
+      2. Call `create("task-<name>", definition)` with focused states
          - Each state should be small and actionable
          - Always have `done` (terminal, outcome: complete) and `failed` (terminal, outcome: fail)
          - Use `on_fail` for recovery paths
-      3. Save workflow name to context: `workflow_context_set(session_id, "dynamic_workflow", "task-<name>")`
+      3. Save workflow name to context: `context_set(session_id, "dynamic_workflow", "task-<name>")`
       4. Write plan file with:
          - Brief context of what the workflow does
          - Reference to the created workflow name
