@@ -5,17 +5,43 @@ max_transitions: 40
 
 states:
   prepare:
-    prompt: "Read all files to touch. Verify skills are loaded. Core rule: refactored code must conform to ALL loaded skills."
+    prompt: |
+      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
+
+      Before writing any code:
+
+      1. **Read every file you will touch** — understand before changing
+
+      Refactoring = bringing touched files to standards from loaded skills.
+      Don't cargo-cult the original — it may predate current skills.
+
+      When files are read and understood → transition `ready`.
     transitions:
       ready: write
 
   write:
-    prompt: "Apply refactoring. Check each file against all loaded skill rules."
+    prompt: |
+      Apply refactoring. For each touched file, apply ALL loaded preference/lang skill checklists.
+
+      Check every pattern against loaded skills before preserving it.
+
+      Choose transition:
+      - `review` → done writing, ready for review
     transitions:
       review: review
 
   review:
-    prompt: "Review complete refactoring: before/after, no behavior changes, dead code removal."
+    prompt: |
+      Review the complete refactoring:
+
+      1. Compare before/after — verify no behavior changes
+      2. Check all touched files against ALL loaded skills at once
+      3. Look for new extraction opportunities created by refactoring
+      4. Dead code — remove anything made unnecessary
+
+      Choose transition:
+      - `verify` → review passed, ready for testing
+      - `fix` → found issues, go back to write
     transitions:
       verify: verify
       fix: write
@@ -26,5 +52,5 @@ states:
     on_fail: write
 
   done:
-    prompt: "Refactoring complete. All tests pass."
+    prompt: "Refactoring complete. All touched files conform to current standards. Tests pass."
     terminal: true

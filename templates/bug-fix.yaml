@@ -5,34 +5,96 @@ max_transitions: 50
 
 states:
   classify:
-    prompt: "Classify: `visual` (UI/layout) or `logic` (data/crash)."
+    task: "Classify bug type"
+    prompt: |
+      Classify the bug before proceeding.
+
+      Look at the user's report:
+      - Does it include a screenshot or describe a VISUAL problem (layout, overlap, wrong color, missing element)?
+      - Or is it a LOGIC problem (wrong data, crash, incorrect calculation, serialization error)?
+
+      Choose:
+      - `visual` → UI/layout bug — requires debug bridge, screenshots, visual reproduction
+      - `logic` → data/logic bug — reproducible via unit tests or logs
     transitions:
       visual: reproduce_visual
       logic: reproduce_logic
 
   reproduce_visual:
-    prompt: "Reproduce visually — launch app, screenshot, verify bug is visible."
+    task: "Reproduce the bug visually"
+    prompt: |
+      Reproduce the bug VISUALLY before proceeding — reading code is NOT reproduction.
+
+      DO NOT fix the bug here. You may add trace/log statements to help reproduce,
+      but do NOT modify production logic. The fix belongs in the `fix` state.
+
+      MANDATORY STEPS (all required, in order):
+      1. Understand the exact user path that triggers the bug (which button, which file, which action)
+      2. Build and launch the app with debug bridge (`-debug -DFASTBOOT -DDEBUG_API -DHEADLESS`)
+      3. Follow the SAME path the user described to trigger the bug
+      4. Take a screenshot and VERIFY the bug is visible
+      5. Describe what you see — compare with the user's report
+
+      STOP — self-check before transitioning:
+      - Did you LAUNCH the app and take a SCREENSHOT? If not, you haven't reproduced.
+      - Can you show the screenshot? If not, you haven't reproduced yet.
+      - "I can see from the code that..." is NOT evidence. Run the app.
+
+      DO NOT skip visual reproduction. Running unit tests is NOT reproduction for visual bugs.
+      DO NOT transition to `reproduced` without a screenshot proving the bug exists.
+
+      If the bug requires file operations, use the tm-interactive-debug skill recipes.
     transitions:
       reproduced: diagnose
       cant_reproduce: clarify
 
   reproduce_logic:
-    prompt: "Reproduce with tests — write failing test, build, run, show output."
+    task: "Reproduce the bug with tests"
+    prompt: |
+      Reproduce the bug by EXECUTING code — reading source is NOT reproduction.
+
+      DO NOT fix the bug here. You may add trace/log statements or write test code
+      to help reproduce, but do NOT modify production logic. The fix belongs in the `fix` state.
+
+      MANDATORY STEPS (all required, in order):
+      1. Understand the exact scenario that triggers the bug
+      2. Write a minimal FAILING test that demonstrates the wrong behavior
+      3. BUILD and RUN the test — show the actual output
+      4. Describe: EXPECTED vs ACTUAL — what should happen vs what does happen
+
+      STOP — self-check before transitioning:
+      - Did you EXECUTE something (build + run)? Reading code ≠ reproduction.
+      - Can you paste the failing output? If not, you haven't reproduced yet.
+      - "I can see from the code that..." is NOT evidence. Run the code.
+
+      DO NOT transition to `reproduced` without concrete executed evidence
+      (test failure output, wrong runtime output, crash log).
+
+      If the bug is hard to cover with a unit test (UI state, complex setup, timing),
+      transition `try_visual` to reproduce via debug bridge instead.
     transitions:
       reproduced: diagnose
       try_visual: reproduce_visual
       cant_reproduce: clarify
 
   diagnose:
+    task: "Diagnose root cause"
     prompt: |
-      Find root cause. Assess scope:
-      `single` (1 file), `multi` (2+ files), `unclear` (need logging).
+      Find the root cause of the bug.
+
+      DO NOT fix the bug here. You may add trace/log statements to narrow down
+      the cause, but do NOT modify production logic. The fix belongs in the `fix` state.
+
+      After diagnosing, assess how many files need fixing:
+      - 1 file → `single`
+      - 2+ files → `multi`
     transitions:
       single: fix_single
       multi: fix_delegate
       unclear: add_logging
 
   add_logging:
+    task: "Add diagnostic logging"
     prompt: "Add logging for diagnostics, run again."
     max_visits: 3
     transitions:
@@ -46,20 +108,57 @@ states:
     on_fail: review
 
   fix_delegate:
+    task: "Delegate per-file fixes to agents"
     prompt: |
-      Spawn one file-code agent per file in parallel.
-      Include: file path, diagnosis, per-file fix plan, interface contracts.
-      Collect reports, abort orphaned sessions, then → `done`.
+      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
+
+      The fix spans multiple files. Produce a per-file plan with interface contracts,
+      then spawn one Agent per file for parallel implementation.
+      Use `subagent_type="general-purpose"`, `model="opus"`.
+
+      For each file, include in the agent prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about workflow_start().
+      Do NOT call workflow_start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__workflow_start({ workflow: "file-code", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the file-code workflow states until completion.
+      ---
+      Also include:
+      - The file path
+      - The diagnosis and root cause
+      - The per-file fix plan
+      - Interface contracts with other files
+
+      Launch ALL file agents in parallel. Wait for all to complete. Collect reports.
+
+      After ALL reports are collected:
+      1. Abort orphaned child workflow sessions.
+      2. Transition `done`.
     transitions:
       done: integrate
 
   integrate:
-    prompt: "Cross-file integration check: contracts, imports, conflicts."
+    task: "Cross-file integration check"
+    prompt: |
+      All file agents have completed. Verify integration:
+
+      1. **Interface contracts** — do all files satisfy the contracts?
+      2. **Import resolution** — are all cross-file imports correct?
+      3. **Conflict resolution** — did agents make conflicting assumptions? Fix any.
+      4. **Missing glue** — any wiring code needed?
+
+      Fix any issues found directly. Then → transition `done`.
     transitions:
       done: review
 
   review:
-    prompt: "Route: `single` (1 file) or `multi` (2+ files)."
+    task: "Route review by scope"
+    prompt: |
+      Route to the correct review approach based on how many files were changed:
+      - `single` → 1 file changed
+      - `multi` → 2+ files changed
     transitions:
       single: review_single
       multi: review_delegate
@@ -70,20 +169,53 @@ states:
     on_fail: write_fix
 
   review_delegate:
+    task: "Delegate per-file review to agents"
     prompt: |
-      Spawn one file-review agent per changed file in parallel.
-      Collect reports, abort orphaned sessions, then → `done`.
+      Spawn one Agent per changed file for deep review.
+      Use `subagent_type="general-purpose"`, `model="opus"`.
+
+      For each file, include in the agent prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about workflow_start().
+      Do NOT call workflow_start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__workflow_start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the file-review workflow states until completion.
+      ---
+      Also include:
+      - The file path
+      - How to get the diff: `git diff HEAD -- <filepath>`
+      - Review scope: `diff`
+
+      Launch ALL file agents in parallel. Collect reports.
+
+      After ALL reports are collected:
+      1. Abort orphaned child workflow sessions.
+      2. Transition `done`.
     transitions:
       done: cross_file
 
   cross_file:
-    prompt: "Cross-file review: duplication, consistency, integration."
+    task: "Cross-file review analysis"
+    prompt: |
+      Review the big picture — things per-file agents can't see:
+      - [ ] Duplication across files
+      - [ ] Missing updates to consumers of changed interfaces
+      - [ ] Consistency across files
+      - [ ] Integration between changed components
+
+      Choose:
+      - `ok` → no issues, proceed to testing
+      - `fix` → found issues that need fixing
     transitions:
       ok: test
       fix: write_fix
 
   write_fix:
-    prompt: "Fix review issues, then → `done` to re-review."
+    task: "Fix review issues"
+    prompt: |
+      Fix the issues found during review. After fixing, transition back to review.
     transitions:
       done: review
 
@@ -93,35 +225,59 @@ states:
     on_fail: write_fix
 
   verify_route:
-    prompt: "Route: `visual` or `logic` based on classify decision."
+    task: "Route to correct verification"
+    prompt: |
+      Route to the correct verification based on the bug type classified at the start.
+
+      Check the classify decision:
+      - Was the bug classified as `visual`? → transition `visual`
+      - Was the bug classified as `logic`? → transition `logic`
     transitions:
       visual: verify_visual
       logic: verify_logic
 
   verify_visual:
-    prompt: "Verify fix visually — screenshot proving bug is gone."
+    task: "Verify the fix visually"
+    prompt: |
+      Verify the original bug is fixed VISUALLY.
+
+      MANDATORY STEPS:
+      1. Build and launch the app with debug bridge
+      2. Follow the SAME path used during reproduction
+      3. Take a screenshot and VERIFY the bug is gone
+      4. Compare before/after — describe the visual difference
+
+      DO NOT transition to `confirmed` without a screenshot proving the fix works.
     transitions:
       confirmed: done
       still_broken: diagnose
 
   verify_logic:
-    prompt: "Verify fix with tests — run reproduction, confirm it passes."
+    task: "Verify the fix with tests"
+    prompt: |
+      Verify the original bug is fixed.
+
+      MANDATORY STEPS:
+      1. Run the same test/scenario used during reproduction
+      2. Confirm it now passes — show the output
+      3. Check for regressions in related tests
+
+      DO NOT transition to `confirmed` without concrete evidence (test passing, correct output).
     transitions:
       confirmed: done
       still_broken: diagnose
 
   clarify:
-    prompt: "Ask user for more details."
+    task: "Clarify bug details"
+    prompt: "Ask the user for more details about the bug."
     transitions:
       got_info_visual: reproduce_visual
       got_info_logic: reproduce_logic
 
   escalate:
-    prompt: "Could not diagnose. Report to user."
+    prompt: "Could not diagnose. Report to the user."
     terminal: true
-    outcome: fail
 
   done:
     prompt: "Bug fixed and verified."
     terminal: true
-    outcome: complete

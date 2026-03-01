@@ -6,36 +6,100 @@ max_transitions: 40
 states:
   think:
     prompt: |
-      Think before writing:
-      1. Outline the approach. Check for existing utilities.
-      2. For multi-file: produce per-file plan with interface contracts.
-      Route: `single` (1 file) or `multi` (2+ files).
+      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
+
+      Then think before writing:
+      1. What will I write? Outline the approach
+      2. Does it smell like a utility? Check framework built-ins first
+      3. Search project for existing utilities/helpers — use if found, create if broadly useful
+      4. Before creating new files: verify name/path doesn't already exist
+
+      For multi-file tasks (2+ files changing):
+      5. Produce a **per-file plan** listing each file and what changes it needs
+      6. Define **interface contracts** between files — function signatures, types, imports
+         that must match across file boundaries
+      7. Identify dependencies between files — which must be written first
+
+      Route based on scope:
+      - `single` → 1 file to change (or tightly coupled changes best done together)
+      - `multi` → 2+ independent files to change in parallel via agents
+      - `multi_self` → 2+ files but high coupling / detailed plan already exists → write yourself
     transitions:
       single: write_single
       multi: delegate
+      multi_self: write_multi
 
   write_single:
     sub_workflow: file-code
     on_complete: review
     on_fail: review
 
-  delegate:
+  write_multi:
+    task: "Implement multi-file changes (self)"
     prompt: |
-      Spawn one file-code agent per file in parallel.
-      Include: file path, per-file plan, interface contracts.
-      Collect reports, abort orphaned sessions, then → `done`.
+      Write changes across multiple files yourself (high coupling or detailed plan).
+      Implement layer by layer respecting dependencies.
+      Build after all changes to verify compilation.
+      Then → transition `done`.
+    transitions:
+      done: review
+
+  delegate:
+    task: "Delegate per-file coding to agents"
+    prompt: |
+      Spawn one Agent per file for parallel implementation.
+      Use `subagent_type="general-purpose"`, `model="opus"`.
+
+      For each file, include in the agent prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about workflow_start().
+      Do NOT call workflow_start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__workflow_start({ workflow: "file-code", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the file-code workflow states until completion.
+      ---
+      Also include:
+      - The file path
+      - The per-file plan for this specific file
+      - The interface contracts — what signatures/types/exports this file must provide
+        and what it can expect from other files
+      - How to get current state: `git diff HEAD -- <filepath>`
+
+      Launch ALL file agents in parallel (single message, multiple Agent tool calls).
+      Wait for all to complete. Collect their reports.
+
+      After ALL reports are collected:
+      1. Abort orphaned child workflow sessions — call `workflow_sessions` to find
+         any active `file-code` sessions that are children of this session,
+         then `workflow_abort` each one.
+      2. Transition `done`.
     transitions:
       done: integrate
 
   integrate:
+    task: "Cross-file integration check"
     prompt: |
-      Cross-file integration check after parallel agents:
-      interface contracts, imports, conflicts, missing glue.
+      All file agents have completed. Now verify integration:
+
+      1. **Interface contracts** — do all files satisfy the contracts defined in think?
+         Check function signatures, types, imports match across boundaries.
+      2. **Import resolution** — are all cross-file imports correct and present?
+      3. **Conflict resolution** — did agents make conflicting assumptions?
+         Fix any inconsistencies.
+      4. **Missing glue** — any wiring code needed to connect the pieces?
+
+      Fix any issues found directly.
+      Then → transition `done`.
     transitions:
       done: review
 
   review:
-    prompt: "Route: `single` (1 file) or `multi` (2+ files)."
+    task: "Route review by scope"
+    prompt: |
+      Route to the correct review approach based on how many files were changed:
+      - `single` → 1 file changed — review via file-review sub-workflow (yourself)
+      - `multi` → 2+ files changed — spawn file-review agents in parallel
     transitions:
       single: review_single
       multi: review_delegate
@@ -46,22 +110,59 @@ states:
     on_fail: write_fix
 
   review_delegate:
+    task: "Delegate per-file review to agents"
     prompt: |
-      Spawn one file-review agent per changed file in parallel.
-      Collect reports, abort orphaned sessions, then → `done`.
+      Spawn one Agent per changed file for deep review.
+      Use `subagent_type="general-purpose"`, `model="opus"`.
+
+      For each file, include in the agent prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about workflow_start().
+      Do NOT call workflow_start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__workflow_start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the file-review workflow states until completion.
+      ---
+      Also include:
+      - The file path
+      - How to get the diff: `git diff HEAD -- <filepath>`
+      - Review scope: `diff` — review only the changed lines
+
+      Launch ALL file agents in parallel (single message, multiple Agent tool calls).
+      Wait for all to complete. Collect their reports.
+
+      After ALL reports are collected:
+      1. Abort orphaned child workflow sessions — call `workflow_sessions` to find
+         any active `file-review` sessions that are children of this session,
+         then `workflow_abort` each one.
+      2. Transition `done`.
     transitions:
       done: cross_file
 
   cross_file:
+    task: "Cross-file review analysis"
     prompt: |
-      Cross-file review: duplication, missing updates, consistency, integration.
-      `ok` → testing, `fix` → needs fixing.
+      Review the big picture — things per-file agents can't see:
+
+      - [ ] Duplication across files: did different files introduce similar code?
+      - [ ] Missing updates: if an interface/type changed, are all consumers updated?
+      - [ ] Consistency: do the changes follow the same patterns across files?
+      - [ ] Integration: do the changed components work together correctly?
+      - [ ] Blast radius: are there callers/dependents that weren't updated?
+
+      Choose transition:
+      - `ok` → no issues, proceed to testing
+      - `fix` → found issues that need fixing
     transitions:
       ok: verify
       fix: write_fix
 
   write_fix:
-    prompt: "Fix review issues, then → `done` to re-review."
+    task: "Fix review issues"
+    prompt: |
+      Fix the issues found during review. After fixing, transition back to review
+      for re-verification.
     transitions:
       done: review
 
@@ -71,6 +172,5 @@ states:
     on_fail: write_fix
 
   done:
-    prompt: "Code written, reviewed, and verified."
+    prompt: "Code written, reviewed, and verified. Implementation complete."
     terminal: true
-    outcome: complete

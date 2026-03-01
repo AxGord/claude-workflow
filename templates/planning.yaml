@@ -1,0 +1,85 @@
+name: planning
+description: "Planning sub-workflow — explore, design plan, record workflow context"
+initial: explore_needed
+max_transitions: 30
+
+states:
+  explore_needed:
+    prompt: |
+      Determine if codebase exploration is needed before planning.
+
+      1. Check loaded skills, MEMORY.md, and project CLAUDE.md
+      2. Read the user's task description — do you already understand the scope?
+
+      Choose transition:
+      - `explore` → need to explore codebase first
+      - `skip` → scope is clear, go straight to planning
+    transitions:
+      explore: run_explore
+      skip: design
+
+  run_explore:
+    sub_workflow: explore
+    on_complete: design
+    on_fail: design
+
+  design:
+    prompt: |
+      Load architecture skill: `Skill("architecture")`.
+
+      Design the implementation plan.
+
+      **Plan mode**: if system prompt says "Plan mode is active" — you're already in it,
+      do NOT call EnterPlanMode. Otherwise call `EnterPlanMode`.
+
+      **Dynamic check**: If the task is operational/multi-step (not pure code changes —
+      e.g. git operations, deployment, file management, CI/CD setup) → transition `dynamic`
+      to create the execution workflow directly instead of writing a text plan.
+
+      **Steps in plan mode:**
+      1. Explore codebase (Read/Glob/Grep or Plan/Explore subagents)
+      2. Design approach
+      3. Write plan to the plan file specified in plan mode system prompt
+      4. Plan file MUST end with Workflow section (get session_id via `workflow_status`):
+         ```
+         ## Workflow
+         - **Session**: `<session_id>`
+         - **Current state**: `planning @ design`
+         - **After approve**: transition `planned` → returns to parent
+         - **Execution workflow**: coding / refactoring / dynamic
+         - **Resume**: `workflow_transition("<session_id>", "planned")`
+         ```
+      5. Call `ExitPlanMode` for user approval
+
+      **After plan approved → transition `planned`.**
+    transitions:
+      planned: done
+      dynamic: create_workflow
+
+  create_workflow:
+    prompt: |
+      The task is operational/dynamic — create the execution workflow directly.
+      The workflow IS the plan.
+
+      **Plan mode**: if system prompt says "Plan mode is active" — you're already in it,
+      do NOT call EnterPlanMode. Otherwise call `EnterPlanMode`.
+
+      1. Design the step-by-step workflow
+      2. Call `workflow_create("task-<name>", definition)` with focused states
+         - Each state should be small and actionable
+         - Always have `done` (terminal, outcome: complete) and `failed` (terminal, outcome: fail)
+         - Use `on_fail` for recovery paths
+      3. Save workflow name to context: `workflow_context_set(session_id, "dynamic_workflow", "task-<name>")`
+      4. Write plan file with:
+         - Brief context of what the workflow does
+         - Reference to the created workflow name
+         - Workflow section with `Execution workflow: dynamic`
+      5. Call `ExitPlanMode` for user approval
+
+      **After plan approved → transition `planned`.**
+    transitions:
+      planned: done
+
+  done:
+    prompt: "Plan approved. Returning to parent workflow for execution."
+    terminal: true

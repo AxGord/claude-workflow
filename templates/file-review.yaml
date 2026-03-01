@@ -1,0 +1,164 @@
+name: file-review
+description: "Per-file deep review — spawned by code-review for each changed file"
+initial: read_context
+max_transitions: 25
+
+states:
+  read_context:
+    task: "Read file and context"
+    prompt: |
+      You are reviewing a single file as part of a code review.
+      The file path and diff info were provided in your task prompt.
+
+      1. Call `Skill("coding-skill-selector")` to load language/domain skills.
+      2. Read the diff for this file to understand what changed.
+      3. Check the review scope from your task prompt:
+         - `diff` scope → read the diff, then read the full methods/blocks containing changes.
+           Changes can affect surrounding code, so always understand the logical context.
+         - `full` scope → read the FULL file
+      4. Read related files: imports, files that call this one, siblings in the same module.
+         Check if similar code already exists elsewhere that could be reused or unified.
+      5. Understand what changed and why.
+
+      Then → transition `done`.
+    transitions:
+      done: build_checklist
+
+  build_checklist:
+    task: "Build style checklist from skills"
+    prompt: |
+      Build a concrete style checklist from loaded skills:
+
+      Process each loaded `lang-*` and `preferences-*` skill ONE AT A TIME.
+      For each skill:
+      1. Re-read the FULL skill text
+      2. Extract EVERY rule — each `// WRONG` example, explicit rule, or convention
+         becomes a one-line check with the wrong pattern AND the correct one
+      3. Count rules extracted from this skill and output the count
+
+      Do NOT summarize, group, or prioritize — every rule matters equally.
+      If your total is under 25 rules across all skills, you missed some — re-read.
+
+      Output the full checklist, then → transition `done`.
+    transitions:
+      done: check_correctness
+
+  check_correctness:
+    task: "Check correctness"
+    prompt: |
+      Check based on review scope (`diff` or `full`).
+      For `diff` scope: changed lines are entry points, but always check the
+      logical context around them — the full method, callers of changed signatures,
+      other uses of changed fields. A change can break surrounding code.
+      - [ ] Logic errors: wrong conditions, off-by-one, inverted booleans, wrong operators
+      - [ ] Edge cases: null/undefined, empty collections, zero, negative, boundary values
+      - [ ] Error handling: uncaught exceptions, swallowed errors, wrong error types
+      - [ ] Race conditions: async without awaits, shared mutable state
+      - [ ] Resource leaks: unclosed handles, missing cleanup in error paths
+      - [ ] Type mismatches: wrong argument types, unsafe casts
+      - [ ] Regression risk: does this break existing callers or assumptions?
+
+      Then → transition `done`.
+    transitions:
+      done: check_loops
+
+  check_loops:
+    task: "Audit every loop and iteration pattern"
+    prompt: |
+      Find loops based on review scope (`diff` = only loops in changed code, `full` = ALL loops in file). For each one, output:
+
+        Line <N>: `<the loop header>` — iterates <what> to access <what> → verdict: ok / issue
+
+      Check each loop against these anti-patterns:
+
+      1. **Range-over-sparse-container**: the loop iterates an index range (`0...n`,
+         `i++`) but uses the index to look up a Map/Dict/HashMap, with a null check
+         to skip missing entries. This means the container is sparse and should be
+         iterated directly instead of via index range.
+         WRONG: `for (i in 0...n) { val = map[i]; if (val == null) continue; ... }`
+         RIGHT: `for (key => val in map) { ... }` (with filter if needed)
+
+      2. **Keys-then-lookup**: iterates `.keys()` then does a separate `map[key]`
+         lookup inside the body. Use key-value destructuring instead.
+         WRONG: `for (k in map.keys()) { v = map[k]; ... }`
+         RIGHT: `for (k => v in map) { ... }`
+
+      3. **Repeated linear scan**: the same collection is scanned multiple times in
+         the same method or call chain to find related data that could be found in
+         a single pass.
+
+      4. **Wrong container for access pattern**: Array with `.contains()` checks
+         (should be Set/Map), unsorted Array with binary-search-like access, etc.
+
+      5. **Continue instead of guard**: when a single condition filters the entire
+         loop body, use guard-style `for (...) if (cond) {` instead of
+         `if (!cond) continue;`. But when multiple independent checks follow
+         sequentially (each with its own variable), `continue` is fine.
+         WRONG: `for (x in list) { if (x.type != Foo) continue; doWork(x); }`
+         RIGHT: `for (x in list) if (x.type == Foo) { doWork(x); }`
+         OK:    `for (f in range) { val = map[f]; if (val == null) continue; ... }`
+
+      6. **If/else-if chain instead of switch**: when a loop body checks the same
+         variable with `if/else if` chain (e.g. `if (x == "a") ... else if (x == "b")`),
+         use `switch` instead — cleaner, exhaustive, idiomatic.
+         WRONG: `if (node.name == "a") { ... } else if (node.name == "b") { ... }`
+         RIGHT: `switch node.name { case "a": ... case "b": ... }`
+
+      You MUST list ALL loops with verdicts. Do not summarize or skip "obvious" ones.
+
+      Then → transition `done`.
+    transitions:
+      done: check_style
+
+  check_style:
+    task: "Check code style"
+    prompt: |
+      Go through EVERY item in your style checklist from build_checklist.
+      Scope: `diff` = scan only lines in the diff; `full` = scan entire file.
+      If a line appears in the diff, it is part of the change and must meet
+      current style standards. Report with file:line.
+
+      Additionally check:
+      - [ ] Naming: consistent with conventions in neighboring files
+      - [ ] Duplication: does this duplicate existing code? Search the codebase.
+      - [ ] Dead code: unused imports, unreachable branches, commented-out code
+      - [ ] Complexity: overly nested logic, functions doing too many things
+      - [ ] Consistency: does new code follow patterns in the same module?
+
+      Then → transition `done`.
+    transitions:
+      done: check_security
+
+  check_security:
+    task: "Check security"
+    prompt: |
+      Check code for security issues (scope: `diff` = changed code, `full` = entire file):
+      - [ ] Injection: unsanitized inputs reaching dangerous APIs
+      - [ ] Auth/authz: missing or insufficient access controls
+      - [ ] Data exposure: secrets, credentials, or sensitive data leaking
+      - [ ] Input validation: missing validation at system boundaries
+      - [ ] Unsafe operations: anything exploitable by malicious input
+
+      Only flag real risks — don't invent hypothetical issues.
+      Then → transition `done`.
+    transitions:
+      done: report
+
+  report:
+    task: "Write file review report"
+    prompt: |
+      Write a structured report for this file:
+
+      **File**: <path>
+      **What changed**: <one-paragraph summary of the changes>
+      **Issues found**:
+      For each issue:
+      - Severity: bug / risk / style / nit
+      - Line: <line number>
+      - Description: <what's wrong>
+      - Suggestion: <how to fix>
+
+      If no issues found, say so explicitly.
+
+      Output this report as your final response.
+    terminal: true

@@ -1,0 +1,90 @@
+name: explore
+description: "Codebase exploration workflow — understand structure, trace code, find patterns"
+initial: scope
+max_transitions: 20
+
+states:
+  scope:
+    prompt: |
+      Determine what we're looking for and where.
+
+      Exploration types:
+      - **Structure** — project layout, module boundaries, dependency graph
+      - **Feature** — how a specific feature is implemented end-to-end
+      - **Pattern** — recurring code patterns, conventions, idioms
+      - **Code path** — trace execution flow through the codebase
+
+      1. Check loaded skills, MEMORY.md, and project CLAUDE.md first
+      2. If the answer is already available → transition `already_known`
+      3. If exploration is needed → transition `explore`
+    transitions:
+      already_known: synthesize
+      explore: investigate
+
+  investigate:
+    prompt: |
+      Explore the codebase using available tools.
+
+      **Preferred approach:**
+      - Launch parallel `Explore` subagents for independent questions
+      - Use Glob to find files by pattern
+      - Use Grep to search for symbols, strings, patterns
+      - Use Read to examine specific files
+
+      **Rules:**
+      - Start broad (Glob/Grep), then narrow (Read specific files)
+      - Follow imports and call chains to understand flow
+      - Note key files, patterns, and architectural decisions
+
+      Choose transition:
+      - `found` → gathered enough information to answer
+      - `deeper` → need to explore further (follow a lead, check another area)
+      - `ask_user` → need user input to decide direction (e.g., "is this feature needed?", "which approach do you prefer?")
+      - `not_found` → exhausted search avenues, nothing relevant found
+    max_visits: 4
+    transitions:
+      found: synthesize
+      deeper: investigate
+      ask_user: clarify
+      not_found: synthesize
+
+  clarify:
+    prompt: |
+      Findings so far require user input before proceeding.
+
+      Present what you've found so far concisely, then ask your question(s).
+      Use AskUserQuestion for critical decisions that affect the direction of exploration.
+
+      After getting user's answer → transition `continue` to resume investigation
+      with the new context, or `enough` if the answer completes the picture.
+    transitions:
+      continue: investigate
+      enough: synthesize
+
+  synthesize:
+    prompt: |
+      Compile findings into a structured answer.
+
+      Format:
+      - Start with a concise summary (1-2 sentences)
+      - Key files and their roles
+      - Architecture/patterns discovered
+      - Code flow if traced
+
+      If this reveals a recurring knowledge gap → note it for reflection.
+
+      Choose transition:
+      - `done` → exploration is complete, no further action needed (pure research)
+      - `needs_action` → findings indicate code changes are needed (delete, refactor, fix, implement)
+    transitions:
+      done: done
+      needs_action: needs_action
+
+  needs_action:
+    prompt: "Exploration complete. Findings indicate action is needed."
+    terminal: true
+    outcome: needs_action
+
+  done:
+    prompt: "Codebase exploration complete."
+    terminal: true

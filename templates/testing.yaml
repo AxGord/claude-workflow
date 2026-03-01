@@ -1,11 +1,27 @@
 name: testing
-description: "Testing verification — unit tests first, then integration"
+description: "Testing verification sub-workflow — unit tests first, then integration"
 initial: assess
 max_transitions: 30
 
 states:
   assess:
-    prompt: "Assess what tests are needed: unit, integration, both, or none."
+    prompt: |
+      Assess what verification is needed for the current change.
+
+      **Decision matrix:**
+      | Change type                        | Unit tests | Integration |
+      |------------------------------------|-----------|-------------|
+      | Pure logic (data, state, algorithms)| YES       | only if affects UI |
+      | Logic + UI (commands, properties)   | YES       | YES |
+      | Pure UI (layout, visual, wiring)    | no        | YES |
+
+      **IMPORTANT**: Steps are strictly sequential. Never parallelize unit and integration —
+      they often share the same output binary and will conflict.
+
+      Choose transition:
+      - `has_unit` → change touches logic with existing or meaningful tests
+      - `skip_to_integration` → pure UI change, no unit-testable logic
+      - `skip_all` → trivial wiring fix fully covered by existing tests
     transitions:
       has_unit: unit_tests
       skip_to_integration: check_integration
@@ -13,41 +29,92 @@ states:
 
   unit_tests:
     max_visits: 5
-    prompt: "Write and run unit tests. Bug fixes: red-green workflow mandatory."
+    prompt: |
+      Write and run unit tests for the changed behavior.
+
+      **If bug fix — Red-Green workflow (mandatory):**
+      1. Write test targeting buggy behavior → run → confirm FAILS (red)
+      2. Apply fix → run → confirm PASSES (green)
+
+      **Otherwise:**
+      1. Find existing test files for patterns
+      2. Write tests covering new/changed behavior
+      3. Register new test class if needed
+
+      Run via `debugger` subagent to keep build output out of main context.
+
+      Choose transition:
+      - `pass` → all unit tests pass
+      - `fail` → tests failing, need fixes
     transitions:
       pass: check_integration
       fail: fix_unit
 
   fix_unit:
-    prompt: "Fix failing unit tests, then retry."
+    prompt: |
+      Unit tests are failing. Analyze the failures and fix the code.
+
+      Do NOT fix tests to match wrong behavior — fix the implementation.
+      After fixing, transition back to re-run unit tests.
+
+      Choose transition:
+      - `retry` → fixed, re-run unit tests
+      - `give_up` → unable to fix after multiple attempts
     transitions:
       retry: unit_tests
       give_up: failed
 
   check_integration:
-    prompt: "Does change affect UI? If yes → need_integration, if no → skip."
+    prompt: |
+      Does this change affect what the user sees or interacts with?
+
+      - If yes AND project has a debug bridge → `need_integration`
+      - If no (pure backend/data change fully covered by unit tests) → `skip`
+
+      Choose transition:
+      - `need_integration` → must verify via integration test
+      - `skip` → unit tests are sufficient
     transitions:
       need_integration: integration
       skip: done
 
   integration:
     max_visits: 5
-    prompt: "Run integration verification via debug bridge or manual testing."
+    prompt: |
+      Run integration verification.
+
+      1. Build and launch via `debugger` subagent
+      2. Simulate the actual user workflow end-to-end
+      3. Verify state changes propagated correctly (screenshots, state inspection)
+
+      **Bug fixes**: reproduce the EXACT user scenario that triggered the bug.
+      Check for regressions in related workflows.
+
+      Choose transition:
+      - `pass` → integration verified, behavior correct
+      - `fail` → integration broken, need fixes
     transitions:
       pass: done
       fail: fix_integration
 
   fix_integration:
-    prompt: "Fix integration failures, then retry."
+    prompt: |
+      Integration test failed. Analyze what broke and fix it.
+
+      After fixing, transition back to re-run integration.
+
+      Choose transition:
+      - `retry` → fixed, re-run integration tests
+      - `give_up` → unable to fix after multiple attempts
     transitions:
       retry: integration
       give_up: failed
 
   done:
-    prompt: "All tests pass."
+    prompt: "All required tests pass. Verification complete."
     terminal: true
 
   failed:
-    prompt: "Testing failed after maximum attempts."
+    prompt: "Testing failed after maximum attempts. Report failures to the user."
     terminal: true
     outcome: fail

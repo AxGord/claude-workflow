@@ -1,0 +1,84 @@
+name: investigate
+description: "Investigation workflow — resolve unknowns before deciding on action. For tasks that describe desired changes but contain questions, uncertainties, or assumptions that need verification first."
+initial: parse
+max_transitions: 25
+
+states:
+  parse:
+    prompt: |
+      The user's task contains unknowns that need investigation before coding.
+
+      1. Extract from the user's message:
+         - **Goal**: what the user ultimately wants changed
+         - **Unknowns**: questions, uncertainties, assumptions to verify
+           (markers: "вроде", "кажется", "если это так", "не уверен", "should",
+            "not sure", "?", conditional language, hedging)
+         - **Knowns**: concrete facts or behaviors stated as certain
+
+      2. Formulate 1-3 specific investigation questions to resolve the unknowns
+
+      Present the breakdown to the user briefly, then → transition `explore`.
+    transitions:
+      explore: run_explore
+
+  run_explore:
+    sub_workflow: explore
+    on_complete: assess
+    on_fail: assess
+
+  assess:
+    prompt: |
+      Investigation complete. Review findings against the original unknowns.
+
+      Present to the user:
+      1. For each unknown — what did investigation reveal?
+      2. Does the desired change still make sense given the findings?
+      3. Recommended action and scope
+
+      Choose transition:
+      - `trivial` → fix is obvious and small (1-3 lines), apply it now
+      - `needs_plan` → changes needed but require planning (multi-file, risk, unclear scope)
+      - `no_action` → investigation showed the change is unnecessary or already works correctly
+      - `unclear` → still unclear after investigation, need user input
+    transitions:
+      trivial: quick_fix
+      needs_plan: needs_plan
+      no_action: done
+      unclear: clarify
+
+  clarify:
+    prompt: |
+      Present findings and remaining questions to the user.
+      Use AskUserQuestion for critical decisions.
+
+      After getting user's answer → transition based on clarity:
+      - `reassess` → re-evaluate with new info
+      - `done` → user says no action needed
+    transitions:
+      reassess: assess
+      done: done
+
+  quick_fix:
+    prompt: |
+      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load
+      language/domain skills BEFORE writing code.
+
+      The fix is trivial (1-3 lines). Apply it directly.
+      After fixing → transition `done`.
+    transitions:
+      done: fixed
+
+  fixed:
+    prompt: "Investigation + quick fix complete."
+    terminal: true
+    outcome: complete
+
+  needs_plan:
+    prompt: "Investigation complete. Changes need planning — escalating."
+    terminal: true
+    outcome: fail
+
+  done:
+    prompt: "Investigation complete. No code changes needed."
+    terminal: true
+    outcome: complete

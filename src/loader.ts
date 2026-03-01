@@ -5,13 +5,15 @@ import type { WorkflowDefinition } from "./types.js";
 import { WorkflowDefinitionSchema } from "./types.js";
 
 export class Loader {
+  private readonly _bundledDir: string | null;
   private readonly _globalDir: string;
   private readonly _projectDir: string | null;
   private _workflows: Map<string, WorkflowDefinition> = new Map();
   private _globalWatcher: fs.FSWatcher | null = null;
   private _projectWatcher: fs.FSWatcher | null = null;
 
-  constructor(globalDir: string, projectDir: string | null) {
+  constructor(bundledDir: string | null, globalDir: string, projectDir: string | null) {
+    this._bundledDir = bundledDir;
     this._globalDir = globalDir;
     this._projectDir = projectDir;
     fs.mkdirSync(this._globalDir, { recursive: true });
@@ -100,10 +102,13 @@ export class Loader {
   private _loadAll(): void {
     const next = new Map<string, WorkflowDefinition>();
 
-    // Load global first
+    // Load bundled first (read-only defaults)
+    if (this._bundledDir) this._loadDir(this._bundledDir, next);
+
+    // Global overrides bundled
     this._loadDir(this._globalDir, next);
 
-    // Project overrides global on name conflict
+    // Project overrides global
     if (this._projectDir) this._loadDir(this._projectDir, next);
 
     this._workflows = next;

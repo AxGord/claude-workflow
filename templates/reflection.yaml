@@ -1,24 +1,58 @@
 name: reflection
-description: "Self-reflection after significant tasks"
+description: "Self-reflection after significant tasks — evaluate, classify, act"
 initial: evaluate
 max_transitions: 15
 
 states:
   evaluate:
-    prompt: "Evaluate: efficiency, hallucinations, foresight, user impact, pattern recognition."
+    prompt: |
+      Evaluate the completed task:
+
+      - Was it a clean pass, or were there errors/retries?
+      - Any hallucinations (made-up names, paths, APIs)?
+      - Unnecessary complexity added?
+      - User had to correct you or wait?
+
+      Choose transition:
+      - `has_lesson` → found something worth recording
+      - `clean` → task went smoothly
     transitions:
       has_lesson: classify
       clean: done
 
   classify:
-    prompt: "Classify lesson: enrich existing skill, create new skill, or update MEMORY.md."
+    prompt: |
+      Classify the lesson — where does it belong?
+
+      | Type | Destination | Example |
+      |------|------------|---------|
+      | Factual error, gotcha | Skill (ENRICH) | "Fib(47) overflows Int32" |
+      | Missing domain knowledge | New skill (CREATE) | No skill for gRPC |
+      | Process/approach pattern | Skill (ENRICH) | "Always verify packages" |
+      | Project-specific quirk | MEMORY.md | "Custom ORM, not EF" |
+      | Project build/config | MEMORY.md | "Needs --legacy-peer-deps" |
+
+      Choose transition:
+      - `enrich_skill` → update existing skill via skill-manager ENRICH
+      - `create_skill` → systemic gap, create new skill via skill-manager CREATE
+      - `update_memory` → project-specific, write to MEMORY.md
     transitions:
       enrich_skill: action
       create_skill: action
       update_memory: action
 
   action:
-    prompt: "Execute the classified action (ENRICH, CREATE, or MEMORY.md update)."
+    prompt: |
+      Execute the classified action:
+
+      - **ENRICH**: identify which skill → research correct answer → use skill-manager ENRICH
+      - **CREATE**: only if systemic gap → use skill-manager CREATE
+      - **MEMORY.md**: write project-specific knowledge to auto-memory
+
+      After acting, acknowledge the lesson to the user honestly.
+
+      Choose transition:
+      - `done` → action completed
     transitions:
       done: done
 

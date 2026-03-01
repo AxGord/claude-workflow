@@ -1,0 +1,53 @@
+name: web-research
+description: "Web research workflow — check existing knowledge, then delegate to web subagents"
+initial: check_existing
+max_transitions: 20
+
+states:
+  check_existing:
+    prompt: |
+      Before researching externally, check what you already know:
+
+      1. Check loaded skills and MEMORY.md
+      2. Check project documentation (CLAUDE.md, README)
+      3. If answer is already available → transition `already_known`
+      4. If not enough → transition `need_research`
+
+      **When NOT to research:**
+      - Confident and routine task
+      - Answer is in a loaded skill
+    transitions:
+      already_known: apply
+      need_research: delegate
+
+  delegate:
+    prompt: |
+      Call `Skill("web-reading")` for the web access tool hierarchy.
+
+      Delegate to `researcher` subagents:
+      - Split broad questions into 3-5 narrow ones, launch in parallel
+      - Each returns only a concise answer
+      - Follow tool hierarchy from loaded web-reading skill
+      - Extract ONLY what's needed
+
+      Choose transition:
+      - `found` → got the answer, ready to apply
+      - `not_found` → could not find reliable information
+    transitions:
+      found: apply
+      not_found: done
+
+  apply:
+    prompt: |
+      Apply research results to the current task.
+
+      If this reveals a recurring knowledge gap → note it for reflection.
+
+      Choose transition:
+      - `done` → results applied or communicated to user
+    transitions:
+      done: done
+
+  done:
+    prompt: "Web research complete."
+    terminal: true

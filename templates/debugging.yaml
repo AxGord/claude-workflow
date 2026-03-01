@@ -5,51 +5,158 @@ max_transitions: 40
 
 states:
   reproduce:
-    prompt: "Reproduce the bug. Build with diagnostic flags, confirm the error."
+    prompt: |
+      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
+
+      **Rule #1: Diagnose FIRST, fix NEVER.**
+      **Rule #2: Reproduce BEFORE fixing.**
+
+      1. Build with diagnostic flags from loaded skills
+      2. Reproduce the bug via debug bridge or manual steps
+      3. Confirm the crash/error happens
+
+      Do NOT jump to fixing based on code reading alone.
+
+      Choose transition:
+      - `reproduced` → bug confirmed, ready to diagnose
+      - `need_info` → can't reproduce, need more details from user
     transitions:
       reproduced: hypothesize
       need_info: clarify
 
   clarify:
-    prompt: "Ask user for more details about the bug."
+    prompt: |
+      Ask the user for more details about the bug:
+      - Exact steps to reproduce
+      - Error messages or logs
+      - When it started happening
+      - Any recent changes
+
+      Choose transition:
+      - `got_info` → have enough info to try reproducing again
     transitions:
       got_info: reproduce
 
   hypothesize:
-    prompt: "Hypothesize WHERE the problem is (not why). Form 1-3 hypotheses."
+    prompt: |
+      **Step 1: Hypothesize WHERE, not WHY.**
+
+      Before adding traces, narrow down WHERE the problem is — not why it happens.
+      Form 1-3 hypotheses about the location of the bug.
+
+      Choose transition:
+      - `trace` → ready to add targeted traces to test hypotheses
     transitions:
       trace: trace
 
   trace:
     max_visits: 5
-    prompt: "Add targeted traces (3-5 with unique prefixes). Run via debugger subagent."
+    prompt: |
+      Add 3-5 targeted traces with unique prefixes (`[DBG1]`, `[DBG2]`).
+
+      Delegate to `debugger` subagent: build command, run command, what to look for, timeout.
+      **NEVER use `run_in_background: true`**.
+
+      **Anti-patterns:**
+      - Running builds in main context (100KB+ noise)
+      - Adding Mutex/volatile "just in case" — masks real problem
+
+      Choose transition:
+      - `found` → root cause identified
+      - `more_traces` → need more data
+      - `bridge` → need interactive debug bridge inspection
+      - `escalate` → exhausted trace attempts
     transitions:
-      found: fix
+      found: diagnosed
       more_traces: trace
       bridge: bridge_debug
       escalate: escalated
 
   bridge_debug:
-    prompt: "Use debug bridge for interactive state inspection."
+    prompt: |
+      Call `Skill("debug-bridge")`.
+
+      Use debug bridge for interactive state inspection.
+      Launch `interactive-openfl-debugger` subagent. Inspect state, take screenshots, simulate events.
+
+      Choose transition:
+      - `found` → root cause identified via bridge
+      - `back_to_trace` → need more code-level tracing
     transitions:
-      found: fix
+      found: diagnosed
       back_to_trace: trace
 
-  fix:
-    prompt: "Apply minimal fix addressing the root cause."
+  diagnosed:
+    prompt: |
+      Root cause identified. Present diagnosis to the user, then decide:
+      - Trivial fix (1-2 lines, obvious, no risk) → `fix`
+      - Significant changes needed → `done` (exit to master; user decides next)
+      - Unclear scope or trade-offs → `ask_user`
     transitions:
-      verify: verify
+      fix: fix
+      done: done
+      ask_user: ask_user
+
+  ask_user:
+    prompt: |
+      Present findings and trade-offs. Ask user how to proceed:
+      - Quick fix here?
+      - Plan a bigger change?
+      - More investigation needed?
+    transitions:
+      fix: fix
+      done: done
+      investigate: hypothesize
+
+  fix:
+    prompt: |
+      Root cause identified. Fix the bug.
+      Apply the minimal fix that addresses the root cause.
+      Do NOT add defensive code "just in case" — fix the actual problem.
+      After fixing → transition `review`.
+    transitions:
+      review: mini_review
+
+  mini_review:
+    prompt: |
+      Re-read what you just wrote. Code review only — do NOT build or run tests.
+      1. Typos, edge cases, off-by-one, null refs
+      2. Does the change affect surrounding logic?
+      3. Ripple check — grep all call sites of changed functions
+      - `ok` → proceed to testing
+      - `fix` → go back and fix
+    transitions:
+      ok: verify
+      fix: fix
 
   verify:
     sub_workflow: testing
-    on_complete: done
+    on_complete: final_review
     on_fail: fix
 
+  final_review:
+    prompt: |
+      Tests pass. Full review of all changes made during debugging.
+      1. New + old code together — do they fit?
+      2. Dead code — did the fix make something unnecessary?
+      3. Constants/config — magic values?
+      4. Simplification opportunities?
+      - `ok` → done
+      - `fix` → needs more work
+    transitions:
+      ok: done
+      fix: fix
+
   done:
-    prompt: "Bug diagnosed, fixed, and verified."
+    prompt: "Debugging complete. Present findings to user."
     terminal: true
 
   escalated:
-    prompt: "Could not diagnose. Report findings to user."
+    prompt: |
+      Could not diagnose the root cause after maximum trace attempts.
+      Report findings to the user:
+      - What was tried
+      - What was ruled out
+      - Remaining hypotheses
     terminal: true
     outcome: fail

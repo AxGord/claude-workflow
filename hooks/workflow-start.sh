@@ -2,6 +2,25 @@
 # SessionStart hook: detect context (new session / plan resume / context clear)
 # and instruct agent accordingly.
 
+# --- 0. Ensure base skills exist ---
+# lang-* skills are dependencies of coding-skill-selector — only copied together with it.
+# If user deletes a lang-* skill, it stays deleted until coding-skill-selector is also removed.
+SKILLS_SRC="${CLAUDE_PLUGIN_ROOT}/templates/skills"
+SKILLS_DST="$HOME/.claude/skills"
+if [ -d "$SKILLS_SRC" ]; then
+  mkdir -p "$SKILLS_DST"
+  COPY_LANG=false
+  [ ! -d "$SKILLS_DST/coding-skill-selector" ] && COPY_LANG=true
+  for skill_dir in "$SKILLS_SRC"/*/; do
+    [ -d "$skill_dir" ] || continue
+    skill_name=$(basename "$skill_dir")
+    if [ "$COPY_LANG" = false ] && [[ "$skill_name" == lang-* ]]; then continue; fi
+    if [ ! -d "$SKILLS_DST/$skill_name" ]; then
+      cp -r "$skill_dir" "$SKILLS_DST/$skill_name"
+    fi
+  done
+fi
+
 read -t 1 -r INPUT
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"

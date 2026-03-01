@@ -1,0 +1,67 @@
+name: subagent
+description: "Workflow for sub-agents spawned by the Task tool. Routes to appropriate sub-workflow, completes task, and exits. No chat, planning, or reflection."
+initial: route
+max_transitions: 50
+
+states:
+  route:
+    prompt: |
+      You are a sub-agent with a specific assigned task.
+      Route based on your task type — do NOT enter chat or planning mode.
+
+      - Read/understand/explore code → explore
+      - Write/modify code → coding
+      - Debug/investigate an issue → debugging
+      - Fix a known bug → bug_fix
+      - Look up docs or web info → research
+      - Run or write tests → testing
+      - Simple direct task (single command, quick answer) → execute
+    transitions:
+      coding: run_coding
+      explore: run_explore
+      debugging: run_debugging
+      bug_fix: run_bug_fix
+      research: run_research
+      testing: run_testing
+      execute: execute
+
+  execute:
+    prompt: |
+      Execute the assigned task directly. No sub-workflow needed.
+      When done → transition `done`.
+    transitions:
+      done: done
+
+  run_coding:
+    sub_workflow: coding
+    on_complete: done
+    on_fail: done
+
+  run_explore:
+    sub_workflow: explore
+    on_complete: done
+    on_fail: done
+
+  run_debugging:
+    sub_workflow: debugging
+    on_complete: done
+    on_fail: done
+
+  run_bug_fix:
+    sub_workflow: bug-fix
+    on_complete: done
+    on_fail: done
+
+  run_research:
+    sub_workflow: web-research
+    on_complete: done
+    on_fail: done
+
+  run_testing:
+    sub_workflow: testing
+    on_complete: done
+    on_fail: done
+
+  done:
+    terminal: true
+    outcome: complete

@@ -1,0 +1,69 @@
+name: file-code
+description: "Per-file coding — spawned by coding/bug-fix for each file to implement"
+initial: understand
+max_transitions: 25
+
+states:
+  understand:
+    task: "Understand file context"
+    prompt: |
+      You are implementing changes in a single file as part of a larger task.
+      The file path, plan, and interface contracts were provided in your task prompt.
+
+      1. Call `Skill("coding-skill-selector")` to load language/domain skills.
+      2. Read the existing file (if it exists) to understand current structure.
+      3. Read related files: imports, callers, siblings in the same module.
+         Understand the interfaces this file must satisfy.
+      4. Review the plan and interface contracts from your task prompt.
+         Identify exactly what needs to change in this file.
+
+      Then → transition `done`.
+    transitions:
+      done: write
+
+  write:
+    task: "Write implementation"
+    prompt: |
+      Write the implementation for this file following:
+      - The plan and interface contracts from your task prompt
+      - Loaded preference/style skills
+      - Existing patterns in the file and its neighbors
+
+      Check original before changing: `git diff HEAD -- <file>` to understand original values.
+
+      Write the code, then → transition `done`.
+    transitions:
+      done: self_review
+
+  self_review:
+    task: "Self-review code"
+    prompt: |
+      Re-read what you just wrote. Code review only — do NOT build or run tests.
+
+      1. **Skills as checklist** — re-read loaded `lang-*` and `preferences-*` skills.
+         For every WRONG pattern listed, scan your new code for matches.
+      2. **Typos, edge cases, off-by-one, null refs**
+      3. **Interface contracts** — does your code satisfy the contracts from the plan?
+         Check function signatures, return types, side effects match what other files expect.
+      4. **Ripple check** — if you added a call to function F, grep ALL existing call sites.
+         Some may now fire twice through your new path. Flag for the parent agent.
+      5. **DRY check** — duplicating existing code? Extract if obvious.
+
+      If issues found → fix them, then re-review.
+      When clean → transition `done`.
+    transitions:
+      done: report
+
+  report:
+    task: "Write implementation report"
+    prompt: |
+      Write a structured report for this file:
+
+      **File**: <path>
+      **What was done**: <one-paragraph summary of changes>
+      **Decisions made**: <any implementation choices and rationale>
+      **Interface notes**: <how this file connects to others — exports, imports, contracts satisfied>
+      **Concerns**: <anything the parent agent should verify — edge cases, assumptions, integration risks>
+
+      Output this report as your final response.
+    terminal: true

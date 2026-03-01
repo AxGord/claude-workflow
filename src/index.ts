@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Storage } from "./storage.js";
@@ -16,6 +17,9 @@ function resolveDir(envVar: string, defaultAbs: string): string {
   return path.isAbsolute(val) ? val : path.resolve(process.cwd(), val);
 }
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BUNDLED_DIR = path.resolve(__dirname, "..", "templates");
+
 const home = os.homedir();
 const GLOBAL_WORKFLOW_DIR = resolveDir("WORKFLOW_DIR", path.join(home, ".claude", "workflows"));
 const STATE_DIR = resolveDir("STATE_DIR", path.join(home, ".claude", "workflow-state"));
@@ -27,7 +31,7 @@ const PROJECT_WORKFLOW_DIR = projectDir !== GLOBAL_WORKFLOW_DIR ? projectDir : n
 
 // Initialize components
 const storage = new Storage(STATE_DIR);
-const loader = new Loader(GLOBAL_WORKFLOW_DIR, PROJECT_WORKFLOW_DIR);
+const loader = new Loader(BUNDLED_DIR, GLOBAL_WORKFLOW_DIR, PROJECT_WORKFLOW_DIR);
 
 // Validate cross-references
 const refErrors = loader.validateReferences();

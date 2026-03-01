@@ -1,38 +1,130 @@
 name: master
-description: "Master workflow — single entry point. Analyzes task, loads knowledge skills, routes to process sub-workflows."
-initial: analyze
+description: "Master workflow — single entry point replacing skill-selector. Analyzes task, loads knowledge skills, routes to process sub-workflows."
+initial: route
 max_transitions: 100
 
 states:
-  analyze:
+  route:
     prompt: |
-      Analyze the user's task. Determine type (coding/debugging/refactoring/research/simple).
-      Load knowledge skills via Skill() based on task type, file extensions, and domain.
-      Then choose the appropriate transition.
+      STOP. This is a routing state. Do NOT perform any work. Do NOT answer the user.
+      The ONLY tool calls allowed here are workflow_list and workflow_transition.
+
+      **Step 1 — Check for project workflows.**
+      Call `workflow_list`. Look for workflows NOT in the global set (coding, debugging,
+      bug-fix, new-feature, refactoring, code-review, explore, web-research, planning,
+      testing, reflection, investigate, master). If a project workflow exists and its description
+      matches the user's task → transition `project` and set context key
+      `project_workflow` to that workflow's name.
+
+      **Step 2 — Standard routing (only if no project workflow matched).**
+
+      Plan mode active in system prompt? → plan
+
+      Plan override — always `plan` when ANY apply:
+      - 5+ files touched, mixed actions, cascade risk, user asks to plan
+
+      Route the user's message:
+      - understand/investigate → debugging or explore (NEVER coding)
+      - questions about code behavior ("will X break?", "how does Y work?",
+        "what happens when Z?") → explore (requires reading code before answering)
+      - task describes desired changes BUT contains unknowns, questions, or
+        uncertainty about current behavior → investigate (NEVER coding)
+        Markers: "вроде", "кажется", "если это так", "не уверен", "should X?",
+        "not sure if", conditional "если/if", multiple interleaved questions,
+        hedging language. When in doubt between coding and investigate → investigate.
+      - write/modify code (1-4 files), scope is clear → coding
+      - new feature e2e → feature
+      - fix known bug → bug_fix
+      - restructure code → refactoring
+      - review PR/code → code_review
+      - look up docs/web → research
+      - conversation that does NOT require reading code (greetings, meta-questions
+        about workflow, preferences, general knowledge) → chat
+      - unclear → unclear
+
+      Code reference in system-reminder → code-related (code_review, explore, or coding), NEVER chat.
+
+      → Call workflow_transition NOW.
     transitions:
       plan: plan
+      project: run_project
       coding: run_coding
+      feature: run_feature
+      bug_fix: run_bug_fix
       debugging: run_debugging
+      investigate: run_investigate
       refactoring: run_refactoring
+      code_review: run_code_review
       research: run_research
-      simple: handle_simple
+      explore: run_explore
+      chat: chat
       unclear: clarify
 
   clarify:
-    prompt: "Ask the user to clarify the task type and scope."
+    prompt: |
+      The task is unclear. Ask the user to clarify:
+      - What exactly do they need?
+      - Is this a bug fix, new feature, refactoring, research, or codebase exploration?
+      - What files/areas are involved?
+
+      After getting clarification → transition `got_info` to re-analyze.
     transitions:
-      got_info: analyze
+      got_info: route
 
   plan:
+    sub_workflow: planning
+    on_complete: route_execution
+    on_fail: reflect
+
+  route_execution:
     prompt: |
-      Complex task — decompose into a dynamic workflow.
-      1. Break into steps (standalone prompts or sub_workflow references to coding/testing/debugging/etc.)
-      2. Call workflow_create("task-<name>", {definition}) with the full plan
-      3. Call workflow_modify to add run_plan state (sub_workflow: "task-<name>", on_complete: "reflect", on_fail: "reflect")
-      4. Call workflow_modify to add transition from "plan" to "run_plan" named "execute"
-      5. Transition "execute"
+      The plan has been approved. Now route to the correct execution workflow.
+
+      Read the plan file — check the "Execution workflow" field in the Workflow section.
+
+      Choose transition:
+      - `coding` → plan says coding
+      - `refactoring` → plan says refactoring
+      - `feature` → plan says feature
+      - `bug_fix` → plan says bug_fix
+      - `project` → plan says project-specific workflow (set context key `project_workflow`)
+      - `dynamic` → plan says dynamic (complex multi-step, needs workflow_create)
+    transitions:
+      coding: run_coding
+      refactoring: run_refactoring
+      feature: run_feature
+      bug_fix: run_bug_fix
+      project: run_project
+      dynamic: create_dynamic
+
+  create_dynamic:
+    prompt: |
+      The dynamic workflow was already created during planning.
+
+      1. Read context key `dynamic_workflow` to get the workflow name
+      2. Call `workflow_modify` to add execution state:
+         - add_state: {name: "run_dynamic", sub_workflow: "<workflow name>", on_complete: "reflect", on_fail: "reflect"}
+         - add_transition: {from: "create_dynamic", name: "execute", to: "run_dynamic"}
+      3. Transition `execute`
     transitions:
       execute: reflect
+
+  run_project:
+    prompt: |
+      A project-specific workflow was selected. Wire it up dynamically:
+
+      1. Read context key `project_workflow` to get the workflow name
+      2. Call `workflow_modify` to update THIS state:
+         - add_state: {name: "run_project_sub", sub_workflow: "<workflow name>", on_complete: "reflect", on_fail: "reflect"}
+         - add_transition: {from: "run_project", name: "execute", to: "run_project_sub"}
+      3. Transition `execute`
+    transitions:
+      execute: reflect
+
+  run_investigate:
+    sub_workflow: investigate
+    on_complete: reflect
+    on_fail: plan
 
   run_coding:
     sub_workflow: coding
@@ -44,20 +136,61 @@ states:
     on_complete: reflect
     on_fail: reflect
 
+  run_feature:
+    sub_workflow: new-feature
+    on_complete: reflect
+    on_fail: reflect
+
+  run_bug_fix:
+    sub_workflow: bug-fix
+    on_complete: reflect
+    on_fail: reflect
+
+  run_code_review:
+    sub_workflow: code-review
+    on_complete: done
+    on_fail: done
+
   run_refactoring:
     sub_workflow: refactoring
     on_complete: reflect
     on_fail: reflect
 
   run_research:
-    sub_workflow: research
+    sub_workflow: web-research
     on_complete: done
     on_fail: done
 
-  handle_simple:
-    prompt: "Handle this simple task directly — questions, config, explanations, trivial edits."
+  run_explore:
+    sub_workflow: explore
+    on_complete: explore_outcome
+    on_fail: done
+
+  explore_outcome:
+    prompt: |
+      Exploration is complete. Decide what happens next based on the findings:
+
+      - If the findings indicate code changes are needed (delete dead code, refactor,
+        fix a bug, implement something) → transition `plan` to enter planning.
+      - If the exploration was purely informational (understand how something works,
+        answer a question, no action needed) → transition `done`.
+
+      Review the synthesized findings and decide.
     transitions:
+      plan: plan
       done: done
+
+  chat:
+    terminal: true
+    outcome: complete
+    prompt: |
+      Pure conversation — no code, no sub-workflow.
+
+      Answer the user's question or respond to their message directly.
+
+      If the user's next message changes scope (coding, research, etc.) → transition `next_task`.
+    transitions:
+      next_task: route
 
   reflect:
     sub_workflow: reflection
@@ -65,5 +198,5 @@ states:
     on_fail: done
 
   done:
-    prompt: "Task complete."
     terminal: true
+    outcome: complete
