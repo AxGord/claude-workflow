@@ -1,6 +1,6 @@
 {
-  "name": "claude-workflow",
-  "version": "1.0.0",
+  "name": "claude-mcp-workflow",
+  "version": "0.1.0",
   "description": "Structured workflow orchestration for AI agents via finite-state machines",
   "author": "AxGord <axgord@gmail.com> (https://github.com/AxGord)",
   "license": "MIT",
@@ -23,6 +23,17 @@
     "proper-lockfile": "^4.1.2",
     "yaml": "^2.6.0",
     "zod": "^3.24.0"
+  },
+  "files": [
+    "build/",
+    "templates/",
+    "hooks/",
+    "dashboard/",
+    ".claude-plugin/",
+    ".mcp.json"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
