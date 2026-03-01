@@ -56,16 +56,16 @@ claude --plugin-dir ./
 ## How It Works
 
 ```
-Agent                          Engine                         Storage
-  │                              │                              │
-  ├─ start() ─────────────────►│─ snapshot workflows ────────►│ session.json
-  │◄──── initial state prompt ──│                              │
-  │                              │                              │
-  ├─ transition() ──────────────►│─ validate & advance ────────►│ update JSON
-  │◄──── new state prompt ──────│  (push/pop sub-workflows)    │
-  │                              │                              │
-  ├─ transition() ──────────────►│─ terminal state? ───────────►│ mark complete
-  │◄──── done ──────────────────│  (auto-pop to parent)        │
+Agent                    Engine                         Storage
+  │                        │                              │
+  ├─ start() ─────────────►│─ snapshot workflows ────────►│ session.json
+  │◄── initial state prompt│                              │
+  │                        │                              │
+  ├─ transition() ─────────►│─ validate & advance ────────►│ update JSON
+  │◄── new state prompt ───│  (push/pop sub-workflows)    │
+  │                        │                              │
+  ├─ transition() ─────────►│─ terminal state? ───────────►│ mark complete
+  │◄── done ───────────────│  (auto-pop to parent)        │
 ```
 
 1. `start()` — creates a session, snapshots all workflow definitions, returns the initial state prompt
