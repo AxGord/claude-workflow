@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="package.json"><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="Version"></a>
+  <a href="https://www.npmjs.com/package/claude-mcp-workflow"><img src="https://img.shields.io/npm/v/claude-mcp-workflow" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-3178c6" alt="TypeScript"></a>
   <a href="https://code.claude.com/docs/en/plugins"><img src="https://img.shields.io/badge/Claude_Code-Plugin-ff6600" alt="Claude Code Plugin"></a>
@@ -27,20 +27,25 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 
 ## Quick Start
 
-### From the Official Marketplace
+### From npm (recommended)
 
-```
-/plugin install workflow@claude-plugin-directory
-```
-
-### From GitHub
+Create a `marketplace.json` and add it as a source, or install directly:
 
 ```bash
-# 1. Add the repository as a marketplace source
-/plugin marketplace add AxGord/claude-workflow
+# 1. Add a marketplace with this plugin
+/plugin marketplace add <marketplace-with-workflow>
 
-# 2. Install the plugin
-/plugin install workflow@AxGord-claude-workflow
+# 2. Install
+/plugin install workflow@<marketplace-name>
+```
+
+See [Creating a marketplace](https://code.claude.com/docs/en/plugin-marketplaces) for how to set up an npm-based marketplace with this plugin:
+
+```json
+{
+  "name": "workflow",
+  "source": { "source": "npm", "package": "claude-mcp-workflow" }
+}
 ```
 
 ### Manual (for development)

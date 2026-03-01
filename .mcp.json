@@ -2,8 +2,7 @@
   "mcpServers": {
     "wf": {
       "command": "node",
-      "args": ["./build/index.js"],
-      "env": {}
+      "args": ["${CLAUDE_PLUGIN_ROOT}/build/index.js"]
     }
   }
 }
