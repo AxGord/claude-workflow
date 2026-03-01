@@ -1,5 +1,5 @@
 {
-  "name": "mcp-workflow-engine",
+  "name": "claude-workflow",
   "version": "1.0.0",
   "description": "MCP-based workflow engine with FSM, nested workflows, and dashboard",
   "type": "module",

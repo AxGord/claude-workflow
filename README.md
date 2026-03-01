@@ -25,19 +25,30 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 
 ## Quick Start
 
-### As Claude Code Plugin
+### From the Official Marketplace
 
-```bash
-claude plugin add AxGord/mcp-workflow-engine
+```
+/plugin install workflow@claude-plugin-directory
 ```
 
-### Manual Installation
+### From GitHub
 
 ```bash
-git clone https://github.com/AxGord/mcp-workflow-engine.git
-cd mcp-workflow-engine
+# 1. Add the repository as a marketplace source
+/plugin marketplace add AxGord/claude-workflow
+
+# 2. Install the plugin
+/plugin install workflow@AxGord-claude-workflow
+```
+
+### Manual (for development)
+
+```bash
+git clone https://github.com/AxGord/claude-workflow.git
+cd claude-workflow
 npm install
 npm run build
+claude --plugin-dir ./
 ```
 
 ## How It Works
