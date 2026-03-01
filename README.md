@@ -198,7 +198,11 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 
 ## Status Line
 
-Show the active workflow and state in Claude Code's status bar. Add this snippet to your statusline script:
+Show the active workflow and state in Claude Code's status bar:
+
+![Status line showing coding:think](docs/screenshots/statusline.png)
+
+Add this snippet to your statusline script:
 
 ```sh
 # Workflow status — add to your ~/.claude/statusline-command.sh
