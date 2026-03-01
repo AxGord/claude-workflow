@@ -1,7 +1,14 @@
 {
   "name": "claude-workflow",
   "version": "1.0.0",
-  "description": "MCP-based workflow engine with FSM, nested workflows, and dashboard",
+  "description": "Structured workflow orchestration for AI agents via finite-state machines",
+  "author": "AxGord <axgord@gmail.com> (https://github.com/AxGord)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AxGord/claude-workflow.git"
+  },
+  "homepage": "https://github.com/AxGord/claude-workflow",
   "type": "module",
   "main": "build/index.js",
   "scripts": {

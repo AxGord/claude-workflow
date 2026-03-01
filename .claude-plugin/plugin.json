@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Structured workflow orchestration for AI agents via finite-state machines",
   "author": {
-    "name": "AxGord"
+    "name": "AxGord",
+    "email": "axgord@gmail.com",
+    "url": "https://github.com/AxGord"
   },
   "homepage": "https://github.com/AxGord/claude-workflow",
   "repository": "https://github.com/AxGord/claude-workflow",
