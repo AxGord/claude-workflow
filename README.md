@@ -196,6 +196,40 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 | `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence |
 | `DASHBOARD_PORT` | `3100` | Web dashboard HTTP port |
 
+## Status Line
+
+Show the active workflow and state in Claude Code's status bar. Add this snippet to your statusline script:
+
+```sh
+# Workflow status — add to your ~/.claude/statusline-command.sh
+wf_state_dir="$HOME/.claude/workflow-state"
+if [ -d "$wf_state_dir" ]; then
+  for f in "$wf_state_dir"/*.json; do
+    [ -f "$f" ] || continue
+    slen=$(jq -r '.stack | length' "$f" 2>/dev/null)
+    if [ "$slen" -gt 0 ]; then
+      cpid=$(jq -r '.context.claude_code_pid // 0' "$f" 2>/dev/null)
+      [ "$cpid" != "$PPID" ] && continue
+      wf=$(jq -r '.stack[.active_frame].workflow // ""' "$f" 2>/dev/null)
+      st=$(jq -r '.stack[.active_frame].current_state // ""' "$f" 2>/dev/null)
+      printf "\033[96m\xE2\x9A\x99 %s:%s\033[0m" "$wf" "$st"
+      break
+    fi
+  done
+fi
+```
+
+Then in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline-command.sh"
+  }
+}
+```
+
 ## Development
 
 ```bash
