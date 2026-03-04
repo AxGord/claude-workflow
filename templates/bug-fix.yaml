@@ -28,6 +28,11 @@ states:
       DO NOT fix the bug here. You may add trace/log statements to help reproduce,
       but do NOT modify production logic. The fix belongs in the `fix` state.
 
+      MANDATORY FIRST ACTION — read the skill descriptions in the system-reminder skills list
+      and call `Skill(name)` for EVERY skill whose description relates to debug bridges,
+      interactive debugging, UI interaction, or the current app's domain.
+      Do NOT skip this. Working without relevant skills leads to wasted time and errors.
+
       MANDATORY STEPS (all required, in order):
       1. Understand the exact user path that triggers the bug (which button, which file, which action)
       2. Build and launch the app with debug bridge (`-debug -DFASTBOOT -DDEBUG_API -DHEADLESS`)
@@ -85,12 +90,14 @@ states:
       DO NOT fix the bug here. You may add trace/log statements to narrow down
       the cause, but do NOT modify production logic. The fix belongs in the `fix` state.
 
-      After diagnosing, assess how many files need fixing:
+      After diagnosing, assess the fix scope:
       - 1 file → `single`
-      - 2+ files → `multi`
+      - 2+ files, tightly coupled (one logical chain, shared context) → `multi_coupled`
+      - 2+ files, independent (can be done in parallel with clear interfaces) → `multi_independent`
     transitions:
       single: fix_single
-      multi: fix_delegate
+      multi_coupled: fix_coupled
+      multi_independent: fix_delegate
       unclear: add_logging
 
   add_logging:
@@ -99,13 +106,30 @@ states:
     max_visits: 3
     transitions:
       single: fix_single
-      multi: fix_delegate
+      multi_coupled: fix_coupled
+      multi_independent: fix_delegate
       still_unclear: escalate
 
   fix_single:
     sub_workflow: file-code
     on_complete: review
     on_fail: review
+
+  fix_coupled:
+    task: "Fix tightly coupled multi-file changes"
+    prompt: |
+      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
+
+      The fix spans multiple tightly coupled files (one logical chain, shared context).
+      Do it yourself sequentially — delegation overhead exceeds benefit here.
+
+      1. Plan the order: start from the innermost change, work outward to callers
+      2. For each file: read → edit → self-review against loaded skills
+      3. After all files: verify cross-file consistency (imports, signatures, contracts)
+
+      Then → transition `done`.
+    transitions:
+      done: review
 
   fix_delegate:
     task: "Delegate per-file fixes to agents"
@@ -240,6 +264,10 @@ states:
     task: "Verify the fix visually"
     prompt: |
       Verify the original bug is fixed VISUALLY.
+
+      MANDATORY FIRST ACTION — read the skill descriptions in the system-reminder skills list
+      and call `Skill(name)` for EVERY skill whose description relates to debug bridges,
+      interactive debugging, UI interaction, or the current app's domain.
 
       MANDATORY STEPS:
       1. Build and launch the app with debug bridge

@@ -20,8 +20,6 @@ Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 
 **Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__start`).
 
-**Migration from standalone**: see `migrate.sh` (not yet committed) to update user configs, then install as plugin.
-
 ## Build & Run
 
 ```bash

@@ -104,7 +104,7 @@ export function registerTools(
   }, async (args) => {
     try {
       const status = await engine.start(args.workflow ?? "master", args.actor, args.parent_session_id);
-      const text = formatStatus(status, { showSessionId: true })
+      const text = formatStatus(status, { showSessionId: true, forceFullPrompt: true })
         + "\n\n---\nWORKFLOW RULES:\n"
         + "- Transitions in real-time only — never batch multiple transitions in one step.\n"
         + "- Complete each state fully before transitioning to the next.\n"
@@ -157,6 +157,7 @@ export function registerTools(
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
+      engine.assertOwnership(sid);
       const status = await engine.transition(sid, args.transition, args.actor);
       return { content: [{ type: "text", text: formatStatus(status) }] };
     } catch (err) {
@@ -176,6 +177,7 @@ export function registerTools(
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
+      engine.assertOwnership(sid);
       await engine.setContext(sid, args.key, args.value, args.actor);
       return { content: [{ type: "text", text: `Context "${args.key}" set successfully.` }] };
     } catch (err) {
@@ -212,6 +214,7 @@ export function registerTools(
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
+      engine.assertOwnership(sid);
       const messages = await modifier.modify(sid, {
         add_state: args.add_state,
         add_transition: args.add_transition,
@@ -289,6 +292,7 @@ export function registerTools(
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
+      engine.assertOwnership(sid);
       await engine.abort(sid);
       return { content: [{ type: "text", text: `Session "${sid}" aborted.` }] };
     } catch (err) {
@@ -299,11 +303,16 @@ export function registerTools(
   // 10. sessions
   server.registerTool("sessions", {
     description: "List all workflow sessions (active shown first, recent inactive limited to 3).",
-    inputSchema: z.object({}).strict(),
-  }, async () => {
-    const sessions = storage.readAll();
+    inputSchema: z.object({
+      all: z.boolean().optional().describe("Show sessions from all processes. Default: only current process."),
+    }).strict(),
+  }, async (args) => {
+    const pid = process.ppid;
+    const allSessions = storage.readAll();
+    const sessions = args.all ? allSessions : allSessions.filter(s => s.context.claude_code_pid === pid);
     if (sessions.length === 0) {
-      return { content: [{ type: "text", text: "No active sessions." }] };
+      const hint = args.all ? "" : " Use sessions({ all: true }) to see all processes.";
+      return { content: [{ type: "text", text: `No sessions found.${hint}` }] };
     }
 
     const formatSession = (s: SessionState): string => {
@@ -314,7 +323,10 @@ export function registerTools(
         : s.outcome === "abandoned" ? "(abandoned)" : "(completed)";
       const depth = s.stack.length > 1 ? ` [depth: ${s.stack.length}]` : "";
       const parent = s.parent_session_id ? ` [child of ${s.parent_session_id}]` : "";
-      return `  ${s.session_id}: ${stateInfo}${depth}${parent} (updated: ${s.updated_at})`;
+      const pidInfo = args.all && s.context.claude_code_pid !== undefined
+        ? ` [pid: ${s.context.claude_code_pid}${s.context.claude_code_pid === pid ? " ★" : ""}]`
+        : "";
+      return `  ${s.session_id}: ${stateInfo}${depth}${parent}${pidInfo} (updated: ${s.updated_at})`;
     };
 
     const active = sessions.filter(s => s.stack.length > 0);

@@ -51,6 +51,10 @@ states:
       logical context around them — the full method, callers of changed signatures,
       other uses of changed fields. A change can break surrounding code.
       - [ ] Logic errors: wrong conditions, off-by-one, inverted booleans, wrong operators
+      - [ ] Dead guards: for EVERY guard/early-return/conditional check in changed code,
+            trace all call sites and ask "can this condition ever be true/false here?"
+            Apply knowledge from loaded skills (e.g. library callback ordering, lifecycle
+            guarantees). If no execution path triggers the guard — it's dead code, remove it.
       - [ ] Edge cases: null/undefined, empty collections, zero, negative, boundary values
       - [ ] Error handling: uncaught exceptions, swallowed errors, wrong error types
       - [ ] Race conditions: async without awaits, shared mutable state
@@ -121,7 +125,7 @@ states:
       Additionally check:
       - [ ] Naming: consistent with conventions in neighboring files
       - [ ] Duplication: does this duplicate existing code? Search the codebase.
-      - [ ] Dead code: unused imports, unreachable branches, commented-out code
+      - [ ] Dead code: unused imports, commented-out code (dead guards checked in check_correctness)
       - [ ] Complexity: overly nested logic, functions doing too many things
       - [ ] Consistency: does new code follow patterns in the same module?
 

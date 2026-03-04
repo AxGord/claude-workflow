@@ -54,7 +54,7 @@ states:
     prompt: |
       Add 3-5 targeted traces with unique prefixes (`[DBG1]`, `[DBG2]`).
 
-      Delegate to `debugger` subagent: build command, run command, what to look for, timeout.
+      Delegate to `general-purpose` subagent: build command, run command, what to look for, timeout.
       **NEVER use `run_in_background: true`**.
 
       **Anti-patterns:**
@@ -74,10 +74,11 @@ states:
 
   bridge_debug:
     prompt: |
-      Call `Skill("debug-bridge")`.
+      Load all debug bridge skills available in the system-reminder skills list
+      (e.g. `Skill("debug-bridge")` and any platform-specific debug bridge skills).
 
       Use debug bridge for interactive state inspection.
-      Launch `interactive-openfl-debugger` subagent. Inspect state, take screenshots, simulate events.
+      Launch `general-purpose` subagent. Inspect state, take screenshots, simulate events.
 
       Choose transition:
       - `found` → root cause identified via bridge

@@ -48,6 +48,10 @@ states:
   review_delegate:
     task: "Deep per-file review via agents"
     prompt: |
+      CRITICAL: You are a DISPATCHER in this state, not a reviewer.
+      Do NOT read diffs, files, or code yourself. Do NOT use Read, Grep, Bash to look at file content.
+      Your ONLY job is to spawn Agent tools and collect their results.
+
       Spawn one Agent per changed file for deep review.
       Use `subagent_type="general-purpose"`, `model="opus"`.
 

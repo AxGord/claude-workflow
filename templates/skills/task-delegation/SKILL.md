@@ -14,23 +14,15 @@ description: When and how to delegate to subagents
 
 **3+ yes → delegate**
 
-## Available Agents
+## Agent
 
-| Agent | Use for |
-|-------|---------|
-| **researcher** | Information gathering, docs, APIs |
-| **coder-python** | Python code |
-| **debugger** | Build, run, test |
-| **general-purpose** | Complex tasks needing MCP tools |
-
-<!-- Add your own agent mappings here, e.g.: -->
-<!-- | **coder-haxe** | Haxe code | -->
-<!-- | **coder-csharp** | C# code | -->
+All delegation uses `general-purpose` subagent. It inherits all tools including MCP from the parent context.
 
 ## ALWAYS Delegate to Subagent
 
-Build, run, and test operations → **always** use `debugger` subagent.
-Heavy output (compilation logs, long files, web content) → through subagent with **precise extraction prompt** ("extract only X"), never dump raw output into main context.
+Build, run, and test operations → subagent.
+Interactive debug bridge sessions (display tree, clicks, screenshots) → subagent.
+Heavy output (compilation logs, long files, web content) → subagent with **precise extraction prompt** ("extract only X"), never dump raw output into main context.
 Preserves main context for decision-making.
 
 ## Do It Yourself When
@@ -45,9 +37,9 @@ Preserves main context for decision-making.
 
 ## Rules
 
-- **Maximize parallelism** — launch ALL independent agents in **one message**, not sequentially
+- **Maximize parallelism** — launch ALL independent agents in **one message**, not sequentially. If 3 components have clear interfaces → 3 agents at once
 - Split by **logical component**, not per file
 - Stabilize interfaces **before** parallelizing
 - Give agents **specific prompts** with file paths and signatures
 - After agents complete: verify integration, link components, test
-- **Review subagent code against loaded skills** — subagent fixes compile but may violate style rules. ALWAYS read changed files and apply loaded preference/lang skills before considering done
+- **Review subagent code against loaded skills** — subagents fix problems mechanically (compile errors, type mismatches). Their fixes compile but may violate style rules (missing types, verbose patterns, redundant code). ALWAYS read each file the subagent changed and apply loaded preference/lang skills before considering done

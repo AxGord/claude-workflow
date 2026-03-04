@@ -41,7 +41,7 @@ states:
       2. Write tests covering new/changed behavior
       3. Register new test class if needed
 
-      Run via `debugger` subagent to keep build output out of main context.
+      Run via `general-purpose` subagent to keep build output out of main context.
 
       Choose transition:
       - `pass` → all unit tests pass
@@ -83,7 +83,7 @@ states:
     prompt: |
       Run integration verification.
 
-      1. Build and launch via `debugger` subagent
+      1. Build and launch via `general-purpose` subagent
       2. Simulate the actual user workflow end-to-end
       3. Verify state changes propagated correctly (screenshots, state inspection)
 

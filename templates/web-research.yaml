@@ -24,7 +24,7 @@ states:
     prompt: |
       Call `Skill("web-reading")` for the web access tool hierarchy.
 
-      Delegate to `researcher` subagents:
+      Delegate to `general-purpose` subagents:
       - Split broad questions into 3-5 narrow ones, launch in parallel
       - Each returns only a concise answer
       - Follow tool hierarchy from loaded web-reading skill

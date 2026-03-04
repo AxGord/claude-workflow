@@ -60,6 +60,17 @@ export class Engine {
     return active[0].session_id;
   }
 
+  /** Throw if the session belongs to a different Claude Code process. */
+  public assertOwnership(sessionId: string): void {
+    const session = this._storage.read(sessionId);
+    if (!session) throw new Error(`Session "${sessionId}" not found`);
+    const ownerPid = session.context.claude_code_pid;
+    const currentPid = process.ppid;
+    if (ownerPid !== undefined && ownerPid !== currentPid) {
+      throw new Error(`Session "${sessionId}" belongs to PID ${ownerPid} (current: ${currentPid}). Use the dashboard to manage other processes' sessions.`);
+    }
+  }
+
   public async start(workflowName: string, actor?: string, parentSessionId?: string): Promise<StatusResult> {
     // Guard: prevent duplicate top-level sessions from the same Claude Code process.
     // Sub-agent sessions (with parent_session_id) are exempt — they run alongside the parent.
@@ -69,9 +80,19 @@ export class Engine {
         s => s.context.claude_code_pid === pid && !s.parent_session_id && s.stack.length > 0
       );
       if (active.length > 0) {
-        // Auto-redirect to subagent workflow as a child session
-        parentSessionId = active[0].session_id;
-        workflowName = "subagent";
+        // Idempotent start: return existing session with a short message
+        // instead of the full state prompt. This prevents sub-agents
+        // (who inherit the "call start() first" rule) from seeing
+        // transition instructions and hijacking the parent session.
+        const existing = active[0];
+        const frame = existing.stack[existing.active_frame];
+        const status = this._buildStatus(existing, []);
+        return {
+          ...status,
+          prompt: `Session already active: ${existing.session_id} (${frame.workflow} @ ${frame.current_state}). `
+            + `If you are a sub-agent, pass parent_session_id to start your own session. `
+            + `If you lost context, call status() to re-read the full prompt.`,
+        };
       }
     }
 
