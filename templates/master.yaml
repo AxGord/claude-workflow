@@ -29,8 +29,8 @@ states:
         "what happens when Z?") → explore (requires reading code before answering)
       - task describes desired changes BUT contains unknowns, questions, or
         uncertainty about current behavior → investigate (NEVER coding)
-        Markers: "вроде", "кажется", "если это так", "не уверен", "should X?",
-        "not sure if", conditional "если/if", multiple interleaved questions,
+        Markers: "seems like", "I think", "if that's the case", "not sure",
+        "should X?", "not sure if", conditional "if", multiple interleaved questions,
         hedging language. When in doubt between coding and investigate → investigate.
       - write/modify code (1-4 files), scope is clear → coding
       - new feature e2e → feature

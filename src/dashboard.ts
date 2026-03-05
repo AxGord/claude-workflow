@@ -1,5 +1,6 @@
 import express from "express";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
@@ -71,6 +72,13 @@ function buildApp(storage: Storage, loader: Loader): express.Express {
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
+  });
+
+  // Serve dagre from node_modules (works both in dev and when installed as a dependency)
+  const require = createRequire(import.meta.url);
+  const dagrePath = require.resolve("@dagrejs/dagre/dist/dagre.min.js");
+  app.get("/dagre.min.js", (_req, res) => {
+    res.sendFile(dagrePath);
   });
 
   // Serve dashboard HTML

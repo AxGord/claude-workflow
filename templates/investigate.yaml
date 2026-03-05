@@ -11,7 +11,7 @@ states:
       1. Extract from the user's message:
          - **Goal**: what the user ultimately wants changed
          - **Unknowns**: questions, uncertainties, assumptions to verify
-           (markers: "вроде", "кажется", "если это так", "не уверен", "should",
+           (markers: "seems like", "I think", "if that's the case", "not sure", "should",
             "not sure", "?", conditional language, hedging)
          - **Knowns**: concrete facts or behaviors stated as certain
 
