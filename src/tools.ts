@@ -153,13 +153,15 @@ export function registerTools(
       session_id: z.string().optional().describe("Session identifier"),
       transition: z.string().describe("Name of the transition to take"),
       actor: z.string().optional().describe("Identity of the agent performing this action"),
+      force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations)"),
     }).strict(),
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
-      engine.assertOwnership(sid);
+      const warning = engine.assertOwnership(sid, args.force);
       const status = await engine.transition(sid, args.transition, args.actor);
-      return { content: [{ type: "text", text: formatStatus(status) }] };
+      const text = (warning ? warning + "\n\n" : "") + formatStatus(status);
+      return { content: [{ type: "text", text }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
@@ -173,13 +175,15 @@ export function registerTools(
       key: z.string().describe("Context key"),
       value: z.unknown().describe("Context value"),
       actor: z.string().optional().describe("Identity of the agent performing this action"),
+      force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations)"),
     }).strict(),
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
-      engine.assertOwnership(sid);
+      const warning = engine.assertOwnership(sid, args.force);
       await engine.setContext(sid, args.key, args.value, args.actor);
-      return { content: [{ type: "text", text: `Context "${args.key}" set successfully.` }] };
+      const text = (warning ? warning + "\n" : "") + `Context "${args.key}" set successfully.`;
+      return { content: [{ type: "text", text }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
@@ -210,17 +214,19 @@ export function registerTools(
         from: z.string(),
         name: z.string(),
       }).optional().describe("Remove a transition"),
+      force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations)"),
     }).strict(),
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
-      engine.assertOwnership(sid);
+      const warning = engine.assertOwnership(sid, args.force);
       const messages = await modifier.modify(sid, {
         add_state: args.add_state,
         add_transition: args.add_transition,
         remove_transition: args.remove_transition,
       });
-      return { content: [{ type: "text", text: `Modifications applied:\n${messages.join("\n")}` }] };
+      const text = (warning ? warning + "\n" : "") + `Modifications applied:\n${messages.join("\n")}`;
+      return { content: [{ type: "text", text }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
@@ -288,13 +294,15 @@ export function registerTools(
     description: "Abort the workflow (pop all stack frames, end session).",
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
+      force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations, e.g. aborting stale sessions from dead processes)"),
     }).strict(),
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
-      engine.assertOwnership(sid);
+      const warning = engine.assertOwnership(sid, args.force);
       await engine.abort(sid);
-      return { content: [{ type: "text", text: `Session "${sid}" aborted.` }] };
+      const text = (warning ? warning + "\n" : "") + `Session "${sid}" aborted.`;
+      return { content: [{ type: "text", text }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }

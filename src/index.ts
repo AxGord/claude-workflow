@@ -58,6 +58,11 @@ registerTools(server, engine, modifier, loader, storage);
 // Start dashboard
 createDashboard(storage, loader, DASHBOARD_PORT);
 
+// Reap orphaned sessions from previous processes on startup
+engine.reapOrphanedSessions().then(reaped => {
+  if (reaped.length > 0) console.error(`Reaped orphaned sessions: ${reaped.join(", ")}`);
+}).catch(() => {});
+
 // Connect via stdio
 async function main(): Promise<void> {
   const transport = new StdioServerTransport();

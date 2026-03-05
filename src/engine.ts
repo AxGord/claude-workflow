@@ -60,15 +60,28 @@ export class Engine {
     return active[0].session_id;
   }
 
-  /** Throw if the session belongs to a different Claude Code process. */
-  public assertOwnership(sessionId: string): void {
+  /**
+   * Check if the session belongs to the current Claude Code process.
+   * When force=true, skip the check but warn if the owner process is still alive.
+   * Returns a warning string if force was used, undefined otherwise.
+   */
+  public assertOwnership(sessionId: string, force?: boolean): string | undefined {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
     const ownerPid = session.context.claude_code_pid;
     const currentPid = process.ppid;
     if (ownerPid !== undefined && ownerPid !== currentPid) {
-      throw new Error(`Session "${sessionId}" belongs to PID ${ownerPid} (current: ${currentPid}). Use the dashboard to manage other processes' sessions.`);
+      if (!force) {
+        throw new Error(`Session "${sessionId}" belongs to PID ${ownerPid} (current: ${currentPid}). Use force: true to override.`);
+      }
+      // Check if the owner process is still alive
+      let alive = false;
+      try { process.kill(ownerPid as number, 0); alive = true; } catch {}
+      if (alive) {
+        return `Warning: session "${sessionId}" belongs to PID ${ownerPid} which is still alive. Proceeding due to force: true.`;
+      }
     }
+    return undefined;
   }
 
   public async start(workflowName: string, actor?: string, parentSessionId?: string): Promise<StatusResult> {
@@ -302,6 +315,23 @@ export class Engine {
       await this._storage.write(sessionId, reparked);
       return null;
     }
+  }
+
+  /** Abandon active sessions whose owner PID is no longer alive. */
+  public async reapOrphanedSessions(): Promise<string[]> {
+    const reaped: string[] = [];
+    const active = this._storage.readAll().filter(s => s.stack.length > 0);
+    for (const session of active) {
+      const pid = session.context.claude_code_pid;
+      if (pid === undefined) continue;
+      let alive = false;
+      try { process.kill(pid as number, 0); alive = true; } catch {}
+      if (!alive) {
+        await this.abort(session.session_id);
+        reaped.push(session.session_id);
+      }
+    }
+    return reaped;
   }
 
   public async setContext(sessionId: string, key: string, value: unknown, actor?: string): Promise<void> {
