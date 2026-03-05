@@ -61,7 +61,7 @@ createDashboard(storage, loader, DASHBOARD_PORT);
 // Reap orphaned sessions from previous processes on startup
 engine.reapOrphanedSessions().then(reaped => {
   if (reaped.length > 0) console.error(`Reaped orphaned sessions: ${reaped.join(", ")}`);
-}).catch(() => {});
+}).catch(err => console.error("Reap failed:", err));
 
 // Connect via stdio
 async function main(): Promise<void> {

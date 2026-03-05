@@ -60,6 +60,15 @@ export class Engine {
     return active[0].session_id;
   }
 
+  private static _isPidAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (e: any) {
+      return e?.code === "EPERM";
+    }
+  }
+
   /**
    * Check if the session belongs to the current Claude Code process.
    * When force=true, skip the check but warn if the owner process is still alive.
@@ -74,14 +83,10 @@ export class Engine {
       if (!force) {
         throw new Error(`Session "${sessionId}" belongs to PID ${ownerPid} (current: ${currentPid}). Use force: true to override.`);
       }
-      // Check if the owner process is still alive
-      let alive = false;
-      try { process.kill(ownerPid as number, 0); alive = true; } catch {}
-      if (alive) {
+      if (Engine._isPidAlive(ownerPid as number)) {
         return `Warning: session "${sessionId}" belongs to PID ${ownerPid} which is still alive. Proceeding due to force: true.`;
       }
     }
-    return undefined;
   }
 
   public async start(workflowName: string, actor?: string, parentSessionId?: string): Promise<StatusResult> {
@@ -323,10 +328,8 @@ export class Engine {
     const active = this._storage.readAll().filter(s => s.stack.length > 0);
     for (const session of active) {
       const pid = session.context.claude_code_pid;
-      if (pid === undefined) continue;
-      let alive = false;
-      try { process.kill(pid as number, 0); alive = true; } catch {}
-      if (!alive) {
+      if (pid === undefined || typeof pid !== "number") continue;
+      if (!Engine._isPidAlive(pid)) {
         await this.abort(session.session_id);
         reaped.push(session.session_id);
       }
