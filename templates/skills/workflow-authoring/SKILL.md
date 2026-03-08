@@ -38,6 +38,24 @@ check_api:
   error_prompt: "Not responding: {{error}}"
 ```
 
+**skills** — Skill gate. Checks if skills are loaded; blocks if not, auto-transitions if yes.
+```yaml
+load_skills:
+  skills:
+    - coding-skill-selector
+    - preferences
+  transitions:
+    continue: work
+```
+
+- Engine tracks loaded skills per session with epoch-based freshness
+- First visit: prompts agent to call `Skill("X")` for each missing skill
+- After loading + transition: skills marked as loaded for current epoch
+- Subsequent visits: auto-transitions silently (agent sees nothing)
+- After context clear/plan resume: epoch increments, skills reload on next gate
+- Skill gate states have `transitions` (unlike action states)
+- Typically one transition (`ready`) pointing to the next work state
+
 ### Routing Modes
 
 **Simple** — binary success/error:

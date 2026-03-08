@@ -1,24 +1,29 @@
 name: file-review
 description: "Per-file deep review — spawned by code-review for each changed file"
-initial: read_context
+initial: load_skills
 max_transitions: 25
 
 states:
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: read_context
+
   read_context:
     task: "Read file and context"
     prompt: |
       You are reviewing a single file as part of a code review.
       The file path and diff info were provided in your task prompt.
 
-      1. Call `Skill("coding-skill-selector")` to load language/domain skills.
-      2. Read the diff for this file to understand what changed.
-      3. Check the review scope from your task prompt:
+      1. Read the diff for this file to understand what changed.
+      2. Check the review scope from your task prompt:
          - `diff` scope → read the diff, then read the full methods/blocks containing changes.
            Changes can affect surrounding code, so always understand the logical context.
          - `full` scope → read the FULL file
-      4. Read related files: imports, files that call this one, siblings in the same module.
+      3. Read related files: imports, files that call this one, siblings in the same module.
          Check if similar code already exists elsewhere that could be reused or unified.
-      5. Understand what changed and why.
+      4. Understand what changed and why.
 
       Then → transition `done`.
     transitions:

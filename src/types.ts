@@ -15,6 +15,9 @@ export const StateDefinitionSchema = z.object({
   on_fail: z.string().optional(),
   task: z.string().optional(),
 
+  // Skill gate: require skills to be loaded before proceeding
+  skills: z.array(z.string()).optional(),
+
   // Action state fields
   type: z.enum(["prompt", "exec", "fetch"]).optional(),
 
@@ -104,6 +107,8 @@ export interface SessionState {
   readonly background_pids?: Record<string, number>;
   readonly pending_pop?: { readonly outcome: "complete" | "fail" };
   readonly global_state_visits?: Record<string, number>;
+  readonly skill_epoch?: number;
+  readonly loaded_skills?: Record<string, number>;
 }
 
 export interface WorkflowOverrides {

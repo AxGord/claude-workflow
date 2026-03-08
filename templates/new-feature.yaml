@@ -12,14 +12,18 @@ states:
 
   plan:
     sub_workflow: planning
-    on_complete: implement
+    on_complete: load_skills
     on_fail: requirements
+
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: implement
 
   implement:
     task: "Implement the feature"
     prompt: |
-      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
-
       Implement the feature according to the plan.
     transitions:
       done: test
@@ -27,14 +31,14 @@ states:
   test:
     sub_workflow: testing
     on_complete: review
-    on_fail: implement
+    on_fail: load_skills
 
   review:
     task: "Review implementation"
     prompt: "Review the implementation. Check for edge cases, code quality, and adherence to project conventions."
     transitions:
       approved: done
-      changes_needed: implement
+      changes_needed: load_skills
 
   done:
     prompt: "Feature implemented, tested, and reviewed."

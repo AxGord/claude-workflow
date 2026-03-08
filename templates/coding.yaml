@@ -1,14 +1,18 @@
 name: coding
 description: "Code writing workflow — from thinking to verified implementation"
-initial: think
+initial: load_skills
 max_transitions: 40
 
 states:
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: think
+
   think:
     prompt: |
-      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
-
-      Then think before writing:
+      Think before writing:
       1. What will I write? Outline the approach
       2. Does it smell like a utility? Check framework built-ins first
       3. Search project for existing utilities/helpers — use if found, create if broadly useful

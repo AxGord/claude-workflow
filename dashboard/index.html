@@ -298,7 +298,11 @@ function renderDetail(session) {
     const wf = allWorkflows[frame.workflow];
     const state = wf?.states?.[frame.current_state];
     const isActionState = state?.type === 'exec' || state?.type === 'fetch';
-    if (isActionState) {
+    const isSkillGateState = state?.skills && state.skills.length > 0;
+    if (isSkillGateState) {
+      html += `<h2 style="margin-top:16px">Skill Gate</h2>`;
+      html += `<div class="prompt-box">${state.skills.map(s => escapeHtml(s)).join('\n')}</div>`;
+    } else if (isActionState) {
       const info = state.type === 'exec' ? `command: ${state.command || '?'}` : `url: ${state.url || '?'}`;
       html += `<h2 style="margin-top:16px">Action State (${state.type})</h2>`;
       html += `<div class="prompt-box">${escapeHtml(info)}</div>`;
@@ -342,6 +346,21 @@ function renderDetail(session) {
     html += '</div>';
   }
 
+  // Skills
+  const loadedSkills = session.loaded_skills;
+  if (loadedSkills && Object.keys(loadedSkills).length > 0) {
+    const epoch = session.skill_epoch ?? 0;
+    html += `<h2 style="margin-top:16px">Loaded Skills <span style="color:#484f58;font-size:12px;text-transform:none">(epoch ${epoch})</span></h2>`;
+    html += '<div>';
+    for (const [skill, loadedEpoch] of Object.entries(loadedSkills)) {
+      const stale = loadedEpoch < epoch;
+      const color = stale ? '#f85149' : '#3fb950';
+      const label = stale ? ' (stale)' : '';
+      html += `<div class="context-entry"><span style="color:${color}">●</span> <span class="context-key">${escapeHtml(skill)}</span><span style="color:#484f58">${label}</span></div>`;
+    }
+    html += '</div>';
+  }
+
   // Graph
   if (isActive) {
     const frame = session.stack[session.active_frame];
@@ -358,6 +377,7 @@ function renderDetail(session) {
     const actorHtml = h.actor ? ` <span class="actor-tag" style="background:${actorColor(h.actor)}20;color:${actorColor(h.actor)}">${escapeHtml(h.actor)}</span>` : '';
     const detailHtml = h.detail ? ` <span style="color:#ffa657">(${escapeHtml(h.detail)})</span>` : '';
     if (h.event === 'action') return `<div class="history-entry">[${h.frame}] <span style="color:#ffa657">[auto]</span> ${escapeHtml(h.from || '')} → ${escapeHtml(h.to || '')}${detailHtml}</div>`;
+    if (h.event === 'skill_gate') return `<div class="history-entry">[${h.frame}] <span style="color:#39d3c0">[skills]</span> ${escapeHtml(h.from || '')} → ${escapeHtml(h.to || '')}</div>`;
     if (h.event) return `<div class="history-entry">[${h.frame}] ${escapeHtml(h.event)}${h.workflow ? ' (' + escapeHtml(h.workflow) + ')' : ''}${actorHtml}</div>`;
     return `<div class="history-entry">[${h.frame}] ${escapeHtml(h.from || '')} → ${escapeHtml(h.to || '')} via "${escapeHtml(h.via || '')}"${actorHtml}</div>`;
   }).join('');
@@ -550,6 +570,7 @@ function renderGraph(workflowName, currentState, stack) {
     const isExec = state.type === 'exec';
     const isFetch = state.type === 'fetch';
     const isAction = isExec || isFetch;
+    const isSkillGate = state.skills && state.skills.length > 0;
 
     let fill = '#21262d';
     let stroke = '#30363d';
@@ -563,6 +584,10 @@ function renderGraph(workflowName, currentState, stack) {
     } else if (isInStack) {
       fill = '#1c2333'; stroke = '#58a6ff'; textColor = '#58a6ff'; strokeWidth = 2.5;
       filterAttr = ` filter="url(#glow-blue-${uid})"`;
+    } else if (isSkillGate) {
+      fill = '#1a2a2a'; stroke = '#39d3c0';
+    } else if (isExec && state.background) {
+      fill = '#0d2a27'; stroke = '#39d3c0';
     } else if (isExec) {
       fill = '#2a1f0d'; stroke = '#ffa657';
     } else if (isFetch) {
@@ -608,8 +633,13 @@ function renderGraph(workflowName, currentState, stack) {
     // Action type label below main label
     if (isAction && !isCurrent && !isInStack) {
       const label = isExec ? (state.background ? 'exec (bg)' : 'exec') : 'fetch';
-      const labelColor = isExec ? '#ffa657' : '#58a6ff';
+      const labelColor = isExec ? (state.background ? '#39d3c0' : '#ffa657') : '#58a6ff';
       svg += `<text x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle" fill="${labelColor}" font-size="9" opacity="0.7">${label}</text>`;
+    }
+
+    // Skill gate label below main label
+    if (isSkillGate && !isCurrent && !isInStack) {
+      svg += `<text x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle" fill="#39d3c0" font-size="9" opacity="0.7">skills</text>`;
     }
 
     svg += `</g>`;
@@ -638,6 +668,7 @@ function showWorkflowGraph(name) {
       if (state.sub_workflow) flags.push('sub: ' + state.sub_workflow);
       if (state.type === 'exec') flags.push(state.background ? 'exec (bg)' : 'exec');
       if (state.type === 'fetch') flags.push('fetch');
+      if (state.skills && state.skills.length > 0) flags.push('skills: ' + state.skills.map(s => escapeHtml(s)).join(', '));
       const flagStr = flags.length > 0 ? `<span class="state-flags">[${flags.join(', ')}]</span>` : '';
       stateList += `<div class="stack-frame state-item" data-state="${escapeHtml(sn)}" data-workflow="${escapeHtml(name)}" onclick="toggleStatePrompt(this, '${escapeHtml(name)}', '${escapeHtml(sn)}')"><span class="state-name">${escapeHtml(sn)}</span>${flagStr}</div>`;
     }
@@ -713,7 +744,9 @@ function toggleStatePrompt(el, workflowName, stateName) {
   wrapper.className = 'state-prompt-wrapper';
 
   let html = '';
-  if (state.type === 'exec' || state.type === 'fetch') {
+  if (state.skills && state.skills.length > 0) {
+    html += `<div class="state-prompt-label">Required Skills</div><div class="state-prompt">${state.skills.map(s => escapeHtml(s)).join('\n')}</div>`;
+  } else if (state.type === 'exec' || state.type === 'fetch') {
     const label = state.type === 'exec' ? 'Command' : 'URL';
     const value = state.type === 'exec' ? (state.command || '?') : (state.url || '?');
     html += `<div class="state-prompt-label">${label}</div><div class="state-prompt">${escapeHtml(value)}</div>`;

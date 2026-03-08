@@ -28,14 +28,17 @@ states:
 
       Output the combined file list, then → transition `understood`.
     transitions:
-      understood: deep_review
+      understood: load_skills
+
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: deep_review
 
   deep_review:
     task: "Route review by scope"
     prompt: |
-      Call `Skill("coding-skill-selector")` to load language/domain skills — you will
-      need them for cross-file analysis and summarization.
-
       Route based on how many files changed:
       - `single` → 1 file changed — review via file-review sub-workflow (yourself)
       - `multi` → 2+ files changed — spawn file-review agents in parallel

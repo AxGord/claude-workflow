@@ -1,20 +1,25 @@
 name: file-code
 description: "Per-file coding — spawned by coding/bug-fix for each file to implement"
-initial: understand
+initial: load_skills
 max_transitions: 25
 
 states:
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: understand
+
   understand:
     task: "Understand file context"
     prompt: |
       You are implementing changes in a single file as part of a larger task.
       The file path, plan, and interface contracts were provided in your task prompt.
 
-      1. Call `Skill("coding-skill-selector")` to load language/domain skills.
-      2. Read the existing file (if it exists) to understand current structure.
-      3. Read related files: imports, callers, siblings in the same module.
+      1. Read the existing file (if it exists) to understand current structure.
+      2. Read related files: imports, callers, siblings in the same module.
          Understand the interfaces this file must satisfy.
-      4. Review the plan and interface contracts from your task prompt.
+      3. Review the plan and interface contracts from your task prompt.
          Identify exactly what needs to change in this file.
 
       Then → transition `done`.

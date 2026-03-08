@@ -96,8 +96,8 @@ states:
       - 2+ files, independent (can be done in parallel with clear interfaces) → `multi_independent`
     transitions:
       single: fix_single
-      multi_coupled: fix_coupled
-      multi_independent: fix_delegate
+      multi_coupled: load_skills_coupled
+      multi_independent: load_skills_delegate
       unclear: add_logging
 
   add_logging:
@@ -106,8 +106,8 @@ states:
     max_visits: 3
     transitions:
       single: fix_single
-      multi_coupled: fix_coupled
-      multi_independent: fix_delegate
+      multi_coupled: load_skills_coupled
+      multi_independent: load_skills_delegate
       still_unclear: escalate
 
   fix_single:
@@ -115,11 +115,15 @@ states:
     on_complete: review
     on_fail: review
 
+  load_skills_coupled:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: fix_coupled
+
   fix_coupled:
     task: "Fix tightly coupled multi-file changes"
     prompt: |
-      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
-
       The fix spans multiple tightly coupled files (one logical chain, shared context).
       Do it yourself sequentially — delegation overhead exceeds benefit here.
 
@@ -131,11 +135,15 @@ states:
     transitions:
       done: review
 
+  load_skills_delegate:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: fix_delegate
+
   fix_delegate:
     task: "Delegate per-file fixes to agents"
     prompt: |
-      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
-
       The fix spans multiple files. Produce a per-file plan with interface contracts,
       then spawn one Agent per file for parallel implementation.
       Use `subagent_type="general-purpose"`.

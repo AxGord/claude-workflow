@@ -38,6 +38,7 @@ export interface StatusResult {
   readonly context: Record<string, unknown>;
   readonly taskOps: TaskOp[];
   readonly visitCount: number;
+  readonly forcePrompt?: boolean;
 }
 
 const MAX_ACTION_CHAIN = 20;
@@ -155,13 +156,14 @@ export class Engine {
 
     await this._storage.write(sessionId, session);
 
-    // Check if initial state is a sub_workflow
+    // Check if initial state is a skill gate, sub_workflow, or action
     const initialState = this._resolveState(session, workflowName, wf.initial);
+    if (this._isSkillGate(initialState)) {
+      return this._handleSkillGate(session, initialState!, []);
+    }
     if (initialState?.sub_workflow) {
       return this._pushSubWorkflow(session, initialState, []);
     }
-
-    // Check if initial state is an action state
     if (this._isActionState(initialState)) {
       return this._executeActionState(session, initialState!, []);
     }
@@ -236,8 +238,19 @@ export class Engine {
     const globalKey = `${frame.workflow}:${targetStateName}`;
     const prevGlobal = session.global_state_visits ?? {};
 
+    // Mark skill gate skills as loaded when transitioning from a skill gate state
+    const skillUpdate = state?.skills?.length
+      ? {
+          loaded_skills: {
+            ...(session.loaded_skills ?? {}),
+            ...Object.fromEntries(state.skills.map(s => [s, session.skill_epoch ?? 0])),
+          },
+        }
+      : {};
+
     let updated: SessionState = {
       ...session,
+      ...skillUpdate,
       stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
       updated_at: now,
       history: [...session.history, historyEntry],
@@ -271,7 +284,11 @@ export class Engine {
       await this._storage.write(sessionId, updated);
     }
 
-    // Order: sub_workflow → action (consistent with start() and _popStack())
+    // Order: skill_gate → sub_workflow → action
+    if (this._isSkillGate(targetState)) {
+      return this._handleSkillGate(updated, targetState!, taskOps);
+    }
+
     if (targetState?.sub_workflow) {
       return this._pushSubWorkflow(updated, targetState, taskOps);
     }
@@ -377,6 +394,112 @@ export class Engine {
 
   private _isActionState(state: StateDefinition | undefined): boolean {
     return state?.type === "exec" || state?.type === "fetch";
+  }
+
+  private _isSkillGate(state: StateDefinition | undefined): boolean {
+    return (state?.skills?.length ?? 0) > 0;
+  }
+
+  private async _handleSkillGate(
+    session: SessionState,
+    state: StateDefinition,
+    taskOps: TaskOp[],
+    depth: number = 0,
+    actionPrompt?: string
+  ): Promise<StatusResult> {
+    if (depth >= MAX_ACTION_CHAIN) {
+      throw new Error(`Auto-transition chain exceeded max depth (${MAX_ACTION_CHAIN})`);
+    }
+
+    const epoch = session.skill_epoch ?? 0;
+    const loaded = session.loaded_skills ?? {};
+    const missing = state.skills!.filter(s => (loaded[s] ?? -1) < epoch);
+
+    if (missing.length > 0) {
+      const skillList = missing.map(s => `  - Skill("${s}")`).join("\n");
+      const parts: string[] = [];
+      if (actionPrompt) parts.push(actionPrompt);
+      if (state.prompt) parts.push(state.prompt);
+      parts.push(`Load the following skills before proceeding:\n${skillList}\n\nAfter loading all skills, transition to continue.`);
+      return this._buildStatus(session, taskOps, parts.join("\n\n"));
+    }
+
+    // All skills loaded — auto-transition through
+    const transitions = state.transitions ?? {};
+    const transitionNames = Object.keys(transitions);
+    if (transitionNames.length === 0) {
+      throw new Error(`Skill gate state has no transitions defined`);
+    }
+
+    const transitionName = transitionNames[0];
+    const targetStateName = transitions[transitionName];
+
+    const frame = session.stack[session.active_frame];
+    const wf = this._getWorkflow(session.session_id, frame.workflow);
+    const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
+    if (frame.total_transitions >= maxTransitions) {
+      throw new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`);
+    }
+
+    const targetVisits = (frame.state_visits[targetStateName] ?? 0) + 1;
+    const resolvedTarget = this._resolveState(session, frame.workflow, targetStateName);
+    if (resolvedTarget?.max_visits && targetVisits > resolvedTarget.max_visits) {
+      throw new Error(`State "${targetStateName}" max_visits (${resolvedTarget.max_visits}) exceeded`);
+    }
+
+    const now = new Date().toISOString();
+    const updatedFrame: StackFrame = {
+      ...frame,
+      current_state: targetStateName,
+      state_visits: { ...frame.state_visits, [targetStateName]: targetVisits },
+      total_transitions: frame.total_transitions + 1,
+    };
+
+    const historyEntry: HistoryEntry = {
+      frame: session.active_frame,
+      from: frame.current_state,
+      to: targetStateName,
+      event: "skill_gate",
+      at: now,
+    };
+
+    const globalKey = `${frame.workflow}:${targetStateName}`;
+    const prevGlobal = session.global_state_visits ?? {};
+
+    let updated: SessionState = {
+      ...session,
+      stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
+      updated_at: now,
+      history: [...session.history, historyEntry],
+      global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
+    };
+
+    await this._storage.write(session.session_id, updated);
+
+    if (resolvedTarget?.terminal) {
+      const hasTransitions = resolvedTarget.transitions && Object.keys(resolvedTarget.transitions).length > 0;
+      if (!hasTransitions) {
+        const outcome = resolvedTarget.outcome === "fail" ? "fail" : "complete";
+        return this._popStack(updated, outcome, taskOps);
+      }
+      updated = { ...updated, soft_terminal: true };
+      await this._storage.write(session.session_id, updated);
+      return this._buildStatus(updated, taskOps, actionPrompt);
+    }
+
+    if (this._isSkillGate(resolvedTarget)) {
+      return this._handleSkillGate(updated, resolvedTarget!, taskOps, depth + 1, actionPrompt);
+    }
+
+    if (resolvedTarget?.sub_workflow) {
+      return this._pushSubWorkflow(updated, resolvedTarget, taskOps);
+    }
+
+    if (this._isActionState(resolvedTarget)) {
+      return this._executeActionState(updated, resolvedTarget!, taskOps);
+    }
+
+    return this._buildStatus(updated, taskOps, actionPrompt);
   }
 
   private _buildTemplateVars(session: SessionState): Record<string, unknown> {
@@ -502,6 +625,10 @@ export class Engine {
       return this._buildStatus(updated, taskOps, actionPrompt);
     }
 
+    if (this._isSkillGate(targetState)) {
+      return this._handleSkillGate(updated, targetState!, taskOps, 0, actionPrompt);
+    }
+
     if (targetState?.sub_workflow) {
       return this._pushSubWorkflow(updated, targetState, taskOps);
     }
@@ -544,8 +671,11 @@ export class Engine {
 
     await this._storage.write(session.session_id, updated);
 
-    // Check if the initial state of sub_workflow is itself a sub_workflow or action
+    // Check if the initial state of sub_workflow is itself a skill gate, sub_workflow, or action
     const initialState = this._resolveState(updated, subName, wf.initial);
+    if (this._isSkillGate(initialState)) {
+      return this._handleSkillGate(updated, initialState!, taskOps ?? []);
+    }
     if (initialState?.sub_workflow) {
       return this._pushSubWorkflow(updated, initialState, taskOps);
     }
@@ -662,11 +792,14 @@ export class Engine {
       await this._storage.write(session.session_id, softUpdated);
       return this._buildStatus(softUpdated, taskOps);
     }
+    if (this._isSkillGate(nextState)) {
+      return this._handleSkillGate(updated, nextState!, taskOps ?? []);
+    }
+
     if (nextState?.sub_workflow) {
       return this._pushSubWorkflow(updated, nextState, taskOps);
     }
 
-    // Check if parent target is an action state
     if (this._isActionState(nextState)) {
       return this._executeActionState(updated, nextState!, taskOps ?? []);
     }
@@ -818,6 +951,7 @@ export class Engine {
       taskOps: currentTaskOps,
       visitCount: session.global_state_visits?.[`${frame.workflow}:${frame.current_state}`]
         ?? frame.state_visits[frame.current_state] ?? 0,
+      forcePrompt: actionPrompt !== undefined,
     };
   }
 }

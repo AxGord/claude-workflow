@@ -1,13 +1,17 @@
 name: refactoring
 description: "Refactoring workflow — bring every touched file to current standards"
-initial: prepare
+initial: load_skills
 max_transitions: 40
 
 states:
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: prepare
+
   prepare:
     prompt: |
-      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
-
       Before writing any code:
 
       1. **Read every file you will touch** — understand before changing

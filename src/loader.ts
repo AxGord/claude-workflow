@@ -190,8 +190,8 @@ export class Loader {
           errors.push(`state "${name}" action state cannot have transitions`);
       } else {
         // Non-action state validation
-        if (!state.prompt && !state.sub_workflow && !state.terminal)
-          errors.push(`state "${name}" has no prompt, sub_workflow, or terminal flag`);
+        if (!state.prompt && !state.sub_workflow && !state.terminal && !state.skills?.length)
+          errors.push(`state "${name}" has no prompt, sub_workflow, terminal, or skills`);
 
         if (state.sub_workflow && !state.on_complete)
           errors.push(`state "${name}" has sub_workflow but no on_complete`);

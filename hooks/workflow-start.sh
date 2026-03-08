@@ -31,6 +31,27 @@ if [[ -n "$ZED_ENVIRONMENT" ]]; then
   ZED_SUFFIX=" Then load skill ide-zed (Skill tool)."
 fi
 
+# --- Helper: increment skill_epoch in a session JSON by ID ---
+bump_skill_epoch_by_id() {
+  local sid="$1"
+  local sf="$STATE_DIR/${sid}.json"
+  [ -f "$sf" ] || return
+  jq '.skill_epoch = ((.skill_epoch // 0) + 1)' "$sf" 2>/dev/null > "${sf}.tmp" && mv "${sf}.tmp" "$sf" || rm -f "${sf}.tmp"
+}
+
+# --- Helper: increment skill_epoch in active sessions for current PID ---
+bump_skill_epoch_by_pid() {
+  [ -d "$STATE_DIR" ] || return
+  local cc_pid=$PPID
+  for sf in "$STATE_DIR"/*.json; do
+    [ -f "$sf" ] || continue
+    local pid
+    pid=$(jq -r '.context.claude_code_pid // empty' "$sf" 2>/dev/null)
+    [ "$pid" = "$cc_pid" ] || continue
+    jq 'if .stack | length > 0 then .skill_epoch = ((.skill_epoch // 0) + 1) else . end' "$sf" 2>/dev/null > "${sf}.tmp" && mv "${sf}.tmp" "$sf" || rm -f "${sf}.tmp"
+  done
+}
+
 # --- Helper: find active planning session from plan files ---
 find_plan_session() {
   [ -d "$PLANS_DIR" ] || return
@@ -58,11 +79,13 @@ if [ -n "$TRANSCRIPT" ] && [ -s "$TRANSCRIPT" ]; then
   if grep -q 'ExitPlanMode' "$TRANSCRIPT" 2>/dev/null; then
     PLAN_SID=$(grep -oE 'transition\(\\"[a-f0-9]+\\"' "$TRANSCRIPT" | tail -1 | grep -oE '[a-f0-9]{7,}')
     if [ -n "$PLAN_SID" ]; then
+      bump_skill_epoch_by_id "$PLAN_SID"
       echo "PLAN RESUME (same process): call transition(\"$PLAN_SID\", \"planned\") to resume planning session.$ZED_SUFFIX"
       exit 0
     fi
   fi
   # Has content but no plan → context clear
+  bump_skill_epoch_by_pid
   echo "Context was cleared. Call status() to check for active session and restore context.$ZED_SUFFIX"
   exit 0
 fi
@@ -71,6 +94,7 @@ fi
 # Check plans/ for active planning sessions (cross-process plan resume)
 PLAN_SID=$(find_plan_session)
 if [ -n "$PLAN_SID" ]; then
+  bump_skill_epoch_by_id "$PLAN_SID"
   echo "PLAN RESUME (new process): active planning session $PLAN_SID found. Call transition(\"$PLAN_SID\", \"planned\") to resume.$ZED_SUFFIX"
   exit 0
 fi

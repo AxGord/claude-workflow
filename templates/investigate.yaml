@@ -41,7 +41,7 @@ states:
       - `no_action` → investigation showed the change is unnecessary or already works correctly
       - `unclear` → still unclear after investigation, need user input
     transitions:
-      trivial: quick_fix
+      trivial: load_skills
       needs_plan: needs_plan
       no_action: done
       unclear: clarify
@@ -58,11 +58,14 @@ states:
       reassess: assess
       done: done
 
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: quick_fix
+
   quick_fix:
     prompt: |
-      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load
-      language/domain skills BEFORE writing code.
-
       The fix is trivial (1-3 lines). Apply it directly.
       After fixing → transition `done`.
     transitions:

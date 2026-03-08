@@ -44,7 +44,7 @@ function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): 
   parts.push(formatStateHeader(status));
   parts.push("");
 
-  if (!forceFullPrompt && status.visitCount > 1) {
+  if (!forceFullPrompt && !status.forcePrompt && status.visitCount > 1) {
     parts.push(`Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`);
     parts.push(`If you don't remember them, call status() to re-read.`);
   } else {
@@ -131,6 +131,7 @@ export function registerTools(
         const actorStr = h.actor ? ` [${h.actor}]` : "";
         const detailStr = h.detail ? ` (${h.detail})` : "";
         if (h.event === "action") return `  [${h.frame}] [auto] ${h.from} --${detailStr}--> ${h.to} at ${h.at}`;
+        if (h.event === "skill_gate") return `  [${h.frame}] [auto] ${h.from} --skills--> ${h.to} at ${h.at}`;
         if (h.event) return `  [${h.frame}] ${h.event}${h.workflow ? ` (${h.workflow})` : ""}${actorStr} at ${h.at}`;
         return `  [${h.frame}] ${h.from} --${h.via}--> ${h.to}${actorStr} at ${h.at}`;
       });

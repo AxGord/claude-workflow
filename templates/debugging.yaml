@@ -1,13 +1,17 @@
 name: debugging
 description: "Debugging workflow — diagnose first, fix never (until diagnosed)"
-initial: reproduce
+initial: load_skills
 max_transitions: 40
 
 states:
+  load_skills:
+    skills:
+      - coding-skill-selector
+    transitions:
+      continue: reproduce
+
   reproduce:
     prompt: |
-      MANDATORY FIRST ACTION — call `Skill("coding-skill-selector")` to load language/domain skills BEFORE doing anything else in this state. Do NOT skip this step.
-
       **Rule #1: Diagnose FIRST, fix NEVER.**
       **Rule #2: Reproduce BEFORE fixing.**
 
