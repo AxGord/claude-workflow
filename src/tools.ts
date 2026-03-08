@@ -4,7 +4,7 @@ import type { Engine, StatusResult } from "./engine.js";
 import type { Modifier } from "./modifier.js";
 import type { Loader } from "./loader.js";
 import type { Storage } from "./storage.js";
-import type { SessionState } from "./types.js";
+import { StateDefinitionSchema, type SessionState } from "./types.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -129,6 +129,8 @@ export function registerTools(
       const status = engine.getStatus(sid);
       const historyLines = status.history.slice(-10).map(h => {
         const actorStr = h.actor ? ` [${h.actor}]` : "";
+        const detailStr = h.detail ? ` (${h.detail})` : "";
+        if (h.event === "action") return `  [${h.frame}] [auto] ${h.from} --${detailStr}--> ${h.to} at ${h.at}`;
         if (h.event) return `  [${h.frame}] ${h.event}${h.workflow ? ` (${h.workflow})` : ""}${actorStr} at ${h.at}`;
         return `  [${h.frame}] ${h.from} --${h.via}--> ${h.to}${actorStr} at ${h.at}`;
       });
@@ -194,17 +196,7 @@ export function registerTools(
     description: "Add/change/remove states and transitions in the current session's workflow (overlay, does not modify YAML).",
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
-      add_state: z.object({
-        name: z.string(),
-        prompt: z.string().optional(),
-        transitions: z.record(z.string()).optional(),
-        terminal: z.boolean().optional(),
-        outcome: z.enum(["complete", "fail", "needs_action"]).optional(),
-        max_visits: z.number().int().positive().optional(),
-        sub_workflow: z.string().optional(),
-        on_complete: z.string().optional(),
-        on_fail: z.string().optional(),
-      }).optional().describe("Add a new state"),
+      add_state: StateDefinitionSchema.extend({ name: z.string() }).optional().describe("Add a new state"),
       add_transition: z.object({
         from: z.string(),
         name: z.string(),
@@ -241,16 +233,7 @@ export function registerTools(
         description: z.string().optional(),
         initial: z.string().min(1),
         max_transitions: z.number().int().positive().optional(),
-        states: z.record(z.object({
-          prompt: z.string().optional(),
-          transitions: z.record(z.string()).optional(),
-          terminal: z.boolean().optional(),
-          outcome: z.enum(["complete", "fail", "needs_action"]).optional(),
-          max_visits: z.number().int().positive().optional(),
-          sub_workflow: z.string().optional(),
-          on_complete: z.string().optional(),
-          on_fail: z.string().optional(),
-        })),
+        states: z.record(StateDefinitionSchema),
       }).describe("Full workflow definition"),
       scope: z.enum(["project", "global"]).optional().describe("Where to save: project (.claude/workflows/) or global (~/.claude/workflows/). Default: project if available, else global."),
     }).strict(),

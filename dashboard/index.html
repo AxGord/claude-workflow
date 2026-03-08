@@ -7,11 +7,11 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0d1117; color: #c9d1d9; }
-  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+  .container { margin: 0 auto; padding: 20px; }
   h1 { color: #58a6ff; margin-bottom: 20px; font-size: 24px; }
   h2 { color: #8b949e; font-size: 16px; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
-  .grid { display: grid; grid-template-columns: 350px 1fr; gap: 20px; min-height: calc(100vh - 100px); }
-  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .grid { display: grid; grid-template-columns: 350px minmax(0, 1fr); gap: 20px; min-height: calc(100vh - 100px); }
+  .panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; min-width: 0; }
   .session-item { padding: 10px 12px; border: 1px solid #30363d; border-radius: 6px; margin-bottom: 8px; cursor: pointer; transition: border-color 0.2s; }
   .session-item:hover { border-color: #58a6ff; }
   .session-item.active { border-color: #58a6ff; background: #1c2333; }
@@ -297,9 +297,16 @@ function renderDetail(session) {
     const frame = session.stack[session.active_frame];
     const wf = allWorkflows[frame.workflow];
     const state = wf?.states?.[frame.current_state];
-    const prompt = state?.prompt || '(sub_workflow state)';
-    html += '<h2 style="margin-top:16px">Current Prompt</h2>';
-    html += `<div class="prompt-box">${escapeHtml(prompt)}</div>`;
+    const isActionState = state?.type === 'exec' || state?.type === 'fetch';
+    if (isActionState) {
+      const info = state.type === 'exec' ? `command: ${state.command || '?'}` : `url: ${state.url || '?'}`;
+      html += `<h2 style="margin-top:16px">Action State (${state.type})</h2>`;
+      html += `<div class="prompt-box">${escapeHtml(info)}</div>`;
+    } else {
+      const prompt = state?.prompt || '(sub_workflow state)';
+      html += '<h2 style="margin-top:16px">Current Prompt</h2>';
+      html += `<div class="prompt-box">${escapeHtml(prompt)}</div>`;
+    }
 
     // Transitions
     const transitions = state?.transitions || {};
@@ -312,6 +319,16 @@ function renderDetail(session) {
       ).join('');
       html += '</div>';
     }
+  }
+
+  // Background PIDs
+  if (session.background_pids && Object.keys(session.background_pids).length > 0) {
+    html += '<h2 style="margin-top:16px">Background Processes</h2>';
+    html += '<div>';
+    for (const [stateName, pid] of Object.entries(session.background_pids)) {
+      html += `<div class="context-entry"><span class="context-key">${escapeHtml(stateName)}</span>: <span class="context-value">PID ${pid}</span></div>`;
+    }
+    html += '</div>';
   }
 
   // Context
@@ -339,6 +356,8 @@ function renderDetail(session) {
   const history = (session.history || []).slice(-20);
   html += history.map(h => {
     const actorHtml = h.actor ? ` <span class="actor-tag" style="background:${actorColor(h.actor)}20;color:${actorColor(h.actor)}">${escapeHtml(h.actor)}</span>` : '';
+    const detailHtml = h.detail ? ` <span style="color:#ffa657">(${escapeHtml(h.detail)})</span>` : '';
+    if (h.event === 'action') return `<div class="history-entry">[${h.frame}] <span style="color:#ffa657">[auto]</span> ${escapeHtml(h.from || '')} → ${escapeHtml(h.to || '')}${detailHtml}</div>`;
     if (h.event) return `<div class="history-entry">[${h.frame}] ${escapeHtml(h.event)}${h.workflow ? ' (' + escapeHtml(h.workflow) + ')' : ''}${actorHtml}</div>`;
     return `<div class="history-entry">[${h.frame}] ${escapeHtml(h.from || '')} → ${escapeHtml(h.to || '')} via "${escapeHtml(h.via || '')}"${actorHtml}</div>`;
   }).join('');
@@ -405,13 +424,51 @@ function renderGraph(workflowName, currentState, stack) {
       if (state.on_fail && g.hasNode(state.on_fail))
         g.setEdge(name, state.on_fail, { label: 'on_fail', type: 'on_fail' }, `of:${name}`);
     }
+    // Action state routing edges
+    if (state.type === 'exec' || state.type === 'fetch') {
+      if (state.cases) {
+        for (const [code, target] of Object.entries(state.cases)) {
+          if (g.hasNode(target))
+            g.setEdge(name, target, { label: code, type: 'on_complete' }, `case:${name}:${code}`);
+        }
+        if (state.default && g.hasNode(state.default))
+          g.setEdge(name, state.default, { label: 'default', type: 'on_fail' }, `def:${name}`);
+      } else {
+        if (state.on_success && g.hasNode(state.on_success))
+          g.setEdge(name, state.on_success, { label: 'success', type: 'on_complete' }, `os:${name}`);
+        if (state.on_error && g.hasNode(state.on_error))
+          g.setEdge(name, state.on_error, { label: 'error', type: 'on_fail' }, `oe:${name}`);
+      }
+    }
   }
 
   dagre.layout(g);
 
-  const graphInfo = g.graph();
-  const svgW = Math.ceil(graphInfo.width || 400);
-  const svgH = Math.ceil(graphInfo.height || 300);
+  if (g.nodes().length === 0) return '<div class="empty-state">No states</div>';
+
+  // Compute actual bounding box including edge control points
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const name of g.nodes()) {
+    const node = g.node(name);
+    minX = Math.min(minX, node.x - nodeW / 2);
+    minY = Math.min(minY, node.y - nodeH / 2);
+    maxX = Math.max(maxX, node.x + nodeW / 2);
+    maxY = Math.max(maxY, node.y + nodeH / 2);
+  }
+  for (const e of g.edges()) {
+    const edgeData = g.edge(e);
+    for (const p of (edgeData.points || [])) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+  }
+  const pad = 40;
+  minX = Math.floor(minX - pad); minY = Math.floor(minY - pad);
+  maxX = Math.ceil(maxX + pad); maxY = Math.ceil(maxY + pad);
+  const svgW = maxX - minX;
+  const svgH = maxY - minY;
 
   // Collect active states from stack for highlighting
   const activeStates = new Set();
@@ -422,7 +479,7 @@ function renderGraph(workflowName, currentState, stack) {
   // Unique ID suffix to avoid filter collisions when multiple graphs on page
   const uid = workflowName.replace(/[^a-zA-Z0-9]/g, '');
 
-  let svg = `<svg viewBox="0 0 ${svgW} ${svgH}" width="${svgW}" style="max-width:${svgW}px" xmlns="http://www.w3.org/2000/svg">`;
+  let svg = `<svg viewBox="${minX} ${minY} ${svgW} ${svgH}" width="${svgW}" style="max-width:${svgW}px" xmlns="http://www.w3.org/2000/svg">`;
 
   // Defs: markers and glow filters
   svg += '<defs>';
@@ -490,6 +547,10 @@ function renderGraph(workflowName, currentState, stack) {
     const isCurrent = name === currentState;
     const isInStack = !isCurrent && activeStates.has(name);
 
+    const isExec = state.type === 'exec';
+    const isFetch = state.type === 'fetch';
+    const isAction = isExec || isFetch;
+
     let fill = '#21262d';
     let stroke = '#30363d';
     let textColor = '#c9d1d9';
@@ -502,6 +563,10 @@ function renderGraph(workflowName, currentState, stack) {
     } else if (isInStack) {
       fill = '#1c2333'; stroke = '#58a6ff'; textColor = '#58a6ff'; strokeWidth = 2.5;
       filterAttr = ` filter="url(#glow-blue-${uid})"`;
+    } else if (isExec) {
+      fill = '#2a1f0d'; stroke = '#ffa657';
+    } else if (isFetch) {
+      fill = '#0d1f2a'; stroke = '#58a6ff';
     } else if (isTerminal) {
       fill = '#1a2a3a'; stroke = '#58a6ff';
     }
@@ -511,6 +576,15 @@ function renderGraph(workflowName, currentState, stack) {
     // Initial state: outer halo rect
     if (isInitial && !isCurrent && !isInStack) {
       svg += `<rect x="${x - w / 2 - 4}" y="${y - h / 2 - 4}" width="${w + 8}" height="${h + 8}" rx="${rx + 2}" fill="none" stroke="#58a6ff" stroke-width="1" opacity="0.5"/>`;
+    }
+
+    // Wrap node elements in <g> so <title> tooltip works correctly
+    svg += `<g>`;
+
+    // Tooltip for action states
+    if (isAction) {
+      const tip = isExec ? (state.command || '') : (state.url || '');
+      svg += `<title>${escapeHtml(tip)}</title>`;
     }
 
     // Main node rect
@@ -530,6 +604,15 @@ function renderGraph(workflowName, currentState, stack) {
     if (hasSubWorkflow) {
       svg += `<text x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle" fill="#d2a8ff" font-size="9" opacity="0.7">${escapeHtml(state.sub_workflow)}</text>`;
     }
+
+    // Action type label below main label
+    if (isAction && !isCurrent && !isInStack) {
+      const label = isExec ? (state.background ? 'exec (bg)' : 'exec') : 'fetch';
+      const labelColor = isExec ? '#ffa657' : '#58a6ff';
+      svg += `<text x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle" fill="${labelColor}" font-size="9" opacity="0.7">${label}</text>`;
+    }
+
+    svg += `</g>`;
   }
 
   svg += '</svg>';
@@ -553,6 +636,8 @@ function showWorkflowGraph(name) {
       if (sn === wf.initial) flags.push('initial');
       if (state.terminal) flags.push('terminal');
       if (state.sub_workflow) flags.push('sub: ' + state.sub_workflow);
+      if (state.type === 'exec') flags.push(state.background ? 'exec (bg)' : 'exec');
+      if (state.type === 'fetch') flags.push('fetch');
       const flagStr = flags.length > 0 ? `<span class="state-flags">[${flags.join(', ')}]</span>` : '';
       stateList += `<div class="stack-frame state-item" data-state="${escapeHtml(sn)}" data-workflow="${escapeHtml(name)}" onclick="toggleStatePrompt(this, '${escapeHtml(name)}', '${escapeHtml(sn)}')"><span class="state-name">${escapeHtml(sn)}</span>${flagStr}</div>`;
     }
@@ -624,11 +709,20 @@ function toggleStatePrompt(el, workflowName, stateName) {
   el.classList.add('selected');
   highlightGraphNode(stateName);
 
-  const prompt = state.prompt || '(no prompt)';
   const wrapper = document.createElement('div');
   wrapper.className = 'state-prompt-wrapper';
 
-  let html = `<div class="state-prompt-label">Prompt</div><div class="state-prompt">${escapeHtml(prompt)}</div>`;
+  let html = '';
+  if (state.type === 'exec' || state.type === 'fetch') {
+    const label = state.type === 'exec' ? 'Command' : 'URL';
+    const value = state.type === 'exec' ? (state.command || '?') : (state.url || '?');
+    html += `<div class="state-prompt-label">${label}</div><div class="state-prompt">${escapeHtml(value)}</div>`;
+    if (state.success_prompt) html += `<div class="state-prompt-label">Success Prompt</div><div class="state-prompt">${escapeHtml(state.success_prompt)}</div>`;
+    if (state.error_prompt) html += `<div class="state-prompt-label">Error Prompt</div><div class="state-prompt">${escapeHtml(state.error_prompt)}</div>`;
+  } else {
+    const prompt = state.prompt || '(no prompt)';
+    html += `<div class="state-prompt-label">Prompt</div><div class="state-prompt">${escapeHtml(prompt)}</div>`;
+  }
 
   // Show transitions if any
   const transitions = state.transitions ? Object.entries(state.transitions) : [];

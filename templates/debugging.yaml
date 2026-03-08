@@ -74,8 +74,8 @@ states:
 
   bridge_debug:
     prompt: |
-      Load all debug bridge skills available in the system-reminder skills list
-      (e.g. `Skill("debug-bridge")` and any platform-specific debug bridge skills).
+      Call `Skill("debug-bridge")` and any platform-specific debug bridge skills
+      from the available skills list (e.g. `debug-bridge-openfl`, `debug-bridge-unity`, etc.).
 
       Use debug bridge for interactive state inspection.
       Launch `general-purpose` subagent. Inspect state, take screenshots, simulate events.

@@ -6,10 +6,13 @@ import type {
   WorkflowDefinition,
   StateDefinition,
   WorkflowOverrides,
+  ActionResult,
 } from "./types.js";
 import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS } from "./types.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
+import type { Executor } from "./executor.js";
+import { render } from "./template.js";
 
 export interface TransitionResult {
   readonly prompt: string;
@@ -37,15 +40,19 @@ export interface StatusResult {
   readonly visitCount: number;
 }
 
+const MAX_ACTION_CHAIN = 20;
+
 export class Engine {
   private readonly _storage: Storage;
   private readonly _loader: Loader;
+  private readonly _executor: Executor;
   // Snapshot: sessions keep the workflow version they started with
   private readonly _snapshots: Map<string, Map<string, WorkflowDefinition>> = new Map();
 
-  constructor(storage: Storage, loader: Loader) {
+  constructor(storage: Storage, loader: Loader, executor: Executor) {
     this._storage = storage;
     this._loader = loader;
+    this._executor = executor;
   }
 
   /** Find the most recently updated active session for the current Claude Code PID. */
@@ -154,6 +161,11 @@ export class Engine {
       return this._pushSubWorkflow(session, initialState, []);
     }
 
+    // Check if initial state is an action state
+    if (this._isActionState(initialState)) {
+      return this._executeActionState(session, initialState!, []);
+    }
+
     return this._buildStatus(session, []);
   }
 
@@ -259,9 +271,13 @@ export class Engine {
       await this._storage.write(sessionId, updated);
     }
 
-    // Check if target is sub_workflow → push
+    // Order: sub_workflow → action (consistent with start() and _popStack())
     if (targetState?.sub_workflow) {
       return this._pushSubWorkflow(updated, targetState, taskOps);
+    }
+
+    if (this._isActionState(targetState)) {
+      return this._executeActionState(updated, targetState!, taskOps);
     }
 
     return this._buildStatus(updated, taskOps);
@@ -270,6 +286,13 @@ export class Engine {
   public async abort(sessionId: string): Promise<void> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
+
+    // Kill background processes
+    if (session.background_pids) {
+      for (const [, pid] of Object.entries(session.background_pids)) {
+        try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+      }
+    }
 
     const now = new Date().toISOString();
     const updated: SessionState = {
@@ -352,6 +375,145 @@ export class Engine {
     await this._storage.write(sessionId, updated);
   }
 
+  private _isActionState(state: StateDefinition | undefined): boolean {
+    return state?.type === "exec" || state?.type === "fetch";
+  }
+
+  private _buildTemplateVars(session: SessionState): Record<string, unknown> {
+    const vars: Record<string, unknown> = { context: session.context };
+    const ar = session.last_action_result;
+    if (ar) {
+      if (ar.stdout !== undefined) vars.stdout = ar.stdout;
+      if (ar.stderr !== undefined) vars.stderr = ar.stderr;
+      if (ar.exit_code !== undefined) vars.exit_code = ar.exit_code;
+      if (ar.status !== undefined) vars.status = ar.status;
+      if (ar.body !== undefined) vars.body = ar.body;
+      if (ar.error !== undefined) vars.error = ar.error;
+      if (ar.pid !== undefined) vars.pid = ar.pid;
+    }
+    return vars;
+  }
+
+  private async _executeActionState(
+    session: SessionState,
+    state: StateDefinition,
+    taskOps: TaskOp[],
+    depth: number = 0
+  ): Promise<StatusResult> {
+    if (depth >= MAX_ACTION_CHAIN) {
+      throw new Error(`Action chain exceeded max depth (${MAX_ACTION_CHAIN})`);
+    }
+
+    const vars = this._buildTemplateVars(session);
+    const result = await this._executor.execute(state, vars);
+
+    // Determine target state
+    let targetStateName: string | undefined;
+    let detail: string;
+
+    if (state.cases) {
+      const key = result.type === "exec" ? String(result.exit_code ?? 1) : String(result.status ?? 0);
+      targetStateName = state.cases[key] ?? state.default;
+      detail = result.type === "exec" ? `exit ${result.exit_code}` : `HTTP ${result.status ?? "err"}`;
+    } else {
+      targetStateName = result.success ? state.on_success : state.on_error;
+      detail = result.type === "exec"
+        ? `exit ${result.exit_code ?? "?"}`
+        : result.success ? `HTTP ${result.status}` : (result.error ?? "error");
+    }
+
+    if (!targetStateName) {
+      throw new Error(
+        `Action state has no target for result: ${detail}. ` +
+        `Configure cases/default or on_success/on_error.`
+      );
+    }
+
+    // Determine prompt
+    const promptTemplate = result.success ? state.success_prompt : state.error_prompt;
+    const actionPrompt = promptTemplate ? render(promptTemplate, { ...vars, ...result }) : undefined;
+
+    // Update frame
+    const frame = session.stack[session.active_frame];
+    const targetVisits = (frame.state_visits[targetStateName] ?? 0) + 1;
+    const now = new Date().toISOString();
+
+    // Check max_transitions
+    const wf = this._getWorkflow(session.session_id, frame.workflow);
+    const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
+    if (frame.total_transitions >= maxTransitions) {
+      throw new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`);
+    }
+
+    // Check max_visits on target
+    const resolvedTarget = this._resolveState(session, frame.workflow, targetStateName);
+    if (resolvedTarget?.max_visits && targetVisits > resolvedTarget.max_visits) {
+      throw new Error(`State "${targetStateName}" max_visits (${resolvedTarget.max_visits}) exceeded`);
+    }
+
+    const updatedFrame: StackFrame = {
+      ...frame,
+      current_state: targetStateName,
+      state_visits: { ...frame.state_visits, [targetStateName]: targetVisits },
+      total_transitions: frame.total_transitions + 1,
+    };
+
+    const historyEntry: HistoryEntry = {
+      frame: session.active_frame,
+      from: frame.current_state,
+      to: targetStateName,
+      event: "action",
+      detail,
+      at: now,
+    };
+
+    const globalKey = `${frame.workflow}:${targetStateName}`;
+    const prevGlobal = session.global_state_visits ?? {};
+
+    // Save background PID if applicable
+    let bgPids = session.background_pids;
+    if (result.pid) {
+      bgPids = { ...(bgPids ?? {}), [`${frame.current_state}:${Date.now()}`]: result.pid };
+    }
+
+    let updated: SessionState = {
+      ...session,
+      stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
+      updated_at: now,
+      history: [...session.history, historyEntry],
+      global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
+      last_action_result: result,
+      background_pids: bgPids,
+    };
+
+    await this._storage.write(session.session_id, updated);
+
+    // Check target state
+    const targetState = this._resolveState(updated, frame.workflow, targetStateName);
+
+    if (targetState?.terminal) {
+      const hasTransitions = targetState.transitions && Object.keys(targetState.transitions).length > 0;
+      if (!hasTransitions) {
+        const outcome = targetState.outcome === "fail" ? "fail" : "complete";
+        return this._popStack(updated, outcome, taskOps);
+      }
+      updated = { ...updated, soft_terminal: true };
+      await this._storage.write(session.session_id, updated);
+      return this._buildStatus(updated, taskOps, actionPrompt);
+    }
+
+    if (targetState?.sub_workflow) {
+      return this._pushSubWorkflow(updated, targetState, taskOps);
+    }
+
+    // Chain: if target is also an action state, recurse
+    if (this._isActionState(targetState)) {
+      return this._executeActionState(updated, targetState!, taskOps, depth + 1);
+    }
+
+    return this._buildStatus(updated, taskOps, actionPrompt);
+  }
+
   private async _pushSubWorkflow(session: SessionState, state: StateDefinition, taskOps?: TaskOp[]): Promise<StatusResult> {
     const subName = state.sub_workflow!;
     const wf = this._getWorkflow(session.session_id, subName);
@@ -382,10 +544,13 @@ export class Engine {
 
     await this._storage.write(session.session_id, updated);
 
-    // Check if the initial state of sub_workflow is itself a sub_workflow
+    // Check if the initial state of sub_workflow is itself a sub_workflow or action
     const initialState = this._resolveState(updated, subName, wf.initial);
     if (initialState?.sub_workflow) {
       return this._pushSubWorkflow(updated, initialState, taskOps);
+    }
+    if (this._isActionState(initialState)) {
+      return this._executeActionState(updated, initialState!, taskOps ?? []);
     }
 
     return this._buildStatus(updated, taskOps);
@@ -501,6 +666,11 @@ export class Engine {
       return this._pushSubWorkflow(updated, nextState, taskOps);
     }
 
+    // Check if parent target is an action state
+    if (this._isActionState(nextState)) {
+      return this._executeActionState(updated, nextState!, taskOps ?? []);
+    }
+
     return this._buildStatus(updated, taskOps);
   }
 
@@ -602,7 +772,7 @@ export class Engine {
     return { ...state, transitions };
   }
 
-  private _buildStatus(session: SessionState, taskOps?: TaskOp[]): StatusResult {
+  private _buildStatus(session: SessionState, taskOps?: TaskOp[], actionPrompt?: string): StatusResult {
     if (session.stack.length === 0) {
       const isAbandoned = session.outcome === "abandoned";
       const msg = isAbandoned ? "Workflow abandoned." : "Workflow completed.";
@@ -625,7 +795,9 @@ export class Engine {
 
     const frame = session.stack[session.active_frame];
     const state = this._resolveState(session, frame.workflow, frame.current_state);
-    const prompt = state?.prompt ?? `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`;
+    const vars = this._buildTemplateVars(session);
+    const rawPrompt = actionPrompt ?? state?.prompt ?? `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`;
+    const prompt = render(rawPrompt, vars);
 
     const currentTaskOps = [...(taskOps ?? [])];
     if (state?.task) {

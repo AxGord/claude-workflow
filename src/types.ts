@@ -2,6 +2,8 @@ import { z } from "zod";
 
 // --- Workflow Definition (parsed from YAML) ---
 
+// Single source of truth for state fields. Tool schemas derive from this.
+// To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
 export const StateDefinitionSchema = z.object({
   prompt: z.string().optional(),
   transitions: z.record(z.string()).optional(),
@@ -12,6 +14,31 @@ export const StateDefinitionSchema = z.object({
   on_complete: z.string().optional(),
   on_fail: z.string().optional(),
   task: z.string().optional(),
+
+  // Action state fields
+  type: z.enum(["prompt", "exec", "fetch"]).optional(),
+
+  // exec
+  command: z.string().optional(),
+  cwd: z.string().optional(),
+  timeout: z.number().positive().optional(),
+  env: z.record(z.string()).optional(),
+  background: z.boolean().optional(),
+
+  // fetch
+  url: z.string().optional(),
+  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]).optional(),
+  headers: z.record(z.string()).optional(),
+  body: z.string().optional(),
+
+  // shared action routing
+  on_success: z.string().optional(),
+  on_error: z.string().optional(),
+  cases: z.record(z.string()).optional(),
+  default: z.string().optional(),
+  success_prompt: z.string().optional(),
+  error_prompt: z.string().optional(),
+  retry: z.object({ max: z.number().int().positive(), interval: z.number().int().positive() }).optional(),
 });
 
 export type StateDefinition = z.infer<typeof StateDefinitionSchema>;
@@ -25,6 +52,20 @@ export const WorkflowDefinitionSchema = z.object({
 });
 
 export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
+
+// --- Action Result (from exec/fetch states) ---
+
+export interface ActionResult {
+  readonly type: "exec" | "fetch";
+  readonly success: boolean;
+  readonly stdout?: string;
+  readonly stderr?: string;
+  readonly exit_code?: number;
+  readonly status?: number;
+  readonly body?: string;
+  readonly error?: string;
+  readonly pid?: number;
+}
 
 // --- Session State (persisted as JSON) ---
 
@@ -44,6 +85,7 @@ export interface HistoryEntry {
   readonly event?: string;
   readonly workflow?: string;
   readonly actor?: string;
+  readonly detail?: string;
 }
 
 export interface SessionState {
@@ -58,6 +100,8 @@ export interface SessionState {
   readonly context: Record<string, unknown>;
   readonly outcome?: "completed" | "abandoned";
   readonly soft_terminal?: boolean;
+  readonly last_action_result?: ActionResult;
+  readonly background_pids?: Record<string, number>;
   readonly pending_pop?: { readonly outcome: "complete" | "fail" };
   readonly global_state_visits?: Record<string, number>;
 }
@@ -96,17 +140,7 @@ export const WorkflowContextSetInputSchema = z.object({
 
 export const WorkflowModifyInputSchema = z.object({
   session_id: z.string().describe("Session identifier"),
-  add_state: z.object({
-    name: z.string(),
-    prompt: z.string().optional(),
-    transitions: z.record(z.string()).optional(),
-    terminal: z.boolean().optional(),
-    outcome: z.enum(["complete", "fail", "needs_action"]).optional(),
-    max_visits: z.number().int().positive().optional(),
-    sub_workflow: z.string().optional(),
-    on_complete: z.string().optional(),
-    on_fail: z.string().optional(),
-  }).optional().describe("Add a new state to the current workflow"),
+  add_state: StateDefinitionSchema.extend({ name: z.string() }).optional().describe("Add a new state to the current workflow"),
   add_transition: z.object({
     from: z.string(),
     name: z.string(),

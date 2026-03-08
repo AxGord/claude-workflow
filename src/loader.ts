@@ -150,6 +150,8 @@ export class Loader {
       errors.push("no terminal state defined");
 
     for (const [name, state] of Object.entries(wf.states)) {
+      const isAction = state.type === "exec" || state.type === "fetch";
+
       if (state.transitions) {
         for (const [tName, tgt] of Object.entries(state.transitions)) {
           if (!stateNames.has(tgt))
@@ -157,11 +159,43 @@ export class Loader {
         }
       }
 
-      if (!state.prompt && !state.sub_workflow && !state.terminal)
-        errors.push(`state "${name}" has no prompt, sub_workflow, or terminal flag`);
+      if (isAction) {
+        // Action state validation
+        if (state.type === "exec" && !state.command)
+          errors.push(`state "${name}" type exec requires command`);
+        if (state.type === "fetch" && !state.url)
+          errors.push(`state "${name}" type fetch requires url`);
 
-      if (state.sub_workflow && !state.on_complete)
-        errors.push(`state "${name}" has sub_workflow but no on_complete`);
+        if (state.cases) {
+          if (!state.default)
+            errors.push(`state "${name}" has cases but no default`);
+          for (const [key, tgt] of Object.entries(state.cases)) {
+            if (!stateNames.has(tgt))
+              errors.push(`state "${name}" cases "${key}" → unknown state "${tgt}"`);
+          }
+          if (state.default && !stateNames.has(state.default))
+            errors.push(`state "${name}" default → unknown state "${state.default}"`);
+        } else {
+          if (!state.on_success || !state.on_error)
+            errors.push(`state "${name}" action requires on_success + on_error or cases + default`);
+          if (state.on_success && !stateNames.has(state.on_success))
+            errors.push(`state "${name}" on_success → unknown state "${state.on_success}"`);
+          if (state.on_error && !stateNames.has(state.on_error))
+            errors.push(`state "${name}" on_error → unknown state "${state.on_error}"`);
+        }
+
+        if (state.sub_workflow)
+          errors.push(`state "${name}" action state cannot have sub_workflow`);
+        if (state.transitions && Object.keys(state.transitions).length > 0)
+          errors.push(`state "${name}" action state cannot have transitions`);
+      } else {
+        // Non-action state validation
+        if (!state.prompt && !state.sub_workflow && !state.terminal)
+          errors.push(`state "${name}" has no prompt, sub_workflow, or terminal flag`);
+
+        if (state.sub_workflow && !state.on_complete)
+          errors.push(`state "${name}" has sub_workflow but no on_complete`);
+      }
 
       // terminal + transitions is allowed: "soft terminal" — considered complete
       // but can be re-entered via transitions (useful for top-level confirmation loops)

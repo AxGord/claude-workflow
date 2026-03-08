@@ -8,17 +8,7 @@ import type { Loader } from "./loader.js";
 import type { Engine } from "./engine.js";
 
 export interface ModifyInput {
-  readonly add_state?: {
-    readonly name: string;
-    readonly prompt?: string;
-    readonly transitions?: Record<string, string>;
-    readonly terminal?: boolean;
-    readonly outcome?: "complete" | "fail" | "needs_action";
-    readonly max_visits?: number;
-    readonly sub_workflow?: string;
-    readonly on_complete?: string;
-    readonly on_fail?: string;
-  };
+  readonly add_state?: { readonly name: string } & Partial<StateDefinition>;
   readonly add_transition?: {
     readonly from: string;
     readonly name: string;
@@ -63,6 +53,10 @@ export class Modifier {
 
     if (changes.add_state) {
       const { name, ...stateDef } = changes.add_state;
+      const isAction = stateDef.type === "exec" || stateDef.type === "fetch";
+      if (isAction && stateDef.sub_workflow) {
+        throw new Error(`State "${name}": action state cannot have sub_workflow`);
+      }
       const addStates = { ...(updated.add_states ?? {}), [name]: stateDef as StateDefinition };
       (updated as Record<string, unknown>).add_states = addStates;
       messages.push(`Added state "${name}"`);

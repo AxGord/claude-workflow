@@ -46,7 +46,7 @@ states:
          - **Session**: `<session_id>`
          - **Current state**: `planning @ design`
          - **After approve**: transition `planned` → returns to parent
-         - **Execution workflow**: coding / refactoring / dynamic
+         - **Execution workflow**: coding / refactoring / <workflow-name>
          - **Resume**: `transition("<session_id>", "planned")`
          ```
       5. Call `ExitPlanMode` for user approval
@@ -61,11 +61,15 @@ states:
       The task is operational/dynamic — create the execution workflow directly.
       The workflow IS the plan.
 
+      **First**: call `Skill("workflow-authoring")` for exec/fetch state reference.
+
       **Plan mode**: if system prompt says "Plan mode is active" — you're already in it,
       do NOT call EnterPlanMode. Otherwise call `EnterPlanMode`.
 
-      1. Design the step-by-step workflow
-      2. Call `create("task-<name>", definition)` with focused states
+      0. If a suitable workflow already exists (check `list`), skip creation —
+         just set `context_set(session_id, "dynamic_workflow", "<existing-name>")`
+      1. Design the step-by-step workflow (skip if using existing)
+      2. Call `create("task-<name>", definition)` with focused states (skip if using existing)
          - Each state should be small and actionable
          - Always have `done` (terminal, outcome: complete) and `failed` (terminal, outcome: fail)
          - Use `on_fail` for recovery paths
@@ -73,7 +77,7 @@ states:
       4. Write plan file with:
          - Brief context of what the workflow does
          - Reference to the created workflow name
-         - Workflow section with `Execution workflow: dynamic`
+         - Workflow section with `Execution workflow: <workflow-name>` (actual name, not "dynamic")
       5. Call `ExitPlanMode` for user approval
 
       **After plan approved → transition `planned`.**

@@ -6,6 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { Storage } from "./storage.js";
 import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
+import { Executor } from "./executor.js";
 import { Modifier } from "./modifier.js";
 import { registerTools } from "./tools.js";
 import { createDashboard } from "./dashboard.js";
@@ -42,7 +43,8 @@ if (refErrors.length > 0) {
 // Start hot-reload
 loader.startWatching();
 
-const engine = new Engine(storage, loader);
+const executor = new Executor();
+const engine = new Engine(storage, loader, executor);
 const modifier = new Modifier(storage, loader);
 modifier.setEngine(engine);
 

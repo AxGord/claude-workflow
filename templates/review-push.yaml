@@ -1,0 +1,63 @@
+name: review-push
+description: "Review uncommitted changes, then commit and push to GitHub if clean"
+initial: review
+max_transitions: 60
+
+states:
+  review:
+    sub_workflow: code-review
+    on_complete: build
+    on_fail: failed
+
+  build:
+    task: "Build project"
+    prompt: |
+      Review is complete and all issues are resolved.
+      Build the project to verify everything compiles.
+
+      Run the project's build command (check package.json, Makefile, Cargo.toml, etc.).
+      Common: `npm run build`, `cargo build`, `make`, `dotnet build`.
+
+      If build succeeds → `commit`
+      If build fails → `fix`
+    transitions:
+      commit: commit
+      fix: fix_build
+
+  fix_build:
+    task: "Fix build errors"
+    prompt: |
+      Build failed. Fix the errors, then build again.
+      After fixing → `retry`.
+    transitions:
+      retry: build
+
+  commit:
+    task: "Commit changes"
+    prompt: |
+      Build passed. Create a git commit with all the changes.
+
+      1. `git status` to see what's being committed
+      2. `git diff --stat` for a summary
+      3. `git log --oneline -5` to match commit message style
+      4. Stage relevant files (prefer specific files over `git add -A`)
+      5. Write a clear commit message following the repo's convention
+      6. Commit
+
+      Then → `push`.
+    transitions:
+      push: push
+
+  push:
+    task: "Push to remote"
+    prompt: |
+      Push the commit to the remote repository.
+      Run `git push` and verify it succeeds.
+      Report the commit hash and remote URL.
+    terminal: true
+    outcome: complete
+
+  failed:
+    prompt: "Review or build failed."
+    terminal: true
+    outcome: fail

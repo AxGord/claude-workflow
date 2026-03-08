@@ -48,7 +48,7 @@ states:
     task: "Delegate per-file coding to agents"
     prompt: |
       Spawn one Agent per file for parallel implementation.
-      Use `subagent_type="general-purpose"`, `model="opus"`.
+      Use `subagent_type="general-purpose"`.
 
       For each file, include in the agent prompt VERBATIM:
       ---
@@ -113,7 +113,7 @@ states:
     task: "Delegate per-file review to agents"
     prompt: |
       Spawn one Agent per changed file for deep review.
-      Use `subagent_type="general-purpose"`, `model="opus"`.
+      Use `subagent_type="general-purpose"`.
 
       For each file, include in the agent prompt VERBATIM:
       ---

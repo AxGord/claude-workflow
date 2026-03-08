@@ -37,6 +37,8 @@ states:
       - fix known bug → bug_fix
       - restructure code → refactoring
       - review PR/code → code_review
+      - review changes + commit + push ("review and push",
+        "check and push", "push to github") → review_push
       - look up docs/web → research
       - conversation that does NOT require reading code (greetings, meta-questions
         about workflow, preferences, general knowledge) → chat
@@ -55,6 +57,7 @@ states:
       investigate: run_investigate
       refactoring: run_refactoring
       code_review: run_code_review
+      review_push: run_review_push
       research: run_research
       explore: run_explore
       chat: chat
@@ -88,7 +91,8 @@ states:
       - `feature` → plan says feature
       - `bug_fix` → plan says bug_fix
       - `project` → plan says project-specific workflow (set context key `project_workflow`)
-      - `dynamic` → plan says dynamic (complex multi-step, needs create)
+      - Any other value → it's a workflow name. Set context key `dynamic_workflow` to that value,
+        then transition `dynamic`.
     transitions:
       coding: run_coding
       refactoring: run_refactoring
@@ -123,8 +127,22 @@ states:
 
   run_investigate:
     sub_workflow: investigate
-    on_complete: reflect
+    on_complete: investigate_outcome
     on_fail: plan
+
+  investigate_outcome:
+    prompt: |
+      Investigation is complete. Decide what happens next based on the findings:
+
+      - If the findings indicate code changes are needed (multi-file edits, refactoring,
+        new feature work, non-trivial fixes) → transition `plan` to enter planning.
+      - If the investigation fully resolved everything (quick fix already applied,
+        or no action needed) → transition `done`.
+
+      Review the investigation results and decide.
+    transitions:
+      plan: plan
+      done: reflect
 
   run_coding:
     sub_workflow: coding
@@ -148,6 +166,11 @@ states:
 
   run_code_review:
     sub_workflow: code-review
+    on_complete: done
+    on_fail: done
+
+  run_review_push:
+    sub_workflow: review-push
     on_complete: done
     on_fail: done
 

@@ -19,11 +19,14 @@ states:
          - "check changes" / "review diff" / default → `scope: diff` (only review changed lines)
          - "review file" / "check whole file" / "bring to order" → `scope: full` (review entire file)
          Save the scope via `context_set(key: "review_scope", value: "diff" or "full")`.
-      3. Get changed file names ONLY (`--name-only`). Do NOT read full diffs.
+      3. Get ALL changed file names — both modified AND new (untracked):
+         - Modified/staged: `git diff HEAD --name-only`
+         - New untracked: `git ls-files --others --exclude-standard`
+         Combine both lists. Do NOT read full diffs yet — names only.
          **Git pathspec gotcha (zsh):** to exclude paths, use `-- . ':(exclude)path'`,
          NOT `-- ':!path'` — the latter silently returns empty results in zsh.
 
-      Output the file list, then → transition `understood`.
+      Output the combined file list, then → transition `understood`.
     transitions:
       understood: deep_review
 
@@ -53,7 +56,7 @@ states:
       Your ONLY job is to spawn Agent tools and collect their results.
 
       Spawn one Agent per changed file for deep review.
-      Use `subagent_type="general-purpose"`, `model="opus"`.
+      Use `subagent_type="general-purpose"`.
 
       For each file, include in the agent prompt VERBATIM:
       ---
@@ -66,9 +69,11 @@ states:
       ---
       Also include:
       - The file path
-      - How to get the diff (e.g. `git diff HEAD~1 -- <filepath>`)
+      - Whether the file is modified or new (untracked):
+        - Modified: "Get the diff with: `git diff HEAD -- <filepath>`"
+        - New/untracked: "This is a new file — read the entire file and review all code."
       - The review scope (from context key `review_scope`):
-        - `diff` → "Review ONLY the changed lines. Report pre-existing issues separately as 'pre-existing' severity, do NOT mix with diff issues."
+        - `diff` → "Review ONLY the changed lines (or all code if new file). Report pre-existing issues separately as 'pre-existing' severity, do NOT mix with diff issues."
         - `full` → "Review the ENTIRE file for all issues, not just the diff."
 
       Launch ALL file agents in parallel (single message, multiple Agent tool calls).

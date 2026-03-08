@@ -1,0 +1,81 @@
+name: github-init
+description: "Initialize git repo and create private GitHub repository"
+initial: check_state
+max_transitions: 20
+
+states:
+  check_state:
+    prompt: |
+      Check the current state of the project:
+      1. `git status` — is it already a git repo?
+      2. `gh auth status` — is GitHub CLI authenticated?
+      3. Check if `.gitignore` exists
+
+      Choose transition:
+      - `needs_gitignore` → not a git repo, no .gitignore
+      - `needs_init` → .gitignore exists but not a git repo
+      - `needs_repo` → already a git repo, just needs GitHub remote
+      - `fail` → gh CLI not authenticated or other blocker
+    transitions:
+      needs_gitignore: create_gitignore
+      needs_init: git_init
+      needs_repo: create_repo
+      fail: failed
+
+  create_gitignore:
+    prompt: |
+      Create `.gitignore` appropriate for the project.
+
+      Detect the project type (look at package.json, Cargo.toml, *.csproj, etc.)
+      and generate a suitable .gitignore. Always include OS artifacts (.DS_Store).
+
+      Ask the user if unsure what to exclude.
+
+      Transition `next`.
+    transitions:
+      next: git_init
+
+  git_init:
+    prompt: |
+      Initialize git and make the first commit:
+      1. `git init`
+      2. Check for files excluded by global gitignore that should be tracked
+         (e.g. CLAUDE.md if it's part of the project). Force-add them if needed.
+      3. `git add -A`
+      4. `git commit -m "Initial commit"`
+
+      Transition `next`.
+    transitions:
+      next: create_repo
+
+  create_repo:
+    prompt: |
+      Create a private GitHub repo and push:
+      1. Determine repo name from the current directory name
+      2. Determine GitHub username from `gh auth status`
+      3. Run: `gh repo create <user>/<repo> --private --source=. --push`
+
+      If it succeeds → transition `next`.
+      If it fails → transition `fail`.
+    transitions:
+      next: verify
+      fail: failed
+
+  verify:
+    prompt: |
+      Verify the repo was created:
+      - `gh repo view --json isPrivate,url`
+      - `git remote -v`
+      Confirm it's private and remote is set. Transition `next`.
+    transitions:
+      next: done
+
+  done:
+    prompt: "GitHub repo created and code pushed successfully."
+    terminal: true
+    outcome: complete
+
+  failed:
+    prompt: "Failed to create the GitHub repo. Report the error to the user."
+    terminal: true
+    outcome: fail
