@@ -20,9 +20,10 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 - **Three-tier loading** — bundled templates < global (`~/.claude/workflows/`) < project (`.claude/workflows/`)
 - **Snapshot isolation** — workflow definitions frozen at session start; hot-reloads don't affect running sessions
 - **Runtime overlays** — modify workflows on the fly without touching YAML files
+- **Action states** — `exec` runs shell commands, `fetch` makes HTTP requests, with auto-routing by exit code or HTTP status
 - **Web dashboard** — real-time session monitoring with DAG graph visualization
-- **16 bundled workflows** — complete agent lifecycle from routing to reflection
-- **8 bundled skills** — reusable knowledge modules auto-provisioned on first run
+- **18 bundled workflows** — complete agent lifecycle from routing to reflection
+- **9 bundled skills** — reusable knowledge modules auto-provisioned on first run
 - **SessionStart hook** — auto-provisions missing skills and injects workflow context
 
 ## Quick Start
@@ -108,6 +109,67 @@ states:
     outcome: complete            # or "fail"
 ```
 
+## Action States
+
+States can run shell commands or HTTP requests automatically — the agent doesn't participate, the engine handles execution and routes to the next state based on the result.
+
+### `exec` — run a shell command
+
+```yaml
+run_tests:
+  type: exec
+  command: "npm test"
+  cwd: "{{context.cwd}}"
+  timeout: 30000
+  on_success: analyze
+  on_error: fix
+  success_prompt: "Tests passed:\n{{stdout}}"
+  error_prompt: "Tests failed (exit {{exit_code}}):\n{{stderr}}"
+```
+
+### `fetch` — make an HTTP request
+
+```yaml
+check_api:
+  type: fetch
+  url: "http://localhost:8888/ping"
+  method: GET
+  timeout: 5000
+  retry:
+    max: 60
+    interval: 500
+  on_success: ready
+  on_error: wait
+  success_prompt: "API ready: {{body}}"
+  error_prompt: "Not responding: {{error}}"
+```
+
+### Routing
+
+Action states route via `on_success`/`on_error`, or by specific codes using `cases`:
+
+```yaml
+run_tests:
+  type: exec
+  command: "npm test"
+  cases:
+    "0": all_passed
+    "1": tests_failed
+    "2": no_tests_found
+  default: unknown_error
+```
+
+### Template variables
+
+All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`. After action execution, result variables are also available:
+
+| Source | Variables |
+|--------|-----------|
+| `exec` | `{{stdout}}`, `{{stderr}}`, `{{exit_code}}`, `{{pid}}` (background) |
+| `fetch` | `{{status}}`, `{{body}}`, `{{error}}` |
+
+Action states can be chained — `exec` → `exec` → `fetch` → `prompt` — up to 20 steps without agent involvement.
+
 ## Three-Tier Loading
 
 Workflows load from three sources in ascending priority — later tiers override earlier ones:
@@ -140,6 +202,8 @@ A project workflow named `coding` overrides the bundled `coding` template. Same-
 | `subagent` | Lightweight routing for sub-agents (no chat/plan/reflect) |
 | `file-code` | Per-file coding — spawned by coding/bug-fix for each file |
 | `file-review` | Per-file deep review — spawned by code-review for each file |
+| `review-push` | Review uncommitted changes, then commit and push to GitHub |
+| `github-init` | Initialize git repo and create private GitHub repository |
 
 ![Coding workflow graph](docs/screenshots/workflow-coding.png)
 
@@ -157,6 +221,7 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-pr
 | `lang-python` | Python language gotchas |
 | `math` | Math overflow boundary gotchas |
 | `web-reading` | Fetch web content via subagents |
+| `workflow-authoring` | Reference for creating workflows with exec/fetch action states |
 
 ## MCP Tools
 
@@ -245,6 +310,7 @@ Then in `~/.claude/settings.json`:
 npm run build    # tsc → compiles src/ to build/
 npm run dev      # tsc --watch
 npm start        # node build/index.js
+npm test         # vitest run
 ```
 
 ### Architecture
@@ -257,6 +323,8 @@ npm start        # node build/index.js
 | `src/storage.ts` | JSON persistence with atomic writes and lockfile mutex |
 | `src/modifier.ts` | Runtime overlays + create (YAML writer) |
 | `src/tools.ts` | MCP tool registrations + response formatting |
+| `src/executor.ts` | Action state execution — shell commands (`exec`) and HTTP requests (`fetch`) |
+| `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 
