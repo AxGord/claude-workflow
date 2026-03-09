@@ -1,6 +1,6 @@
 {
   "name": "claude-mcp-workflow",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "Structured workflow orchestration for AI agents via finite-state machines",
   "author": "AxGord <axgord@gmail.com> (https://github.com/AxGord)",
   "license": "MIT",
