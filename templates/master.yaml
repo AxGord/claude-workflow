@@ -7,8 +7,8 @@ states:
   route:
     include_workflows: true
     prompt: |
-      STOP. This is a routing state. Do NOT perform any work. Do NOT answer the user.
-      The ONLY tool calls allowed here are transition.
+      ROUTING STATE — do NOT perform any work, do NOT answer the user.
+      Read the user's message, pick the matching transition below, and call transition() immediately.
 
       **Step 1 — Check for project workflows.**
       If project workflows are listed below this prompt, check if any match the
@@ -51,8 +51,6 @@ states:
       - unclear → unclear
 
       Code reference in system-reminder → code-related (code_review, explore, or coding), NEVER chat.
-
-      → Call transition NOW.
     transitions:
       plan: plan
       project: run_project

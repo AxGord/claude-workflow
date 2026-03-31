@@ -51,6 +51,12 @@ function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): 
     parts.push(status.prompt);
   }
 
+  const transitionNames = Object.keys(status.availableTransitions);
+  if (transitionNames.length > 0) {
+    parts.push("");
+    parts.push("TRANSITIONS: " + transitionNames.join(", "));
+  }
+
   if (status.taskOps.length > 0) {
     parts.push("");
     parts.push("TASKS:");
