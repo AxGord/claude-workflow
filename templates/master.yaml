@@ -5,15 +5,14 @@ max_transitions: 100
 
 states:
   route:
+    include_workflows: true
     prompt: |
       STOP. This is a routing state. Do NOT perform any work. Do NOT answer the user.
-      The ONLY tool calls allowed here are list and transition.
+      The ONLY tool calls allowed here are transition.
 
       **Step 1 — Check for project workflows.**
-      Call `list`. Look for workflows NOT in the global set (coding, debugging,
-      bug-fix, new-feature, code-review, explore, web-research, planning,
-      testing, reflection, investigate, master). If a project workflow exists and its description
-      matches the user's task → transition `project` and set context key
+      If project workflows are listed below this prompt, check if any match the
+      user's task. If a match → transition `project` and set context key
       `project_workflow` to that workflow's name.
 
       **Step 2 — Standard routing (only if no project workflow matched).**

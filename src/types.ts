@@ -18,6 +18,9 @@ export const StateDefinitionSchema = z.object({
   // Skill gate: require skills to be loaded before proceeding
   skills: z.array(z.string()).optional(),
 
+  // Include project-specific workflow list in prompt
+  include_workflows: z.boolean().optional(),
+
   // Action state fields
   type: z.enum(["prompt", "exec", "fetch"]).optional(),
 

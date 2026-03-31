@@ -93,7 +93,8 @@ function buildApp(storage: Storage, loader: Loader): express.Express {
 }
 
 function tryListen(app: express.Express, port: number): void {
-  const server = app.listen(port);
+  const host = process.env.DASHBOARD_HOST || "127.0.0.1";
+  const server = app.listen(port, host);
   server.on("listening", () => {
     console.error(`Dashboard running at http://localhost:${port}`);
   });

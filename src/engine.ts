@@ -48,6 +48,12 @@ export interface StatusResult {
 const MAX_ACTION_CHAIN = 20;
 
 export class Engine {
+  private static readonly GLOBAL_WORKFLOWS = new Set([
+    "coding", "debugging", "bug-fix", "new-feature", "code-review",
+    "explore", "web-research", "planning", "testing", "reflection",
+    "investigate", "master", "file-code", "file-review", "subagent", "review-push",
+  ]);
+
   private readonly _storage: Storage;
   private readonly _loader: Loader;
   private readonly _executor: Executor;
@@ -873,6 +879,16 @@ export class Engine {
     }
   }
 
+  private _getProjectWorkflows(sessionId: string): Array<{ name: string; description?: string }> {
+    const snapshot = this._snapshots.get(sessionId);
+    const workflows = snapshot ?? this._loader.getAll();
+    const result: Array<{ name: string; description?: string }> = [];
+    for (const [name, wf] of workflows) {
+      if (!Engine.GLOBAL_WORKFLOWS.has(name)) result.push({ name, description: wf.description });
+    }
+    return result.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   private _getWorkflow(sessionId: string, name: string): WorkflowDefinition {
     // Try snapshot first, fallback to loader
     const snapshot = this._snapshots.get(sessionId);
@@ -960,7 +976,16 @@ export class Engine {
     const state = this._resolveState(session, frame.workflow, frame.current_state);
     const vars = this._buildTemplateVars(session);
     const rawPrompt = actionPrompt ?? state?.prompt ?? `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`;
-    const prompt = render(rawPrompt, vars);
+    let prompt = render(rawPrompt, vars);
+
+    if (state?.include_workflows) {
+      const projectWorkflows = this._getProjectWorkflows(session.session_id);
+      if (projectWorkflows.length > 0) {
+        prompt += "\n\nAvailable workflows:\n" + projectWorkflows
+          .map(w => `- ${w.name} — ${w.description ?? "(no description)"}`)
+          .join("\n");
+      }
+    }
 
     const currentTaskOps = [...(taskOps ?? [])];
     if (state?.task) {

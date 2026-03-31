@@ -1,7 +1,7 @@
 {
   "name": "workflow",
   "version": "0.1.5",
-  "description": "Structured workflow orchestration for AI agents via finite-state machines",
+  "description": "Structured workflow orchestration for AI agents via finite-state machines. Dashboard: http://localhost:3100",
   "author": {
     "name": "AxGord",
     "email": "axgord@gmail.com",

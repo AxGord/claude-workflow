@@ -37,6 +37,7 @@ No test runner, linter, or formatter is configured.
 | `WORKFLOW_DIR` | `~/.claude/workflows/` | Global workflow YAML directory |
 | `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence |
 | `DASHBOARD_PORT` | `3100` | Web dashboard HTTP port |
+| `DASHBOARD_HOST` | `127.0.0.1` | Web dashboard bind address |
 
 Project-local workflows load from `./.claude/workflows/` (relative to server CWD). Project-local overrides global on name conflict.
 

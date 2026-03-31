@@ -264,6 +264,7 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 | `WORKFLOW_DIR` | `~/.claude/workflows/` | Global workflow YAML directory |
 | `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence |
 | `DASHBOARD_PORT` | `3100` | Web dashboard HTTP port |
+| `DASHBOARD_HOST` | `127.0.0.1` | Web dashboard bind address |
 
 ## Status Line
 
