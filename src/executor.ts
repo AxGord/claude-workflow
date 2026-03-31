@@ -1,17 +1,21 @@
-import { exec, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { StateDefinition, ActionResult } from "./types.js";
 import { render } from "./template.js";
 
-const MAX_OUTPUT = 10 * 1024; // 10KB truncation limit
+const DEFAULT_MAX_OUTPUT = 10 * 1024; // 10KB truncation limit
 const DEFAULT_EXEC_TIMEOUT = 30_000;
 const DEFAULT_FETCH_TIMEOUT = 5_000;
+const SIGKILL_GRACE_MS = 5_000;
+const EXIT_CODE_TIMEOUT = 124;
+const TRIM_TRIGGER_FACTOR = 4;
+const TRIM_TARGET_FACTOR = 2;
 
-function truncate(s: string): string {
-  if (s.length <= MAX_OUTPUT) return s;
-  return s.slice(0, MAX_OUTPUT) + "\n...[truncated]";
+function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
+  if (s.length <= limit) return s;
+  return "...[truncated]\n" + s.slice(-limit);
 }
 
 export class Executor {
@@ -30,26 +34,68 @@ export class Executor {
     const command = render(state.command!, vars);
     const cwd = state.cwd ? render(state.cwd, vars) : undefined;
     const timeout = state.timeout ?? DEFAULT_EXEC_TIMEOUT;
+    const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
 
     const envVars = state.env
       ? Object.fromEntries(Object.entries(state.env).map(([k, v]) => [k, render(v, vars)]))
       : undefined;
 
     return new Promise((resolve) => {
-      exec(command, {
+      let stdout = "";
+      let stderr = "";
+      let killed = false;
+
+      const child = spawn("sh", ["-c", command], {
         cwd,
-        timeout,
         env: envVars ? { ...process.env, ...envVars } : undefined,
-        maxBuffer: MAX_OUTPUT * 2,
-      }, (error, stdout, stderr) => {
-        const exit_code = error ? (error as any).code ?? 1 : 0;
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: true,
+      });
+
+      const killGroup = (signal: NodeJS.Signals) => {
+        if (!child.pid) return;
+        try { process.kill(-child.pid, signal); } catch {}
+      };
+
+      let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
+      const timer = setTimeout(() => {
+        killed = true;
+        killGroup("SIGTERM");
+        sigkillTimer = setTimeout(() => killGroup("SIGKILL"), SIGKILL_GRACE_MS);
+      }, timeout);
+
+      // Keep only the tail — no memory explosion on large output
+      const accumulate = (buf: string, chunk: Buffer): string => {
+        buf += chunk.toString();
+        return buf.length > maxOutput * TRIM_TRIGGER_FACTOR ? buf.slice(-maxOutput * TRIM_TARGET_FACTOR) : buf;
+      };
+      child.stdout!.on("data", (chunk: Buffer) => { stdout = accumulate(stdout, chunk); });
+      child.stderr!.on("data", (chunk: Buffer) => { stderr = accumulate(stderr, chunk); });
+
+      child.on("close", (code: number | null) => {
+        clearTimeout(timer);
+        clearTimeout(sigkillTimer);
+        const exit_code = killed ? EXIT_CODE_TIMEOUT : (code ?? 1);
         resolve({
           type: "exec",
           success: exit_code === 0,
-          stdout: truncate(stdout),
-          stderr: truncate(stderr),
-          exit_code: typeof exit_code === "number" ? exit_code : 1,
-          error: error && exit_code !== 0 ? error.message : undefined,
+          stdout: truncate(stdout, maxOutput),
+          stderr: truncate(stderr, maxOutput),
+          exit_code,
+          error: killed ? "Process timed out" : (exit_code !== 0 ? `Exit code ${exit_code}` : undefined),
+        });
+      });
+
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        clearTimeout(sigkillTimer);
+        resolve({
+          type: "exec",
+          success: false,
+          stdout: truncate(stdout, maxOutput),
+          stderr: truncate(stderr, maxOutput),
+          exit_code: 1,
+          error: err.message,
         });
       });
     });

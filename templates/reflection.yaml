@@ -1,7 +1,7 @@
 name: reflection
 description: "Self-reflection after significant tasks — evaluate, classify, act"
 initial: evaluate
-max_transitions: 15
+max_transitions: 25
 
 states:
   evaluate:
@@ -22,7 +22,7 @@ states:
 
   classify:
     prompt: |
-      Classify the lesson — where does it belong?
+      Classify EACH lesson — one lesson may produce multiple actions.
 
       | Type | Destination | Example |
       |------|------------|---------|
@@ -32,14 +32,21 @@ states:
       | Project-specific quirk | MEMORY.md | "Custom ORM, not EF" |
       | Project build/config | MEMORY.md | "Needs --legacy-peer-deps" |
 
+      **Bias check**: prefer skills over memory. If a lesson applies beyond this
+      one project (language gotcha, tool behavior, API pattern) → it's a skill,
+      NOT memory. Memory is ONLY for things unique to THIS project.
+
       Choose transition:
       - `enrich_skill` → update existing skill via skill-manager ENRICH
       - `create_skill` → systemic gap, create new skill via skill-manager CREATE
       - `update_memory` → project-specific, write to MEMORY.md
+      - `suggest_improvements` → the lesson itself IS about workflow/skill friction
+        (not a side observation — the primary lesson is about process inefficiency)
     transitions:
       enrich_skill: action
       create_skill: action
       update_memory: action
+      suggest_improvements: suggest_improvements
 
   action:
     prompt: |
@@ -52,8 +59,37 @@ states:
       After acting, acknowledge the lesson to the user honestly.
 
       Choose transition:
-      - `done` → action completed
+      - `more` → have more lessons to classify
+      - `suggest_improvements` → also noticed workflow/skill friction
+      - `done` → all lessons handled
     transitions:
+      more: classify
+      suggest_improvements: suggest_improvements
+      done: done
+
+  suggest_improvements:
+    prompt: |
+      Review the session and suggest improvements to workflows or skills.
+
+      Consider:
+      - **Workflow friction**: Did the workflow route incorrectly? Were there
+        unnecessary states? Missing transitions? Confusing prompts?
+      - **Skill gaps**: Were skills missing, outdated, or not loaded when needed?
+      - **Process**: Did you repeat steps that could be automated or streamlined?
+
+      Present suggestions as a short bulleted list to the user:
+      ```
+      Possible improvements:
+      - [workflow/skill name]: what to change and why
+      ```
+
+      Only suggest changes you're confident about — no speculative ideas.
+
+      Choose transition:
+      - `more` → still have lessons to classify from evaluate
+      - `done` → finished
+    transitions:
+      more: classify
       done: done
 
   done:

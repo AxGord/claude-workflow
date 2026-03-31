@@ -7,6 +7,7 @@ states:
   load_skills:
     skills:
       - coding-skill-selector
+      - ?project-skill-selector
     transitions:
       continue: read_context
 
@@ -128,11 +129,42 @@ states:
       current style standards. Report with file:line.
 
       Additionally check:
+      - [ ] Missing type annotations: if a variable/field/parameter has no explicit type
+            and adding one would improve clarity, recommend it — but ONLY after you find
+            the actual type definition in the codebase (via Grep/Read). Never guess types.
+            Use short type names + import, not fully qualified paths (e.g. `MyClass`,
+            not `com.package.MyClass`) — unless a name conflict or conditional compilation
+            requires the full path (check loaded lang/preferences skills for specifics).
       - [ ] Naming: consistent with conventions in neighboring files
+      - [ ] Member ordering: new fields and methods must respect class member order
+            (constants → public vars → private vars → constructor → instance methods →
+            static methods). Check that added code is in the right section, not just
+            appended next to related code.
       - [ ] Duplication: does this duplicate existing code? Search the codebase.
       - [ ] Dead code: unused imports, commented-out code (dead guards checked in check_correctness)
       - [ ] Complexity: overly nested logic, functions doing too many things
       - [ ] Consistency: does new code follow patterns in the same module?
+
+      Then → transition `done`.
+    transitions:
+      done: check_architecture
+
+  check_architecture:
+    task: "Check architecture"
+    prompt: |
+      Check structural quality (scope: `diff` = changed code, `full` = entire file):
+      - [ ] Unnecessary indirection: wrapper classes/methods that just forward calls
+      - [ ] Dead abstractions: interface with one implementation, base class with one subclass
+      - [ ] God class: file doing too many unrelated things — should it be split?
+      - [ ] Overcomplicated: deep inheritance or nesting that could be flattened
+      - [ ] Wrong level: logic placed in the wrong layer (UI doing data work, model doing display)
+      - [ ] Stale patterns: old patterns that predate current codebase conventions
+      - [ ] Initialization in parent: parent manually triggers component's internal setup — should be inside the component
+      - [ ] Serialization in runtime state: serialize/deserialize mixed into state classes — should be separate
+      - [ ] Event re-dispatch duplication: re-dispatched event carries fields that duplicate event.target
+      - [ ] Complexity without pain: abstractions, patterns, or layers added for hypothetical future needs
+
+      Only flag real simplification opportunities — don't invent hypothetical improvements.
 
       Then → transition `done`.
     transitions:

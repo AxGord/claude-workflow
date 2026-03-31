@@ -1,7 +1,7 @@
 name: code-review
 description: "Code review workflow"
 initial: overview
-max_transitions: 50
+max_transitions: 300
 
 states:
   overview:
@@ -9,42 +9,69 @@ states:
     prompt: |
       Do these steps in order, then transition `understood`:
 
-      1. Determine review scope:
-         - **First check git status in system prompt** — if it shows uncommitted changes
-           (staged or unstaged), those ARE the changes to review. Do NOT ask the user.
-         - User specified files/commits/PR → use that scope
-         - Nothing specified AND no changes in system prompt → ask the user
-         - NEVER default to `git diff master` or full branch diff
-      2. Determine review depth from user's request:
-         - "check changes" / "review diff" / default → `scope: diff` (only review changed lines)
-         - "review file" / "check whole file" / "bring to order" → `scope: full` (review entire file)
-         Save the scope via `context_set(key: "review_scope", value: "diff" or "full")`.
-      3. Get ALL changed file names — both modified AND new (untracked):
-         - Modified/staged: `git diff HEAD --name-only`
-         - New untracked: `git ls-files --others --exclude-standard`
-         Combine both lists. Do NOT read full diffs yet — names only.
-         **Git pathspec gotcha (zsh):** to exclude paths, use `-- . ':(exclude)path'`,
-         NOT `-- ':!path'` — the latter silently returns empty results in zsh.
+      **Step 1 — Determine file source (first match wins):**
 
-      Output the combined file list, then → transition `understood`.
+      1. **User specified files** — user named concrete file paths → use those.
+         Do NOT touch git.
+      2. **User specified directories** — user named directories or patterns
+         (e.g. "src/api/", "src/ без editor", "src/*.hx, src/api/, src/drill/").
+         Parse the request in natural language:
+         - `"src/"` → all source files recursively, auto-group by first-level subdirectories
+         - `"src/api/, src/drill/"` → only these dirs recursively, each = one package
+         - `"src/*.hx, src/api/, src/drill/"` → root files + specific dirs
+         - `"src/ without editor and video"` → everything except excluded dirs
+         Use Glob to build the final file list. Group files by parent directory into packages.
+         Save via `context_set(key: "review_mode", value: "directory")`.
+         Save via `context_set(key: "packages", value: "<JSON array>")` where format is:
+         `[{"name": "api", "files": ["src/api/Foo.hx", ...]}, {"name": "root", "files": [...]}]`
+         Save via `context_set(key: "current_package_index", value: "0")`.
+      3. **Called as sub-workflow after testing/coding** — you already know which files
+         were changed from conversation history. Use that knowledge directly.
+      4. **Starting fresh with no prior context** — check git status for uncommitted
+         changes (staged or unstaged). If none → ask the user.
+      - NEVER default to `git diff master` or full branch diff
+
+      **Step 2 — Determine review depth:**
+      - Coming from testing/coding / "check changes" / "review diff" / default
+        → `scope: diff` (only review changed lines)
+      - "review file" / "целиком" / "check whole file" / "bring to order" / "привести в порядок"
+        → `scope: full` (review entire file)
+      - Directory mode → always `scope: full`
+      Save the scope via `context_set(key: "review_scope", value: "diff" or "full")`.
+
+      **Step 3 — Get file names:**
+      - If source is user-specified files or directories → already have the list.
+      - If source is git → get ALL changed file names (modified AND new/untracked):
+        - Modified/staged: `git diff HEAD --name-only`
+        - New untracked: `git ls-files --others --exclude-standard`
+        Combine both lists. Do NOT read full diffs yet — names only.
+        **Git pathspec gotcha (zsh):** to exclude paths, use `-- . ':(exclude)path'`,
+        NOT `-- ':!path'` — the latter silently returns empty results in zsh.
+
+      Output the file list (and packages if directory mode), then → transition `understood`.
     transitions:
       understood: load_skills
 
   load_skills:
     skills:
       - coding-skill-selector
+      - ?project-skill-selector
     transitions:
       continue: deep_review
 
   deep_review:
     task: "Route review by scope"
     prompt: |
-      Route based on how many files changed:
-      - `single` → 1 file changed — review via file-review sub-workflow (yourself)
-      - `multi` → 2+ files changed — spawn file-review agents in parallel
+      Check context key `review_mode`:
+      - If `review_mode` is `"directory"` → `directory`
+
+      Otherwise route based on how many files:
+      - `single` → 1 file — review via file-review sub-workflow (yourself)
+      - `multi` → 2+ files — spawn file-review agents in parallel
     transitions:
       single: review_single
       multi: review_delegate
+      directory: package_review
 
   review_single:
     sub_workflow: file-review
@@ -79,6 +106,10 @@ states:
         - `diff` → "Review ONLY the changed lines (or all code if new file). Report pre-existing issues separately as 'pre-existing' severity, do NOT mix with diff issues."
         - `full` → "Review the ENTIRE file for all issues, not just the diff."
 
+      Do NOT include style rules, review checklists, or coding preferences in the agent prompt.
+      The file-review workflow has its own skill-loading state — agents will load all
+      relevant skills themselves. Manual rule lists are lossy and cause missed issues.
+
       Launch ALL file agents in parallel (single message, multiple Agent tool calls).
       Wait for all to complete. Collect their reports.
 
@@ -91,17 +122,66 @@ states:
     transitions:
       done: cross_file
 
+  package_review:
+    task: "Review current package (batch loop)"
+    prompt: |
+      CRITICAL: You are a DISPATCHER in this state, not a reviewer.
+      Do NOT read files or code yourself — only spawn agents and collect results.
+
+      1. Read `packages` and `current_package_index` from context.
+      2. If `current_package_index` >= number of packages → transition `all_done`.
+      3. Take the current package. Output: "**Package: <name>** (<N> files)".
+      4. Split the package's files into batches of 8.
+      5. For each batch, spawn one Agent per file for deep review.
+         Use `subagent_type="general-purpose"`.
+
+         For each file, include in the agent prompt VERBATIM:
+         ---
+         IMPORTANT: Override the default CLAUDE.md rule about start().
+         Do NOT call start() without arguments.
+         Instead, your FIRST action must be:
+           mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
+         where <SESSION_ID> is the current session ID (substitute it before sending).
+         Then follow the file-review workflow states until completion.
+         ---
+         Also include:
+         - The file path
+         - "This is a full file review — read the entire file and review all code."
+         - "Review the ENTIRE file for all issues (scope: full)."
+
+         Do NOT include style rules or coding preferences — agents load their own skills.
+
+         Launch the batch agents in parallel (single message, multiple Agent tool calls).
+         Wait for all to complete before starting the next batch.
+
+      6. Collect all reports for this package. Save to context:
+         `context_set(key: "package_<index>_report", value: "<aggregated report>")`
+      7. Abort orphaned child workflow sessions for this package.
+      8. Increment: `context_set(key: "current_package_index", value: "<next index>")`
+      9. Transition `next_package` to process the next package.
+    transitions:
+      next_package: package_review
+      all_done: cross_file
+
   cross_file:
     task: "Cross-file analysis"
     prompt: |
       Now look at the big picture — things a per-file agent can't see:
 
+      **Cross-file consistency:**
       - [ ] Duplication across files: did different files introduce similar code?
       - [ ] Missing updates: if an interface/type changed, are all consumers updated?
       - [ ] Consistency: do the changes follow the same patterns across files?
       - [ ] Test coverage: are changed behaviors covered by tests? Missing test files?
       - [ ] Integration: do the changed components work together correctly?
       - [ ] Blast radius: are there callers/dependents that weren't updated?
+
+      **Architecture:**
+      - [ ] Duplicate abstractions: similar classes/interfaces across files that should be unified
+      - [ ] Common logic: repeated patterns across files that should be extracted
+      - [ ] Unnecessary coupling: modules depending on each other's internals
+      - [ ] Classes to merge: tiny classes that always appear together and share state
+      - [ ] Layer violations: data flowing through unnecessary intermediary layers
 
       Add any cross-file findings to the review.
     transitions:
@@ -113,12 +193,16 @@ states:
       Aggregate all findings from per-file reviews and cross-file analysis.
       Categorize every finding into one of two buckets:
 
-      **Obvious fixes** — clear bugs, typos, style violations, missing error handling,
-      naming issues — things that have an objectively correct fix and don't need discussion.
+      **Obvious fixes** — ONLY cosmetic changes that do NOT alter code behavior:
+      formatting, naming, dead code removal, unused imports, comment fixes, typos in strings.
+      A fix is obvious ONLY if the code does exactly the same thing before and after.
 
-      **Debatable concerns** — architectural choices, alternative approaches, trade-offs,
-      style preferences where the codebase has no clear convention — things that need
-      the user's input before changing.
+      **Debatable concerns** — EVERYTHING that changes functionality, even if "clearly better":
+      refactoring logic, changing conditions, restructuring data flow, removing/adding calls,
+      changing API signatures, fixing bugs (bug fixes change behavior!), adding error handling,
+      architectural choices, alternative approaches, trade-offs.
+
+      **Rule: when in doubt, it's debatable, not obvious.**
 
       Present the summary clearly with both buckets. If there are no issues at all → `approve`.
       If there are any issues → `has_issues`.
@@ -129,47 +213,121 @@ states:
   apply_fixes:
     task: "Apply obvious fixes"
     prompt: |
-      Apply all obvious fixes identified in the summary — bugs, typos, style violations,
-      missing error handling, naming issues. Fix them directly without asking.
+      Apply ONLY cosmetic fixes from the "obvious" bucket — formatting, naming,
+      dead code, unused imports, comment fixes, typos.
+
+      **STOP and move to debatable** if you realize a fix changes what the code does,
+      even subtly. Removing a seemingly-dead code path, reordering operations,
+      changing error handling — these are NOT obvious.
 
       Do NOT touch debatable concerns — those go to discussion.
 
-      After fixing: if there are debatable concerns remaining → `has_concerns`.
-      If everything was obvious and already fixed → `all_clear`.
+      After fixing, route:
+      - You made code changes → `changes_made`
+      - No changes, but there are debatable concerns → `has_concerns`
+      - No changes and no debatable concerns → `all_clear`
     transitions:
+      changes_made: verify_build
       has_concerns: discuss
       all_clear: done
+
+  verify_build:
+    task: "Verify build after obvious fixes"
+    prompt: |
+      Code was changed — verify the project still builds.
+
+      Run the project's build/compile command. Check for errors.
+      - Build fails → fix the build errors, then run the build again.
+        Repeat until the build passes.
+
+      After build passes, route:
+      - There are debatable concerns remaining → `has_concerns`
+      - No debatable concerns → `all_clear`
+    transitions:
+      has_concerns: discuss
+      all_clear: re_review
 
   discuss:
     task: "Discuss debatable concerns"
     prompt: |
-      Present each debatable concern to the user. For each one, explain:
+      Present ALL debatable concerns to the user as a numbered list. For each one, explain:
       - What the current code does
       - What the concern is
       - Your suggestion (if any)
+      - Whether the change affects functionality (if yes — it will need testing)
 
-      Discuss with the user and reach agreement on what to change and what to leave.
+      **CRITICAL: Resolve EVERY item before transitioning.**
+      Stay in this state until the user has given a decision on each concern:
+      fix, skip, or needs more investigation. If the user asks to investigate
+      a specific item — do the research here, present findings, get a decision.
+      Do NOT transition out to fix one item and leave others unresolved.
 
-      After discussion, route based on scope of agreed changes:
+      Only after ALL items have a decision, route based on scope of agreed changes:
       - Many changes / architectural / multi-file refactoring → `plan` (enters planning mode)
       - Few small stylistic or localized fixes → `code` (direct coding)
-      - User decided to change nothing → `skip`
+      - User decided to change nothing on ALL items → `skip`
     transitions:
       plan: plan_changes
       code: code_changes
-      skip: done
+      skip: re_review
 
   plan_changes:
     task: "Plan agreed changes"
     sub_workflow: planning
-    on_complete: done
+    on_complete: verify_functional
     on_fail: done
 
   code_changes:
     task: "Apply agreed changes"
     sub_workflow: coding
-    on_complete: done
+    on_complete: verify_functional
     on_fail: done
+
+  verify_functional:
+    task: "Verify build and test functional changes"
+    prompt: |
+      Code was changed after discussion — verify correctness.
+
+      1. Run the project's build/compile command. Check for errors.
+         - Build fails → fix errors, rebuild until it passes.
+
+      2. Check if any agreed changes modified functionality (not just cosmetic).
+         If yes → run tests for the changed behavior. Use the project's test
+         framework, or if no automated tests cover the change, describe what
+         manual testing is needed and ask the user to verify.
+         If all changes were cosmetic → build passing is sufficient.
+
+      After verification:
+      - `pass` → proceed to re-review
+      - `fail` → changes broke the build beyond repair, skip to re-review without the failed changes
+    transitions:
+      pass: re_review
+      fail: re_review
+
+  re_review:
+    task: "Re-review changed files for cascading issues"
+    prompt: |
+      Previous fixes may have unblocked new issues or introduced cascading problems.
+      Re-review ALL files that were modified in previous phases (apply_fixes, code_changes).
+
+      1. Get the list of files changed since the review started (git diff or track from context).
+      2. If no files were changed (e.g. discussion resulted in no changes) → `clean`.
+      3. Spawn file-review agents for changed files with `scope: diff`
+         (review only the new changes, not the entire file again).
+         Use the same agent spawning pattern as `review_delegate`.
+      4. Collect reports.
+
+      If new issues found → `has_issues` (back to summarize for another cycle).
+      If clean pass (0 new findings) → `clean`.
+
+      **Iteration limit**: check context key `re_review_count`. If >= 3, transition
+      `clean` regardless — diminishing returns after 3 cycles. Otherwise, increment
+      the counter via `context_set(key: "re_review_count", value: "<N+1>")`.
+
+      The goal is to loop until a clean pass — fixes stabilize and no new issues appear.
+    transitions:
+      has_issues: summarize
+      clean: done
 
   done:
     prompt: "Review complete."

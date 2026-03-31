@@ -27,6 +27,7 @@ export const StateDefinitionSchema = z.object({
   timeout: z.number().positive().optional(),
   env: z.record(z.string()).optional(),
   background: z.boolean().optional(),
+  max_output: z.number().int().positive().optional(), // stdout/stderr truncation limit in bytes (default 10KB)
 
   // fetch
   url: z.string().optional(),
@@ -42,6 +43,7 @@ export const StateDefinitionSchema = z.object({
   success_prompt: z.string().optional(),
   error_prompt: z.string().optional(),
   retry: z.object({ max: z.number().int().positive(), interval: z.number().int().positive() }).optional(),
+  context_set: z.record(z.string()).optional(), // auto-set context keys after action succeeds; values are templates (e.g. "{{stdout}}")
 });
 
 export type StateDefinition = z.infer<typeof StateDefinitionSchema>;

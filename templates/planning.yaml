@@ -36,6 +36,26 @@ states:
       e.g. git operations, deployment, file management, CI/CD setup) → transition `dynamic`
       to create the execution workflow directly instead of writing a text plan.
 
+      **Data flow rule**: when the task involves reading or writing persistent data
+      (files, cache, database), the explore phase MUST trace the complete data flow:
+      write → serialize → load → copy → consumer. Don't stop at 'found where it's
+      stored' — follow the path until you see how the data reaches its consumers.
+      Check how analogous fields in the same system are handled.
+
+      **Before proposing a new storage mechanism** (Store, DB column, file scan):
+      verify — does the project already have infrastructure for this type of data?
+      Check how similar fields are stored and propagated. Use existing infrastructure first.
+
+      **UI animation plans**: for any animation/transition changes, include a
+      per-element table: Element | Start state | End state | Tween props | Notes.
+      Ambiguous phrases like "crossfade" or "morph" cause misinterpretation.
+      Be explicit: "icon tweens x from 0 to -offset, alpha 1→0, no y change."
+
+      **Plan scope**: focus on WHAT to change and WHY. Do NOT include build, run,
+      or launch steps in the plan — the execution workflow handles building and
+      running automatically in its review/testing states. Including them causes
+      the agent to run manual builds that conflict with the automated pipeline.
+
       **Steps in plan mode:**
       1. Explore codebase (Read/Glob/Grep or Plan/Explore subagents)
       2. Design approach
@@ -46,7 +66,7 @@ states:
          - **Session**: `<session_id>`
          - **Current state**: `planning @ design`
          - **After approve**: transition `planned` → returns to parent
-         - **Execution workflow**: coding / refactoring / <workflow-name>
+         - **Execution workflow**: coding / code-review / <workflow-name>
          - **Resume**: `transition("<session_id>", "planned")`
          ```
       5. Call `ExitPlanMode` for user approval

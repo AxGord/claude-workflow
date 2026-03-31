@@ -14,6 +14,10 @@ import type { Loader } from "./loader.js";
 import type { Executor } from "./executor.js";
 import { render } from "./template.js";
 
+function stripOptionalPrefix(s: string): string {
+  return s.replace(/^\?/, '');
+}
+
 export interface TransitionResult {
   readonly prompt: string;
   readonly warnings: string[];
@@ -243,7 +247,7 @@ export class Engine {
       ? {
           loaded_skills: {
             ...(session.loaded_skills ?? {}),
-            ...Object.fromEntries(state.skills.map(s => [s, session.skill_epoch ?? 0])),
+            ...Object.fromEntries(state.skills.map(s => [stripOptionalPrefix(s), session.skill_epoch ?? 0])),
           },
         }
       : {};
@@ -413,14 +417,29 @@ export class Engine {
 
     const epoch = session.skill_epoch ?? 0;
     const loaded = session.loaded_skills ?? {};
-    const missing = state.skills!.filter(s => (loaded[s] ?? -1) < epoch);
+    const missing = state.skills!.filter(s => (loaded[stripOptionalPrefix(s)] ?? -1) < epoch);
 
     if (missing.length > 0) {
-      const skillList = missing.map(s => `  - Skill("${s}")`).join("\n");
+      const required: string[] = [];
+      const optional: string[] = [];
+      for (const s of missing) {
+        if (s.startsWith('?')) optional.push(stripOptionalPrefix(s));
+        else required.push(s);
+      }
+
+      const lines: string[] = [];
+      if (required.length > 0) {
+        lines.push(`Load the following skills before proceeding:\n${required.map(s => `  - Skill("${s}")`).join("\n")}`);
+      }
+      if (optional.length > 0) {
+        lines.push(`Load these skills if available (skip if not found):\n${optional.map(s => `  - Skill("${s}")`).join("\n")}`);
+      }
+      lines.push('After loading all skills, transition to continue.');
+
       const parts: string[] = [];
       if (actionPrompt) parts.push(actionPrompt);
       if (state.prompt) parts.push(state.prompt);
-      parts.push(`Load the following skills before proceeding:\n${skillList}\n\nAfter loading all skills, transition to continue.`);
+      parts.push(lines.join("\n\n"));
       return this._buildStatus(session, taskOps, parts.join("\n\n"));
     }
 
@@ -599,8 +618,19 @@ export class Engine {
       bgPids = { ...(bgPids ?? {}), [`${frame.current_state}:${Date.now()}`]: result.pid };
     }
 
+    // Auto context_set from action state definition (rendered with action result vars)
+    let ctx = session.context;
+    if (result.success && state.context_set) {
+      const renderVars = { ...vars, ...result };
+      const entries = Object.entries(state.context_set).map(
+        ([k, v]) => [k, render(v, renderVars)] as const
+      );
+      ctx = { ...ctx, ...Object.fromEntries(entries) };
+    }
+
     let updated: SessionState = {
       ...session,
+      context: ctx,
       stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
       updated_at: now,
       history: [...session.history, historyEntry],

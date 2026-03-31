@@ -37,6 +37,11 @@ states:
 
       Choose transition:
       - `trivial` → fix is obvious and small (1-3 lines), apply it now
+        **Before choosing trivial, verify ALL:**
+        ☐ Only 1 file changed
+        ☐ No UI positioning/layout/scaling involved (needs visual verification)
+        ☐ No unknowns about API behavior in the fix path
+        If any check fails → `needs_plan`
       - `needs_plan` → changes needed but require planning (multi-file, risk, unclear scope)
       - `no_action` → investigation showed the change is unnecessary or already works correctly
       - `unclear` → still unclear after investigation, need user input
@@ -61,6 +66,7 @@ states:
   load_skills:
     skills:
       - coding-skill-selector
+      - ?project-skill-selector
     transitions:
       continue: quick_fix
 

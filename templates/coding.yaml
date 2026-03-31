@@ -7,11 +7,14 @@ states:
   load_skills:
     skills:
       - coding-skill-selector
+      - ?project-skill-selector
     transitions:
       continue: think
 
   think:
     prompt: |
+      **DO NOT write code or edit files in this state — only research and plan.**
+
       Think before writing:
       1. What will I write? Outline the approach
       2. Does it smell like a utility? Check framework built-ins first
@@ -43,8 +46,9 @@ states:
     prompt: |
       Write changes across multiple files yourself (high coupling or detailed plan).
       Implement layer by layer respecting dependencies.
-      Build after all changes to verify compilation.
-      Then → transition `done`.
+
+      Do NOT build or verify compilation here — testing workflow handles that.
+      Just write code and transition `done`.
     transitions:
       done: review
 

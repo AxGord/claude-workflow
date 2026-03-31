@@ -190,7 +190,6 @@ A project workflow named `coding` overrides the bundled `coding` template. Same-
 | `coding` | Code writing pipeline: think → delegate → write → review → verify |
 | `bug-fix` | Standard bug fix: classify → diagnose → fix → verify |
 | `new-feature` | New feature implementation with planning and testing |
-| `refactoring` | Bring every touched file to current standards |
 | `debugging` | Diagnose first, fix never (until diagnosed) |
 | `code-review` | Code review with per-file deep analysis |
 | `explore` | Codebase exploration — understand structure, trace code, find patterns |

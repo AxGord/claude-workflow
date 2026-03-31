@@ -18,6 +18,7 @@ states:
   load_skills:
     skills:
       - coding-skill-selector
+      - ?project-skill-selector
     transitions:
       continue: implement
 

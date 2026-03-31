@@ -11,7 +11,7 @@ states:
 
       **Step 1 — Check for project workflows.**
       Call `list`. Look for workflows NOT in the global set (coding, debugging,
-      bug-fix, new-feature, refactoring, code-review, explore, web-research, planning,
+      bug-fix, new-feature, code-review, explore, web-research, planning,
       testing, reflection, investigate, master). If a project workflow exists and its description
       matches the user's task → transition `project` and set context key
       `project_workflow` to that workflow's name.
@@ -27,18 +27,25 @@ states:
       - understand/investigate → debugging or explore (NEVER coding)
       - questions about code behavior ("will X break?", "how does Y work?",
         "what happens when Z?") → explore (requires reading code before answering)
-      - task describes desired changes BUT contains unknowns, questions, or
-        uncertainty about current behavior → investigate (NEVER coding)
-        Markers: "seems like", "I think", "if that's the case", "not sure",
-        "should X?", "not sure if", conditional "if", multiple interleaved questions,
-        hedging language. When in doubt between coding and investigate → investigate.
+      - broken behavior / suspected bug → bug_fix (EVEN with hedging language).
+        Bug reports naturally use uncertainty ("seems broken", "doesn't seem to work",
+        "I think it crashes", "looks like X is broken"). The key signal is a
+        **concrete symptom** (crash, wrong output, feature not working, error).
+        Hedging about the symptom ≠ architectural uncertainty.
+      - task describes desired changes BUT contains unknowns about **architecture,
+        approach, or design** (not about a symptom) → investigate (NEVER coding)
+        Markers: "should we use X or Y?", "is this the right approach?",
+        "how should this be structured?", multiple interleaved design questions.
+        When in doubt between coding and investigate → investigate.
+        When in doubt between bug_fix and investigate → bug_fix.
       - write/modify code (1-4 files), scope is clear → coding
       - new feature e2e → feature
-      - fix known bug → bug_fix
-      - restructure code → refactoring
+      - restructure code, refactoring, fix formatting, cleanup, lint across files/directories → code_review
       - review PR/code → code_review
+      - test / verify / check on device or simulator → testing
       - review changes + commit + push ("review and push",
         "check and push", "push to github") → review_push
+      - /init or "generate CLAUDE.md" or "create CLAUDE.md" → init
       - look up docs/web → research
       - conversation that does NOT require reading code (greetings, meta-questions
         about workflow, preferences, general knowledge) → chat
@@ -55,9 +62,10 @@ states:
       bug_fix: run_bug_fix
       debugging: run_debugging
       investigate: run_investigate
-      refactoring: run_refactoring
       code_review: run_code_review
+      testing: run_testing
       review_push: run_review_push
+      init: init_generate
       research: run_research
       explore: run_explore
       chat: chat
@@ -87,17 +95,19 @@ states:
 
       Choose transition:
       - `coding` → plan says coding
-      - `refactoring` → plan says refactoring
+      - `refactoring` → plan says refactoring (routes to code_review)
       - `feature` → plan says feature
       - `bug_fix` → plan says bug_fix
+      - `testing` → plan says testing
       - `project` → plan says project-specific workflow (set context key `project_workflow`)
       - Any other value → it's a workflow name. Set context key `dynamic_workflow` to that value,
         then transition `dynamic`.
     transitions:
       coding: run_coding
-      refactoring: run_refactoring
+      refactoring: run_code_review
       feature: run_feature
       bug_fix: run_bug_fix
+      testing: run_testing
       project: run_project
       dynamic: create_dynamic
 
@@ -107,11 +117,11 @@ states:
 
       1. Read context key `dynamic_workflow` to get the workflow name
       2. Call `modify` to add execution state:
-         - add_state: {name: "run_dynamic", sub_workflow: "<workflow name>", on_complete: "reflect", on_fail: "reflect"}
+         - add_state: {name: "run_dynamic", sub_workflow: "<workflow name>", on_complete: "doc_sync", on_fail: "doc_sync"}
          - add_transition: {from: "create_dynamic", name: "execute", to: "run_dynamic"}
       3. Transition `execute`
     transitions:
-      execute: reflect
+      execute: doc_sync
 
   run_project:
     prompt: |
@@ -119,11 +129,11 @@ states:
 
       1. Read context key `project_workflow` to get the workflow name
       2. Call `modify` to update THIS state:
-         - add_state: {name: "run_project_sub", sub_workflow: "<workflow name>", on_complete: "reflect", on_fail: "reflect"}
+         - add_state: {name: "run_project_sub", sub_workflow: "<workflow name>", on_complete: "doc_sync", on_fail: "doc_sync"}
          - add_transition: {from: "run_project", name: "execute", to: "run_project_sub"}
       3. Transition `execute`
     transitions:
-      execute: reflect
+      execute: doc_sync
 
   run_investigate:
     sub_workflow: investigate
@@ -142,42 +152,43 @@ states:
       Review the investigation results and decide.
     transitions:
       plan: plan
-      done: reflect
+      done: doc_sync
 
   run_coding:
     sub_workflow: coding
-    on_complete: reflect
-    on_fail: reflect
+    on_complete: doc_sync
+    on_fail: doc_sync
 
   run_debugging:
     sub_workflow: debugging
-    on_complete: reflect
-    on_fail: reflect
+    on_complete: doc_sync
+    on_fail: doc_sync
 
   run_feature:
     sub_workflow: new-feature
-    on_complete: reflect
-    on_fail: reflect
+    on_complete: doc_sync
+    on_fail: doc_sync
+
+  run_testing:
+    sub_workflow: testing
+    on_complete: doc_sync
+    on_fail: doc_sync
 
   run_bug_fix:
     sub_workflow: bug-fix
-    on_complete: reflect
-    on_fail: reflect
+    on_complete: doc_sync
+    on_fail: doc_sync
 
   run_code_review:
     sub_workflow: code-review
-    on_complete: done
-    on_fail: done
+    on_complete: doc_sync
+    on_fail: doc_sync
 
   run_review_push:
     sub_workflow: review-push
     on_complete: done
     on_fail: done
 
-  run_refactoring:
-    sub_workflow: refactoring
-    on_complete: reflect
-    on_fail: reflect
 
   run_research:
     sub_workflow: web-research
@@ -203,6 +214,23 @@ states:
       plan: plan
       done: done
 
+  init_generate:
+    prompt: |
+      Generate CLAUDE.md. Scan the project, then write the file.
+
+      **DO NOT include:**
+      - Boilerplate headers ("# CLAUDE.md", "This file provides guidance to Claude Code...")
+      - Project description section
+      - Verbatim README content
+      - File/component listings discoverable by reading the code
+      - Generic dev practices ("write tests", "use meaningful names")
+      - Made-up sections ("Tips", "Support", "Common Tasks")
+
+      Every line should save the next agent real time.
+      Briefly tell the user what was included (2-3 bullet points max).
+    terminal: true
+    outcome: complete
+
   chat:
     terminal: true
     outcome: complete
@@ -215,10 +243,60 @@ states:
     transitions:
       next_task: route
 
+  doc_sync:
+    prompt: |
+      Check if documentation needs updating after the code changes.
+
+      **Skip this state** (transition `done`) if:
+      - No code was changed (pure research, exploration, conversation)
+      - Changes were trivial (typo fix, formatting)
+
+      **If code was changed**, quickly scan:
+      1. **CLAUDE.md** — do the changes affect build commands, architecture,
+         conventions, or env vars documented there? If outdated → update.
+      2. **README.md** — do the changes affect usage, installation, API,
+         or examples? If outdated → update.
+      3. **Code comments/JSDoc** in changed files — are there comments that
+         now describe wrong behavior? If so → fix or remove.
+      4. **Config examples** — do the changes add/remove env vars, CLI flags,
+         or config keys not reflected in docs?
+
+      Also ADD documentation if:
+      - New public API, env var, CLI flag, or config key has no docs
+      - New non-obvious behavior that would confuse the next developer
+      - CLAUDE.md is missing info that would save the next agent time
+
+      Do NOT:
+      - Rewrite sections that are still accurate
+      - Touch files you didn't change during this session
+      - Add boilerplate or generic comments
+
+      → transition `done` when finished (or skipped).
+    transitions:
+      done: reflect
+
   reflect:
     sub_workflow: reflection
-    on_complete: done
-    on_fail: done
+    on_complete: suggest_commit
+    on_fail: suggest_commit
+
+  suggest_commit:
+    prompt: |
+      If code was changed during this session (any files modified, created, or deleted),
+      suggest a short commit message (1 line, imperative mood, max ~70 chars).
+      Do NOT create the commit — just present the message to the user.
+
+      If changes span multiple repositories, list a separate commit message for each:
+      ```
+      repo-name: commit message
+      repo-name-2: commit message
+      ```
+
+      If no code was changed (pure research, exploration, conversation) → skip silently.
+
+      → After presenting (or skipping), transition `done`.
+    transitions:
+      done: done
 
   done:
     terminal: true

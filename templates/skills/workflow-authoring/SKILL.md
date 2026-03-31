@@ -116,12 +116,21 @@ start_build:
 **Multi-step pipeline**: chain action states — exec → exec → fetch → prompt
 (max chain depth: 20, no agent involvement between action states)
 
+### Exec Options
+
+- `max_output` — truncation limit in bytes (default 10KB). Truncation keeps the **tail** (last N bytes), not the head. Use higher values for verbose builds (e.g. Android: `max_output: 51200`).
+- `background: true` — stdout/stderr go to a temp log file (no pipe issues). `on_success` fires immediately.
+
 ### Gotchas
 
-- stdout/stderr truncated to 10KB
+- stdout/stderr truncated to `max_output` bytes (default 10KB, configurable per state)
+- Truncation keeps the **tail** — errors at the end of output are preserved
 - Default timeout: 30s (exec), 5s (fetch)
 - Action states CANNOT have `transitions` or `sub_workflow`
 - Action states route via on_success/on_error or cases/default only
 - `success_prompt`/`error_prompt` are templates, rendered with action result vars
 - If neither prompt template is set, the next prompt state's own prompt is used
 - Background processes are NOT monitored — use a subsequent fetch/exec to check
+- **Duplicate YAML keys** — parser rejects the entire file with a `YAMLParseError`; the loader logs it to stderr and skips the file (workflow not loaded). Always validate YAML before deploying (no duplicate `success_prompt`, `error_prompt`, etc. on the same state)
+- **Long-running commands with child processes** (e.g. `adb logcat`, `openfl test android`) — these never exit while the app runs. Always use `background: true` for such commands. Foreground exec waits for process exit, not pipe close — but if the main process itself doesn't exit, it blocks forever
+- **Foreground build + background deploy** pattern: use foreground `build` (catches errors) then background `test/run` (streams logs), then poll readiness via `fetch` with retry

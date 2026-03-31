@@ -35,18 +35,20 @@ states:
 
       MANDATORY STEPS (all required, in order):
       1. Understand the exact user path that triggers the bug (which button, which file, which action)
-      2. Build and launch the app with debug bridge (`-debug -DFASTBOOT -DDEBUG_API -DHEADLESS`)
+      2. Build and launch the app with debug bridge
       3. Follow the SAME path the user described to trigger the bug
       4. Take a screenshot and VERIFY the bug is visible
       5. Describe what you see — compare with the user's report
 
       STOP — self-check before transitioning:
       - Did you LAUNCH the app and take a SCREENSHOT? If not, you haven't reproduced.
-      - Can you show the screenshot? If not, you haven't reproduced yet.
+      - Can you SEE the bug in YOUR screenshot? If not → `cant_reproduce`.
       - "I can see from the code that..." is NOT evidence. Run the app.
+      - User screenshots are NOT your reproduction. YOU must see it in YOUR screenshot.
 
-      DO NOT skip visual reproduction. Running unit tests is NOT reproduction for visual bugs.
-      DO NOT transition to `reproduced` without a screenshot proving the bug exists.
+      `reproduced` = you have YOUR OWN screenshot showing the bug. No exceptions.
+      `cant_reproduce` = you tried but can't see it. This leads to asking the user for help.
+      NEVER use `reproduced` when you haven't seen the bug yourself.
 
       If the bug requires file operations, use the tm-interactive-debug skill recipes.
     transitions:
@@ -61,6 +63,9 @@ states:
       DO NOT fix the bug here. You may add trace/log statements or write test code
       to help reproduce, but do NOT modify production logic. The fix belongs in the `fix` state.
 
+      FILE RESTRICTION: You may ONLY create or edit test files.
+      Any edit to production code is a workflow violation.
+
       MANDATORY STEPS (all required, in order):
       1. Understand the exact scenario that triggers the bug
       2. Write a minimal FAILING test that demonstrates the wrong behavior
@@ -71,6 +76,8 @@ states:
       - Did you EXECUTE something (build + run)? Reading code ≠ reproduction.
       - Can you paste the failing output? If not, you haven't reproduced yet.
       - "I can see from the code that..." is NOT evidence. Run the code.
+      - Run `git diff --name-only` — if ANY file outside test directories was modified,
+        you violated the workflow. Revert with `git checkout -- <file>` before transitioning.
 
       DO NOT transition to `reproduced` without concrete executed evidence
       (test failure output, wrong runtime output, crash log).
@@ -89,6 +96,13 @@ states:
 
       DO NOT fix the bug here. You may add trace/log statements to narrow down
       the cause, but do NOT modify production logic. The fix belongs in the `fix` state.
+
+      FILE RESTRICTION: Do NOT add new methods, fields, or change signatures.
+      Only trace/log statements are allowed. Any structural code change is a workflow violation.
+
+      STOP — self-check before transitioning:
+      - Run `git diff --name-only` — if any production file was modified beyond trace statements,
+        revert with `git checkout -- <file>` before transitioning.
 
       After diagnosing, assess the fix scope:
       - 1 file → `single`
@@ -118,6 +132,7 @@ states:
   load_skills_coupled:
     skills:
       - coding-skill-selector
+      - ?project-skill-selector
     transitions:
       continue: fix_coupled
 
@@ -138,6 +153,7 @@ states:
   load_skills_delegate:
     skills:
       - coding-skill-selector
+      - ?project-skill-selector
     transitions:
       continue: fix_delegate
 
@@ -259,23 +275,17 @@ states:
   verify_route:
     task: "Route to correct verification"
     prompt: |
-      Route to the correct verification based on the bug type classified at the start.
-
-      Check the classify decision:
-      - Was the bug classified as `visual`? → transition `visual`
-      - Was the bug classified as `logic`? → transition `logic`
+      Check the bug type classified at the start:
+      - Visual bug → `visual` (needs screenshot verification)
+      - Logic bug → `logic` (tests already passed in testing workflow)
     transitions:
       visual: verify_visual
-      logic: verify_logic
+      logic: done
 
   verify_visual:
     task: "Verify the fix visually"
     prompt: |
       Verify the original bug is fixed VISUALLY.
-
-      MANDATORY FIRST ACTION — read the skill descriptions in the system-reminder skills list
-      and call `Skill(name)` for EVERY skill whose description relates to debug bridges,
-      interactive debugging, UI interaction, or the current app's domain.
 
       MANDATORY STEPS:
       1. Build and launch the app with debug bridge
@@ -284,21 +294,6 @@ states:
       4. Compare before/after — describe the visual difference
 
       DO NOT transition to `confirmed` without a screenshot proving the fix works.
-    transitions:
-      confirmed: done
-      still_broken: diagnose
-
-  verify_logic:
-    task: "Verify the fix with tests"
-    prompt: |
-      Verify the original bug is fixed.
-
-      MANDATORY STEPS:
-      1. Run the same test/scenario used during reproduction
-      2. Confirm it now passes — show the output
-      3. Check for regressions in related tests
-
-      DO NOT transition to `confirmed` without concrete evidence (test passing, correct output).
     transitions:
       confirmed: done
       still_broken: diagnose
