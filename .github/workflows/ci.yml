@@ -10,6 +10,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Verify version consistency
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          PLUGIN_VERSION=$(node -p "require('./.claude-plugin/plugin.json').version")
+          if [ "$PKG_VERSION" != "$PLUGIN_VERSION" ]; then
+            echo "::error::Version mismatch: package.json=$PKG_VERSION, plugin.json=$PLUGIN_VERSION"
+            exit 1
+          fi
       - run: npm ci
       - run: npm run build
       - run: npm test

@@ -1,12 +1,14 @@
 name: Publish to npm
 
 on:
-  release:
-    types: [published]
+  push:
+    branches: [master]
+    paths:
+      - 'package.json'
 
 permissions:
   id-token: write
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -14,13 +16,58 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
-      - run: npm ci
-      - run: npm run build
-      - run: npm test
-      - run: npm publish --provenance --access public
+
+      - name: Check for version bump
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists, skipping"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New version: $VERSION"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract changelog
+        if: steps.version.outputs.changed == 'true'
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BODY=$(awk "/^## \\[?${VERSION}\\]?/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md)
+          if [ -z "$BODY" ]; then
+            BODY="Release v$VERSION"
+          fi
+          {
+            echo "body<<EOF"
+            echo "$BODY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and test
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body: ${{ steps.changelog.outputs.body }}
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true'
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
