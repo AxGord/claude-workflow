@@ -6,7 +6,11 @@ max_transitions: 80
 states:
   requirements:
     task: "Clarify requirements"
-    prompt: "Clarify requirements with the user. What exactly should this feature do?"
+    prompt: |
+      Clarify requirements with the user. What exactly should this feature do?
+
+      **Do NOT explore the codebase here** — no Read, Grep, Glob, or Explore agents.
+      Only ask the user questions. Codebase exploration happens in the planning phase.
     transitions:
       clear: plan
 
