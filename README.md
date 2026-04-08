@@ -28,7 +28,16 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 
 ## Quick Start
 
-### From npm (recommended)
+### From Community Plugins (recommended)
+
+The plugin is listed in the [claude-plugins-community](https://github.com/anthropics/claude-plugins-community/) catalog:
+
+```bash
+/plugin marketplace add https://github.com/anthropics/claude-plugins-community
+/plugin install workflow
+```
+
+### From npm
 
 Create a `marketplace.json` and add it as a source, or install directly:
 
