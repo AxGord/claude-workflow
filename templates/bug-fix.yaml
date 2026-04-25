@@ -17,8 +17,16 @@ states:
       - `visual` → UI/layout bug — requires debug bridge, screenshots, visual reproduction
       - `logic` → data/logic bug — reproducible via unit tests or logs
     transitions:
-      visual: reproduce_visual
+      visual: load_skills_visual
       logic: reproduce_logic
+
+  load_skills_visual:
+    skills:
+      - coding-skill-selector
+      - debug-bridge
+      - ?project-skill-selector
+    transitions:
+      continue: reproduce_visual
 
   reproduce_visual:
     task: "Reproduce the bug visually"
@@ -27,11 +35,6 @@ states:
 
       DO NOT fix the bug here. You may add trace/log statements to help reproduce,
       but do NOT modify production logic. The fix belongs in the `fix` state.
-
-      MANDATORY FIRST ACTION — read the skill descriptions in the system-reminder skills list
-      and call `Skill(name)` for EVERY skill whose description relates to debug bridges,
-      interactive debugging, UI interaction, or the current app's domain.
-      Do NOT skip this. Working without relevant skills leads to wasted time and errors.
 
       REPRODUCTION TOOLING — find the right tool:
       1. Check available MCP tools for browser/screenshot/debug-bridge capabilities.
@@ -99,7 +102,7 @@ states:
       transition `try_visual` to reproduce via debug bridge instead.
     transitions:
       reproduced: diagnose
-      try_visual: reproduce_visual
+      try_visual: load_skills_visual
       cant_reproduce: clarify
 
   diagnose:
@@ -292,8 +295,16 @@ states:
       - Visual bug → `visual` (needs screenshot verification)
       - Logic bug → `logic` (tests already passed in testing workflow)
     transitions:
-      visual: verify_visual
+      visual: load_skills_verify
       logic: done
+
+  load_skills_verify:
+    skills:
+      - coding-skill-selector
+      - debug-bridge
+      - ?project-skill-selector
+    transitions:
+      continue: verify_visual
 
   verify_visual:
     task: "Verify the fix visually"
@@ -306,7 +317,7 @@ states:
       platform.)
 
       MANDATORY STEPS:
-      1. Build (if applicable — native targets must be rebuilt before verification)
+      1. Build (if applicable — native targets must be built before launch; rebuild after the fix)
       2. Launch the app using the tool above
       3. Follow the SAME path used during reproduction
       4. Take a screenshot and VERIFY the bug is gone
@@ -321,7 +332,7 @@ states:
     task: "Clarify bug details"
     prompt: "Ask the user for more details about the bug."
     transitions:
-      got_info_visual: reproduce_visual
+      got_info_visual: load_skills_visual
       got_info_logic: reproduce_logic
 
   escalate:

@@ -280,10 +280,10 @@ states:
   code_changes:
     task: "Apply agreed changes"
     sub_workflow: coding
-    on_complete: verify_functional
+    on_complete: verify_impact
     on_fail: done
 
-  verify_functional:
+  verify_impact:
     task: "Verify build, tests, and cross-file impact"
     prompt: |
       Code was changed after discussion — verify correctness and impact.
