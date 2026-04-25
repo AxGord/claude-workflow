@@ -245,7 +245,7 @@ states:
       - No debatable concerns → `all_clear`
     transitions:
       has_concerns: discuss
-      all_clear: re_review
+      all_clear: done
 
   discuss:
     task: "Discuss debatable concerns"
@@ -269,12 +269,12 @@ states:
     transitions:
       plan: plan_changes
       code: code_changes
-      skip: re_review
+      skip: done
 
   plan_changes:
     task: "Plan agreed changes"
     sub_workflow: planning
-    on_complete: verify_functional
+    on_complete: done
     on_fail: done
 
   code_changes:
@@ -284,50 +284,27 @@ states:
     on_fail: done
 
   verify_functional:
-    task: "Verify build and test functional changes"
+    task: "Verify build, tests, and cross-file impact"
     prompt: |
-      Code was changed after discussion — verify correctness.
+      Code was changed after discussion — verify correctness and impact.
 
-      1. Run the project's build/compile command. Check for errors.
-         - Build fails → fix errors, rebuild until it passes.
+      1. Run the project's build/compile command. Fix errors and rebuild until green.
 
-      2. Check if any agreed changes modified functionality (not just cosmetic).
-         If yes → run tests for the changed behavior. Use the project's test
-         framework, or if no automated tests cover the change, describe what
-         manual testing is needed and ask the user to verify.
-         If all changes were cosmetic → build passing is sufficient.
+      2. Run tests for changed behavior. If no automated tests cover the change,
+         describe what manual testing is needed and ask the user to verify.
+         Cosmetic-only changes → build passing is sufficient.
 
-      After verification:
-      - `pass` → proceed to re-review
-      - `fail` → changes broke the build beyond repair, skip to re-review without the failed changes
+      3. Cross-file impact check: for each file modified during discussion,
+         identify other files in the original review set that use its changed
+         APIs/symbols. Quickly inspect those call sites for compile-time or
+         obvious behavior breakage. This is NOT a full re-review — only check
+         consumers of what changed.
+
+      After verification, transition `complete`. The coding sub-workflow already
+      reviewed the files it modified. Planning produces a plan only — review
+      happens later when the plan is executed via the coding workflow.
     transitions:
-      pass: re_review
-      fail: re_review
-
-  re_review:
-    task: "Re-review changed files for cascading issues"
-    prompt: |
-      Previous fixes may have unblocked new issues or introduced cascading problems.
-      Re-review ALL files that were modified in previous phases (apply_fixes, code_changes).
-
-      1. Get the list of files changed since the review started (git diff or track from context).
-      2. If no files were changed (e.g. discussion resulted in no changes) → `clean`.
-      3. Spawn file-review agents for changed files with `scope: diff`
-         (review only the new changes, not the entire file again).
-         Use the same agent spawning pattern as `review_delegate`.
-      4. Collect reports.
-
-      If new issues found → `has_issues` (back to summarize for another cycle).
-      If clean pass (0 new findings) → `clean`.
-
-      **Iteration limit**: check context key `re_review_count`. If >= 3, transition
-      `clean` regardless — diminishing returns after 3 cycles. Otherwise, increment
-      the counter via `context_set(key: "re_review_count", value: "<N+1>")`.
-
-      The goal is to loop until a clean pass — fixes stabilize and no new issues appear.
-    transitions:
-      has_issues: summarize
-      clean: done
+      complete: done
 
   done:
     prompt: "Review complete."

@@ -33,12 +33,23 @@ states:
       interactive debugging, UI interaction, or the current app's domain.
       Do NOT skip this. Working without relevant skills leads to wasted time and errors.
 
+      REPRODUCTION TOOLING — find the right tool:
+      1. Check available MCP tools for browser/screenshot/debug-bridge capabilities.
+      2. Pick the tool matching the platform.
+      3. Persist the choice for verify_visual:
+         `context_set({ key: "chosen_tool", value: "<short name + how to launch>" })`
+
+      "No tooling available" is almost never true for a visual app. Verify the MCP
+      tool list before choosing `cant_reproduce`. Do NOT `abort()` to escape this
+      gate — use `cant_reproduce` if genuinely blocked.
+
       MANDATORY STEPS (all required, in order):
       1. Understand the exact user path that triggers the bug (which button, which file, which action)
-      2. Build and launch the app with debug bridge
-      3. Follow the SAME path the user described to trigger the bug
-      4. Take a screenshot and VERIFY the bug is visible
-      5. Describe what you see — compare with the user's report
+      2. Build (if applicable — native targets must be built before launch)
+      3. Launch the app and connect with the tool chosen above
+      4. Follow the SAME path the user described to trigger the bug
+      5. Take a screenshot and VERIFY the bug is visible
+      6. Describe what you see — compare with the user's report
 
       STOP — self-check before transitioning:
       - Did you LAUNCH the app and take a SCREENSHOT? If not, you haven't reproduced.
@@ -50,7 +61,9 @@ states:
       `cant_reproduce` = you tried but can't see it. This leads to asking the user for help.
       NEVER use `reproduced` when you haven't seen the bug yourself.
 
-      If the bug requires file operations, use the tm-interactive-debug skill recipes.
+      If the bug requires simulated input or file operations, use the chosen tool's
+      recipes: Playwright `browser_evaluate` / `browser_press_key` for web,
+      tm-interactive-debug for native.
     transitions:
       reproduced: diagnose
       cant_reproduce: clarify
@@ -287,11 +300,17 @@ states:
     prompt: |
       Verify the original bug is fixed VISUALLY.
 
+      Tool chosen at reproduction: {{context.chosen_tool}}
+      (If empty — context was lost. Re-pick a tool now using the same approach
+      as reproduce_visual: check available MCP tools, pick the one matching the
+      platform.)
+
       MANDATORY STEPS:
-      1. Build and launch the app with debug bridge
-      2. Follow the SAME path used during reproduction
-      3. Take a screenshot and VERIFY the bug is gone
-      4. Compare before/after — describe the visual difference
+      1. Build (if applicable — native targets must be rebuilt before verification)
+      2. Launch the app using the tool above
+      3. Follow the SAME path used during reproduction
+      4. Take a screenshot and VERIFY the bug is gone
+      5. Compare before/after — describe the visual difference
 
       DO NOT transition to `confirmed` without a screenshot proving the fix works.
     transitions:
