@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.7
+
+- Expand bundled skills from 9 to 20 (lang-as3, target-openfl-native, domain-{yolo,pixi,reid,gamedev}, build-cmake, ci-github-actions, aws-lambda, mcp-setup, claude-code-config)
+- Sync architecture (+7 sections) and lang-haxe (+650 lines on macros, null safety, hxcpp gotchas) with project-specific examples abstracted
+- Update coding-skill-selector to map all bundled skills by extension/domain/tooling category
+- Add Loader.validateSkillReferences() — checks required skills resolve in plugin/user/project skill dirs; logs missing on startup
+- Mark debug-bridge as optional in bug-fix.yaml (not in bundle, prompt handles missing tooling)
+
 ## 0.1.6
 
 - Add version consistency check in CI (package.json vs plugin.json)
