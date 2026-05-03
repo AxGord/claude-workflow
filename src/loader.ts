@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 import type { WorkflowDefinition } from "./types.js";
@@ -210,6 +211,41 @@ export class Loader {
       for (const [stateName, state] of Object.entries(wf.states)) {
         if (state.sub_workflow && !this._workflows.has(state.sub_workflow))
           errors.push(`${wfName}/${stateName}: sub_workflow "${state.sub_workflow}" not found`);
+      }
+    }
+    return errors;
+  }
+
+  /**
+   * Validate that every required skill referenced in a state's `skills:` list exists
+   * in at least one skill directory (plugin bundle, user, or project). Optional skills
+   * (`?<name>` prefix) are skipped — they're allowed to be missing.
+   *
+   * Skill discovery order matches Claude Code's: plugin templates → user (~/.claude/skills/)
+   * → project (<cwd>/.claude/skills/). Existence is checked by SKILL.md presence.
+   *
+   * Returns a flat list of error strings; non-empty result means the workflow set
+   * references a non-existent required skill (typo or removed skill).
+   */
+  public validateSkillReferences(): string[] {
+    const errors: string[] = [];
+
+    const skillDirs: string[] = [];
+    if (this._bundledDir) skillDirs.push(path.join(this._bundledDir, "skills"));
+    skillDirs.push(path.join(os.homedir(), ".claude", "skills"));
+    if (this._projectDir) skillDirs.push(path.resolve(this._projectDir, "..", "skills"));
+
+    const exists = (name: string): boolean =>
+      skillDirs.some(d => fs.existsSync(path.join(d, name, "SKILL.md")));
+
+    for (const [wfName, wf] of this._workflows) {
+      for (const [stateName, state] of Object.entries(wf.states)) {
+        if (!state.skills) continue;
+        for (const ref of state.skills) {
+          if (ref.startsWith("?")) continue;
+          if (!exists(ref))
+            errors.push(`${wfName}/${stateName}: required skill "${ref}" not found`);
+        }
       }
     }
     return errors;

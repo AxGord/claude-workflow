@@ -23,7 +23,7 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 - **Action states** — `exec` runs shell commands, `fetch` makes HTTP requests, with auto-routing by exit code or HTTP status
 - **Web dashboard** — real-time session monitoring with DAG graph visualization
 - **18 bundled workflows** — complete agent lifecycle from routing to reflection
-- **9 bundled skills** — reusable knowledge modules auto-provisioned on first run
+- **20 bundled skills** — reusable knowledge modules auto-provisioned on first run
 - **SessionStart hook** — auto-provisions missing skills and injects workflow context
 
 ## Quick Start
@@ -217,19 +217,52 @@ A project workflow named `coding` overrides the bundled `coding` template. Same-
 
 ## Bundled Skills
 
-Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-provisioned to `~/.claude/skills/` on first run if missing.
+Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-provisioned to `~/.claude/skills/` on first run if missing. Edit your local copy to override the bundled version — the hook never overwrites existing files.
+
+**Methodology**
 
 | Skill | Description |
 |-------|-------------|
-| `preferences` | User's general coding preferences |
+| `preferences` | Template for personal coding preferences (fill in your own) |
 | `architecture` | Simplicity-first architecture decisions |
 | `task-delegation` | When and how to delegate to subagents |
 | `coding-skill-selector` | Select and load coding skills by file extensions and domains |
-| `lang-haxe` | Haxe language gotchas |
+| `workflow-authoring` | Reference for creating workflows with exec/fetch action states |
+
+**Languages**
+
+| Skill | Description |
+|-------|-------------|
+| `lang-haxe` | Haxe language gotchas (incl. macros, null safety, hxcpp) |
 | `lang-python` | Python language gotchas |
+| `lang-as3` | AS3 / AIR 51 language gotchas |
+
+**Domains**
+
+| Skill | Description |
+|-------|-------------|
+| `domain-yolo` | YOLO object detection model selection |
+| `domain-pixi` | Pixi.js v8 masking and graphics gotchas |
+| `domain-reid` | Person re-identification ML gotchas |
+| `domain-gamedev` | Game dev precision and physics gotchas |
+
+**Platforms & Tooling**
+
+| Skill | Description |
+|-------|-------------|
+| `target-openfl-native` | OpenFL/hxcpp native target gotchas |
+| `build-cmake` | CMake build system gotchas |
+| `ci-github-actions` | GitHub Actions workflow gotchas |
+| `aws-lambda` | AWS Lambda .NET deployment gotchas |
+| `mcp-setup` | MCP server setup and troubleshooting |
+| `claude-code-config` | Claude Code configuration gotchas |
+
+**Utility**
+
+| Skill | Description |
+|-------|-------------|
 | `math` | Math overflow boundary gotchas |
 | `web-reading` | Fetch web content via subagents |
-| `workflow-authoring` | Reference for creating workflows with exec/fetch action states |
 
 ## MCP Tools
 

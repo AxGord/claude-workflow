@@ -23,7 +23,7 @@ states:
   load_skills_visual:
     skills:
       - coding-skill-selector
-      - debug-bridge
+      - ?debug-bridge
       - ?project-skill-selector
     transitions:
       continue: reproduce_visual
@@ -301,7 +301,7 @@ states:
   load_skills_verify:
     skills:
       - coding-skill-selector
-      - debug-bridge
+      - ?debug-bridge
       - ?project-skill-selector
     transitions:
       continue: verify_visual

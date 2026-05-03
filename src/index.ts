@@ -40,6 +40,11 @@ if (refErrors.length > 0) {
   console.error("Workflow reference warnings:", refErrors.join("; "));
 }
 
+const skillErrors = loader.validateSkillReferences();
+if (skillErrors.length > 0) {
+  console.error("Skill reference warnings:", skillErrors.join("; "));
+}
+
 // Start hot-reload
 loader.startWatching();
 
