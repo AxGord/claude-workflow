@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8
+
+- Cap retained terminal sessions via shared prunePolicy() — keep N most recently updated, delete older (Storage, InMemoryStorage, SessionEnd hook)
+- engine: _pruneTerminal runs once after cascade (not per child), avoids quadratic scans
+- prunePolicy: stable tiebreak by session_id, throws on negative keep, skips transient placeholders
+
 ## 0.1.7
 
 - Expand bundled skills from 9 to 20 (lang-as3, target-openfl-native, domain-{yolo,pixi,reid,gamedev}, build-cmake, ci-github-actions, aws-lambda, mcp-setup, claude-code-config)
