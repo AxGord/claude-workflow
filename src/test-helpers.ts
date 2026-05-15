@@ -1,5 +1,6 @@
 import type { SessionState, WorkflowDefinition } from "./types.js";
 import type { Storage } from "./storage.js";
+import { prunePolicy } from "./storage.js";
 import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
@@ -29,6 +30,10 @@ export class InMemoryStorage implements Storage {
 
   readAll(): SessionState[] {
     return Array.from(this._data.values());
+  }
+
+  pruneTerminal(keep: number): void {
+    prunePolicy(this.readAll(), keep, id => this.delete(id));
   }
 }
 

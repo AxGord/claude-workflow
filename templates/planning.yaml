@@ -56,6 +56,10 @@ states:
       running automatically in its review/testing states. Including them causes
       the agent to run manual builds that conflict with the automated pipeline.
 
+      **Brevity**: fewer steps. Skip what the user can infer from the task. Don't
+      restate the task back at the top of the plan. No filler sections (`Overview`,
+      `Background`) unless the task is genuinely novel and context is needed.
+
       **Steps in plan mode:**
       1. Explore codebase (Read/Glob/Grep or Plan/Explore subagents)
       2. Design approach

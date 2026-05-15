@@ -10,6 +10,7 @@ import {
 } from "./test-helpers.js";
 import type { Loader } from "./loader.js";
 import type { ActionResult } from "./types.js";
+import { KEEP_TERMINAL_SESSIONS } from "./types.js";
 
 describe("Engine", () => {
   let storage: InMemoryStorage;
@@ -116,6 +117,71 @@ describe("Engine", () => {
       const result = await engine.transition(sessionId, "next");
       expect(result.stack).toHaveLength(0);
       expect(result.prompt).toContain("completed");
+    });
+
+    it("retains the completed session for history", async () => {
+      setup({ simple: SIMPLE_WORKFLOW });
+      const { sessionId } = await engine.start("simple");
+
+      await engine.transition(sessionId, "next");
+
+      const persisted = storage.read(sessionId);
+      expect(persisted?.stack).toHaveLength(0);
+      expect(persisted?.outcome).toBe("completed");
+    });
+
+    it("keeps only the newest KEEP_TERMINAL_SESSIONS terminal sessions", async () => {
+      setup({ simple: SIMPLE_WORKFLOW });
+      for (let i = 0; i < KEEP_TERMINAL_SESSIONS + 2; i++) {
+        const { sessionId } = await engine.start("simple");
+        await engine.transition(sessionId, "next");
+      }
+
+      const all = storage.readAll();
+      expect(all).toHaveLength(KEEP_TERMINAL_SESSIONS);
+      expect(all.every(s => s.stack.length === 0)).toBe(true);
+    });
+
+    it("completing a parent after its children finished prunes terminal sessions once down to KEEP_TERMINAL_SESSIONS", async () => {
+      setup({ simple: SIMPLE_WORKFLOW });
+
+      // Parent with several children. The engine blocks parent completion
+      // while children are active, so each child finishes first; then the
+      // parent completes and _pruneTerminal runs once over all the now-terminal
+      // sessions (children + parent).
+      const parent = await engine.start("simple");
+      const childCount = KEEP_TERMINAL_SESSIONS + 4;
+      for (let i = 0; i < childCount; i++) {
+        const child = await engine.start("simple", undefined, parent.sessionId);
+        await engine.transition(child.sessionId, "next");
+      }
+
+      await engine.transition(parent.sessionId, "next");
+
+      const all = storage.readAll();
+      expect(all).toHaveLength(KEEP_TERMINAL_SESSIONS);
+      expect(all.every(s => s.stack.length === 0)).toBe(true);
+    });
+
+    it("aborting a parent with multiple children prunes terminal sessions once down to KEEP_TERMINAL_SESSIONS", async () => {
+      setup({ simple: SIMPLE_WORKFLOW });
+
+      for (let i = 0; i < KEEP_TERMINAL_SESSIONS; i++) {
+        const { sessionId } = await engine.start("simple");
+        await engine.transition(sessionId, "next");
+      }
+
+      const parent = await engine.start("simple");
+      const childCount = KEEP_TERMINAL_SESSIONS + 4;
+      for (let i = 0; i < childCount; i++) {
+        await engine.start("simple", undefined, parent.sessionId);
+      }
+
+      await engine.abort(parent.sessionId);
+
+      const all = storage.readAll();
+      expect(all).toHaveLength(KEEP_TERMINAL_SESSIONS);
+      expect(all.every(s => s.stack.length === 0)).toBe(true);
     });
   });
 

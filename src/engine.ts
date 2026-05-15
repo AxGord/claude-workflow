@@ -8,7 +8,7 @@ import type {
   WorkflowOverrides,
   ActionResult,
 } from "./types.js";
-import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS } from "./types.js";
+import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS, KEEP_TERMINAL_SESSIONS } from "./types.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { Executor } from "./executor.js";
@@ -332,8 +332,9 @@ export class Engine {
     };
 
     await this._storage.write(sessionId, updated);
-    this._snapshots.delete(sessionId);
+    this._finalize(sessionId);
     await this._cascadeAbandonChildren(sessionId);
+    this._pruneTerminal();
 
     // If this was a child session, try to unblock the parent's pending completion
     if (session.parent_session_id) await this.retryPendingPop(session.parent_session_id);
@@ -748,8 +749,9 @@ export class Engine {
         outcome: "completed",
       };
       await this._storage.write(session.session_id, updated);
-      this._snapshots.delete(session.session_id);
+      this._finalize(session.session_id);
       await this._cascadeAbandonChildren(session.session_id);
+      this._pruneTerminal();
       return this._buildStatus(updated, taskOps);
     }
 
@@ -874,9 +876,23 @@ export class Engine {
         outcome: "abandoned",
       };
       await this._storage.write(child.session_id, updated);
-      this._snapshots.delete(child.session_id);
+      this._finalize(child.session_id);
       await this._cascadeAbandonChildren(child.session_id);
     }
+  }
+
+  /** Drop a finished session's cached snapshot. */
+  private _finalize(sessionId: string): void {
+    this._snapshots.delete(sessionId);
+  }
+
+  /**
+   * Cap retained terminal sessions so the state dir keeps only the most
+   * recent few for history. Call once after a finalize + its cascade, not
+   * per child — a full STATE_DIR scan per child is quadratic.
+   */
+  private _pruneTerminal(): void {
+    this._storage.pruneTerminal(KEEP_TERMINAL_SESSIONS);
   }
 
   private _getProjectWorkflows(sessionId: string): Array<{ name: string; description?: string }> {

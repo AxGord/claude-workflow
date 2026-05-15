@@ -64,4 +64,50 @@ export class Storage {
       .map(id => this.read(id))
       .filter((s): s is SessionState => s !== null);
   }
+
+  /**
+   * Keep only the `keep` most recently updated terminal sessions; delete older ones.
+   * Active sessions are untouched. Corrupt/unreadable session files are also deleted.
+   *
+   * No plan-referenced-session guard is needed here (unlike workflow-cleanup.sh):
+   * plan resume requires an active stack, while this only prunes empty-stack
+   * (terminal) sessions, so the two sets can never collide.
+   */
+  public pruneTerminal(keep: number): void {
+    const sessions: SessionState[] = [];
+    for (const id of this.list()) {
+      try {
+        const s = this.read(id);
+        if (s) sessions.push(s);
+      } catch (e) {
+        console.error(`Deleting corrupt session file ${id}:`, e);
+        this.delete(id);
+      }
+    }
+    prunePolicy(sessions, keep, id => this.delete(id));
+  }
+}
+
+/**
+ * Shared terminal-session retention policy. Deletes all but the `keep` most
+ * recently updated terminal (empty-stack) sessions via `del`.
+ *
+ * Secondary sort by session_id: _cascadeAbandonChildren stamps every child
+ * with one identical updated_at, so a stable tiebreak is required for the
+ * retained set to be deterministic and to match workflow-cleanup.sh.
+ * The `s.stack?.length` guard skips transient `{}` placeholder files that
+ * write() creates before its lock+rename completes.
+ */
+export function prunePolicy(
+  sessions: SessionState[],
+  keep: number,
+  del: (sessionId: string) => void
+): void {
+  if (keep < 0) throw new Error(`prunePolicy: keep must be >= 0, got ${keep}`);
+  const terminal = sessions.filter(s => s.stack?.length === 0);
+  terminal.sort(
+    (a, b) =>
+      b.updated_at.localeCompare(a.updated_at) || b.session_id.localeCompare(a.session_id)
+  );
+  for (const s of terminal.slice(keep)) del(s.session_id);
 }

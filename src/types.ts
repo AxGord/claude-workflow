@@ -185,3 +185,4 @@ export const WorkflowSessionsInputSchema = z.object({}).optional();
 export const MAX_STACK_DEPTH = 10;
 export const DEFAULT_MAX_TRANSITIONS = 50;
 export const LOCK_STALE_MS = 5000;
+export const KEEP_TERMINAL_SESSIONS = 3;

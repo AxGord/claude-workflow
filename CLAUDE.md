@@ -16,7 +16,7 @@ Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 | `.mcp.json` | MCP server registration (server name: `wf`) |
 | `hooks/hooks.json` | Hook declarations (SessionStart, SessionEnd) |
 | `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start |
-| `hooks/workflow-cleanup.sh` | Abandons active sessions on session end |
+| `hooks/workflow-cleanup.sh` | Abandons this instance's active sessions on session end, caps retained terminal sessions |
 
 **Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__start`).
 

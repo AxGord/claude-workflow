@@ -285,9 +285,9 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 
 The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 
-- **Sessions panel** — active, completed, and abandoned sessions with status badges
+- **Sessions panel** — active sessions plus the most recent finished ones (terminal history is capped)
 - **Workflow list** — all loaded workflows with state counts
-- **Session detail** — full state history, stack depth, context data
+- **Session detail** — state history, stack depth, context data
 - **Workflow graphs** — interactive DAG visualization rendered with dagre
 
 ### REST API
