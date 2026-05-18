@@ -1,9 +1,16 @@
 name: planning
 description: "Planning sub-workflow — explore, design plan, record workflow context"
-initial: explore_needed
+initial: load_skills
 max_transitions: 30
 
 states:
+  load_skills:
+    skills:
+      - coding-skill-selector
+      - ?project-skill-selector
+    transitions:
+      continue: explore_needed
+
   explore_needed:
     prompt: |
       Determine if codebase exploration is needed before planning.
@@ -25,9 +32,10 @@ states:
 
   design:
     prompt: |
-      Load architecture skill: `Skill("architecture")`.
-
-      Design the implementation plan.
+      Design the implementation plan. (Coding skills incl. architecture
+      and the project's structural-navigation skill were loaded at the
+      `load_skills` gate — follow them; do not default to grep on
+      parseable source.)
 
       **Plan mode**: if system prompt says "Plan mode is active" — you're already in it,
       do NOT call EnterPlanMode. Otherwise call `EnterPlanMode`.
