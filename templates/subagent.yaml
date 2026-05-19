@@ -34,13 +34,11 @@ states:
     prompt: |
       Execute the assigned task directly. No sub-workflow needed.
 
-      This leaf bypasses every skill gate, so the environment contract is
-      yours to honour directly:
-      - A bash hook blocks grep/sed/cat/head/tail on parseable .hx — use
-        the Read tool or the hxq CLI, never shell text-extraction.
-      - hxq is multi-file: ONE `hxq <sub> <Type> <dir-or-glob>` call,
-        never a per-file loop.
-      - Report output/numbers VERBATIM; do not summarise or judge.
+      This leaf bypasses every skill gate. Honour whatever tooling/env
+      constraints your spawn prompt specified (required CLIs, blocked
+      commands). Strip noise, but quote every error, failing assertion,
+      and number VERBATIM — don't paraphrase the signal or replace it
+      with a verdict; the parent judges.
 
       When done → transition `done`.
     transitions:

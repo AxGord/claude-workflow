@@ -43,14 +43,13 @@ states:
 
       Run via a flat `general-purpose` subagent (build/run/report — no
       workflow, no skills) to keep build output out of main context.
-      Include in its prompt VERBATIM:
-      ---
-      Environment rules: a bash hook blocks grep/sed/cat/head/tail on
-      parseable .hx — use the Read tool or the hxq CLI, never shell
-      text-extraction. hxq is multi-file: ONE `hxq <sub> <Type>
-      <dir-or-glob>` call, never a per-file loop. Report output/numbers
-      VERBATIM; do not summarise or judge.
-      ---
+      A flat subagent inherits none of this project's skills or env
+      rules — it only knows what YOU put in its spawn prompt. So include
+      VERBATIM in that prompt: (a) any tooling/hook constraints that
+      apply in this project (required CLIs, blocked commands), and
+      (b) "Strip noise, but quote every error, failing assertion, and
+      number VERBATIM — don't paraphrase the signal or replace it with
+      a verdict; the parent judges."
 
       Choose transition:
       - `pass` → all unit tests pass
@@ -93,14 +92,14 @@ states:
       Run integration verification.
 
       1. Build and launch via a flat `general-purpose` subagent (no
-         workflow, no skills). Include in its prompt VERBATIM:
-         ---
-         Environment rules: a bash hook blocks grep/sed/cat/head/tail on
-         parseable .hx — use the Read tool or the hxq CLI, never shell
-         text-extraction. hxq is multi-file: ONE `hxq <sub> <Type>
-         <dir-or-glob>` call, never a per-file loop. Report output
-         VERBATIM; do not summarise or judge.
-         ---
+         workflow, no skills). It inherits none of this project's
+         skills or env rules — only what YOU put in its spawn prompt.
+         Include VERBATIM in that prompt: (a) any tooling/hook
+         constraints that apply in this project (required CLIs,
+         blocked commands), and (b) "Strip noise, but quote every
+         error, failing assertion, and number VERBATIM — don't
+         paraphrase the signal or replace it with a verdict; the
+         parent judges."
       2. Simulate the actual user workflow end-to-end
       3. Verify state changes propagated correctly (screenshots, state inspection)
 

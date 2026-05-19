@@ -89,14 +89,13 @@ states:
       4. Describe: EXPECTED vs ACTUAL — what should happen vs what does happen
 
       Delegate the build+run to a flat subagent (run/report — no workflow,
-      no skills needed). Include in its prompt VERBATIM:
-      ---
-      Environment rules: a bash hook blocks grep/sed/cat/head/tail on
-      parseable .hx — use the Read tool or the hxq CLI, never shell
-      text-extraction. hxq is multi-file: ONE `hxq <sub> <Type>
-      <dir-or-glob>` call, never a per-file loop. Report output/numbers
-      VERBATIM; do not summarise or judge.
-      ---
+      no skills needed). It inherits none of this project's skills or env
+      rules — only what YOU put in its spawn prompt. Include VERBATIM in
+      that prompt: (a) any tooling/hook constraints that apply in this
+      project (required CLIs, blocked commands), and (b) "Strip noise,
+      but quote every error, failing assertion, and number VERBATIM —
+      don't paraphrase the signal or replace it with a verdict; the
+      parent judges."
 
       STOP — self-check before transitioning:
       - Did you EXECUTE something (build + run)? Reading code ≠ reproduction.
