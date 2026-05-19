@@ -88,6 +88,16 @@ states:
       3. BUILD and RUN the test — show the actual output
       4. Describe: EXPECTED vs ACTUAL — what should happen vs what does happen
 
+      Delegate the build+run to a flat subagent (run/report — no workflow,
+      no skills needed). Include in its prompt VERBATIM:
+      ---
+      Environment rules: a bash hook blocks grep/sed/cat/head/tail on
+      parseable .hx — use the Read tool or the hxq CLI, never shell
+      text-extraction. hxq is multi-file: ONE `hxq <sub> <Type>
+      <dir-or-glob>` call, never a per-file loop. Report output/numbers
+      VERBATIM; do not summarise or judge.
+      ---
+
       STOP — self-check before transitioning:
       - Did you EXECUTE something (build + run)? Reading code ≠ reproduction.
       - Can you paste the failing output? If not, you haven't reproduced yet.
@@ -119,6 +129,20 @@ states:
       STOP — self-check before transitioning:
       - Run `git diff --name-only` — if any production file was modified beyond trace statements,
         revert with `git checkout -- <file>` before transitioning.
+
+      Delegating root-cause analysis to a subagent (it reads code to judge —
+      ANALYTICAL)? Include in the agent prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__start({ workflow: "subagent", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the subagent workflow until completion — its `route` state
+      self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      ---
+      After collecting reports: `sessions` → `abort` orphaned child `subagent`
+      sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
 
       After diagnosing, assess the fix scope:
       - 1 file → `single`

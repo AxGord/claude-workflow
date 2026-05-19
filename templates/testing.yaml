@@ -41,7 +41,16 @@ states:
       2. Write tests covering new/changed behavior
       3. Register new test class if needed
 
-      Run via `general-purpose` subagent to keep build output out of main context.
+      Run via a flat `general-purpose` subagent (build/run/report — no
+      workflow, no skills) to keep build output out of main context.
+      Include in its prompt VERBATIM:
+      ---
+      Environment rules: a bash hook blocks grep/sed/cat/head/tail on
+      parseable .hx — use the Read tool or the hxq CLI, never shell
+      text-extraction. hxq is multi-file: ONE `hxq <sub> <Type>
+      <dir-or-glob>` call, never a per-file loop. Report output/numbers
+      VERBATIM; do not summarise or judge.
+      ---
 
       Choose transition:
       - `pass` → all unit tests pass
@@ -83,7 +92,15 @@ states:
     prompt: |
       Run integration verification.
 
-      1. Build and launch via `general-purpose` subagent
+      1. Build and launch via a flat `general-purpose` subagent (no
+         workflow, no skills). Include in its prompt VERBATIM:
+         ---
+         Environment rules: a bash hook blocks grep/sed/cat/head/tail on
+         parseable .hx — use the Read tool or the hxq CLI, never shell
+         text-extraction. hxq is multi-file: ONE `hxq <sub> <Type>
+         <dir-or-glob>` call, never a per-file loop. Report output
+         VERBATIM; do not summarise or judge.
+         ---
       2. Simulate the actual user workflow end-to-end
       3. Verify state changes propagated correctly (screenshots, state inspection)
 

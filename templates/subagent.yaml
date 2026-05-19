@@ -9,13 +9,18 @@ states:
       You are a sub-agent with a specific assigned task.
       Route based on your task type — do NOT enter chat or planning mode.
 
-      - Read/understand/explore code → explore
+      Analytical work (correctness depends on project skills, or it returns
+      a judgement/recommendation) MUST take a skill-loaded path, never
+      `execute`:
+      - Read/understand/explore/verify code, blast-radius, recon, deep
+        investigation → explore
       - Write/modify code → coding
       - Debug/investigate an issue → debugging
       - Fix a known bug → bug_fix
       - Look up docs or web info → research
       - Run or write tests → testing
-      - Simple direct task (single command, quick answer) → execute
+      - ONLY a genuinely trivial run-and-report task (one command, paste
+        output verbatim, zero judgement) → execute
     transitions:
       coding: run_coding
       explore: run_explore
@@ -28,6 +33,15 @@ states:
   execute:
     prompt: |
       Execute the assigned task directly. No sub-workflow needed.
+
+      This leaf bypasses every skill gate, so the environment contract is
+      yours to honour directly:
+      - A bash hook blocks grep/sed/cat/head/tail on parseable .hx — use
+        the Read tool or the hxq CLI, never shell text-extraction.
+      - hxq is multi-file: ONE `hxq <sub> <Type> <dir-or-glob>` call,
+        never a per-file loop.
+      - Report output/numbers VERBATIM; do not summarise or judge.
+
       When done → transition `done`.
     transitions:
       done: done

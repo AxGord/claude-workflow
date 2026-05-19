@@ -27,6 +27,21 @@ states:
          that must match across file boundaries
       7. Identify dependencies between files — which must be written first
 
+      Delegating analysis to a subagent (blast-radius / verify-writer-path /
+      recon / deep code investigation — correctness depends on project
+      skills, or it returns a judgement)? Include in the agent prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__start({ workflow: "subagent", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the subagent workflow until completion — its `route` state
+      self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      ---
+      After collecting reports: `sessions` → `abort` orphaned child `subagent`
+      sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
+
       Route based on scope:
       - `single` → 1 file to change (or tightly coupled changes best done together)
       - `multi` → 2+ independent files to change in parallel via agents
@@ -46,6 +61,21 @@ states:
     prompt: |
       Write changes across multiple files yourself (high coupling or detailed plan).
       Implement layer by layer respecting dependencies.
+
+      Delegating a pre-code check to a subagent (blast-radius /
+      verify-writer-path — correctness depends on project skills, or it
+      returns a judgement)? Include in the agent prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__start({ workflow: "subagent", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the subagent workflow until completion — its `route` state
+      self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      ---
+      After collecting reports: `sessions` → `abort` orphaned child `subagent`
+      sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
 
       Do NOT build or verify compilation here — testing workflow handles that.
       Just write code and transition `done`.

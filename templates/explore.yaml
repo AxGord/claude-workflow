@@ -49,6 +49,20 @@ states:
       - Follow imports and call chains to understand flow
       - Note key files, patterns, and architectural decisions
 
+      A parallel investigation subagent is ANALYTICAL — never spawn it
+      flat. Include in its prompt VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__start({ workflow: "subagent", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the subagent workflow until completion — its `route` state
+      self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      ---
+      After collecting reports: `sessions` → `abort` orphaned child `subagent`
+      sessions.
+
       Choose transition:
       - `found` → gathered enough information to answer
       - `deeper` → need to explore further (follow a lead, check another area)
