@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - 'package.json'
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -20,8 +21,10 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
+      # Trusted publishing (OIDC) needs npm >= 11.5.1
+      - run: npm install -g npm@latest
 
       - name: Check for version bump
         id: version
@@ -69,5 +72,3 @@ jobs:
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true'
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
