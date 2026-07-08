@@ -68,6 +68,43 @@ npm run build
 claude --plugin-dir ./
 ```
 
+### Install channels
+
+Supported marketplace sources: the **npm package** (`claude-mcp-workflow`) and a **local directory**. A marketplace entry that points at the git repository (git URL as a plugin source) is **not** supported — `build/` is gitignored, so a git-sourced install has no compiled MCP server to run. (Cloning for development works — see above — because you run `npm run build` yourself.)
+
+## Recommended CLAUDE.md Snippet
+
+The engine only helps when the agent actually starts a workflow. Add this to your `~/.claude/CLAUDE.md`:
+
+```markdown
+- **ALWAYS** start every conversation by calling `mcp__plugin_workflow_wf__start()` (no arguments) before doing anything else, including answering the user
+  - **EXCEPTION**: If you are a sub-agent spawned by the Task tool, do NOT call `start()` without arguments — the parent agent manages the workflow session. Follow the start instructions from the parent's preamble instead
+```
+
+## Recommended Permissions
+
+Auto-allow the workflow tools so the agent is not interrupted with a permission prompt on every transition. In `~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_workflow_wf__list",
+      "mcp__plugin_workflow_wf__start",
+      "mcp__plugin_workflow_wf__status",
+      "mcp__plugin_workflow_wf__transition",
+      "mcp__plugin_workflow_wf__context_set",
+      "mcp__plugin_workflow_wf__modify",
+      "mcp__plugin_workflow_wf__create",
+      "mcp__plugin_workflow_wf__delete",
+      "mcp__plugin_workflow_wf__sessions"
+    ]
+  }
+}
+```
+
+`abort` is deliberately **not** allowlisted: sub-agents inherit permissions, and an auto-allowed `abort` would let a sub-agent silently kill its parent's session. Keep it behind a manual prompt.
+
 ## How It Works
 
 ```

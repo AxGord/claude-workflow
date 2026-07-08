@@ -13,7 +13,7 @@ states:
       |------------------------------------|-----------|-------------|
       | Pure logic (data, state, algorithms)| YES       | only if affects UI |
       | Logic + UI (commands, properties)   | YES       | YES |
-      | Pure UI (layout, visual, wiring)    | no        | YES |
+      | Pure UI (layout, visual)            | no        | YES |
 
       **IMPORTANT**: Steps are strictly sequential. Never parallelize unit and integration —
       they often share the same output binary and will conflict.
@@ -23,9 +23,16 @@ states:
       - `skip_to_integration` → pure UI change, no unit-testable logic
       - `skip_all` → trivial wiring fix fully covered by existing tests
     transitions:
-      has_unit: unit_tests
+      has_unit: load_skills
       skip_to_integration: check_integration
       skip_all: done
+
+  load_skills:
+    skills:
+      - coding-skill-selector
+      - ?project-skill-selector
+    transitions:
+      continue: unit_tests
 
   unit_tests:
     max_visits: 5
@@ -39,7 +46,7 @@ states:
       **Otherwise:**
       1. Find existing test files for patterns
       2. Write tests covering new/changed behavior
-      3. Register new test class if needed
+      3. Register the new test file/suite if the runner requires it
 
       Run via a flat `general-purpose` subagent (build/run/report — no
       workflow, no skills) to keep build output out of main context.
@@ -50,6 +57,9 @@ states:
       (b) "Strip noise, but quote every error, failing assertion, and
       number VERBATIM — don't paraphrase the signal or replace it with
       a verdict; the parent judges."
+      Spawn with `run_in_background: false` — you need the result before transitioning.
+
+      Budget: 5 visits to this state (engine-enforced); when nearly exhausted, choose `give_up` in fix_unit instead of retrying.
 
       Choose transition:
       - `pass` → all unit tests pass
@@ -69,21 +79,24 @@ states:
       - `retry` → fixed, re-run unit tests
       - `give_up` → unable to fix after multiple attempts
     transitions:
-      retry: unit_tests
+      retry: load_skills
       give_up: failed
 
   check_integration:
     prompt: |
       Does this change affect what the user sees or interacts with?
 
-      - If yes AND project has a debug bridge → `need_integration`
+      - If yes AND the project has a debug bridge → `need_integration`
+      - If yes but NO debug bridge / automated UI tooling exists → `manual_verify`
       - If no (pure backend/data change fully covered by unit tests) → `skip`
 
       Choose transition:
       - `need_integration` → must verify via integration test
+      - `manual_verify` → UI-affecting change, no automated integration tooling
       - `skip` → unit tests are sufficient
     transitions:
       need_integration: integration
+      manual_verify: manual_verify
       skip: done
 
   integration:
@@ -91,20 +104,26 @@ states:
     prompt: |
       Run integration verification.
 
-      1. Build and launch via a flat `general-purpose` subagent (no
-         workflow, no skills). It inherits none of this project's
-         skills or env rules — only what YOU put in its spawn prompt.
-         Include VERBATIM in that prompt: (a) any tooling/hook
-         constraints that apply in this project (required CLIs,
-         blocked commands), and (b) "Strip noise, but quote every
-         error, failing assertion, and number VERBATIM — don't
-         paraphrase the signal or replace it with a verdict; the
-         parent judges."
-      2. Simulate the actual user workflow end-to-end
-      3. Verify state changes propagated correctly (screenshots, state inspection)
+      1. Build and launch via a flat `general-purpose` subagent — the
+         subagent ONLY builds and launches, nothing else
+      2. Drive the debug bridge YOURSELF (the parent): simulate the
+         actual user workflow end-to-end
+      3. Verify state changes propagated correctly YOURSELF via the
+         bridge (screenshots, state inspection)
+
+      A flat subagent inherits none of this project's skills or env
+      rules — it only knows what YOU put in its spawn prompt. So include
+      VERBATIM in that prompt: (a) any tooling/hook constraints that
+      apply in this project (required CLIs, blocked commands), and
+      (b) "Strip noise, but quote every error, failing assertion, and
+      number VERBATIM — don't paraphrase the signal or replace it with
+      a verdict; the parent judges."
+      Spawn with `run_in_background: false` — you need the result before transitioning.
 
       **Bug fixes**: reproduce the EXACT user scenario that triggered the bug.
       Check for regressions in related workflows.
+
+      Budget: 5 visits to this state (engine-enforced); when nearly exhausted, choose `give_up` in fix_integration instead of retrying.
 
       Choose transition:
       - `pass` → integration verified, behavior correct
@@ -126,8 +145,27 @@ states:
       retry: integration
       give_up: failed
 
+  manual_verify:
+    prompt: |
+      The change affects what the user sees, but no debug bridge or automated
+      UI tooling is available. Do NOT silently skip verification:
+
+      1. Verify everything you can without UI tooling: build succeeds, unit-level
+         checks, code-level trace of the affected path
+      2. Write concrete manual verification steps: exact user actions and the
+         expected result of each
+      3. Include those steps in your final report so the user (or the parent
+         workflow) can run them
+
+      Choose transition:
+      - `done` → checks done, manual steps reported
+      - `give_up` → cannot verify anything (e.g. build is irrecoverably broken)
+    transitions:
+      done: done
+      give_up: failed
+
   done:
-    prompt: "All required tests pass. Verification complete."
+    prompt: "Verification complete: required tests pass (manual steps, if any, reported)."
     terminal: true
 
   failed:

@@ -5,17 +5,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/workflow-start.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/workflow-start.sh",
+            "timeout": 30
           }
         ]
       }
     ],
     "SessionEnd": [
       {
+        "matcher": "logout|prompt_input_exit|other|bypass_permissions_disabled",
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/workflow-cleanup.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/workflow-cleanup.sh"
           }
         ]
       }

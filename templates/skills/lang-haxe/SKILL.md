@@ -20,6 +20,19 @@ var plain = "No $interpolation here";  // ✗ Literal text, no parsing
 - `${expr}` only for expressions (field access, math, function calls)
 - `'${_name}'` is wrong → `'$_name'`
 
+### Escaping a literal `$`: use `$$`, NEVER `\$`
+
+To put a literal `$` in a single-quoted string, double it: `$$`. `\$` is **not a valid escape sequence** — `haxe` rejects it with `Invalid escape sequence \$` (the recognized escapes are `\t \n \r \" \' \\ \xXX \uXXXX`; `\$` is not among them).
+
+```haxe
+var a = 'price is $$5';          // ✓ → "price is $5"
+var b = 'unterminated $${ here'; // ✓ → "unterminated ${ here"  (escape the $, the { is literal)
+var c = 'cost \$5';              // ✗ COMPILE ERROR: Invalid escape sequence \$
+var d = "cost $5";               // ✓ double quotes never interpolate → literal "cost $5"
+```
+
+So for a literal `$` (or a literal `${`) the two correct forms are **`$$` inside `'...'`** or **just use `"..."`** (no interpolation at all). Reach for double quotes when the string is mostly literal `$`/`${`; use `$$` when you also want interpolation elsewhere in the same string.
+
 ## String.replace() Requires `using StringTools`
 
 `String` in Haxe has NO built-in `.replace()` method. Calling `.replace()` without `using StringTools` fails with `String has no field replace`.
@@ -96,7 +109,7 @@ This is distinct from `(default, set)` where the setter IS accessible from subcl
 Fix: pass narrowed value through a helper with non-null param, or use `.bind()` at call site for value types.
 
 ### Strict (`@:nullSafety(Strict)`)
-Fields are NEVER narrowed — compiler assumes another thread/callback could modify them. Local variables narrow normally.
+Fields DO narrow right after a null check, but the narrowing is fragile: ANY intervening statement that could mutate state (a call, a write to any field) resets it — the compiler assumes another thread/callback could modify the field. In practice a field is only usable as non-null on the line directly after its check. Local variables narrow normally and stay narrowed.
 
 **Pattern: capture field into local immediately after null check:**
 ```haxe
@@ -134,6 +147,15 @@ logo.alpha = 0.3;  // ✓
 ```
 
 **Key rule:** in Strict mode, ANY intervening statement (even writing to a *different* field) can invalidate narrowing of a nullable field. Always capture to local **immediately** after the null check.
+
+**Null safety with `?.` on abstract method returns:**
+```haxe
+// WRONG — && narrowing fails for method calls on nullable
+final scrolling:Bool = (_axis != null && _axis.isScrolling());
+
+// RIGHT — safe navigation + explicit comparison
+final scrolling:Bool = (_axis?.isScrolling() == true);
+```
 
 ## Map Key-Value Iteration
 
@@ -195,6 +217,42 @@ if (bmd != null) bmd.image.version++;
 
 Same applies to `--`, `+=`, `-=` on the end of a `?.` chain.
 
+## `Sys.stdin().readAll()` Throws `Error.Blocked` on hxnodejs When Stdin Is a Pipe
+
+`Sys.stdin().readAll()` works on neko / eval, but on hxnodejs (`-lib hxnodejs`, `-js`) it raises `haxe.io.Error.Blocked` the moment stdin is a pipe — `echo … | cmd`, heredoc, `cmd <<< …`, process substitution. The hxnodejs sync stdin binding wraps a non-blocking `process.stdin._handle.read()` call and re-throws `EAGAIN` as `Blocked` instead of waiting for EOF. TTY mode happens to work because input arrives in one synchronous chunk; the moment the producer is anything other than a TTY (`/dev/tty`), the call fails before any bytes are consumed.
+
+```haxe
+// WRONG on hxnodejs — `echo 'class C {}' | node bin/cli.js` throws Blocked
+final src:String = Sys.stdin().readAll().toString();
+
+// RIGHT — read via Node's native fs.readFileSync(0), which IS blocking
+// on a pipe and returns all bytes through EOF.
+private static function readStdin():String {
+    #if nodejs
+    final fs:Dynamic = js.Lib.require('fs');
+    final buf:Dynamic = fs.readFileSync(0);
+    return (buf : Dynamic).toString('utf8');
+    #elseif sys
+    return Sys.stdin().readAll().toString();
+    #else
+    throw 'stdin requires a sys target';
+    #end
+}
+```
+
+The two-branch shape is required: neko / eval do not have `js.Lib.require`, and hxnodejs is the only target on which `Sys.stdin().readAll()` raises Blocked. The Node path uses untyped `Dynamic` because `js.Lib.require('fs')` returns the raw Node module surface — `fs.readFileSync(0)` returns a Node `Buffer` whose `.toString('utf8')` decodes the bytes.
+
+Symptom in test output:
+```
+haxe_ValueException [Error]: Blocked
+    at haxe_Exception.thrown (...:50993:12)
+    at _$Sys_FileInput.readAll (...:285:27)
+    at <yourReadStdin> (...:46538:33)
+  value: { _hx_name: 'Blocked', _hx_index: 0, __enum__: 'haxe.io.Error', ... }
+```
+
+`Error.Blocked` from a `Sys.stdin().readAll()` frame ≡ this gotcha. Verified on Node 20.18 + Haxe 4.3.7 + hxnodejs 12.x.
+
 ## `String.charCodeAt` Returns `Null<Int>` — Use `StringTools.fastCodeAt` Under Strict Null Safety
 
 Under `@:nullSafety(Strict)`, `String.charCodeAt(i)` is typed `Null<Int>`. Assigning it to `final c:Int` fails even inside a bounds-checked loop.
@@ -212,6 +270,42 @@ for (i in 0...s.length) {
 ```
 
 Use `charCodeAt` only when the caller genuinely may pass an out-of-bounds index and wants `null` back. For loops over `0...s.length`, always use `fastCodeAt`.
+
+Sister pattern: `Array.pop()` / `Array.shift()` have the same root cause — see below.
+
+## Array.pop() / shift() Return Null<T> — Strict Refuses to Narrow Despite Length Guard
+
+Under `@:nullSafety(Strict)`, `Array.pop()` and `Array.shift()` are typed `Null<T>`. The classic length-guarded stack-walker pattern fails to compile with `Cannot assign nullable value here` — the compiler does not narrow based on the runtime invariant proved by `stack.length > 0`.
+
+```haxe
+// WRONG — Null<T> cannot be assigned to T under Strict, even with the length guard
+while (stack.length > 0) {
+    final node:T = stack.pop();  // Null safety error
+}
+```
+
+Three valid fixes:
+
+**Option 1 — cast at assignment** (guard already proved correctness):
+```haxe
+final node:T = (cast stack.pop() : T);
+```
+
+**Option 2 — capture as `Null<T>` and break on null**:
+```haxe
+final node:Null<T> = stack.pop();
+if (node == null) break;
+```
+
+**Option 3 — drop `@:nullSafety(Strict)` from the walker class** (lowest friction when the file's only nullability concern is this stdlib accessor):
+```haxe
+@:nullSafety  // Basic, not Strict
+class MyWalker { ... }
+```
+
+Same root cause as `String.charCodeAt` returning `Null<Int>`: stdlib accessor is typed nullable for the out-of-bounds case; Strict has no mechanism to narrow on a runtime-proven invariant. Option 3 is the right default when Strict doesn't otherwise benefit the class; use option 1 or 2 when Strict genuinely matters for the rest of the file.
+
+Verified on Haxe 4.3.7.
 
 ## Enum Abstract for Simple Enums
 
@@ -299,6 +393,33 @@ super(items, 30, 30, -1, 1, 0, "end");  // ✗ Hardcoding someone else's default
 
 **DANGER: Float constant passed to Int parameter silently skips it.** An `inline final X:Float = 180` looks like an integer but is typed Float. When passed to `new Row(children, X, 16, ...)` where `boxWidth:Int`, the Float skips `boxWidth` and lands on the next Float parameter (e.g. `bgAlpha`). Fix: use `Int` type for constants passed to Int parameters, or cast with `Std.int()`.
 
+## Function Default Parameter Values Must Be Compile-Time Constants — Enum Ctors With Args Excluded
+
+Default values in ordinary function signatures (`param:T = default`) must be compile-time constants. Zero-arity enum constructors (e.g. `Empty`) qualify and DO work. Enum constructors that take arguments do NOT — even when every argument is itself a literal constant. The compiler rejects with `Default argument value should be constant`.
+
+```haxe
+enum Foo { A; B(s:String); }
+
+// WRONG — B('hi') is not a compile-time constant despite the literal arg
+function test(x:Foo = B('hi')):Foo return x;
+//                    ^^^^^^^ Default argument value should be constant
+
+// WRONG — same root cause, Line('\n') / Text("x") rejected
+function emit(?items:Array<Doc>, trailBreak:Doc = Line('\n')):Doc { ... }
+
+// RIGHT — make the param nullable, unwrap inside the body with `??`
+function emit(?items:Array<Doc>, ?trailBreak:Doc):Doc {
+    final trailBreakDoc:Doc = trailBreak ?? Line('\n');
+    ...
+}
+
+// RIGHT — zero-arity ctor IS allowed as default
+enum Mode { Empty; Filled(s:String); }
+function f(m:Mode = Empty):Void { ... }  // ✓
+```
+
+Verified on Haxe 4.3.7.
+
 ## Macro `Context.error` Halts the Macro — No Defensive `continue` Needed
 
 `haxe.macro.Context.error(msg, pos)` throws — execution does NOT fall through. The return type is `Dynamic` only because the function never returns normally. Subsequent statements in the same macro invocation are dead code.
@@ -329,7 +450,7 @@ for (field in fields) {
 }
 ```
 
-Downside of the minimal form: the first invalid field halts the whole build, so the user sees one error per compile cycle instead of a batch. If you want **batched** errors across multiple fields, use `Context.warning` (doesn't throw) plus a post-loop `Context.error` / `Context.fatalError`, or collect errors into an array and emit a summary at the end.
+Downside of the minimal form: the first invalid field halts the whole build, so the user sees one error per compile cycle instead of a batch. For **batched** errors across multiple fields, the right API is `Context.reportError(msg, pos)` — it records the error and continues (compilation still fails at the end), so every invalid field is reported in one compile cycle. Follow with a post-loop `Context.error` / `Context.fatalError` only if you must abort before further processing.
 
 ## Macro `FunctionArg`: `opt: true` Widens Type To `Null<T>` Even With a Default
 
@@ -488,6 +609,109 @@ switch (value) { ... }
 switch value { ... }
 ```
 
+## Abstract Types in Catch Clauses: Runtime Type Is the Underlying Type
+
+`catch` accepts abstract types. The runtime check is against the abstract's **underlying type**, not its compile-time conversions. `from` declarations do NOT widen the runtime catch behavior.
+
+- `abstract Foo(Dynamic) from Dynamic` — catches **everything** (class instances, anonymous structs, plain strings) because the underlying runtime check is on `Dynamic`.
+- `abstract Foo(SomeClass) from SomeClass from Dynamic` — catches **only** runtime instances of `SomeClass`. The compile-time `from Dynamic` does not widen what is caught at runtime — anonymous structs and unrelated values fall through.
+
+```haxe
+abstract MyErr(Dynamic) from Dynamic {
+    public var name(get, never):String;
+    inline function get_name():String return this.name;
+}
+
+class Test {
+    static function main():Void {
+        try { throw { name: 'IOError' }; }
+        catch (e: MyErr) { trace('caught: ' + e.name); }  // works — anon struct caught
+    }
+}
+```
+
+Practical pattern: `abstract MyError(Dynamic) from Dynamic` as a typed unified catch surface that catches every thrown shape, with typed accessors via getters.
+
+Verified on Haxe 4.x — `--interp` and `-js` targets.
+
+## `this` Inside an Abstract Body IS the Underlying Type
+
+Inside abstract methods and getters, `this` is already typed as the **underlying type**. No cast is needed.
+
+```haxe
+// WRONG — redundant cast; this is already Dynamic
+abstract MyAbs(Dynamic) from Dynamic {
+    public var name(get, never):String;
+    inline function get_name():String return (this:Dynamic).name;  // noise
+}
+
+// RIGHT — direct field access; this IS Dynamic
+abstract MyAbs(Dynamic) from Dynamic {
+    public var name(get, never):String;
+    inline function get_name():String return this.name;
+}
+```
+
+Same for any underlying type: `abstract Foo(SomeClass)` makes `this` typed as `SomeClass` inside the body — field access goes direct.
+
+**Bonus: `to UnderlyingType` is implicit.** `abstract Foo(Bar) to Bar` — the `to Bar` direction is redundant; the compiler provides it automatically. Drop it.
+
+```haxe
+// REDUNDANT
+abstract MyAbs(Dynamic) from Dynamic to Dynamic { ... }
+
+// EQUIVALENT — less noise
+abstract MyAbs(Dynamic) from Dynamic { ... }
+```
+
+`from Dynamic` IS load-bearing (allows implicit conversion into the abstract from any value). `to Dynamic` is automatic.
+
+## Abstract over Dynamic Does NOT Auto-Convert to Typedef Without Explicit `to`
+
+`abstract Foo(Dynamic) from Dynamic` accepts any value as input (catch-all), but does NOT automatically convert to a `typedef` of an anonymous struct on output. The compiler treats abstract → typedef as a distinct conversion that must be declared with `to TypedefName`.
+
+```haxe
+// typedef in an extern web-API library
+typedef WebAPIError = { code: Float; name: String; message: String; };
+
+abstract MyAbs(Dynamic) from Dynamic { ... }
+
+function logError(e: WebAPIError): Void { /* uses e.code, e.name, e.message */ }
+
+final m: MyAbs = ...;
+logError(m);  // ❌ Compile error:
+              //   pkg.MyAbs should be webapi.WebAPIError
+              //   For function argument 'e'
+```
+
+The fix is to declare `to WebAPIError` on the abstract:
+
+```haxe
+abstract MyAbs(Dynamic) from Dynamic to WebAPIError { ... }  // ✓ now flows
+```
+
+This is asymmetric with the `from Dynamic` direction — Dynamic → typedef works at value level (structural matching), but abstract → typedef requires an explicit declaration. Failing to add `to` triggers a "viral retyping" cascade: every helper that took the typedef seemingly needs to accept the abstract, which is the wrong fix. The right fix is the one-line `to`.
+
+## Don't Propagate the Abstract Into Signatures That Only Need the Underlying Structural Shape
+
+When adding an abstract over an existing typedef (e.g. `DeviceError` over `WebAPIError`), the temptation is to retype every existing helper to accept the abstract. Resist.
+
+If a function only uses fields like `.code`, `.name`, `.message` — fields the typedef already has — its signature should stay on the typedef. The abstract auto-converts at call sites (with `to` declared per the section above). Propagating the abstract into structural-only helpers couples them to the unified-type concept needlessly.
+
+```haxe
+// WRONG — abstract propagated into a pure formatter that only needs {code, name, message}
+private function deviceError(err: DeviceError): Void {
+    error('${err.code} ${err.name} ${err.message}');
+}
+
+// RIGHT — typedef captures the structural need; DeviceError -> WebAPIError via `to`
+private function deviceError(err: WebAPIError): Void {
+    error('${err.code} ${err.name} ${err.message}');
+}
+```
+
+Rule of thumb: type the parameter at the level of structural need, not at the level of the most-typed source. The abstract's job is auto-conversion at the boundary — it should NOT bleed into every internal helper.
+
 ## Type Checking: `is` Operator and `Std.downcast`
 
 `is` is syntactic sugar for `Std.isOfType` — cleaner syntax for type checks:
@@ -598,15 +822,6 @@ else
 ```
 
 **General rule:** in any context where the branch body starts with `macro if(...)`, prefer `?:` over `if/else` to avoid ambiguity.
-
-**Null safety with `?.` on abstract method returns:**
-```haxe
-// WRONG — && narrowing fails for method calls on nullable
-final scrolling:Bool = (_axis != null && _axis.isScrolling());
-
-// RIGHT — safe navigation + explicit comparison
-final scrolling:Bool = (_axis?.isScrolling() == true);
-```
 
 ## Private Access: `@:access` Over `@:privateAccess`
 
@@ -739,9 +954,39 @@ Dollar;
 
 **Rule:** Always use double-quoted strings for metadata arguments containing `$`. This applies to all `@:` metadata, not just specific tags.
 
-## Doc-Comments `/** */` Reject Embedded `*/` — Even Inside Backticks
+## Test Fixture Strings With `$identifier` Content Must Use Double Quotes
 
-Inside a `/** ... */` doc comment the lexer treats the first `*/` it sees as the closing delimiter — even when wrapped in backticks for markdown code-span formatting. Everything after the premature close is invalid syntax.
+Single-quoted strings in test files are subject to Haxe interpolation — any `$name` or `${...}` in a parser fixture input or an `Assert.equals` expected literal is treated as an identifier reference, not verbatim text. The compiler error is a **compile-time `Unknown identifier : <name>`** pointing at the call argument, which can mislead: the error looks like a scope or import problem, not a quoting mistake.
+
+```haxe
+// WRONG — single quotes: Haxe interpolates $name as an identifier
+final decl = parseSingleVarDecl('class Foo { var x:Int = a.$name; }');
+Assert.equals('$name', (f : String));
+// Error: Unknown identifier : name
+//        ... For function argument 'source'
+// Error: Unknown identifier : name
+//        ... For function argument 'expected'
+
+// RIGHT — double quotes: $ is literal text
+final decl = parseSingleVarDecl("class Foo { var x:Int = a.$name; }");
+Assert.equals("$name", (f : String));
+```
+
+Verbatim compiler error for reference:
+```
+HxPostfixSliceTest.hx:92: characters 73-77 : Unknown identifier : name
+HxPostfixSliceTest.hx:92: characters 73-77 : ... For function argument 'source'
+HxPostfixSliceTest.hx:96: characters 21-25 : Unknown identifier : name
+HxPostfixSliceTest.hx:96: characters 21-25 : ... For function argument 'expected'
+```
+
+The failure bites BOTH the fixture input string and the expected-value literal in `Assert.equals`. It survives self-review because `$name` in a string LOOKS intentional — it is reliably caught only by the compiler.
+
+**Prevention rule:** before building, scan newly-added or edited `.hx` test code for single-quoted string literals whose content contains `$` followed by a letter, underscore, or `{`; each is a bug unless interpolation is actually intended. The scan must cover **every** test file touched in the same change, not only the file currently in focus — a recurrence happened where the rule was applied correctly in one new test file but missed in a sibling file edited in the same change, caught only by file-review.
+
+## Block Comments Reject Embedded `*/` — Even Inside Backticks
+
+Inside any `/* ... */` block comment (doc comments `/** */` included) the lexer treats the first `*/` it sees as the closing delimiter — block comments do not nest, and backtick-wrapping for markdown code-span formatting does not escape it. Everything after the premature close is invalid syntax.
 
 ```haxe
 // WRONG — the inner */ closes the doc comment; ` after it is an "Invalid character"
@@ -757,7 +1002,7 @@ class Foo {}  // Error: Invalid character '`'
 class Foo {}
 ```
 
-The gotcha applies only to `/** */` doc comments. Plain `/* */` block comments use a different lexer path and tolerate backtick-wrapped `*/` sequences. Simple backticks (`` `foo` ``, `` `//` ``) inside doc comments are fine — the problem is specifically the `*/` character sequence appearing by any means inside a `/** */` comment.
+The gotcha applies to ALL block comments — plain `/* */` and `/** */` doc comments alike; the lexer closes the comment at the first `*/` regardless of surrounding backticks. Simple backticks (`` `foo` ``, `` `//` ``) inside comments are fine — the problem is specifically the `*/` character sequence appearing by any means inside a block comment.
 
 Verified on Haxe 4.3.7.
 
@@ -791,21 +1036,85 @@ params.push(macro $i{dep.paramName});  // Unknown identifier: _di_storage
 params.push({expr: EConst(CIdent(dep.paramName)), pos: Context.currentPos()});
 ```
 
-## Macro `$a{}` Splices Arguments, Not Array Literal
+## Single Combined `EVars` Splices Into Outer Scope (Workaround for `$b{}` Isolation)
 
-In macro function calls, `$a{arr}` splices array elements as separate arguments, NOT as an array literal. So `f($a{[x, y, z]})` becomes `f(x, y, z)` — three separate arguments, not a single array argument.
+When a macro helper must declare N vars that the caller's sibling code can read, returning `Array<Expr>` of separate `EVars` and splicing via `$b{}` doesn't help — the block still isolates. The fix: fold all `Var` entries into ONE `EVars(Array<Var>)` node and splice it as a single `$expr`.
+
+```haxe
+// WRONG — block wraps vars in new scope, caller siblings can't see them
+function initVars():Expr {
+    return macro { var _prev0:Int = 0; var _prev1:Int = 0; };
+}
+// caller: ${initVars()}; — _prev0/_prev1 NOT visible to siblings
+
+// RIGHT — single EVars node, vars declared at caller's EBlock level
+function initVars(names:Array<String>):Expr {
+    final vars:Array<haxe.macro.Expr.Var> = [
+        for (n in names) {name: n, type: macro:Int, expr: macro 0}
+    ];
+    return vars.length > 0
+        ? {expr: EVars(vars), pos: Context.currentPos()}
+        : (macro {});
+}
+// caller:
+final initPrev:Expr = initVars(['_prev0', '_prev1']);
+return macro { $initPrev; /* _prev0 / _prev1 VISIBLE here */ };
+```
+
+**Why it works:** a single `EVars` spliced into a parent `EBlock` IS the same form as writing `var a = 0; var b = 0;` as sibling statements — no extra nesting. `EBlock` always creates a new scope; `EVars` is just a multi-declaration statement.
+
+**Decision rule:** N var declarations that siblings must read → fold to one `EVars(Array<Var>)`; assignments/mutations of already-declared vars → `EBlock` is fine (nested scope reads outer vars normally). Empty list → `macro {}`.
+
+## Macro `$a{}` Is Context-Dependent: Splices Call Arguments, Builds an Array Literal Standalone
+
+In a call-argument position, `$a{arr}` splices array elements as separate arguments, NOT as an array literal: `f($a{[x, y, z]})` becomes `f(x, y, z)` — three separate arguments. In a standalone expression position, `$a{arr}` builds an array literal: `macro $a{parts}` yields `[x, y, z]` (an `EArrayDecl`).
 
 ```haxe
 // WRONG — splices as separate args: _dc(doc1, doc2, doc3)
 final parts:Array<Expr> = [exprA, exprB, exprC];
 macro _dc($a{parts})
 
-// RIGHT — build array expression manually
-final arr:Expr = {expr: EArrayDecl(parts), pos: Context.currentPos()};
+// RIGHT — build the array literal first (standalone $a{} = array literal), then pass it
+final arr:Expr = macro $a{parts};  // [doc1, doc2, doc3]
 macro _dc($arr)  // generates: _dc([doc1, doc2, doc3])
+
+// EQUIVALENT — construct EArrayDecl manually
+final arr:Expr = {expr: EArrayDecl(parts), pos: Context.currentPos()};
+macro _dc($arr)
 ```
 
-`$a{}` is designed for splicing arguments into function calls (like spread operator), not for building array literals. When you need to pass a macro-time `Array<Expr>` as a single runtime array argument, construct `EArrayDecl` manually.
+When you need a macro-time `Array<Expr>` as a single runtime array argument, wrap it into an array-literal `Expr` first — inside a call's argument list, `$a{}` always splices.
+
+## Macro `Array<Expr>` Literal — Parenthesise Each `macro …` Element
+
+Inside an `Array<Expr>` literal (for `EBlock` / `ECall` / `EArrayDecl` construction in build macros), bare `macro …` reifications must be wrapped in parentheses. Without them, the Haxe parser treats `macro` as an identifier for the next array slot and fails with:
+
+```
+Keyword macro cannot be used as variable name
+```
+
+Plain `Expr` variables (already-built values) do NOT need parens — only `macro …` reifications.
+
+```haxe
+// WRONG — bare macro reification as array element
+final block:Array<Expr> = [
+    macro final _wo = _copyOpt(opt),
+    macro { var _f:Bool = false; $probeBody; },
+    baseRawWriteCall,
+];
+// Error: Keyword macro cannot be used as variable name
+
+// RIGHT — each macro reification parenthesised
+final block:Array<Expr> = [
+    (macro final _wo = _copyOpt(opt)),
+    (macro { var _f:Bool = false; $probeBody; }),
+    baseRawWriteCall,   // plain Expr variable — no parens needed
+];
+```
+
+Ternary positions like `cond ? macro X : macro Y` bind correctly without parens — the issue is specific to comma-separated array literal elements.
+
+Verified on Haxe 4.3.7.
 
 ## Enum Constructor Calls in `macro {}` Trigger Type Checking
 
@@ -855,6 +1164,39 @@ private static function extractInt(texpr:TypedExpr):Int {
 ```
 
 `FEnum` only works for real `enum` types. For `enum abstract(Int)`, the compiler resolves values at typing time — the typed AST contains the raw Int, not a reference to the abstract's field.
+
+## Regex Alternation: `^A|B` Is `(^A)|B`, NOT `^(?:A|B)` — Wrap Both Alts in a Non-Capturing Group
+
+Regex alternation has lower precedence than every other operator including anchors. `^A|B` parses as `(^A)|B` — the `^` anchor binds ONLY to the first alternative. The second alt is unanchored and scans the rest of input for an arbitrary match anywhere — silently consuming mid-buffer bytes that the parser thought it was inspecting at the cursor.
+
+```haxe
+// WRONG — second alt scans mid-buffer
+var re = new EReg('^[0-9]+\\.[0-9]+|[0-9]+\\.(?![\\w.])', '');
+re.match('UI.get() ? 1. : 2.;');
+// re.matched(0) == '1.'   (matched at offset 11, NOT at start)
+// re.matchedPos().pos == 11  (NOT 0)
+// Consumer that does `ctx.pos += re.matched(0).length` advances by 2
+// but the matched bytes started 11 positions away — overwriting the
+// ident at the parser's actual cursor with the mid-buffer slice.
+
+// RIGHT — both alts inside a non-capturing group, so `^` binds to both
+var re = new EReg('^(?:[0-9]+\\.[0-9]+|[0-9]+\\.(?![\\w.]))', '');
+re.match('UI.get() ? 1. : 2.;');
+// re.match returns false — `U` is not a digit, regex fails to match at start.
+```
+
+**Defensive runtime check** for any code that builds regexes from `|`-alternations dynamically (or accepts user-supplied patterns): after `re.match(rest)`, verify `re.matchedPos().pos == 0`. If not, treat as no-match — the regex matched something but NOT at the cursor position.
+
+```haxe
+if (!re.match(_rest) || re.matchedPos().pos != 0) {
+    // either no match, or mid-buffer match — both are "not here"
+    throw new ParseError(...);
+}
+```
+
+**Symptom**: parser produces an AST where two nodes have identical source spans (`@from-to` ranges) at positions where one ident and one literal should sit. The mid-buffer match overwrites the cursor position, the cursor advances by the wrong amount, and the next parse step sees corrupted input. Reproducible only when the second alt's pattern HAPPENS to match somewhere later in the input — easy to miss in narrow unit tests.
+
+Verified on Haxe 4.3.7, JS / EReg path.
 
 ## `EReg.escape` Is Broken on `--interp` Target
 
@@ -1008,6 +1350,32 @@ return { name: _r_name }; // ok
 
 Emit one `final _r_X:T = _f_X` re-bind per required struct field in macro-generated parse functions that build anonymous struct literals from nullable accumulator variables.
 
+## Macro Dead-Code `$v{flag}` Branches Still Type-Check — `cast` Required for Reflective Calls
+
+A `$v{flag}` compile-time bool short-circuits at **runtime**, but the compiler type-checks the whole expression **before** dead-code elimination. A reflective call like `Type.enumParameters(x)` inside a `$v{forceInlineSep}`-gated `else if` fails the build whenever the macro inlines the call across consumers whose element type is a struct, not `EnumValue`:
+
+```
+WriterLowering.hx:8365: characters 30-48 : pkg.grammar.haxe.trivia.HxMemberDeclT should be EnumValue
+WriterLowering.hx:8365: characters 30-48 : ... For function argument 'e'
+```
+
+```haxe
+// WRONG — type-check fails on struct-shaped element types even though
+// the branch is never executed when forceInlineSep == false
+} else if (_si > 0 && $v{forceInlineSep}
+        && Type.enumParameters(_arr[_si - 1].node).length == 0
+        && Type.enumParameters(_t.node).length == 0) {
+
+// RIGHT — cast suppresses compile-time type-check; runtime is gated by $v{flag}
+} else if (_si > 0 && $v{forceInlineSep}
+        && Type.enumParameters(cast _arr[_si - 1].node).length == 0
+        && Type.enumParameters(cast _t.node).length == 0) {
+```
+
+**Rule of thumb:** in macro-generated code, any reflective call (`Type.enumParameters`, `Type.getClass`, `Reflect.field`, …) inside a `$v{...}`-gated branch needs `cast` on the argument when the surrounding engine inlines the call across consumers with different static types. The flag short-circuit is a runtime gate, not a compile-time one.
+
+Verified on Haxe 4.3.7.
+
 ## Helper Signatures Cannot Reference `Context.defineModule`-Synth Sub-Module Types
 
 A test/consumer class trying to "force" a `@:build`-generated synth module via the `private static final _force:Class<MarkerClass> = MarkerClass;` pattern works for FQN references in METHOD BODIES, but NOT for FQN references in HELPER METHOD SIGNATURES of the same class. Method-signature typing precedes static-initializer execution, so the synth module isn't registered when the helper's parameter / return types are resolved.
@@ -1041,6 +1409,24 @@ This is a stricter cousin of the existing "macro-synth sub-module imports don't 
 
 Verified on Haxe 4.3.7.
 
+## Inline Local Functions Cannot Be Passed as Arguments
+
+`inline function` on a local variable is a direct-call optimization only. The compiler cannot materialize a closure object for an inline-tagged local, so passing it as an argument to another function fails with `Cannot create closure on inline closure`.
+
+```haxe
+// WRONG — Cannot create closure on inline closure
+inline function evalAt(x:Int):Int { return x * 2; }
+helper(evalAt);  // Error: Cannot create closure on inline closure
+
+// RIGHT — drop `inline`; direct calls at the same site are still inlined by the optimizer
+function evalAt(x:Int):Int { return x * 2; }
+helper(evalAt);
+```
+
+This surfaces when factoring local helpers (e.g. a recursive `buildXTree`-style function that accepts a callback) and the helper was initially tagged `inline` per project style. `inline` is correct for locals called directly; remove it when the local needs to cross a function boundary as a parameter.
+
+Verified on Haxe 4.3.7.
+
 ## `for (x:Type in array)` — Type Annotations Are NOT Allowed In For Loops
 
 Haxe's `for` loop iteration variable cannot carry an explicit type annotation. Unlike `var x:T = ...` or function parameters, the loop variable's type is always inferred from the iterable. Adding `:Type` produces `Expected )`.
@@ -1062,3 +1448,136 @@ for (member in iface.members) {
 
 Same restriction applies to array-comprehension `[for (x in xs) ...]`. The "always specify types explicitly" rule (when applied as a project preference) does not apply to for-loop iteration variables — there is no syntax for it.
 
+## Adding Enum Ctor: Grep Sister Ctor Literal Across Project
+
+Haxe's exhaustive switch detection fires `Unmatched patterns: <NewCtor>` at every switch missing an arm — but ONLY when that switch is reached during compile. Pre-flight grepping by function name (e.g. "find all walker functions") misses switches with non-obvious names. The reliable audit: grep on a sister-ctor literal that is already exhaustively handled.
+
+```haxe
+// Adding `IfLineExceeds` to Doc enum.
+// WRONG audit: "find all flat-walking helpers"
+//   → finds 6 sites, missed 3 hardline-checking helpers in same file
+// → build breaks with "Unmatched patterns: IfLineExceeds"
+
+// RIGHT audit: grep on existing sister ctor
+//   $ grep -rn 'case IfWidthExceeds' src/
+//   → enumerates ALL 11 exhaustive switch sites uniformly
+```
+
+**Rule**: when adding a new ctor to an enum used in multiple files, grep `case <SisterCtor>` on an existing exhaustively-handled ctor — this catches every switch regardless of function/variable name. Do this BEFORE committing the ctor; otherwise compile errors fire only when callers reach the unmatched switch and may surface late in the test cycle.
+
+Verified on Haxe 4.3.7.
+
+## Enum Constructor Parameters Cannot Have Metadata — Use a Typedef Instead
+
+Haxe does NOT allow field-level metadata on individual enum constructor parameters. Attempting `Ctor(a:Int, @:lead("{") b:String)` is a parse-time error — `Unexpected @` — before any macro or typing runs.
+
+```haxe
+// WRONG — parse error: Unexpected @ at the @ before the param
+enum E {
+    Ctor(a:Int, @:lead("{") b:String);
+}
+
+// RIGHT — wrap params in a typedef; metadata is legal on typedef/anon-struct var fields
+typedef CtorBody = {
+    var a:Int;
+    @:lead("{") var b:String;
+};
+enum E {
+    Ctor(v:CtorBody);
+}
+
+// ALSO RIGHT — metadata IS allowed on the constructor itself (not its params)
+enum E {
+    @:deprecated Ctor(a:Int, b:String);
+}
+```
+
+The restriction bites `@:build` / PEG-style DSLs that drive codegen from per-field metadata: the fix is the **ctor-wraps-typedef** pattern (one struct typedef per constructor), which also keeps per-field metadata working for macro inspection.
+
+Verified on Haxe 4.3.x.
+
+## `#if sys` Is FALSE on hxnodejs Builds — Use `#if (sys || nodejs)`
+
+`-lib hxnodejs` does NOT define the `sys` conditional flag. Its `extraParams.hxml` uses `--macro allowPackage('sys')` (so `sys.io.File` / `sys.FileSystem` imports compile) plus `--macro define('nodejs')` (a separate flag). Code gated on `#if sys` runs ONLY on neko / hxcpp / eval / etc. — the JS/Node build silently takes the `#else` branch.
+
+```haxe
+// WRONG — silently no-op on hxnodejs build despite sys.io.File being importable
+#if sys
+private static function stageProbeSource(s:String):Null<String> {
+    sys.io.File.saveContent('/tmp/scratch.hx', s);
+    return s;
+}
+#else
+private static function stageProbeSource(_:String):Null<String> return null;
+#end
+
+// RIGHT — both system targets AND hxnodejs reach the implementation
+#if (sys || nodejs)
+private static function stageProbeSource(s:String):Null<String> {
+    sys.io.File.saveContent('/tmp/scratch.hx', s);
+    return s;
+}
+#else
+private static function stageProbeSource(_:String):Null<String> return null;
+#end
+```
+
+**Symptom**: code that uses `sys.io.File` / `sys.FileSystem` compiles cleanly under `-lib hxnodejs` AND links into `bin/output.js`, but every `#if sys`-guarded code path is dead — the runtime takes `#else` every time. End-to-end smoke tests (run the binary, observe the side effect) catch it; unit tests using `Cli.run([...])` + exit-code-only assertions DON'T (exit stays 0 because the `#else` branch is well-behaved).
+
+**Detection rule**: before writing a new `#if sys` block in a multi-target project, grep the file's existing import block for the conditional pattern. If imports use `#if (sys || nodejs)` (or `#if (sys || js)` etc.), match that pattern in every new block — single-source the target enumeration to the import guard.
+
+Verified on Haxe 4.3.7 + hxnodejs 12.x.
+
+## Throwing `Error`s in Hot Paths Eagerly Captures a V8 Stack Trace — Catastrophic in Exception-Based Control Flow
+
+A value that extends `haxe.Exception` compiles to a native `js.lib.Error` on the JS target. **V8 captures a stack trace eagerly at `Error` construction** (up to `Error.stackTraceLimit` frames) — even when `.stack` is never read. In exception-based control flow that throws constantly — PEG parser backtracking, recursive-descent ordered-choice, deep retry loops — this per-throw stack capture DOMINATES runtime.
+
+**Symptom**: code is ~1ms per line/item, orders of magnitude slower than the actual work. `node --prof` + `node --prof-process` reports a huge **"Unaccounted" fraction (~96%)** — the cost is in V8's native stack-collection machinery, attributed to no JS function. A `caught`/exception frame shows up in the tick list.
+
+**Confirm in one step**: re-run with `node --stack-trace-limit=0`. A dramatic speedup (measured: 14.0s → 3.9s on a 10891-line parse) proves eager stack capture is the cost.
+
+**Fix** — throw a single **pre-allocated stackless sentinel** instead of `new ParseError(...)` per throw. Allocated once → its stack is captured once (negligible) → reused on every throw with zero per-throw capture or allocation. Correct when the thrown payload is a pure control-flow signal (the real error is reconstructed elsewhere, e.g. from a "farthest failure position" tracker):
+
+```haxe
+class ParseError extends haxe.Exception {
+    // shared backtracking signal: one instance, stack captured once, never mutated
+    public static final backtrack:ParseError = new ParseError(...);
+}
+// hot path:
+throw ParseError.backtrack;            // reused — no capture
+// NOT: throw new ParseError(span, msg) // captures a stack on every throw
+```
+
+Do **not** reach for a global `Error.stackTraceLimit = 0`: it is global mutable state, JS-only, and silently strips stacks from genuine errors. The shared-sentinel approach is local, target-agnostic, and thread-safe.
+
+**Caveat — keep the sentinel immutable.** If it has a mutable field (e.g. a `source` an error-decorator writes), make sure no path mutates it while it is in flight — otherwise you reintroduce global mutable state / a cross-parse data race. When you argue "this comparison always selects the rebuild branch over the sentinel", verify it at the **init/boundary values**: a `maxFailPos > sentinel.span.from` check fails (`-1 > -1`) if the sentinel's span equals the tracker's `-1` init value. (Fix used a `(-2,-2)` sentinel span, strictly below the `-1` floor, so the check is always true.)
+
+Verified on Haxe 4.3.7 + Node (a PEG parser): a 10891-line parse threw 603,361 `new ParseError` (~55/line), each capturing a stack → 14.0s; the stackless sentinel cut it to 3.5s (4×), allocations 603,361 → 1, with byte-identical surfaced errors.
+
+## `untyped` Is a Reserved Keyword — Cannot Be a Variable Name
+
+`untyped` is a Haxe keyword (the `untyped expr` escape hatch that disables type-checking), so it cannot be used as an identifier — a `var`/`final` named `untyped` fails at compile with `Keyword untyped cannot be used as variable name`. It reads like an ordinary descriptive word (e.g. a `final untyped:Array<Bool>` flag array), which is exactly why it slips in.
+
+```haxe
+// WRONG — compile error: Keyword untyped cannot be used as variable name
+final untyped:Array<Bool> = [for (c in clauses) isUntypedCatch(c)];
+
+// RIGHT — rename
+final untypedFlags:Array<Bool> = [for (c in clauses) isUntypedCatch(c)];
+```
+
+Other sneaky-looking reserved words in the same trap (read like normal nouns/verbs but are keywords): `cast`, `dynamic`, `inline`, `extern`, `macro`, `operator`, `overload`, `using`, `abstract`. When a local name collides, rename it (`untypedFlags`, `castNode`, …). Verified on Haxe 4.3.7.
+
+## Safe Cast `cast(v, T)` Returns `null` for a `null` Value — Only Throws on a Non-Null Mismatch
+
+The runtime-checked cast `cast(value, Type)` does NOT unconditionally throw when the value isn't a `Type`. The generated check (Haxe `Boot.__cast`) is `value == null || isOfType(value, T) ? value : throw`. So:
+- `cast(null, SomeClass)` → returns `null` (no exception).
+- `cast(nonNullValueOfWrongType, SomeClass)` → throws.
+
+```haxe
+var s:Null<String> = null;
+var x = cast(s, Sys);   // returns null — does NOT throw
+var y = cast("hi", Sys); // throws — "hi" is a non-null String, not a Sys
+```
+
+Implication when reasoning/messaging about an impossible cast (`cast(x, T)` where `x`'s type and `T` are unrelated): "always throws" / "guaranteed exception" is wrong for a value that may be `null`. The accurate framing is "the cast can never yield a usable `T`" (it throws for any non-null value, yields `null` for a null one). Distinct from `(v : T)` (compile-time ascription — a wrong type is a COMPILE error, never a runtime cast) and from the unchecked single-arg `cast v` (no runtime test at all). Verified on Haxe 4.3.7 / js.

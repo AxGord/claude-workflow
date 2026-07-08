@@ -1,5 +1,5 @@
 name: github-init
-description: "Initialize git repo and create private GitHub repository"
+description: "Initialize git repo and create a private GitHub repository for a project not yet on GitHub"
 initial: check_state
 max_transitions: 20
 
@@ -9,17 +9,20 @@ states:
       Check the current state of the project:
       1. `git status` — is it already a git repo?
       2. `gh auth status` — is GitHub CLI authenticated?
-      3. Check if `.gitignore` exists
+      3. `git remote -v` — is a GitHub remote already configured?
+      4. Check if `.gitignore` exists
 
       Choose transition:
       - `needs_gitignore` → not a git repo, no .gitignore
       - `needs_init` → .gitignore exists but not a git repo
       - `needs_repo` → already a git repo, just needs GitHub remote
+      - `already_done` → git repo with GitHub remote already set — just verify
       - `fail` → gh CLI not authenticated or other blocker
     transitions:
       needs_gitignore: create_gitignore
       needs_init: git_init
       needs_repo: create_repo
+      already_done: verify
       fail: failed
 
   create_gitignore:
@@ -27,7 +30,8 @@ states:
       Create `.gitignore` appropriate for the project.
 
       Detect the project type (look at package.json, Cargo.toml, *.csproj, etc.)
-      and generate a suitable .gitignore. Always include OS artifacts (.DS_Store).
+      and generate a suitable .gitignore. Always include OS artifacts (.DS_Store)
+      and secrets: `.env*`, key files, credentials.
 
       Ask the user if unsure what to exclude.
 
@@ -42,7 +46,10 @@ states:
       2. Check for files excluded by global gitignore that should be tracked
          (e.g. CLAUDE.md if it's part of the project). Force-add them if needed.
       3. `git add -A`
-      4. `git commit -m "Initial commit"`
+      4. Review the staged file list (`git status`) before committing — no
+         secrets (.env files, keys, credentials) may be staged. If found,
+         unstage them and add to .gitignore.
+      5. `git commit -m "Initial commit"`
 
       Transition `next`.
     transitions:
@@ -52,11 +59,14 @@ states:
     prompt: |
       Create a private GitHub repo and push:
       1. Determine repo name from the current directory name
-      2. Determine GitHub username from `gh auth status`
-      3. Run: `gh repo create <user>/<repo> --private --source=. --push`
+      2. Run: `gh repo create <repo> --private --source=. --push`
+         (a bare name creates the repo under the authenticated account —
+         no username parsing needed)
 
       If it succeeds → transition `next`.
-      If it fails → transition `fail`.
+      If the name is already taken → retry once with a more specific name,
+      then transition `next` on success.
+      If it fails otherwise → transition `fail`.
     transitions:
       next: verify
       fail: failed
@@ -66,9 +76,15 @@ states:
       Verify the repo was created:
       - `gh repo view --json isPrivate,url`
       - `git remote -v`
-      Confirm it's private and remote is set. Transition `next`.
+      Confirm it's private and the remote is set.
+
+      Choose transition:
+      - `next` → confirmed
+      - `fail` → verification failed (repo missing, wrong visibility, or no
+        remote) — report what exactly failed
     transitions:
       next: done
+      fail: failed
 
   done:
     prompt: "GitHub repo created and code pushed successfully."

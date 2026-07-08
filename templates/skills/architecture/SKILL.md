@@ -21,7 +21,7 @@ Three questions (if you can't answer all three concretely, suggest the simpler o
 **GOTCHA:** Single implementation behind interface is ceremony, not architecture
 **EXCEPTION:** Public library APIs only
 
-Sonnet defaults to "interfaces for testing are fine" — this skill corrects that.
+Models often default to "interfaces for testing are fine" — this skill corrects that.
 
 ## Response Template
 
@@ -107,6 +107,17 @@ When moving filtering logic from a caller into a shared state manager (allocator
 
 **Rule:** A generic `isX()` that returns the same answer for semantically different states is a lossy abstraction. Before using it, check: does the original code care *why* the state is set, not just *that* it's set?
 
+## Deleting a Mechanism for ONE Rejected Job — Enumerate ALL Its Jobs First
+
+When you remove a function/call because one of its responsibilities is rejected or obsolete, list **every** side effect it has before deleting it. A mechanism named for one concern often quietly carries a second, still-needed concern — and the name masks it, so wholesale deletion silently disables the second.
+
+**DON'T:** See "this does the rejected X" → delete the whole call/function.
+**DO:** Trace every effect (what it sets, reveals, schedules, gates). Keep the still-needed effects; remove only the rejected one — often by splitting the dual-purpose function.
+
+**Tell:** the deleted thing was a per-frame/lifecycle hook whose name describes only one job (`dodge`, `sync`, `refresh`); the regression appears in an *adjacent* concern (visibility, enablement, layout), not the one you were targeting — and surfaces late (doc/visual pass), not in the correctness check.
+
+**Concrete example (illustrative):** A per-frame `noteActorPosition` did TWO things via one alpha lane — faded decorative props IN (made the field *visible*) and faded them OUT near the moving actor (the *proximity dodge*). The user rejected the dodge (alpha-hiding the path). Deleting the whole call removed the dodge **and** the field's visibility → the entire decorative prop field went invisible (`alpha=0` forever). Fix: split — keep a one-time fade-IN (reveal) gated by a `fadeIn` flag, drop only the per-frame fade-OUT. The reveal and the dodge had been fused in one function; the name ("dodge") hid the reveal.
+
 ## Refactoring Scope: Don't Escalate Lifecycle
 
 When refactoring an inline operation into a two-phase approach (set intent + execute), match the original operation's lifecycle scope.
@@ -117,6 +128,23 @@ When refactoring an inline operation into a two-phase approach (set intent + exe
 **Example:** A self-contained `selectNext()` swapped one item inline (release + take + index setter handled stop/start). Refactored to set intent + reallocate(). Added container-level stop/start around it. But start had an `isAvailable()` gate requiring a minimum active count — a constraint the original inline operation never hit. The element-level index setter already stops the old item and starts the new one.
 
 **Rule:** Before adding lifecycle management to a refactored operation, check: did the original operation need it? If the original worked within existing infrastructure (setters, listeners), the refactored version should too.
+
+## Signature Change → Grep All Callsites
+
+When changing a method's return type, parameter list, or visibility, grep ALL callsites BEFORE finalizing the change.
+
+A signature change compiles fine in the modified file but silently breaks callers that ignore the new return type. Example: `clearData(): void` → `clearData(): ITask` — callers that fired-and-forgot still compile; the returned ITask is constructed and discarded; the async work never starts. No compile error, no exception — the cleanup pipeline is a no-op.
+
+**Symptom**: behavior silently regresses in code paths nobody runs during initial smoke test. Caught later by code reviewers, integration tests, or production bugs.
+
+**DON'T:** Change a signature, run the obvious test, declare done.
+**DO:** Change a signature, grep `<methodName>\b` across the whole project, audit each callsite. Trust "find references" only if the IDE has full project indexing.
+
+**Adding a member to an interface/abstract type is also a signature change.** Every implementor must gain the member — including hand-written test doubles / fakes / in-memory stubs, not just production classes.
+
+**Tooling gotcha:** test runners that strip types via esbuild/swc (vitest, ts-jest `isolatedModules`, bun test) do NOT typecheck. A test double missing a newly-added interface method compiles fine and fails at RUNTIME as `TypeError: x.method is not a function` — often in unrelated tests that happen to reach the missing call. `tsc --noEmit` catches it; the test run alone does not.
+
+**DO:** after adding an interface member, grep for `implements <Interface>` and for the type used as a field/param type, and update every implementor (prod + test) in the same change; run `tsc` (not just the test suite) before declaring done.
 
 ## New Canonical Path → Ask About Legacy Parallels
 
@@ -130,3 +158,105 @@ When you add a new canonical input/output mechanism that does the same thing as 
 **Symptom of violation:** you find yourself adding gating logic (coordinate checks, `if (ev.target === ...)` filters, `inflight` flags) just to make two input paths coexist when one is meant to subsume the other.
 
 **Rule:** A new canonical mechanism is an opportunity to remove the old one, not to add a referee between them. If the user didn't explicitly ask to keep both, ask before keeping both.
+
+## Accumulation/Leak Bugs: Fix the Lifecycle, Not a Sweep
+
+When something grows unbounded (state files, DB rows, temp dirs, handles, cache entries), the artifact has a creation event but no deletion event tied to its owner's lifecycle.
+
+**DON'T:** Add a periodic retention/TTL/prune sweep ("delete things older than N days"). It leaves the leak in place, adds a tunable nobody sets correctly, and needs a guard against its own edge cases (NaN window deleting everything).
+**DO:** Tie the artifact's lifetime to its owner. Delete it at the terminal transition (session ends → its file is removed; process dies → its records go). The owner that creates it owns destroying it.
+
+**Tell:** if your fix introduces a `RETENTION_DAYS`/`maxAge`/cleanup-cron, ask "why does this outlive its owner at all?" A retention sweep is a legitimate *policy* for audit data deliberately kept; it is the wrong tool for a missing teardown.
+
+**Before designing the fix:** check sibling/related projects for an already-shipped fix of the same bug class (same author/org repos especially) and mirror its approach instead of inventing a parallel one.
+
+## Repeated Same Symptom After 2+ Fixes = Wrong Subsystem Target
+
+When the user reports the same perceived symptom after two or more rounds of plausible fixes, stop patching that surface. A symptom that survives multiple reasonable fixes is almost always at the **seam between two decoupled subsystems** — a baked/precomputed path vs. a live event; a cached value vs. its source; a predicted position vs. an independently-simulated actor.
+
+**DON'T:** Keep refining one side each iteration — curve shape, easing, constants, thresholds — to match the user's latest wording.
+
+**DO:** By the 2nd repeat, trace BOTH subsystems end-to-end and ask: "why do these two representations exist, and must they?" The fix is to make them **coincide** — re-derive one from the other at the authoritative moment — not to tune one side.
+
+**Tell:** Every "fix" addresses the user's latest description verbatim, yet the user keeps saying "same thing / didn't help." You find yourself adjusting geometry or timing constants repeatedly with no lasting effect.
+
+**GOTCHA:** The seam is invisible when you look at only one subsystem. You must trace both from their shared input to their diverging output paths to see the gap.
+
+**Concrete example:** A game ball flew a fixed pre-baked bézier to a predicted endpoint; the actual hit fired from a per-frame overlap test against a separately-simulated moving sprite. Four curve-shape fixes (overshoot, speed, bulge, straight-line) all failed because the real defect was the timing seam between the two decoupled systems. Resolution: re-derive the sprite's velocity at the true flight start so ball and sprite converge at one shared point. Cost: 5 user round-trips before the architecture was traced.
+
+## Regressing Feature? Find the Principled Algorithm the Codebase Already Has
+
+When a feature keeps regressing across many patch cycles — tuning constants, reshaping curves, adjusting thresholds — stop inventing ad-hoc logic. Ask: **"what does correct behavior fundamentally require, and does this codebase already compute that for some other case?"**
+
+**DON'T:** Keep hand-rolling case-specific geometry or heuristics to chase the latest symptom. Each variant is "more specific" than the last and never converges.
+
+**DO:** Grep for the concept (clearance, retry, normalization, lift…). If a general implementation exists, find why the failing case is excluded from it — an early `return`, a zone guard, a capability flag. That exclusion is the smoking gun: someone already solved it generally, then deliberately opted out the hard case. Mirror or apply that proven algorithm to the excluded case, using its same constants and sampling strategy for parity. Ask the "do we already do it elsewhere?" question by the **2nd** regression, not the 6th.
+
+**Tell:** You're writing the Nth variant of the same code path and each fix is narrower than the last. A sibling module has a richer version of the same routine that the failing path doesn't call.
+
+**GOTCHA:** The exclusion guard often looks load-bearing (e.g., "air shots have no terrain"). Verify it with the principled algorithm before assuming it's correct — it may just be an early simplification that was never revisited.
+
+**Concrete example (illustrative):** An air-launched projectile kept clipping terrain through ~6 patch iterations (overshoot tweaks, speed adjustments, straight-line approximations). The math package already had a `raiseArcOverTerrain` routine — raises a bézier peak until it clears terrain minus a margin — but it explicitly `return`ed early for `zone === 'air'`. Fix: mirror that exact algorithm renderer-side for the excluded zone. No amount of curve reshaping could have matched it because the principled clearance math was simply never reached.
+
+## Changing a Value Invalidates State Sized From Its OLD Value — Not Just Live Readers
+
+When you change a parameter X, the instinct is to update code that **reads** X. But state that was **computed/staged earlier** from X's old value (a precomputed position, a cached offset, a buffer size, a timeout deadline) doesn't "read" anything — it silently encodes the stale quantity. Those frozen values contradict the new X, often by the full ratio of old/new.
+
+**DON'T:** Change X, fix the obvious live consumers, ship. The stale-derived state then fires with pre-change geometry/timing intact.
+
+**DO:** When changing X, enumerate not just "who reads X now" but "what was sized/positioned/scheduled FROM X (possibly long before X changed)." Re-derive those from the new X, or trigger their recompute at the moment X takes effect.
+
+**Tell:** a downstream actor moves/scales ~the ratio of old:new too far/fast (e.g. ~10×); a thing that used to line up now overshoots by a suspiciously clean multiple; bug magnitude ≈ `oldValue / newValue`.
+
+**GOTCHA:** The stale computation may happen at a different time (launch, init, precompute pass) than the code you just changed (tick, render, callback). Grep for every site that captures a derived value from X into a local variable, struct field, or closure — those are the freeze points.
+
+**Concrete example:** A projectile's flight duration was shortened ~6×. The flight-playback code was updated. But an interceptor's ENTRY POSITION had been staged at launch as `start + speed · OLD_duration` (far away, sized for the long flight); the resync only re-solved its velocity over that stale far position → it streaked in ~10× too fast. Fix: re-STAGE the entry from the new duration (`position + velocity · newDuration`), not just re-solve velocity. The corrected duration must drive every derived value — including positions frozen before the change — from a single source.
+
+## "Impossible in the Limit" ≠ "Cheap Lever Fails the Actual Case"
+
+When a global constant's effect scales with a per-case input, no single value can satisfy ALL inputs — that proof is correct. But it does NOT establish that the constant fails the specific case in front of you.
+
+**DON'T:** Write an elegant impossibility argument for the general case and propose a per-case solver/refactor without having run the simple fix once.
+**DO:** Try the cheapest knob empirically first — adjust the constant, widen the relevant tolerance, measure the real target. Reserve the heavy solution for when the simple lever is *measured* to fail, not when it's only *proven* imperfect in the limit.
+
+**Principle:** "Can't be perfect for all" ≠ "doesn't work for this." Empirical failure on the actual target is required evidence; theoretical failure on adversarial inputs is not.
+
+**Tell:** You're composing a sound argument for why a simple fix "structurally cannot work" and proposing architecture instead — without having run the simple fix once. That's the signal to stop, try the knob, and measure.
+
+## A Claimed-Negative Tradeoff Needs the Same Evidence as a Claimed-Impossible Fix
+
+The mirror of "Impossible in the Limit ≠ Cheap Lever Fails": just as you must not call a simple fix impossible without running it, do not tell the user a change makes things WORSE without deriving the actual result. A negative framing extrapolated from a stale note, a prior decision, or an intuitive "it'll scatter / fragment / break" mental model is not evidence.
+
+**DON'T:** Warn "this will be markedly worse" / "destroys the existing structure" from memory or intuition, then ask the user whether to proceed.
+**DO:** Run the concrete analysis that confirms or refutes the claim FIRST — then present the measured result, and only flag a downside that survives the measurement.
+
+**Tell:** You're about to present a tradeoff as a downside, and your reason is a remembered decision ("we left this alone before") or a shape you pictured ("members will scatter"), not something you computed on the actual artifact.
+
+**Concrete example:** Asked to apply an automated member-reorder to a 12k-line god-file, the agent told the user it would be "markedly worse" — destroying intentional locality, exploding one guard block into scattered fragments — citing a stale "leave this file alone" note. The user pushed back: "why worse? I expect better." The analysis the agent should have done first: a sorted line-multiset diff (proved the reorder was a pure permutation — zero content changed) and an index-contiguity + identical-condition-dedup check (proved the guarded cluster stayed one contiguous block). The real change was mild and arguably cleaner. The unmeasured negative cost a user round-trip.
+
+**Principle:** "I think this is worse" is a hypothesis, not a finding. Before it reaches the user as a reason to hesitate, derive it on the real input — the cost of measuring is usually one command; the cost of a wrong negative is a wasted round-trip and a user who now distrusts your tradeoff calls.
+
+## "How Did It Work Before?" = Revert Signal
+
+When the user asks "how did the old way work?", "why not keep it simple / slightly different?", or "did you even try the original approach?" — that is not a request to polish the new mechanism. It is evidence the new direction is wrong.
+
+**DON'T:** Defend the new design across multiple fix→verify cycles, trading one symptom for another, while the user keeps invoking prior behavior.
+**DO:** By the 2nd such pushback, diff against the pre-change baseline. Articulate honestly what the original did and why it was adequate. Offer to revert before sinking more cycles.
+
+**Tell:** You are on the 3rd+ iteration fixing your own new mechanism; each fix introduces a new symptom; the user's questions consistently reference what it used to do. The thrash itself is the signal — the baseline was right.
+
+**Principle:** Repeated pushback that references prior/simpler behavior is not polish feedback — it is a direction correction. Reverting to a known-good baseline is a first-class fix, not a failure.
+
+## The User's Named Beat IS the Acceptance Criterion
+
+When the requirement names a concrete observable event — a strike, a bounce, a wobble, a specific sequence — that beat is not a flourish. It is the spec. Reproducing the surrounding motion while omitting the named beat is a wrong implementation, not a simpler one.
+
+**Observed failure:** User asks for "X hits a corner and visibly bounces, then branches." Agent repeatedly delivers a fast ease-to-stop or a smooth pass-through — dropping the bounce — and declares it done. Each simplification felt cleaner or more physically plausible. User rejected it each time: "there is no bounce, this is identical to the plain case." Required explicit re-statement of the task before the beat was built.
+
+**Tell:** You're choosing a motion because it's easier to implement or "reads cleaner," and the specific event the user named is no longer distinctly visible in the result. Or: the user says the new thing "looks the same as the old/plain one."
+
+**DON'T:** Trade away a named beat for implementation simplicity or "physical plausibility" concerns without surfacing the trade-off.
+**DO:**
+1. Enumerate every named beat from the request.
+2. For each, define how it will be **distinctly observable** (numerically or visually) and assert it before claiming done.
+3. If you're about to drop a beat because it's hard or feels unphysical, surface that trade-off explicitly — don't silently omit it.

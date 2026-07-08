@@ -25,10 +25,13 @@
 
 ## Cross-compilation
 
-| From → To | Flag |
-|-----------|------|
-| macOS → Linux | `-cpp` (Homebrew cross-toolchains) |
-| Any → Windows | `-mingw` |
+hxcpp selects the toolchain via defines (`-D ...`). Haxe's `-cpp <dir>` only sets the C++ output directory — it is not a cross-compilation flag.
+
+| From → To | Define |
+|-----------|--------|
+| macOS → Linux | `-D linux` (needs a Linux cross-toolchain, e.g. via Homebrew) |
+| Linux → Windows | `-D windows` (selects the MinGW-w64 cross toolchain) |
+| Windows: MSVC → MinGW | `-D mingw` |
 
 ## CI/CD gotchas
 

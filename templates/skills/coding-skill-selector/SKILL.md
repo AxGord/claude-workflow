@@ -21,7 +21,7 @@ Load coding skills for files/context in this task.
 
 3. By domain (detect from imports, paths, or task description):
    - YOLO / object detection → `Skill("domain-yolo")`
-   - Pixi.js / pixi.js imports → `Skill("domain-pixi")`
+   - Pixi.js (imports from `pixi.js`, PIXI globals) → `Skill("domain-pixi")`
    - Person re-identification (ReID) → `Skill("domain-reid")`
    - Game dev (physics, precision, camera, sprites) → `Skill("domain-gamedev")`
    - OpenFL / hxcpp native target → `Skill("target-openfl-native")`
@@ -35,6 +35,7 @@ Load coding skills for files/context in this task.
    - Claude Code settings.json / hooks / permissions / plugin config → `Skill("claude-code-config")`
    - Workflow YAML in templates/ or .claude/workflows/ → `Skill("workflow-authoring")`
    - Fetching web docs / external content → `Skill("web-reading")`
+   - Verifying a web/canvas app via Playwright or a browser MCP (screenshots, captures, perf) → `Skill("browser-verify")`
 
 5. If 3+ independent files or parallel work → `Skill("task-delegation")`
 

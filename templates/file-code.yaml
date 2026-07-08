@@ -1,5 +1,5 @@
 name: file-code
-description: "Per-file coding — spawned by coding/bug-fix for each file to implement"
+description: "Per-file coding — spawned as an agent by coding/bug-fix for each file, or run inline as a sub-workflow for a single file"
 initial: load_skills
 max_transitions: 25
 
@@ -15,7 +15,8 @@ states:
     task: "Understand file context"
     prompt: |
       You are implementing changes in a single file as part of a larger task.
-      The file path, plan, and interface contracts were provided in your task prompt.
+      The file path, plan, and interface contracts come from your task prompt
+      (spawned agent) or from the conversation so far (inline sub-workflow).
 
       1. Read the existing file (if it exists) to understand current structure.
       2. Read related files: imports, callers, siblings in the same module.
@@ -35,7 +36,8 @@ states:
       - Loaded preference/style skills
       - Existing patterns in the file and its neighbors
 
-      Check original before changing: `git diff HEAD -- <file>` to understand original values.
+      Check the original before changing: `git show HEAD:<file>` shows the
+      pre-change content (original values, structure).
 
       Write the code, then → transition `done`.
     transitions:
@@ -71,5 +73,12 @@ states:
       **Interface notes**: <how this file connects to others — exports, imports, contracts satisfied>
       **Concerns**: <anything the parent agent should verify — edge cases, assumptions, integration risks>
 
-      Output this report as your final response.
+      Output this report — as your final response (spawned agent) or into the
+      conversation for the parent workflow (inline sub-workflow).
+      Then → transition `done`.
+    transitions:
+      done: finish
+
+  finish:
     terminal: true
+    outcome: complete

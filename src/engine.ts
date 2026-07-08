@@ -46,12 +46,14 @@ export interface StatusResult {
 }
 
 const MAX_ACTION_CHAIN = 20;
+const TERMINAL_PROMPT_DIVIDER = "\n\n---\n\n";
 
 export class Engine {
   private static readonly GLOBAL_WORKFLOWS = new Set([
     "coding", "debugging", "bug-fix", "new-feature", "code-review",
     "explore", "web-research", "planning", "testing", "reflection",
     "investigate", "master", "file-code", "file-review", "subagent", "review-push",
+    "github-init",
   ]);
 
   private readonly _storage: Storage;
@@ -66,7 +68,12 @@ export class Engine {
     this._executor = executor;
   }
 
-  /** Find the most recently updated active session for the current Claude Code PID. */
+  /**
+   * Resolve the active session for the current Claude Code PID.
+   * Exactly one active session → its ID. More than one (e.g. parallel
+   * sub-agents sharing the parent's ppid) → throw: picking one silently
+   * would corrupt a sibling's session.
+   */
   public resolveSessionId(sessionId?: string): string {
     if (sessionId) return sessionId;
     const pid = process.ppid;
@@ -74,7 +81,14 @@ export class Engine {
       s => s.context.claude_code_pid === pid && s.stack.length > 0
     );
     if (active.length === 0) throw new Error("No active session found. Call start first.");
-    active.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    if (active.length > 1) {
+      const candidates = active
+        .map(s => `${s.session_id} (${s.stack[0].workflow})`)
+        .join(", ");
+      throw new Error(
+        `Multiple active sessions for this process: ${candidates}. Pass session_id explicitly.`
+      );
+    }
     return active[0].session_id;
   }
 
@@ -723,7 +737,36 @@ export class Engine {
     return this._buildStatus(updated, taskOps);
   }
 
+  /**
+   * Pop after entering a hard terminal state. Renders the terminal state's
+   * prompt (if any) and prepends it to the resulting status prompt so final
+   * instructions (report contracts, push steps) are not discarded — both on
+   * pop-to-parent and on root completion.
+   */
   private async _popStack(session: SessionState, outcome: "complete" | "fail", taskOps?: TaskOp[]): Promise<StatusResult> {
+    const frame = session.stack[session.active_frame];
+    const terminalState = this._resolveState(session, frame.workflow, frame.current_state);
+    const terminalPrompt = terminalState?.prompt
+      ? render(terminalState.prompt, this._buildTemplateVars(session))
+      : undefined;
+
+    const result = await this._popStackCore(session, outcome, taskOps);
+    if (!terminalPrompt) return result;
+
+    // Parked (pending_pop): the status already shows the terminal state's own
+    // prompt — prepending would duplicate it. The retry re-enters this wrapper.
+    if (this._storage.read(session.session_id)?.pending_pop) return result;
+
+    return {
+      ...result,
+      prompt: `${terminalPrompt}${TERMINAL_PROMPT_DIVIDER}${result.prompt}`,
+      // The terminal prompt is new information even when the parent state is
+      // a revisit — bypass the revisit compression in the tool formatter.
+      forcePrompt: true,
+    };
+  }
+
+  private async _popStackCore(session: SessionState, outcome: "complete" | "fail", taskOps?: TaskOp[]): Promise<StatusResult> {
     const now = new Date().toISOString();
 
     if (session.stack.length <= 1) {

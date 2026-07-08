@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.9
+
+- engine: deliver hard-terminal state prompts — rendered and prepended (with `---` divider) to sub-workflow pop and root-completion output, so report contracts and push instructions actually fire
+- engine: resolveSessionId throws on ambiguous ppid (multiple active sessions) listing candidates — parallel subagents must pass explicit session_id
+- engine: add github-init to GLOBAL_WORKFLOWS; remove dead `needs_action` outcome from schema
+- templates: full review pass over all 17 workflows — fail terminals everywhere (no dead on_fail edges), soft-terminal pattern for report/push states, skill gates (testing, debugging ?debug-bridge, web-research, reflection), session_id in all spawn preambles, background-by-default Agent tool guidance, subagent-context guards on clarify states, max_visits budget hints, secrets scan before commit/push, hunk-only revert guidance
+- skills: sync all 20 bundled skills with live copies (architecture +10 sections, lang-haxe +20, domain-pixi +18 gotchas) and fix factual errors across build-cmake, ci-github-actions, aws-lambda, claude-code-config, domain-{reid,yolo,gamedev}, math, mcp-setup, workflow-authoring, web-reading, lang-{as3,python}, target-openfl-native; rewrite task-delegation for typed agents + background lifecycle
+- skills: bundle 4 new — skill-manager, cleanup, ide-zed, debug-bridge-scaffold
+- hooks: SessionStart branches on stdin `.source`; SessionEnd matcher no longer abandons sessions on /clear; safer temp-file writes; jq guard
+- docs: README install channels, recommended CLAUDE.md snippet and permissions block (abort deliberately excluded)
+
 ## 0.1.8
 
 - Cap retained terminal sessions via shared prunePolicy() — keep N most recently updated, delete older (Storage, InMemoryStorage, SessionEnd hook)

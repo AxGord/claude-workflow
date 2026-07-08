@@ -14,7 +14,7 @@ states:
       1. **User specified files** — user named concrete file paths → use those.
          Do NOT touch git.
       2. **User specified directories** — user named directories or patterns
-         (e.g. "src/api/", "src/ без editor", "src/*.hx, src/api/, src/drill/").
+         (e.g. "src/api/", "src/ without editor", "src/*.hx, src/api/, src/drill/").
          Parse the request in natural language:
          - `"src/"` → all source files recursively, auto-group by first-level subdirectories
          - `"src/api/, src/drill/"` → only these dirs recursively, each = one package
@@ -34,17 +34,21 @@ states:
       **Step 2 — Determine review depth:**
       - Coming from testing/coding / "check changes" / "review diff" / default
         → `scope: diff` (only review changed lines)
-      - "review file" / "целиком" / "check whole file" / "bring to order" / "привести в порядок"
-        → `scope: full` (review entire file)
+      - "review file" / "check whole file" / "bring to order" (or equivalent
+        phrases in the user's language) → `scope: full` (review entire file)
       - Directory mode → always `scope: full`
       Save the scope via `context_set(key: "review_scope", value: "diff" or "full")`.
 
       **Step 3 — Get file names:**
       - If source is user-specified files or directories → already have the list.
       - If source is git → get ALL changed file names (modified AND new/untracked):
-        - Modified/staged: `git diff HEAD --name-only`
+        - Modified/staged: `git diff HEAD --name-only --diff-filter=d`
+          (lowercase `d` excludes deleted files)
         - New untracked: `git ls-files --others --exclude-standard`
         Combine both lists. Do NOT read full diffs yet — names only.
+        Deleted files (`git diff HEAD --name-only --diff-filter=D`) get NO
+        per-file review — note them for the cross-file step instead
+        (their callers/imports may break).
         **Git pathspec gotcha (zsh):** to exclude paths, use `-- . ':(exclude)path'`,
         NOT `-- ':!path'` — the latter silently returns empty results in zsh.
 
@@ -96,6 +100,9 @@ states:
         mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-review workflow states until completion.
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every
+      subsequent workflow tool call (transition, context_set); parallel siblings
+      share the same ppid.
       ---
       Also include:
       - The file path
@@ -110,8 +117,12 @@ states:
       The file-review workflow has its own skill-loading state — agents will load all
       relevant skills themselves. Manual rule lists are lossy and cause missed issues.
 
-      Launch ALL file agents in parallel (single message, multiple Agent tool calls).
-      Wait for all to complete. Collect their reports.
+      Split the files into batches of 8. Launch each batch's agents in parallel
+      (single message, multiple Agent tool calls). Wait for the whole batch to
+      complete before starting the next batch. Collect their reports.
+
+      If a child agent fails or returns no report — re-spawn it once;
+      if it fails again, mark that file as unreviewed in the summary.
 
       After ALL reports are collected:
       1. Abort orphaned child workflow sessions — call `sessions` to find
@@ -128,7 +139,11 @@ states:
       CRITICAL: You are a DISPATCHER in this state, not a reviewer.
       Do NOT read files or code yourself — only spawn agents and collect results.
 
-      1. Read `packages` and `current_package_index` from context.
+      1. Your package list and position, embedded from context (re-rendered on
+         every visit — survives context compression; if they look stale, call
+         `status()` and re-read context):
+         - packages: {{context.packages}}
+         - current_package_index: {{context.current_package_index}}
       2. If `current_package_index` >= number of packages → transition `all_done`.
       3. Take the current package. Output: "**Package: <name>** (<N> files)".
       4. Split the package's files into batches of 8.
@@ -143,16 +158,20 @@ states:
            mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
          where <SESSION_ID> is the current session ID (substitute it before sending).
          Then follow the file-review workflow states until completion.
+         start() returns `SESSION: <id>` — pass that session_id explicitly in every
+         subsequent workflow tool call (transition, context_set); parallel siblings
+         share the same ppid.
          ---
          Also include:
          - The file path
-         - "This is a full file review — read the entire file and review all code."
-         - "Review the ENTIRE file for all issues (scope: full)."
+         - "Review the ENTIRE file for all issues (scope: full) — read the whole file."
 
          Do NOT include style rules or coding preferences — agents load their own skills.
 
          Launch the batch agents in parallel (single message, multiple Agent tool calls).
          Wait for all to complete before starting the next batch.
+         If a child agent fails or returns no report — re-spawn it once;
+         if it fails again, mark that file as unreviewed in the package report.
 
       6. Collect all reports for this package. Save to context:
          `context_set(key: "package_<index>_report", value: "<aggregated report>")`
@@ -183,7 +202,7 @@ states:
       - [ ] Classes to merge: tiny classes that always appear together and share state
       - [ ] Layer violations: data flowing through unnecessary intermediary layers
 
-      Add any cross-file findings to the review.
+      Add any cross-file findings to the review. Then → transition `done`.
     transitions:
       done: summarize
 
@@ -301,8 +320,7 @@ states:
          consumers of what changed.
 
       After verification, transition `complete`. The coding sub-workflow already
-      reviewed the files it modified. Planning produces a plan only — review
-      happens later when the plan is executed via the coding workflow.
+      reviewed the files it modified.
     transitions:
       complete: done
 

@@ -37,10 +37,14 @@ states:
       - When it started happening
       - Any recent changes
 
+      If there is no interactive user (you are running as a subagent), do NOT ask — state your assumptions and continue, or take the failure path.
+
       Choose transition:
       - `got_info` → have enough info to try reproducing again
+      - `escalate` → no way to get more information; give up
     transitions:
       got_info: reproduce
+      escalate: escalated
 
   hypothesize:
     prompt: |
@@ -51,20 +55,34 @@ states:
 
       Choose transition:
       - `trace` → ready to add targeted traces to test hypotheses
+      - `escalate` → out of hypotheses (or trace budget exhausted); report findings
     transitions:
       trace: trace
+      escalate: escalated
 
   trace:
     max_visits: 5
     prompt: |
       Add 3-5 targeted traces with unique prefixes (`[DBG1]`, `[DBG2]`).
 
-      Delegate to `general-purpose` subagent: build command, run command, what to look for, timeout.
-      **NEVER use `run_in_background: true`**.
+      Delegate the build+run to a flat `general-purpose` subagent
+      (build/run/report — no workflow, no skills) to keep build output
+      out of main context: give it the build command, run command, what
+      to look for, and a timeout.
+      A flat subagent inherits none of this project's skills or env
+      rules — it only knows what YOU put in its spawn prompt. So include
+      VERBATIM in that prompt: (a) any tooling/hook constraints that
+      apply in this project (required CLIs, blocked commands), and
+      (b) "Strip noise, but quote every error, failing assertion, and
+      number VERBATIM — don't paraphrase the signal or replace it with
+      a verdict; the parent judges."
+      Spawn with `run_in_background: false` — you need the result before transitioning.
 
       **Anti-patterns:**
       - Running builds in main context (100KB+ noise)
       - Adding Mutex/volatile "just in case" — masks real problem
+
+      Budget: 5 visits to this state (engine-enforced); when nearly exhausted, choose `escalate` instead of retrying.
 
       Choose transition:
       - `found` → root cause identified
@@ -74,29 +92,35 @@ states:
     transitions:
       found: diagnosed
       more_traces: trace
-      bridge: bridge_debug
+      bridge: load_skills_bridge
       escalate: escalated
+
+  load_skills_bridge:
+    skills:
+      - ?debug-bridge
+    transitions:
+      continue: bridge_debug
 
   bridge_debug:
     prompt: |
-      Call `Skill("debug-bridge")` and any platform-specific debug bridge skills
-      from the available skills list (e.g. `debug-bridge-openfl`, `debug-bridge-unity`, etc.).
-
-      Use debug bridge for interactive state inspection.
-      Launch `general-purpose` subagent. Inspect state, take screenshots, simulate events.
+      Use the debug bridge for interactive state inspection.
+      Launch a `general-purpose` subagent to build and launch the app.
+      Inspect state, take screenshots, simulate events.
 
       Choose transition:
       - `found` → root cause identified via bridge
       - `back_to_trace` → need more code-level tracing
+      - `escalate` → bridge inspection exhausted (or trace budget spent); report findings
     transitions:
       found: diagnosed
       back_to_trace: trace
+      escalate: escalated
 
   diagnosed:
     prompt: |
       Root cause identified. Present diagnosis to the user, then decide:
       - Trivial fix (1-2 lines, obvious, no risk) → `fix`
-      - Significant changes needed → `done` (exit to master; user decides next)
+      - Significant changes needed → `done` (exit to parent workflow; user decides next)
       - Unclear scope or trade-offs → `ask_user`
     transitions:
       fix: fix
@@ -106,9 +130,11 @@ states:
   ask_user:
     prompt: |
       Present findings and trade-offs. Ask user how to proceed:
-      - Quick fix here?
-      - Plan a bigger change?
-      - More investigation needed?
+      - Quick fix here? → `fix`
+      - Plan a bigger change? → `done` (exit to parent workflow)
+      - More investigation needed? → `investigate`
+
+      If there is no interactive user (you are running as a subagent), do NOT ask — state your assumptions and continue, or take the failure path.
     transitions:
       fix: fix
       done: done
@@ -159,8 +185,7 @@ states:
 
   escalated:
     prompt: |
-      Could not diagnose the root cause after maximum trace attempts.
-      Report findings to the user:
+      Could not diagnose the root cause. Report findings to the user:
       - What was tried
       - What was ruled out
       - Remaining hypotheses

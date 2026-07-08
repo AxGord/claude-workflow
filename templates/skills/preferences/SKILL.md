@@ -5,11 +5,11 @@ description: User's general coding preferences
 
 ## User's personal coding preferences
 
-These rules are set by the user through direct feedback.
-They ALWAYS take priority over base skills.
+Rules in this file ALWAYS take priority over base skills.
 
-<!-- Add your preferences here. The sections below are examples — -->
-<!-- customize them to match your coding style. -->
+<!-- Customize this file to match your coding style: the uncommented -->
+<!-- rules below are shipped defaults — keep, edit, or delete them. -->
+<!-- Commented rules are examples to uncomment and adapt. -->
 
 ### Model usage
 
@@ -38,9 +38,9 @@ They ALWAYS take priority over base skills.
 ### Naming
 
 - Private fields (variables) must start with `_` prefix: `_count`, `_items`
+- This applies to instance variables, NOT to methods or constants
+- Public fields do NOT use underscore prefix
 <!-- - Event listener methods: use `Handler` suffix, not `on` prefix -->
-<!-- - This applies to instance variables, NOT to methods or constants -->
-<!-- - Public fields do NOT use underscore prefix -->
 
 ### Comments and documentation
 
@@ -53,10 +53,10 @@ They ALWAYS take priority over base skills.
 <!-- - No curly braces for single-line bodies -->
 <!-- - Combine `for` + `if` into `for (...) if (...) {` — preferred over `if (!cond) continue;` -->
 
-### Error handling
-
-- Never silently swallow invalid state — throw exceptions instead of returning quietly
-
 ### Magic numbers
 
 <!-- - No magic number literals in logic — extract into a named constant -->
+
+### Error handling
+
+- Never silently swallow invalid state — throw exceptions instead of returning quietly

@@ -129,8 +129,10 @@ while (!_worker.isStopped() && waited < TIMEOUT_MS) {
     Sys.sleep(0.1);
     waited += 100;
 }
-if (waited < TIMEOUT_MS) {
-    // Thread stopped cleanly — safe to close resources
+if (_worker.isStopped()) {
+    // Thread stopped cleanly — safe to close resources.
+    // Re-check the flag, NOT the timer: the worker may have stopped
+    // during the final sleep, right as the timeout expired.
     try db.close() catch (e:Dynamic) {};
 }
 // Always null out regardless
@@ -143,11 +145,11 @@ _worker = null;
 
 ```haxe
 // WRONG — parent field nulled but still in __children → main thread renders it
-pitchAreaGroup.parent = null;
+child.parent = null;
 
 // RIGHT — remove from __children, then null parent
-@:privateAccess parent.__children.remove(pitchAreaGroup);
-pitchAreaGroup.parent = null;
+@:privateAccess parent.__children.remove(child);
+child.parent = null;
 ```
 
 To restore, save the child index before removing and re-insert at the same position:
@@ -168,6 +170,39 @@ child.parent = savedParent;
 ### Sys.exit() doesn't flush stdout
 
 `Sys.exit()` calls C `exit()`. In worker threads, stdout buffer may not flush. Always call `Sys.stdout().flush()` before `Sys.exit()`.
+
+### Sys.exit() races hxcpp GC mutex destruction → `mutex lock failed: Invalid argument`
+
+`Sys.exit()` → libc `exit()` → runs C++ static destructors, including hxcpp's GC mutexes (`sThreadPoolLock` in `hx::gc::Immix.cpp`, `g_threadInfoMutex` in `hx::Thread.cpp`). The GC worker thread is NOT stopped by `exit()`. Its next `pthread_mutex_lock` on a now-destroyed mutex returns EINVAL → libc++abi terminates with `mutex lock failed: Invalid argument`. Manifests differently per platform: Linux shows `terminate ... std::system_error ... Invalid argument`, Windows is silent or AV, macOS crashes at unit test exit.
+
+Fix: after cooperative cleanup, skip C++ static destructors by calling `_Exit` (see below).
+
+### `_exit` from `<unistd.h>` is NOT available; use `_Exit` from `<cstdlib>`
+
+hxcpp does NOT auto-include `<unistd.h>`. `untyped __cpp__("::_exit({0})", code)` fails with `error: no type named '_exit' in the global namespace`.
+
+Use C99 `_Exit` (capital E) from `<cstdlib>` — skips C++ static destructors and atexit handlers, identical to `_exit` in effect, portable across Darwin/Linux/Windows MSVC.
+
+```haxe
+// WRONG — <unistd.h> not included by hxcpp; compile error
+untyped __cpp__("::_exit({0})", code);
+
+// RIGHT — <cstdlib> is safe; _Exit skips static destructors
+@:cppFileCode("#include <cstdlib>")
+final class CleanExit {
+    public static function exit(code:Int):Void {
+        try Sys.stdout().flush() catch (_:Exception) {}  // see "doesn't flush stdout" above
+        try Sys.stderr().flush() catch (_:Exception) {}
+        #if cpp
+        untyped __cpp__("std::_Exit({0})", code);
+        #else
+        Sys.exit(code);
+        #end
+    }
+}
+```
+
+**Warning**: `_Exit` skips ALL atexit handlers. Any pending writes (DB flushes, file saves) are lost. Only call after cooperative cleanup. Keep this as a small shared utility class.
 
 ## Extern Patterns (@:native)
 
@@ -225,7 +260,7 @@ Including `<OpenGLES/EAGL.h>` or any header that pulls in `Foundation.h` inside 
     #include <objc/runtime.h>
     #include <objc/message.h>
 
-    static void* tm_get_eagl_context() {
+    static void* get_eagl_context() {
         Class cls = objc_getClass("EAGLContext");
         SEL sel = sel_registerName("currentContext");
         return ((void* (*)(id, SEL))objc_msgSend)((id)cls, sel);
@@ -279,25 +314,25 @@ No leading slashes in asset paths — `"/manifest/default.json"` crashes on some
 
 **GlowFilter on Label/Sprite container** — apply to the parent container (Label, Sprite), NOT to TextField directly. `label.filters = [new GlowFilter(...)]` works. `textField.filters` inside a Label wrapper does NOT produce visible results.
 
-**BitmapData.draw() does NOT capture filters** — `bmd.draw(stage)` uses the software renderer and skips GPU filters. Use `window.readPixels()` instead — reads from the GPU framebuffer and captures everything including filters. Debug bridge already uses readPixels with fallback to draw.
+**BitmapData.draw() does NOT capture filters** — `bmd.draw(stage)` uses the software renderer and skips GPU filters. Use `window.readPixels()` instead — reads from the GPU framebuffer and captures everything including filters. Screenshot tooling (e.g. a debug bridge) should use readPixels with draw() as fallback.
 
 **Search codebase first** — before implementing text outlines, shadows, or effects, grep for existing `GlowFilter`/`DropShadowFilter` usage in the project. Likely already solved with correct params.
 
 **`DisplayObject.filters != null` forces `cacheAsBitmap = true`** — the getter is `return (__filters == null ? __cacheAsBitmap : true)`. Any non-null filters array (even a filter with alpha=0 or zero-radius) causes the object to render through the intermediate bitmap-cache path. Symptoms:
 
 - Setting `obj.cacheAsBitmap = false` has NO effect when `filters != null` — the getter still returns `true`.
-- At high render scales (video export, offscreen `BitmapData.draw` with large matrix), the intermediate cache bitmap can be sized wrong for the target, visually clipping the right/bottom of content (e.g. missing right post, missing background geometry).
+- At high render scales (video export, offscreen `BitmapData.draw` with large matrix), the intermediate cache bitmap can be sized wrong for the target, visually clipping the right/bottom of content (elements near those edges silently disappear from the output).
 
 ```haxe
 // WRONG — unselected state keeps a zero-alpha filter "to avoid allocations"
-override function set_isSelected(value:Bool):Bool {
+override private function set_isSelected(value:Bool):Bool {
     final alpha:Float = value ? 1 : 0;
     obj.filters = [new GlowFilter(color, alpha, 4, 4, 1)];  // still forces cacheAsBitmap
     return isSelected = value;
 }
 
 // RIGHT — null out filters when not needed
-override function set_isSelected(value:Bool):Bool {
+override private function set_isSelected(value:Bool):Bool {
     obj.filters = value ? [new GlowFilter(color, 1, 4, 4, 1)] : null;
     return isSelected = value;
 }
@@ -343,7 +378,7 @@ bytes.blit(botOff, tmp, 0, rowStride);        // tmp → bottom
 
 ### BitmapData.draw pixelRatio vs cache bitmaps (text blur on Windows)
 
-`BitmapData.draw()` sets `renderer.__pixelRatio = window.scale`. TextFields with filters (GlowFilter, DropShadowFilter) go through `__updateCacheBitmap` which creates the cache bitmap at `pixelRatio` resolution. On Windows (`window.scale=1`), cache bitmaps are 1x — if the draw matrix scales up (e.g. video export batchMatrix ~2x), the 1x cache is upscaled → blurry text.
+`BitmapData.draw()` sets `renderer.__pixelRatio = window.scale`. TextFields with filters (GlowFilter, DropShadowFilter) go through `__updateCacheBitmap` which creates the cache bitmap at `pixelRatio` resolution. On Windows (`window.scale=1`), cache bitmaps are 1x — if the draw matrix scales up (e.g. a ~2x video-export draw matrix), the 1x cache is upscaled → blurry text.
 
 **Fix**: set `pixelRatio = max(window.scale, transform_scale)` in `BitmapData.draw()` so cache bitmaps are rasterized at the final output resolution. This fixes BOTH code paths — text with filters (cache bitmap) and text without filters (Context3DTextField.render).
 
@@ -391,7 +426,7 @@ graphics.endFill();
 shape.x = containerWidth - FADE_WIDTH;  // gradient at edge, solid extends past it
 ```
 
-Key: solid rect goes PAST `containerWidth`, not before it. Parent mask clips the visual excess, but the fill covers any children that overshoot the boundary (e.g. scrollbar offset by `barPad`). Verify with `display_find` — check child positions and widths to confirm the cover extends past all children.
+Key: solid rect goes PAST `containerWidth`, not before it. Parent mask clips the visual excess, but the fill covers any children that overshoot the boundary (e.g. scrollbar offset by `barPad`). Verify by inspecting the display tree (debug-bridge query, runtime trace) — check child positions and widths to confirm the cover extends past all children.
 
 ## Actuate (Tween Library)
 
@@ -442,7 +477,7 @@ OpenFL provides utility methods that are easy to miss. Use them instead of writi
 | `HXCPP_STACK_LINE` | Line numbers (implies above) | Medium |
 | `-debug` | All above + no optimization | ~80% |
 
-**Crash investigation builds**: When reproducing a crash via debug bridge, always add `-DHXCPP_CHECK_POINTER` to the build flags. Without it, a Null Object Reference is a silent segfault with no stack trace — useless for diagnosis. `-debug` includes it automatically, but if already building with `-debug`, you're covered.
+**Crash investigation builds**: When building a binary to reproduce a crash, always add `-DHXCPP_CHECK_POINTER` to the build flags. Without it, a Null Object Reference is a silent segfault with no stack trace — useless for diagnosis. `-debug` includes it automatically, but if already building with `-debug`, you're covered.
 
 **Null function pointer = hard crash**: `var f:Void->Void = null; f();` → C++ NULL dereference, not catchable. Check before calling.
 
@@ -515,8 +550,8 @@ this.stage.addEventListener(Event.RESIZE, handler);  // if 'this' is a DisplayOb
 Logical coords → `stage.__onMouse()` requires display-matrix input space, NOT stage coordinates:
 
 ```haxe
-// logical (1080×670) → stage global → display input
-final globalPoint:Point = sceneLayer.localToGlobal(new Point(logicalX, logicalY));
+// logical (app coordinate space) → stage global → display input
+final globalPoint:Point = contentRoot.localToGlobal(new Point(logicalX, logicalY));
 final inputPoint:Point = stage.__displayMatrix.transformPoint(globalPoint);
 stage.__onMouse(MouseEvent.MOUSE_DOWN, inputPoint.x, inputPoint.y, 0);
 ```
@@ -531,9 +566,9 @@ Display list hit-test order: **highest index first** (front-to-back). If a trans
 
 ### Scroll events bypass OS natural-scrolling inversion
 
-Real scroll events: OS/SDL applies natural scrolling → Lime → OpenFL. App compensates via `ScrollContainer.inverted` flag.
+Real scroll events: OS/SDL applies natural scrolling → Lime → OpenFL. Apps typically compensate with their own inversion flag on the scroll component.
 
-Synthetic `stage.__onMouseWheel(deltaX, deltaY, mode)` bypasses OS/SDL, so the app's compensation causes **double inversion**. Fix: negate delta when `ScrollContainer.inverted` is true before passing to `__onMouseWheel`.
+Synthetic `stage.__onMouseWheel(deltaX, deltaY, mode)` bypasses OS/SDL, so the app's compensation causes **double inversion**. Fix: when the app's inversion flag is active, negate the delta before passing it to `__onMouseWheel`.
 
 ### __onMouseWheel needs __mouseX/Y set first
 

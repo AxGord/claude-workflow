@@ -53,7 +53,7 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 | `loader.ts` | YAML loading + Zod validation + `fs.watch` hot-reload. Two-tier: global dir, then project dir (project wins) |
 | `storage.ts` | JSON session persistence with atomic writes (temp+rename) and `proper-lockfile` mutex |
 | `modifier.ts` | Runtime overlays via `modify` (stored in session JSON, never touches YAML). Also `create` (writes new YAML) |
-| `tools.ts` | 9 MCP tool registrations + text formatting for status output |
+| `tools.ts` | 10 MCP tool registrations + text formatting for status output |
 | `dashboard.ts` | Express REST API (`/api/sessions`, `/api/session/:id`, `/api/workflows`) + static file serving |
 
 ### Key Design Patterns

@@ -1,5 +1,5 @@
 name: master
-description: "Master workflow — single entry point replacing skill-selector. Analyzes task, loads knowledge skills, routes to process sub-workflows."
+description: "Master workflow — single entry point. Analyzes task, loads knowledge skills, routes to process sub-workflows."
 initial: route
 max_transitions: 100
 
@@ -12,8 +12,8 @@ states:
 
       **Step 1 — Check for project workflows.**
       If project workflows are listed below this prompt, check if any match the
-      user's task. If a match → transition `project` and set context key
-      `project_workflow` to that workflow's name.
+      user's task. If a match → set context key `project_workflow` to that
+      workflow's name, THEN transition `project`.
 
       **Step 2 — Standard routing (only if no project workflow matched).**
 
@@ -23,7 +23,8 @@ states:
       - 5+ files touched, mixed actions, cascade risk, user asks to plan
 
       Route the user's message:
-      - understand/investigate → debugging or explore (NEVER coding)
+      - understand how code works → explore; diagnose why behavior occurs →
+        debugging (NEVER coding for either)
       - questions about code behavior ("will X break?", "how does Y work?",
         "what happens when Z?") → explore (requires reading code before answering)
       - broken behavior / suspected bug → bug_fix (EVEN with hedging language).
@@ -41,7 +42,8 @@ states:
       - new feature e2e → feature
       - restructure code, refactoring, fix formatting, cleanup, lint across files/directories → code_review
       - review PR/code → code_review
-      - test / verify / check on device or simulator → testing
+      - test / verify / check runtime behavior (locally, on a device, in a
+        simulator, against a running service) → testing
       - review changes + commit + push ("review and push",
         "check and push", "push to github") → review_push
       - /init or "generate CLAUDE.md" or "create CLAUDE.md" → init
@@ -113,24 +115,26 @@ states:
       The dynamic workflow was already created during planning.
 
       1. Read context key `dynamic_workflow` to get the workflow name
-      2. Call `modify` to add execution state:
+      2. Call `modify` to add the execution state and its edge:
          - add_state: {name: "run_dynamic", sub_workflow: "<workflow name>", on_complete: "doc_sync", on_fail: "doc_sync"}
          - add_transition: {from: "create_dynamic", name: "execute", to: "run_dynamic"}
       3. Transition `execute`
-    transitions:
-      execute: doc_sync
+
+      The `execute` transition does not exist until the `modify` call adds it —
+      skipping step 2 makes the transition fail loudly.
 
   run_project:
     prompt: |
       A project-specific workflow was selected. Wire it up dynamically:
 
       1. Read context key `project_workflow` to get the workflow name
-      2. Call `modify` to update THIS state:
+      2. Call `modify` to add a new state and its edge:
          - add_state: {name: "run_project_sub", sub_workflow: "<workflow name>", on_complete: "doc_sync", on_fail: "doc_sync"}
          - add_transition: {from: "run_project", name: "execute", to: "run_project_sub"}
       3. Transition `execute`
-    transitions:
-      execute: doc_sync
+
+      The `execute` transition does not exist until the `modify` call adds it —
+      skipping step 2 makes the transition fail loudly.
 
   run_investigate:
     sub_workflow: investigate
@@ -183,9 +187,8 @@ states:
 
   run_review_push:
     sub_workflow: review-push
-    on_complete: done
+    on_complete: doc_sync
     on_fail: done
-
 
   run_research:
     sub_workflow: web-research

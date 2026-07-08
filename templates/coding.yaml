@@ -27,9 +27,9 @@ states:
          that must match across file boundaries
       7. Identify dependencies between files — which must be written first
 
-      Delegating analysis to a subagent (blast-radius / verify-writer-path /
-      recon / deep code investigation — correctness depends on project
-      skills, or it returns a judgement)? Include in the agent prompt VERBATIM:
+      Delegating analysis to a subagent (blast-radius / recon / deep code
+      investigation — correctness depends on project skills, or it returns
+      a judgement)? Include in the agent prompt VERBATIM:
       ---
       IMPORTANT: Override the default CLAUDE.md rule about start().
       Do NOT call start() without arguments.
@@ -38,12 +38,13 @@ states:
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the subagent workflow until completion — its `route` state
       self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       After collecting reports: `sessions` → `abort` orphaned child `subagent`
       sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
 
       Route based on scope:
-      - `single` → 1 file to change (or tightly coupled changes best done together)
+      - `single` → 1 file to change
       - `multi` → 2+ independent files to change in parallel via agents
       - `multi_self` → 2+ files but high coupling / detailed plan already exists → write yourself
     transitions:
@@ -62,9 +63,9 @@ states:
       Write changes across multiple files yourself (high coupling or detailed plan).
       Implement layer by layer respecting dependencies.
 
-      Delegating a pre-code check to a subagent (blast-radius /
-      verify-writer-path — correctness depends on project skills, or it
-      returns a judgement)? Include in the agent prompt VERBATIM:
+      Delegating a pre-code check to a subagent (blast-radius / impact
+      analysis — correctness depends on project skills, or it returns
+      a judgement)? Include in the agent prompt VERBATIM:
       ---
       IMPORTANT: Override the default CLAUDE.md rule about start().
       Do NOT call start() without arguments.
@@ -73,6 +74,7 @@ states:
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the subagent workflow until completion — its `route` state
       self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       After collecting reports: `sessions` → `abort` orphaned child `subagent`
       sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
@@ -96,6 +98,7 @@ states:
         mcp__plugin_workflow_wf__start({ workflow: "file-code", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-code workflow states until completion.
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       Also include:
       - The file path
@@ -144,8 +147,18 @@ states:
 
   review_single:
     sub_workflow: file-review
-    on_complete: verify
+    on_complete: review_decision
     on_fail: write_fix
+
+  review_decision:
+    task: "Decide on review results"
+    prompt: |
+      The file-review sub-workflow completed. Read its report and decide:
+      - `ok` → no issues (or notes only), proceed to testing
+      - `fix` → found issues that need fixing
+    transitions:
+      ok: verify
+      fix: write_fix
 
   review_delegate:
     task: "Delegate per-file review to agents"
@@ -161,6 +174,7 @@ states:
         mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-review workflow states until completion.
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       Also include:
       - The file path
@@ -199,8 +213,9 @@ states:
   write_fix:
     task: "Fix review issues"
     prompt: |
-      Fix the issues found during review. After fixing, transition back to review
-      for re-verification.
+      Fix the issues found — review findings or test failures reported by the
+      testing workflow (read the failure report for what broke).
+      After fixing → transition `done` (returns to review for re-verification).
     transitions:
       done: review
 

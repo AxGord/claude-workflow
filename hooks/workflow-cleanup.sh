@@ -68,18 +68,22 @@ done
 TERM_FILES=()
 for f in "$STATE_DIR"/*.json; do
   [ -f "$f" ] || continue
-  jq -e '.stack | length == 0' "$f" >/dev/null 2>&1 && TERM_FILES+=("$f")
+  # `.stack == []` (not `length == 0`) — a file without a .stack array is a
+  # placeholder, not a terminal session, and must not be pruned.
+  jq -e '.stack == []' "$f" >/dev/null 2>&1 && TERM_FILES+=("$f")
 done
 if [ "${#TERM_FILES[@]}" -gt "$KEEP_TERMINAL" ]; then
   i=0
-  while IFS=$'\t' read -r _ _ f; do
+  while IFS= read -r f; do
     i=$((i + 1))
     [ "$i" -le "$KEEP_TERMINAL" ] && continue
     rm -f "$f"
   done < <(
     for f in "${TERM_FILES[@]}"; do
       meta=$(jq -r '[.updated_at // "", .session_id // ""] | @tsv' "$f" 2>/dev/null)
-      printf '%s\t%s\n' "$meta" "$f"
-    done | sort -r -t $'\t' -k1,2
+      # Path goes FIRST: empty meta fields would collapse under IFS splitting,
+      # shifting the path into the wrong column.
+      printf '%s\t%s\n' "$f" "$meta"
+    done | LC_ALL=C sort -r -t $'\t' -k2,3 | awk -F'\t' '{print $1}'
   )
 fi

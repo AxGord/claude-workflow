@@ -18,14 +18,14 @@ description: GitHub Actions workflow gotchas
 The action resolves the most recent tag **reachable from the current commit** via git history. With the default `fetch-depth: 1`, no tags are reachable — the action returns empty or stale results.
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
   with:
     fetch-depth: 0  # required for tag resolution
 ```
 
 Same applies to `git describe`, `git log --follow`, `gitversion`, and any changelog generator that walks commit history.
 
-## `actions/checkout@v4` Default Fetches Only 1 Commit
+## `actions/checkout` Default Fetches Only 1 Commit (v4+)
 
 Unless `fetch-depth: 0` (full history) or `fetch-depth: N` is set, you get a shallow clone with depth 1. Breaks: tag lookup, `git log`-based changelogs, `git blame`, branch comparison diffs.
 
@@ -53,9 +53,11 @@ deploy:
 # RIGHT — run regardless, check status explicitly
 deploy:
   needs: [build]
-  if: always() && needs.build.result == 'success'
+  if: ${{ !cancelled() && needs.build.result == 'success' }}
   steps: ...
 ```
+
+Prefer `!cancelled()` over `always()`: `always()` forces the job to run even when the workflow run is being cancelled; `!cancelled()` lifts the "dependency failed/skipped" gate but still respects cancellation. (The `${{ }}` is required here — a bare `if:` starting with `!` is invalid YAML.)
 
 ## `$GITHUB_ENV` Changes Are Not Visible in the Same Step
 
@@ -99,46 +101,60 @@ jobs:
   test:
     continue-on-error: true   # whole matrix ignores failures
 
-# Matrix-level — only the flagged cell continues, others still gate the job
-strategy:
-  matrix:
-    os: [ubuntu, windows]
-  fail-fast: false
+# Cell-level — only the flagged cell continues, others still gate the job
 jobs:
   test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu, windows]
     continue-on-error: ${{ matrix.os == 'windows' }}  # only windows cell is optional
 ```
 
+Note `strategy:` lives under `jobs.<job>` — it is not a top-level workflow key.
+
 `fail-fast: false` (strategy level) keeps sibling cells running after one fails. `continue-on-error: true` (job level) prevents the job from being marked failed. They're orthogonal.
 
-## Artifact Names Must Be Unique Within a Run (actions/upload-artifact@v4)
+## Artifact Names Must Be Unique Within a Run (actions/upload-artifact v4+)
 
-v4 dropped the `overwrite` default — uploading two artifacts with the same name in one workflow run is an error, not a silent overwrite.
+v4 made artifacts immutable — uploading two artifacts with the same name in one workflow run is an error (v3 silently merged files into one artifact). Since v4.4 an explicit `overwrite: true` input deletes and replaces the existing artifact; the default is still an error.
 
 ```yaml
 # WRONG — both matrix cells upload "test-results", second one errors
-- uses: actions/upload-artifact@v4
+- uses: actions/upload-artifact@v7
   with:
     name: test-results
 
 # RIGHT — include matrix dimension in the name
-- uses: actions/upload-artifact@v4
+- uses: actions/upload-artifact@v7
   with:
     name: test-results-${{ matrix.os }}
 ```
 
-## `if:` Expressions Use `==` Not `===`, and Strings Are Case-Sensitive
+## `if:` Expressions: Single Quotes Only, Comparison Is Case-INsensitive
 
 ```yaml
-# WRONG — this never matches
-if: github.event_name == "Push"
+# WRONG — double quotes are a validation error in expressions
+if: github.event_name == "push"
 
 # RIGHT
 if: github.event_name == 'push'
 ```
 
-`if:` expressions do NOT require `${{ }}` wrapping (they're evaluated as expressions already). Adding `${{ }}` works but is redundant.
+String literals in expressions must use single quotes — double quotes fail workflow validation. String comparison with `==` ignores case (`'Push' == 'push'` is true). The operator is `==`; there is no `===`.
 
-## `env:` at Job Level Is Not Inherited by `uses:` (Reusable Workflow) Steps
+`if:` expressions do NOT require `${{ }}` wrapping (they're evaluated as expressions already). Adding `${{ }}` works but is redundant — except when the expression starts with `!` (reserved in YAML), e.g. `if: ${{ !cancelled() }}`.
 
-Environment variables set at job level are available to `run:` steps but NOT passed into called reusable workflows (`jobs.<job>.uses`). Pass them explicitly via `with:` inputs or `secrets:` instead.
+## `env:` Does Not Propagate Into Reusable Workflow Calls (`jobs.<job>.uses`)
+
+A reusable workflow is called at the JOB level (`jobs.<job>.uses`), not as a step. Environment variables set at workflow or job level are available to `run:` steps but are NOT passed into the called reusable workflow. Pass values explicitly via `with:` inputs or `secrets:` instead.
+
+## Default Community Health Files (FUNDING.yml, CODEOWNERS, ISSUE_TEMPLATE) Load ONLY From a Repo Named `.github`
+
+Account-wide defaults for community health files come **only** from a public repo named literally `.github` (e.g. `owner/.github`), in its root or a `.github`/`docs` folder. A repo's own file overrides the default.
+
+**Wrong:** Putting `FUNDING.yml` in the username/profile repo (`owner/owner`, the one with the profile README) expecting it to apply org-wide — it does NOT. It only affects that single repo.
+
+**Right:** Create `owner/.github` (must be public) → its `FUNDING.yml` gives every repo without its own a Sponsor button.
+
+`FUNDING.yml` keys are platform-specific usernames, not URLs: `buy_me_a_coffee: <user>`, `patreon: <user>`. There is **no** `paypal:` key — PayPal goes under `custom: ['https://paypal.me/<user>']`.

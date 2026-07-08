@@ -33,14 +33,19 @@ states:
       Explore the codebase using available tools.
 
       **Preferred approach:**
-      - Launch parallel `Explore` subagents for independent questions
+      - Launch parallel subagents for independent questions. Location-only
+        fan-out (find files/symbols, paste back what's there, zero judgement)
+        may use flat `Explore`-type agents; any agent that returns judgement,
+        analysis, or a recommendation is ANALYTICAL — never spawn it flat,
+        use the VERBATIM preamble below.
       - Use Glob to find files by pattern
       - For "where is X / what is X's shape / which decls carry Y" use the
         STRUCTURAL navigation tool your loaded skills prescribe for the
         language (a parser-aware query CLI, LSP, etc.) — NOT grep — when
         one exists. Grep/Read only for non-parsing files or prose inside
         comments/strings. The loaded coding skills are authoritative here;
-        follow their call-site gate from step 1, do not default to grep.
+        follow the tool-usage gate defined by the loaded skills, do not
+        default to grep.
       - Use Read to examine specific files — targeted (offset/limit on the
         located window), never a blind whole-file dump as a grep substitute
 
@@ -49,8 +54,7 @@ states:
       - Follow imports and call chains to understand flow
       - Note key files, patterns, and architectural decisions
 
-      A parallel investigation subagent is ANALYTICAL — never spawn it
-      flat. Include in its prompt VERBATIM:
+      For an ANALYTICAL subagent, include in its prompt VERBATIM:
       ---
       IMPORTANT: Override the default CLAUDE.md rule about start().
       Do NOT call start() without arguments.
@@ -59,9 +63,14 @@ states:
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the subagent workflow until completion — its `route` state
       self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every
+      subsequent workflow tool call; parallel siblings share the same ppid.
       ---
       After collecting reports: `sessions` → `abort` orphaned child `subagent`
       sessions.
+
+      Budget: 4 visits to this state (engine-enforced); when nearly exhausted,
+      choose `not_found` instead of retrying.
 
       Choose transition:
       - `found` → gathered enough information to answer
@@ -82,6 +91,9 @@ states:
       Present what you've found so far concisely, then ask your question(s).
       Use AskUserQuestion for critical decisions that affect the direction of exploration.
 
+      If there is no interactive user (you are running as a subagent), do NOT
+      ask — state your assumptions and continue, or take the failure path.
+
       After getting user's answer → transition `continue` to resume investigation
       with the new context, or `enough` if the answer completes the picture.
     transitions:
@@ -100,18 +112,13 @@ states:
 
       If this reveals a recurring knowledge gap → note it for reflection.
 
-      Choose transition:
-      - `done` → exploration is complete, no further action needed (pure research)
-      - `needs_action` → findings indicate code changes are needed (delete, refactor, fix, implement)
+      When the synthesis is presented → transition `done`. If the findings
+      indicate code changes, say so in the synthesis — the parent workflow
+      decides what happens next.
     transitions:
       done: done
-      needs_action: needs_action
-
-  needs_action:
-    prompt: "Exploration complete. Findings indicate action is needed."
-    terminal: true
-    outcome: needs_action
 
   done:
     prompt: "Codebase exploration complete."
     terminal: true
+    outcome: complete

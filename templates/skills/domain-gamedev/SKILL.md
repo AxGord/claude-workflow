@@ -12,11 +12,13 @@ See also: math skill for overflow boundaries (factorial, Fibonacci, float absorp
 | Distance from origin | ULP (precision) | Effect |
 |---------------------|-----------------|--------|
 | 100km | 0.78cm | Fine for most games |
-| 524km (≈2^19m) | 3.1cm → 6.25cm | Unity/Unreal world edge zone |
+| 524km (≈2^19m) | 3.1cm → 6.25cm | Unity world edge zone |
 | 2,097km (2^21m) | 25cm | 5m/s @ 60fps movement ABSORBED — character stops moving |
 | 8,389km (≈2^23m) | 1m | Positions snap to meter grid |
 
 **Absorption formula**: movement absorbed when `velocity * dt < ULP(position) / 2`.
+
+**Unreal gotcha**: Unreal units are CENTIMETERS, not meters — the same ULP boundaries apply per UNIT, so the metric distances above divide by 100 (e.g. 2^21 units ≈ 21km, not 2,097km).
 
 ## Deterministic Physics
 
@@ -24,7 +26,7 @@ See also: math skill for overflow boundaries (factorial, Fibonacci, float absorp
 
 **Debug vs release breaks replays**: compiler optimization level alone changes float results even with identical source. All replay participants must use identical binary.
 
-**FMA cross-platform**: PowerPC uses fused multiply-add (one rounding), Intel uses separate mul+add (two roundings) → different results from identical math. Cross-platform determinism requires controlling instruction selection.
+**FMA cross-platform**: fused multiply-add (one rounding) vs separate mul+add (two roundings) → different results from identical math. (The classic PowerPC-has-FMA / Intel-doesn't framing is stale — modern x86 has FMA3 since Haswell and ARM has FMA; today the divergence comes from whether the COMPILER contracts `a*b+c` into FMA, which varies by compiler and flags like `-ffp-contract`.) Cross-platform determinism requires controlling instruction selection.
 
 **x87 vs SSE**: x87 uses 80-bit extended precision internally → double rounding when storing to 64-bit. SSE uses exact 32/64-bit → more predictable. But SSE FTZ/DAZ modes may differ across platforms.
 
@@ -32,7 +34,7 @@ See also: math skill for overflow boundaries (factorial, Fibonacci, float absorp
 
 ## CCD Threshold (verified)
 
-Enable continuous collision detection when: `velocity × dt > object_size`.
+Enable continuous collision detection when: `velocity × dt >= object_size`.
 - 1m object at 60m/s, 60fps: travels 1m/frame → equals object size → CCD needed
 - Below threshold: discrete detection misses contacts (tunneling)
 
@@ -49,7 +51,7 @@ When a state machine waits for an animation-completion event (e.g. xstate `on.AN
 
 ## Parallax Tile Assets: Native Width = Integration Signal
 
-When integrating an artist-authored asset (e.g. `hole_flag.png`) into a row of cyclically-stitched parallax tiles (e.g. `front_1..6.png`), **check native dimensions first**.
+When integrating an artist-authored asset (e.g. `landmark.png`) into a row of cyclically-stitched parallax tiles (e.g. `tile_1..6.png`), **check native dimensions first**.
 
 - If the asset has the **same native width** as the cyclic tiles → it was designed as ONE of the tiles. Insert it into the stitch sequence at a specific anchor position. Don't overlay.
 - If the asset has **different dimensions** → it's a prop sprite meant to sit on top of the tile row (e.g. a character, tree, bush).
@@ -86,7 +88,7 @@ In most 2D engines (Pixi, Phaser, etc.), `sprite.anchor.set(ax, ay)` serves TWO 
 
 **Use case**: to rotate a sprite around a specific feature of its PNG (e.g. the left rim of a hazard/foot of a character), put the anchor at that feature's normalized texture coords. Then set `sprite.position` to the world location of that feature and `sprite.rotation` — the feature stays locked in place while the rest swings.
 
-**Gotcha**: anchor and pivot are NOT separate in Pixi's Sprite. If you need them decoupled, wrap the Sprite in a Container and rotate the Container.
+**Gotcha**: in Pixi the Sprite's `anchor` drives BOTH roles — placement point and rotation origin are not independently settable through it (a separate `pivot` property exists on every Container, but changing it shifts where `position` lands too). If you need placement and rotation origin decoupled, wrap the Sprite in a Container and rotate the Container.
 
 ## Heightmap From PNG Alpha — Pre-sample Once
 
@@ -127,7 +129,7 @@ When the follow formula is `cameraY = targetScreenY − worldY × zoom` (standar
 - Ball RISES in world → `worldY` DECREASES → `cameraY` INCREASES.
 - `Math.min(flightTarget, idleCameraY)` reads as "never go ABOVE idle" in human terms, but `cameraY` for a higher ball is NUMERICALLY LARGER than the idle value — so `Math.min` pins the camera to idle and BLOCKS the follow-up. The correct direction is `Math.max` (if clamping against an upper bound on camera Y) or no clamp at all.
 
-**Verify before shipping**: plug in two concrete numbers — ball at rest and ball at peak — and compute `cameraY` for each. The one with higher `worldY` (lower on screen) should yield a MORE NEGATIVE `cameraY` if the pivot is above the horizon pivot, or more positive if below. If the clamp picks the wrong side, the camera becomes useless at exactly the moment it needs to work.
+**Verify before shipping**: plug in two concrete numbers — ball at rest and ball at peak — and compute `cameraY` for each. With `cameraY = targetScreenY − worldY × zoom`, the endpoint with the LARGER `worldY` (ball lower in the world) yields the SMALLER `cameraY`. If the clamp picks the wrong side, the camera becomes useless at exactly the moment it needs to work.
 
 **Rule**: every time you combine `screenAnchor − worldPos × zoom` with a `Math.min`/`Math.max`, write the two endpoints on paper. Don't trust the human-language reading of the clamp.
 
@@ -160,3 +162,51 @@ Sub-pixel for flat terrain, but visible (1+ px sliver) on noticeably tilted band
 | > 40ms | Unacceptable for rhythm/FPS |
 
 Humans react to audio faster than visual → audio lag more noticeable than dropped frames.
+
+## Crash / Multiplier-Game RTP (Aviator / Bustabit style)
+
+**Canonical crash math**: `crashPoint = (1−he)/(1−U)`, `U∈[0,1)`. This gives `P(crashPoint ≥ x) = (1−he)/x` for `x≥1`. EV at any cashout target `x` = `P(survive to x)·x = (1−he)/x · x = 1−he`. RTP = `1−houseEdge`, **strategy-independent** — the only clean way to get that property.
+
+**GOTCHA — forced/consolation payouts break RTP and strategy-independence.**
+Any guaranteed payout on a step the round did NOT crash on (a "soft-loss step saves your accumulated winnings" mechanic, forced cashout on miss, consolation bonus) is EV-positive: it pays value the crash-CDF budget never debited. Effect:
+- Global RTP > target.
+- "Ride longer" becomes the dominant strategy → strategy-independence destroyed.
+
+Only voluntary cashouts and a correctly-priced cap/jackpot are EV-neutral. "Soft-loss that saves X" is fundamentally incompatible with strategy-independent crash RTP without full game-math re-optimization around the save mechanics.
+
+**GOTCHA — flat auto-paid cap inflates AFK strategy EV.**
+A jackpot cap paid regardless of player action gives the never-cash (AFK) strategy `EV = P(cap)·cap`. EV-neutral only if `P(cap) = (1−he)/cap` exactly (the same CDF). Combine with ANY other forced payout and AFK RTP overshoots the target by tens of percent.
+
+**GOTCHA — finite step chain caps reachable multiplier.**
+An N-step chain with per-step multiplier `∈[lo,hi]` tops out at `≈hi^(N−1)`. Crash points above that are structurally unreachable → RTP sags BELOW target for high cashout targets and for never-cash. "Exactly `1−he`, globally strategy-independent" is FALSE for a finite chain; it only holds approximately for reachable targets.
+
+| N steps | per-step max | reachable ceiling |
+|---------|-------------|------------------|
+| 5 | ×3 | ×81 |
+| 7 | ×2.5 | ×244 |
+| 10 | ×2 | ×512 |
+
+**GOTCHA — PRNG stream independence for crashPoint.**
+`crashPoint` must be statistically independent of the per-step multiplier draws. Drawing it as the first output then the curve from subsequent draws of the same stream is fine (good PRNG outputs are uncorrelated). A separate stream keyed by a near-identical seed through a weak hash (e.g. `seed` vs `seed+":crash"` via FNV-1a → mulberry32) can silently correlate and inflate or deflate RTP. Verify empirically with a large Monte Carlo sweep — don't assume independence from the construction.
+
+**GOTCHA — conditional sub-population EV slices carry structural bias.**
+Filtering a Monte Carlo run to "rounds containing event X" and asserting the per-target RTP corridor of the slice ≈ global RTP is wrong whenever X correlates with round length or terminal outcome. Two independent causes:
+(a) *Chain-truncating event*: bonus steps that mostly emit at the crash-branch terminal — the round ends there — so high targets are structurally unreachable. Per-target RTPs of the slice decline monotonically with target; no tolerance widening fixes it.
+(b) *Compensation/dampening gate*: forced-miss rounds replace the event step with a miss variant and never enter the filtered slice — rounds that do enter carry inherited selection bias → the slice mean lands well below the global RTP.
+Pin only the upper bound (no target > 1.10–1.15) to catch +EV regressions, plus a wide mean band (±0.10). Drop per-target corridor, spread, and ride-RTP assertions on any slice with structural correlation between the filter condition and the round's terminal outcome.
+
+**PROCESS GOTCHA — Monte Carlo BEFORE porting or regenerating fixtures.**
+Validate the EV model with a sweep across multiple fixed cashout targets before porting to a second language or regenerating golden fixtures. An analytically "correct" model can hide EV-design bugs (forced payouts, chain ceiling, PRNG correlation) that only a per-target simulation exposes. Porting first = double rework when the math turns out wrong.
+
+**GOTCHA — economic model must not silently override a player-visible physics event.**
+When a deterministic outcome layer (pre-drawn crash point / book-based result) is draped over a physics renderer, scope any economic reclassification to outcomes the player CANNOT SEE. A physical impact the player watches happen (the ball rams an obstacle and bounces) MUST terminate consistently with what was shown — overriding it back to "safe, continue" so the book stays tidy produces a contradiction caught in the first playtest (observed: the ball visibly hit an obstacle yet the multiplier kept climbing). Rule: renderer-derived classification wins for any event the player can see; the economic model may only override outcomes that are visually indistinguishable.
+
+## Virtual-Scroll / Treadmill Takeover — Match Speed at the Handoff Seam
+
+When forward motion transitions from **real translation** (object moves in world-X, camera follows) to a **virtual scroll / treadmill** (object parked at a fixed screen X, background streamed past it to fake motion), the streamed background speed must MATCH the object's prior real forward speed at the seam, then ease down. A speed discontinuity — especially a collapse — reads as the object STOPPING, not as continued motion.
+
+**Concrete case**: a flying ball soared at ~1700 px/s (real X travel, camera following), then a "cruise" phase parked the ball and streamed the sky at a constant 280 px/s — a ~6× speed collapse at the seam. Players read it as "the ball stopped." Fix: start the treadmill at the soar's exit speed (`≈ (end.x − start.x) / duration`, clamped to a sane max), then smoothstep-decelerate to the idle drift speed (280 px/s). The background keeps moving at the prior rate and gently settles — reads as continuous forward flight arriving into a hover.
+
+**Measurement gotcha**: if the engine time-scales animation (e.g. `gsap.globalTimeline.timeScale(speed)` for a `?speed` param), the sampled background px/s is `game-speed × timeScale`. Multiply back by `1/timeScale` before comparing to your intended game-time speed, or a correct value reads as "too slow."
+
+**Secondary motion gotcha**: a vertical overlay (e.g. wind weave) at large amplitude (±70 px) on a now-slow background DOMINATES perception — reads as "bobbing in place." Keep secondary motion small relative to apparent forward speed (±70 → ±26 px fixed it).

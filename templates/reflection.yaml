@@ -12,6 +12,7 @@ states:
       - Any hallucinations (made-up names, paths, APIs)?
       - Unnecessary complexity added?
       - User had to correct you or wait?
+      - Workflow/skill friction — wrong routing, missing skills, redundant states?
 
       Choose transition:
       - `has_lesson` → found something worth recording
@@ -43,10 +44,16 @@ states:
       - `suggest_improvements` → the lesson itself IS about workflow/skill friction
         (not a side observation — the primary lesson is about process inefficiency)
     transitions:
-      enrich_skill: action
-      create_skill: action
+      enrich_skill: load_skill_manager
+      create_skill: load_skill_manager
       update_memory: action
       suggest_improvements: suggest_improvements
+
+  load_skill_manager:
+    skills:
+      - skill-manager
+    transitions:
+      continue: action
 
   action:
     prompt: |
@@ -59,7 +66,7 @@ states:
       After acting, acknowledge the lesson to the user honestly.
 
       Choose transition:
-      - `more` → have more lessons to classify
+      - `more` → more lessons to classify, or remaining actions for this lesson
       - `suggest_improvements` → also noticed workflow/skill friction
       - `done` → all lessons handled
     transitions:
@@ -86,7 +93,7 @@ states:
       Only suggest changes you're confident about — no speculative ideas.
 
       Choose transition:
-      - `more` → still have lessons to classify from evaluate
+      - `more` → still have lessons to classify
       - `done` → finished
     transitions:
       more: classify

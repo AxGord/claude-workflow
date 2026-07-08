@@ -13,6 +13,9 @@ states:
       - Does it include a screenshot or describe a VISUAL problem (layout, overlap, wrong color, missing element)?
       - Or is it a LOGIC problem (wrong data, crash, incorrect calculation, serialization error)?
 
+      Persist the classification for verify_route:
+      `context_set({ key: "bug_type", value: "visual" })` (or `"logic"`)
+
       Choose:
       - `visual` → UI/layout bug — requires debug bridge, screenshots, visual reproduction
       - `logic` → data/logic bug — reproducible via unit tests or logs
@@ -34,7 +37,7 @@ states:
       Reproduce the bug VISUALLY before proceeding — reading code is NOT reproduction.
 
       DO NOT fix the bug here. You may add trace/log statements to help reproduce,
-      but do NOT modify production logic. The fix belongs in the `fix` state.
+      but do NOT modify production logic. The fix comes later, after diagnosis.
 
       REPRODUCTION TOOLING — find the right tool:
       1. Check available MCP tools for browser/screenshot/debug-bridge capabilities.
@@ -64,9 +67,8 @@ states:
       `cant_reproduce` = you tried but can't see it. This leads to asking the user for help.
       NEVER use `reproduced` when you haven't seen the bug yourself.
 
-      If the bug requires simulated input or file operations, use the chosen tool's
-      recipes: Playwright `browser_evaluate` / `browser_press_key` for web,
-      tm-interactive-debug for native.
+      If the bug requires simulated input or file operations, use the chosen
+      tool's input-simulation capabilities.
     transitions:
       reproduced: diagnose
       cant_reproduce: clarify
@@ -76,8 +78,9 @@ states:
     prompt: |
       Reproduce the bug by EXECUTING code — reading source is NOT reproduction.
 
-      DO NOT fix the bug here. You may add trace/log statements or write test code
-      to help reproduce, but do NOT modify production logic. The fix belongs in the `fix` state.
+      DO NOT fix the bug here, and do NOT touch production code at all — not even
+      trace/log statements. Write test code to reproduce. The fix comes later,
+      after diagnosis.
 
       FILE RESTRICTION: You may ONLY create or edit test files.
       Any edit to production code is a workflow violation.
@@ -88,27 +91,32 @@ states:
       3. BUILD and RUN the test — show the actual output
       4. Describe: EXPECTED vs ACTUAL — what should happen vs what does happen
 
-      Delegate the build+run to a flat subagent (run/report — no workflow,
-      no skills needed). It inherits none of this project's skills or env
-      rules — only what YOU put in its spawn prompt. Include VERBATIM in
-      that prompt: (a) any tooling/hook constraints that apply in this
-      project (required CLIs, blocked commands), and (b) "Strip noise,
-      but quote every error, failing assertion, and number VERBATIM —
-      don't paraphrase the signal or replace it with a verdict; the
-      parent judges."
+      Delegate the build+run to a flat `general-purpose` subagent
+      (build/run/report — no workflow, no skills) to keep build output
+      out of main context.
+      A flat subagent inherits none of this project's skills or env
+      rules — it only knows what YOU put in its spawn prompt. So include
+      VERBATIM in that prompt: (a) any tooling/hook constraints that
+      apply in this project (required CLIs, blocked commands), and
+      (b) "Strip noise, but quote every error, failing assertion, and
+      number VERBATIM — don't paraphrase the signal or replace it with
+      a verdict; the parent judges."
+      Spawn with `run_in_background: false` — you need the result before transitioning.
 
       STOP — self-check before transitioning:
       - Did you EXECUTE something (build + run)? Reading code ≠ reproduction.
       - Can you paste the failing output? If not, you haven't reproduced yet.
       - "I can see from the code that..." is NOT evidence. Run the code.
       - Run `git diff --name-only` — if ANY file outside test directories was modified,
-        you violated the workflow. Revert with `git checkout -- <file>` before transitioning.
+        you violated the workflow. Revert before transitioning: revert only the hunks
+        you added, and verify the file was clean before your first edit.
 
       DO NOT transition to `reproduced` without concrete executed evidence
       (test failure output, wrong runtime output, crash log).
 
       If the bug is hard to cover with a unit test (UI state, complex setup, timing),
       transition `try_visual` to reproduce via debug bridge instead.
+      If you genuinely cannot reproduce at all → `cant_reproduce` (asks the user for help).
     transitions:
       reproduced: diagnose
       try_visual: load_skills_visual
@@ -120,14 +128,15 @@ states:
       Find the root cause of the bug.
 
       DO NOT fix the bug here. You may add trace/log statements to narrow down
-      the cause, but do NOT modify production logic. The fix belongs in the `fix` state.
+      the cause, but do NOT modify production logic. The fix comes later, after diagnosis.
 
       FILE RESTRICTION: Do NOT add new methods, fields, or change signatures.
       Only trace/log statements are allowed. Any structural code change is a workflow violation.
 
       STOP — self-check before transitioning:
-      - Run `git diff --name-only` — if any production file was modified beyond trace statements,
-        revert with `git checkout -- <file>` before transitioning.
+      - Run `git diff --name-only` — if any production file was modified beyond trace
+        statements, revert before transitioning: revert only the hunks you added, and
+        verify the file was clean before your first edit.
 
       Delegating root-cause analysis to a subagent (it reads code to judge —
       ANALYTICAL)? Include in the agent prompt VERBATIM:
@@ -139,6 +148,7 @@ states:
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the subagent workflow until completion — its `route` state
       self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       After collecting reports: `sessions` → `abort` orphaned child `subagent`
       sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
@@ -147,6 +157,7 @@ states:
       - 1 file → `single`
       - 2+ files, tightly coupled (one logical chain, shared context) → `multi_coupled`
       - 2+ files, independent (can be done in parallel with clear interfaces) → `multi_independent`
+      - root cause still unclear → `unclear` (add diagnostic logging and retry)
     transitions:
       single: fix_single
       multi_coupled: load_skills_coupled
@@ -155,8 +166,22 @@ states:
 
   add_logging:
     task: "Add diagnostic logging"
-    prompt: "Add logging for diagnostics, run again."
     max_visits: 3
+    prompt: |
+      Root cause is still unclear. Gather more evidence:
+
+      1. Add targeted log/trace statements with unique prefixes (`[DBG1]`, `[DBG2]`)
+         at the locations you suspect — trace statements only, no structural changes
+      2. Re-run the reproduction and read the output
+      3. Analyze: does the output confirm or rule out a suspected location?
+
+      Budget: 3 visits to this state (engine-enforced); when nearly exhausted, choose `still_unclear` instead of retrying.
+
+      After analyzing, assess the fix scope (same as diagnose):
+      - 1 file → `single`
+      - 2+ files, tightly coupled → `multi_coupled`
+      - 2+ files, independent → `multi_independent`
+      - still no root cause → `still_unclear` (escalate to the user)
     transitions:
       single: fix_single
       multi_coupled: load_skills_coupled
@@ -211,6 +236,7 @@ states:
         mcp__plugin_workflow_wf__start({ workflow: "file-code", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-code workflow states until completion.
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       Also include:
       - The file path
@@ -252,8 +278,18 @@ states:
 
   review_single:
     sub_workflow: file-review
-    on_complete: test
+    on_complete: review_decision
     on_fail: write_fix
+
+  review_decision:
+    task: "Decide on review results"
+    prompt: |
+      The file-review sub-workflow completed. Read its report and decide:
+      - `ok` → no issues (or notes only), proceed to testing
+      - `fix` → found issues that need fixing
+    transitions:
+      ok: test
+      fix: write_fix
 
   review_delegate:
     task: "Delegate per-file review to agents"
@@ -269,6 +305,7 @@ states:
         mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
       where <SESSION_ID> is the current session ID (substitute it before sending).
       Then follow the file-review workflow states until completion.
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       Also include:
       - The file path
@@ -302,7 +339,9 @@ states:
   write_fix:
     task: "Fix review issues"
     prompt: |
-      Fix the issues found during review. After fixing, transition back to review.
+      Fix the issues found — review findings or test failures reported by the
+      testing workflow (read the failure report for what broke).
+      After fixing → transition `done` (returns to review for re-verification).
     transitions:
       done: review
 
@@ -314,7 +353,10 @@ states:
   verify_route:
     task: "Route to correct verification"
     prompt: |
-      Check the bug type classified at the start:
+      Bug type classified at the start: {{context.bug_type}}
+      (If empty — context was lost. Re-classify now: was the original report a
+      visual problem or a logic problem?)
+
       - Visual bug → `visual` (needs screenshot verification)
       - Logic bug → `logic` (tests already passed in testing workflow)
     transitions:
@@ -347,20 +389,37 @@ states:
       5. Compare before/after — describe the visual difference
 
       DO NOT transition to `confirmed` without a screenshot proving the fix works.
+
+      Choose transition:
+      - `confirmed` → your screenshot proves the bug is gone
+      - `still_broken` → bug still visible, back to diagnosis
     transitions:
       confirmed: done
       still_broken: diagnose
 
   clarify:
     task: "Clarify bug details"
-    prompt: "Ask the user for more details about the bug."
+    prompt: |
+      You could not reproduce the bug. Ask the user for more details:
+      - Exact steps to reproduce
+      - Error messages, logs, or screenshots
+      - Environment (platform, version, configuration)
+
+      If there is no interactive user (you are running as a subagent), do NOT ask — state your assumptions and continue, or take the failure path.
+
+      Choose transition:
+      - `got_info_visual` → new details point to a visual reproduction attempt
+      - `got_info_logic` → new details point to a test/log reproduction attempt
+      - `escalate` → no way to get more information; give up
     transitions:
       got_info_visual: load_skills_visual
       got_info_logic: reproduce_logic
+      escalate: escalate
 
   escalate:
-    prompt: "Could not diagnose. Report to the user."
+    prompt: "Could not reproduce or diagnose the bug. Report to the user: what was tried, what was ruled out, what information would help."
     terminal: true
+    outcome: fail
 
   done:
     prompt: "Bug fixed and verified."

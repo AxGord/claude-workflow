@@ -871,7 +871,8 @@ describe("Skill Gate", () => {
       expect(result.stack).toHaveLength(1);
       expect(result.currentWorkflow).toBe("parent");
       expect(result.currentStateName).toBe("parent_work");
-      expect(result.prompt).toBe("Parent working");
+      // Child terminal prompt is prepended on pop (hard-terminal prompt delivery)
+      expect(result.prompt).toBe("Child done\n\n---\n\nParent working");
     });
 
     // ---------------------------------------------------------------
@@ -1174,7 +1175,8 @@ describe("Skill Gate", () => {
       expect(result.stack).toHaveLength(2);
       expect(result.currentWorkflow).toBe("grandchild");
       expect(result.currentStateName).toBe("g_work");
-      expect(result.prompt).toBe("Grandchild working");
+      // Child terminal prompt is prepended on pop (hard-terminal prompt delivery)
+      expect(result.prompt).toBe("Child done\n\n---\n\nGrandchild working");
     });
 
     // ---------------------------------------------------------------

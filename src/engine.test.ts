@@ -364,6 +364,114 @@ describe("Engine", () => {
     });
   });
 
+  describe("hard terminal prompts", () => {
+    it("delivers the terminal prompt on root completion", async () => {
+      setup({ simple: SIMPLE_WORKFLOW });
+      const { sessionId } = await engine.start("simple");
+
+      const result = await engine.transition(sessionId, "next");
+      expect(result.stack).toHaveLength(0);
+      expect(result.prompt).toBe("Done\n\n---\n\nWorkflow completed.");
+    });
+
+    it("delivers the sub-workflow terminal prompt plus the parent's next state prompt", async () => {
+      setup({
+        parent: {
+          initial: "start",
+          states: {
+            start: {
+              sub_workflow: "child",
+              on_complete: "review",
+              on_fail: "review",
+            },
+            review: { prompt: "Parent review", transitions: { done: "end" } },
+            end: { terminal: true, outcome: "complete" },
+          },
+        },
+        child: {
+          initial: "work",
+          states: {
+            work: { prompt: "Child work", transitions: { finish: "report" } },
+            report: { terminal: true, prompt: "Report your findings", outcome: "complete" },
+          },
+        },
+      });
+
+      const { sessionId } = await engine.start("parent");
+      const result = await engine.transition(sessionId, "finish");
+
+      expect(result.currentStateName).toBe("review");
+      expect(result.prompt).toBe("Report your findings\n\n---\n\nParent review");
+      // Prefixed prompt must bypass revisit compression in the tool formatter
+      expect(result.forcePrompt).toBe(true);
+    });
+
+    it("keeps current behavior for a terminal without prompt", async () => {
+      setup({
+        bare: {
+          initial: "start",
+          states: {
+            start: { prompt: "Start", transitions: { next: "end" } },
+            end: { terminal: true, outcome: "complete" },
+          },
+        },
+      });
+
+      const { sessionId } = await engine.start("bare");
+      const result = await engine.transition(sessionId, "next");
+
+      expect(result.stack).toHaveLength(0);
+      expect(result.prompt).toBe("Workflow completed.");
+    });
+  });
+
+  describe("resolveSessionId", () => {
+    it("resolves the single active session without an explicit id", async () => {
+      setup({ simple: SIMPLE_WORKFLOW });
+      const { sessionId } = await engine.start("simple");
+
+      expect(engine.resolveSessionId()).toBe(sessionId);
+    });
+
+    it("throws listing candidates when multiple sessions are active for this process", async () => {
+      setup({ simple: SIMPLE_WORKFLOW });
+      const parent = await engine.start("simple");
+      const child = await engine.start("simple", undefined, parent.sessionId);
+
+      expect(() => engine.resolveSessionId()).toThrow(parent.sessionId);
+      expect(() => engine.resolveSessionId()).toThrow(child.sessionId);
+      expect(() => engine.resolveSessionId()).toThrow("session_id");
+      // Explicit id passes through untouched despite the ambiguity
+      expect(engine.resolveSessionId(child.sessionId)).toBe(child.sessionId);
+    });
+  });
+
+  describe("GLOBAL_WORKFLOWS", () => {
+    it("excludes github-init from the project workflow list", async () => {
+      setup({
+        hub: {
+          initial: "menu",
+          states: {
+            menu: {
+              prompt: "Choose a workflow.",
+              include_workflows: true,
+              transitions: { done: "end" },
+            },
+            end: { terminal: true, outcome: "complete" },
+          },
+        },
+        "github-init": SIMPLE_WORKFLOW,
+        "my-project-flow": SIMPLE_WORKFLOW,
+      });
+
+      const result = await engine.start("hub");
+      // Guard: the fixture actually loaded — otherwise not.toContain passes vacuously
+      expect(loader.get("github-init")).toBeTruthy();
+      expect(result.prompt).toContain("my-project-flow");
+      expect(result.prompt).not.toContain("github-init");
+    });
+  });
+
   describe("template rendering", () => {
     it("renders {{context.X}} in prompts", async () => {
       setup({

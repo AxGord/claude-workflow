@@ -1,5 +1,5 @@
 name: file-review
-description: "Per-file deep review — spawned by code-review for each changed file"
+description: "Per-file deep review — spawned as an agent for each changed file, or run inline as a sub-workflow for a single file"
 initial: load_skills
 max_transitions: 25
 
@@ -15,7 +15,8 @@ states:
     task: "Read file and context"
     prompt: |
       You are reviewing a single file as part of a code review.
-      The file path and diff info were provided in your task prompt.
+      The file path and diff info come from your task prompt (spawned agent)
+      or from the conversation so far (inline sub-workflow).
 
       1. Read the diff for this file to understand what changed.
       2. Check the review scope from your task prompt:
@@ -66,7 +67,8 @@ states:
 
       Otherwise (user-authored), build a concrete style checklist from loaded skills:
 
-      Process each loaded `lang-*` and `preferences-*` skill ONE AT A TIME.
+      Process the bare `preferences` skill plus each loaded `lang-*` and
+      `preferences-*` skill ONE AT A TIME.
       For each skill:
       1. Re-read the FULL skill text
       2. Extract EVERY rule — each `// WRONG` example, explicit rule, or convention
@@ -75,6 +77,10 @@ states:
 
       Do NOT summarize, group, or prioritize — every rule matters equally.
       If your total is under 25 rules across all skills, you missed some — re-read.
+
+      Escape hatch: if NO lang/preferences skills apply to this file type
+      (e.g. config, YAML, docs), state so explicitly and continue — the
+      language-agnostic checks in the following states still run.
 
       Output the full checklist, then → transition `done`.
     transitions:
@@ -110,7 +116,11 @@ states:
 
         Line <N>: `<the loop header>` — iterates <what> to access <what> → verdict: ok / issue
 
-      Check each loop against these anti-patterns:
+      Check each loop against these anti-patterns. The examples are
+      Haxe-flavored — translate each pattern to the file's language.
+      Rules 5-6 are personal style preferences — apply them ONLY when
+      `{{context.is_user_authored}}` is not "false" (treat empty as "true");
+      for external/forked/vendored code check rules 1-4 only.
 
       1. **Range-over-sparse-container**: the loop iterates an index range (`0...n`,
          `i++`) but uses the index to look up a Map/Dict/HashMap, with a null check
@@ -251,12 +261,21 @@ states:
       **What changed**: <one-paragraph summary of the changes>
       **Issues found**:
       For each issue:
-      - Severity: bug / risk / style / nit
+      - Severity: bug / risk / style / nit / pre-existing
+        (`pre-existing` = issue outside the changed lines, found during
+        a diff-scope review — report separately, do NOT mix with diff issues)
       - Line: <line number>
       - Description: <what's wrong>
       - Suggestion: <how to fix>
 
       If no issues found, say so explicitly.
 
-      Output this report as your final response.
+      Output this report — as your final response (spawned agent) or into the
+      conversation for the parent workflow (inline sub-workflow).
+      Then → transition `done`.
+    transitions:
+      done: finish
+
+  finish:
     terminal: true
+    outcome: complete

@@ -1,5 +1,6 @@
 ---
 name: claude-code-config
+description: Claude Code configuration gotchas — permission rule syntax and evaluation order, settings hierarchy, plugin install scopes, hook behavior
 ---
 
 # Claude Code Configuration Gotchas
@@ -14,8 +15,10 @@ name: claude-code-config
 **Common mistake**: Writing `Read(/tmp/**)` when you mean absolute path. Correct: `Read(//tmp/**)`.
 
 **Pattern format must match tool signature**:
-- Correct: `Read(//tmp/**)`, `Bash(npm run *)`
+- Correct: `Read(//tmp/**)`, `Bash(npm run:*)`
 - Wrong: `Read(file_path://tmp/**)` — tool name only, no parameter labels
+
+**Bash rules use `:*` for prefix matching**: `Bash(npm run:*)` matches any command starting with `npm run `. `Bash(npm run *)` (space-star) is NOT the prefix syntax and matches unreliably.
 
 ## Wildcard Matching
 
@@ -29,8 +32,8 @@ name: claude-code-config
 
 **Deny always wins**:
 1. Deny rules checked first (block regardless of anything else)
-2. Allow rules checked second (permit if matched)
-3. Ask rules checked last (prompt user)
+2. Ask rules checked second (prompt user if matched)
+3. Allow rules checked last (permit if matched)
 
 **First match wins** within each category.
 
@@ -48,11 +51,7 @@ name: claude-code-config
 
 ## Known Bugs (as of 2026)
 
-**Deny rules not enforced**: Multiple reported issues (GH #13785, #6631, #4467, #6699) where deny patterns in settings.json are ignored. Tool still gets access despite explicit deny.
-
 **Allow rules ignored**: Issue #18160 reports global allow permissions being ignored, requiring manual approval despite being in allowlist.
-
-**Wildcard pattern bugs**: `Bash(command *)` patterns may fail to match commands with flags or tilde expansion.
 
 ## Domain-Specific Rules
 
@@ -64,9 +63,7 @@ name: claude-code-config
 
 **Overly broad wildcards**: Starting with `Bash(*)` or `Read(**)` creates security holes. Be specific.
 
-**Forgetting .gitignore**: By default, Claude respects `.gitignore`. If files missing from suggestions, check ignore rules or set `respectGitignore: false`.
-
-**Environment variables in Bash**: Don't persist between commands. Use `CLAUDE_ENV_FILE` or hooks instead.
+**Environment variables in Bash**: Don't persist between commands. Use the `env` map in settings.json or hooks instead.
 
 **Testing permissions**: Use Shift+Tab to switch permission modes mid-session without editing files.
 
@@ -76,16 +73,16 @@ name: claude-code-config
 {
   "permissions": {
     "allow": [
-      "Read(./.env)",              // relative: .env in settings file dir
+      "Read(./config.json)",       // relative: config.json in settings file dir
       "Read(//tmp/**)",            // absolute: all files in /tmp
       "Read(~/.config/**)",        // home: all files in ~/.config
-      "Read(**/.env)",             // recursive: .env anywhere in subtree
-      "Bash(npm run *)",           // command prefix matching
+      "Read(**/config.json)",      // recursive: config.json anywhere in subtree
+      "Bash(npm run:*)",           // command prefix matching (:* suffix)
       "WebFetch(domain:docs.anthropic.com)"  // domain-specific
     ],
     "deny": [
       "Read(**/secrets/**)",       // block entire directory tree
-      "Bash(rm *)"                 // block dangerous commands
+      "Bash(rm:*)"                 // block dangerous commands
     ]
   }
 }
@@ -94,14 +91,14 @@ name: claude-code-config
 ## Debugging Permission Issues
 
 1. Check hierarchy: local > project > user > enterprise
-2. Check deny rules first (they always win)
+2. Check rule order: deny → ask → allow (deny always wins)
 3. Test pattern manually: Does it match the exact tool signature shown in prompt?
-4. Check for known bugs (deny rules may be ignored)
+4. Check for known bugs (allow rules may be ignored — #18160)
 5. Use `claude mcp list` to verify MCP server status if permission involves MCP tool
 
 ## Plugin Install Scope
 
-`claude plugins install <pkg>@<marketplace>` takes `-s, --scope <user|project|local>` (default: `user`).
+`claude plugin install <pkg>@<marketplace>` (singular `plugin`, not `plugins`) takes `-s, --scope <user|project|local>` (default: `user`).
 
 - `user` — global, ~/.claude/plugins/installed_plugins.json with `"scope": "user"`
 - `project` — must run from within the target project dir; registry entry gets `"scope": "project"` + `"projectPath": "<cwd>"`. Plugin activates only when Claude Code runs inside that dir
@@ -109,14 +106,39 @@ name: claude-code-config
 
 Swap scope = uninstall + reinstall (no in-place conversion):
 ```bash
-claude plugins uninstall <pkg>@<mkt> --scope user
-cd /path/to/project && claude plugins install <pkg>@<mkt> --scope project
+claude plugin uninstall <pkg>@<mkt> --scope user
+cd /path/to/project && claude plugin install <pkg>@<mkt> --scope project
 ```
 
 All scopes share the same `~/.claude/plugins/cache/` payload — only the registry entry differs.
+
+## Stop Hook Fires Per Turn, Not on Process Exit
+
+**Wrong assumption**: `Stop` hook = "CLI process is shutting down / session ending".
+**Correct**: `Stop` fires **each time the main agent finishes responding** (end of every turn). One CLI process lifetime can trigger it dozens of times. Docs: *"when Claude finishes responding"* — [docs.claude.com/en/docs/claude-code/hooks](https://docs.claude.com/en/docs/claude-code/hooks).
+
+`SubagentStop` fires when a subagent (Task tool) finishes — separate from the main agent's Stop.
+
+**Practical implication**: Any state registered on `UserPromptSubmit` and released on `Stop` churns every turn. For per-process state (e.g. a background daemon, a lock file, an IPC socket) key by **CLI PID** — `session_id` is wrong because it also changes on `/clear`, `/compact`, or resume within the same process.
+
+```
+UserPromptSubmit → fires before each user turn
+Stop             → fires after each assistant response (not at exit)
+SubagentStop     → fires when a Task-tool subagent completes
+PostToolUse      → fires after each individual tool call within a turn
+```
 
 ## npx Argument Re-parsing Under PreToolUse Hooks
 
 PreToolUse Bash hooks that rewrite commands can mis-parse `npx -y <pkg>@latest <subcmd>`, with `<pkg>@latest` landing as an **npm** subcommand, producing `Unknown command: "<pkg>@latest"`.
 
 Workaround: invoke through a wrapper that bypasses the rewriter (e.g. an explicit `proxy` subcommand of the hook tool, or call the binary directly without `npx -y`). The same `npx` call may succeed via workflow-engine exec while failing via Bash tool — the difference is whether the hook intercepts.
+
+## Multiple Hook Entries for the Same Event Run in Parallel
+
+**Wrong assumption**: Two `PreToolUse` entries in `hooks.json` run in declaration order — first entry first, second entry second.
+**Correct**: All entries for the same event fire **simultaneously**. Declaration order is not execution order.
+
+**Race-condition trap**: If entry A writes a marker file and entry B deletes it, the outcome depends on timing, not position. A fast B (~0 ms) completes before a slow A (~30–50 ms), so A's delete wins even when B is declared last. Symptom: your write appears to have no effect.
+
+**Fix**: One hook entry per event. Inspect stdin JSON inside that single script/command and branch on `tool_name` or other fields to dispatch logic. This guarantees deterministic ordering because it's a single process.

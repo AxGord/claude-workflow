@@ -8,6 +8,9 @@ states:
     prompt: |
       You are a sub-agent with a specific assigned task.
       Route based on your task type — do NOT enter chat or planning mode.
+      You have no interactive user: never take clarify/ask-user transitions
+      inside sub-workflows — state your assumptions, proceed, and report
+      uncertainty in the final answer.
 
       Analytical work (correctness depends on project skills, or it returns
       a judgement/recommendation) MUST take a skill-loaded path, never
@@ -15,6 +18,8 @@ states:
       - Read/understand/explore/verify code, blast-radius, recon, deep
         investigation → explore
       - Write/modify code → coding
+      - Review or refactor code: refactoring (edits code) → coding;
+        review-only (report findings, no edits) → explore
       - Debug/investigate an issue → debugging
       - Fix a known bug → bug_fix
       - Look up docs or web info → research
@@ -47,33 +52,37 @@ states:
   run_coding:
     sub_workflow: coding
     on_complete: done
-    on_fail: done
+    on_fail: failed
 
   run_explore:
     sub_workflow: explore
     on_complete: done
-    on_fail: done
+    on_fail: failed
 
   run_debugging:
     sub_workflow: debugging
     on_complete: done
-    on_fail: done
+    on_fail: failed
 
   run_bug_fix:
     sub_workflow: bug-fix
     on_complete: done
-    on_fail: done
+    on_fail: failed
 
   run_research:
     sub_workflow: web-research
     on_complete: done
-    on_fail: done
+    on_fail: failed
 
   run_testing:
     sub_workflow: testing
     on_complete: done
-    on_fail: done
+    on_fail: failed
 
   done:
     terminal: true
     outcome: complete
+
+  failed:
+    terminal: true
+    outcome: fail

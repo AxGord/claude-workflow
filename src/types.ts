@@ -8,7 +8,7 @@ export const StateDefinitionSchema = z.object({
   prompt: z.string().optional(),
   transitions: z.record(z.string()).optional(),
   terminal: z.boolean().optional(),
-  outcome: z.enum(["complete", "fail", "needs_action"]).optional(),
+  outcome: z.enum(["complete", "fail"]).optional(),
   max_visits: z.number().int().positive().optional(),
   sub_workflow: z.string().optional(),
   on_complete: z.string().optional(),

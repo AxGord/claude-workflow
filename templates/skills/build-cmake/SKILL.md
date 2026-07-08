@@ -7,23 +7,36 @@ description: CMake build system gotchas
 
 ## find_package Search Order
 
-**No mode specified = tries MODULE first, then CONFIG** (Sonnet reverses this!):
+**No mode specified = tries MODULE first, then CONFIG** (commonly reversed!):
 - First looks for `FindFoo.cmake` in CMAKE_MODULE_PATH (MODULE)
 - Then falls back to `FooConfig.cmake` (CONFIG)
 - `find_package(Foo)` might find wrong file — always specify CONFIG or MODULE explicitly
 
 ```cmake
-set(CMAKE_PREFIX_PATH "/opt/mylib")  # Finds FooConfig.cmake
-set(CMAKE_MODULE_PATH "/opt/mylib")  # Finds FindFoo.cmake — NOT the same!
+# CONFIG: CMAKE_PREFIX_PATH entries are PREFIXES — CMake searches
+# <prefix>/lib/cmake/Foo/, <prefix>/share/cmake/Foo/, etc.
+# for FooConfig.cmake or foo-config.cmake (not the prefix dir itself)
+set(CMAKE_PREFIX_PATH "/opt/mylib")
+
+# CONFIG: Foo_DIR points at the EXACT dir containing FooConfig.cmake
+set(Foo_DIR "/opt/mylib/lib/cmake/Foo")
+
+# MODULE: CMAKE_MODULE_PATH dirs are searched DIRECTLY for FindFoo.cmake — NOT the same!
+set(CMAKE_MODULE_PATH "/opt/cmake-modules")
 ```
 
-## CMP0077: Normal Variables Override Options
+## CMP0077: Normal Variables Override Options (add_subdirectory)
 
 ```cmake
-option(FOO_ENABLE_TESTS "..." OFF)
-set(FOO_ENABLE_TESTS ON)  # Pre-3.13: ignored! 3.13+ with CMP0077 NEW: overrides option
-cmake_policy(SET CMP0077 NEW)  # Let NORMAL variables (not cache) override options
+# Parent project configures a vendored subproject:
+set(FOO_ENABLE_TESTS OFF)   # normal variable — must be set BEFORE the option() executes
+add_subdirectory(foo)       # foo's CMakeLists.txt contains: option(FOO_ENABLE_TESTS "..." ON)
 ```
+
+- CMP0077 **OLD**: `option()` discards the pre-set normal variable and creates the cache entry → the parent's `OFF` is lost.
+- CMP0077 **NEW**: `option()` becomes a no-op when a normal variable of that name exists → the parent's `OFF` wins.
+
+The policy is controlled by the **subproject**: `cmake_minimum_required(VERSION 3.13...)` there, or `cmake_policy(SET CMP0077 NEW)` before its `option()` calls. The parent can force it for all subprojects with `set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)` before `add_subdirectory`.
 
 Key: this is about **normal** variables overriding `option()` cache entries — not cache-to-cache override.
 
@@ -54,5 +67,8 @@ endif()
 FetchContent_Declare(Foo GIT_REPOSITORY https://github.com/org/foo.git GIT_TAG v1.0)
 
 # GOOD (no git needed):
-FetchContent_Declare(Foo URL https://github.com/org/foo/archive/refs/tags/v1.0.tar.gz)
+FetchContent_Declare(Foo
+    URL      https://github.com/org/foo/archive/refs/tags/v1.0.tar.gz
+    URL_HASH SHA256=<tarball-sha256>  # pin integrity — without it the download is unverified
+)
 ```
