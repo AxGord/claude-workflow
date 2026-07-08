@@ -22,7 +22,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
+          # no registry-url: it injects a placeholder NODE_AUTH_TOKEN that blocks OIDC trusted publishing
       # Trusted publishing (OIDC) needs npm >= 11.5.1
       - run: npm install -g npm@latest
 
@@ -61,6 +61,11 @@ jobs:
           npm run build
           npm test
 
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true'
+        run: npm publish --provenance --access public
+
+      # After publish: a failed publish must not leave a tag behind (the version-bump check would skip forever)
       - name: Create GitHub Release
         if: steps.version.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
@@ -68,7 +73,3 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
           body: ${{ steps.changelog.outputs.body }}
-
-      - name: Publish to npm
-        if: steps.version.outputs.changed == 'true'
-        run: npm publish --provenance --access public
