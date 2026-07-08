@@ -145,6 +145,35 @@ String literals in expressions must use single quotes — double quotes fail wor
 
 `if:` expressions do NOT require `${{ }}` wrapping (they're evaluated as expressions already). Adding `${{ }}` works but is redundant — except when the expression starts with `!` (reserved in YAML), e.g. `if: ${{ !cancelled() }}`.
 
+## npm Trusted Publishing (OIDC): `setup-node` `registry-url` Injects a Placeholder Token That Blocks It
+
+With npm Trusted Publishing (no `NPM_TOKEN` secret; npm trusts the repo+workflow via OIDC), `npm publish` needs: `permissions: id-token: write`, npm ≥ 11.5.1 (`npm install -g npm@latest` — Node 22/24 images ship older), and **NO auth token configured**.
+
+**Trap:** `actions/setup-node` with `registry-url:` writes an `.npmrc` with `_authToken=${NODE_AUTH_TOKEN}` and, when the env var is unset, injects the literal placeholder `XXXXX-XXXXX-XXXXX-XXXXX`. npm treats it as real auth, skips the OIDC exchange entirely, and dies with `E404`/`ENEEDAUTH` — looking exactly like a bad token or missing publisher config.
+
+```yaml
+# WRONG — placeholder token blocks OIDC
+- uses: actions/setup-node@v4
+  with:
+    node-version: '24'
+    registry-url: 'https://registry.npmjs.org'
+
+# RIGHT — no registry-url; npm defaults to registry.npmjs.org
+- uses: actions/setup-node@v4
+  with:
+    node-version: '24'
+- run: npm install -g npm@latest
+- run: npm publish --provenance --access public
+```
+
+npmjs.com side (package → Settings → Trusted Publisher): the **Repository** field is the GitHub repo name, NOT the npm package name; workflow filename only (`publish.yml`, no path); Environment must match the job's `environment:` (empty = none). An invalid/expired classic token also fails as `E404 PUT` — npm masks auth errors as 404.
+
+## Create the Git Tag/Release AFTER Publishing, Not Before
+
+A "skip if tag exists" version-bump guard + tag/release creation BEFORE the publish step = one failed publish permanently bricks the pipeline: the failed run already created the tag, so every retry sees the tag, skips everything, and reports **success** while the registry still has the old version.
+
+**Right order:** version check → build/test → `npm publish` → create tag + GitHub Release. A failed publish then leaves no tag, and rerun/dispatch retries cleanly. (Recovery if already bricked: `gh release delete vX.Y.Z --yes --cleanup-tag`, then re-dispatch — reruns of an old run also use its original commit's workflow, so add `workflow_dispatch:` to trigger fresh runs.)
+
 ## `env:` Does Not Propagate Into Reusable Workflow Calls (`jobs.<job>.uses`)
 
 A reusable workflow is called at the JOB level (`jobs.<job>.uses`), not as a step. Environment variables set at workflow or job level are available to `run:` steps but are NOT passed into the called reusable workflow. Pass values explicitly via `with:` inputs or `secrets:` instead.
