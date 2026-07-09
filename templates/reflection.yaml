@@ -32,21 +32,29 @@ states:
       | Process/approach pattern | Skill (ENRICH) | "Always verify packages" |
       | Project-specific quirk | MEMORY.md | "Custom ORM, not EF" |
       | Project build/config | MEMORY.md | "Needs --legacy-peer-deps" |
+      | Workflow friction, concrete fix | Workflow YAML (EVOLVE) | "state X always needs a manual build step → exec state" |
 
       **Bias check**: prefer skills over memory. If a lesson applies beyond this
       one project (language gotcha, tool behavior, API pattern) → it's a skill,
       NOT memory. Memory is ONLY for things unique to THIS project.
 
+      **Workflows evolve like skills do**: a flow that routed wrong, forced a
+      redundant state, or made you repeat a mechanical step by hand is not a
+      fixed cost — it's a lesson with a YAML diff as its action.
+
       Choose transition:
       - `enrich_skill` → update existing skill via skill-manager ENRICH
       - `create_skill` → systemic gap, create new skill via skill-manager CREATE
       - `update_memory` → project-specific, write to MEMORY.md
-      - `suggest_improvements` → the lesson itself IS about workflow/skill friction
-        (not a side observation — the primary lesson is about process inefficiency)
+      - `evolve_workflow` → workflow friction with a CONCRETE fix you're confident
+        about (wrong transition, missing state, mechanical step → exec/fetch state)
+      - `suggest_improvements` → workflow/skill friction, but the fix is uncertain
+        or speculative — present suggestions instead of applying
     transitions:
       enrich_skill: load_skill_manager
       create_skill: load_skill_manager
       update_memory: action
+      evolve_workflow: load_workflow_authoring
       suggest_improvements: suggest_improvements
 
   load_skill_manager:
@@ -54,6 +62,43 @@ states:
       - skill-manager
     transitions:
       continue: action
+
+  load_workflow_authoring:
+    skills:
+      - workflow-authoring
+    transitions:
+      continue: evolve_workflow
+
+  evolve_workflow:
+    prompt: |
+      Apply the workflow fix. Steps:
+
+      1. **Locate the YAML and pick the tier** (higher tier shadows lower by name):
+         - Project flow (`.claude/workflows/` in the repo) → edit in place.
+           It's git-tracked: the process change becomes a reviewable commit.
+         - Personal flow (`~/.claude/workflows/`) → edit in place. This tier is
+           for the user's own preferences, not team process.
+         - Bundled template (shipped with the plugin) → do NOT edit the plugin
+           files. Copy the YAML into the right tier first — project dir if the
+           friction is project-specific, `~/.claude/workflows/` if it's a
+           personal preference — then edit the copy; it overrides the bundled
+           one by name.
+      2. **Propose the diff to the user first** (2-4 lines: which state/transition
+         changes and why). Process is policy — apply after the user agrees, or
+         when they already asked for the change.
+      3. **Edit and validate**: follow the workflow-authoring skill (state types,
+         both routes on action states, terminal/outcome semantics). Re-check the
+         YAML parses and every transition target exists.
+      4. The engine hot-reloads the file automatically. Running sessions keep
+         their snapshot — the change applies to NEW sessions. To also affect the
+         current session, use `modify` (runtime overlay) with the same change.
+
+      Choose transition:
+      - `more` → more lessons to classify
+      - `done` → all lessons handled
+    transitions:
+      more: classify
+      done: done
 
   action:
     prompt: |
@@ -93,9 +138,12 @@ states:
       Only suggest changes you're confident about — no speculative ideas.
 
       Choose transition:
+      - `evolve` → the user approved a workflow suggestion (or asked for the
+        change) → apply it as a YAML diff
       - `more` → still have lessons to classify
       - `done` → finished
     transitions:
+      evolve: load_workflow_authoring
       more: classify
       done: done
 
