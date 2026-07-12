@@ -129,7 +129,7 @@ states:
       - `pass` → integration verified, behavior correct
       - `fail` → integration broken, need fixes
     transitions:
-      pass: done
+      pass: user_testing
       fail: fix_integration
 
   fix_integration:
@@ -158,11 +158,65 @@ states:
          workflow) can run them
 
       Choose transition:
-      - `done` → checks done, manual steps reported
+      - `done` → checks done, manual steps written — hand them to the user
       - `give_up` → cannot verify anything (e.g. build is irrecoverably broken)
     transitions:
-      done: done
+      done: user_testing
       give_up: failed
+
+  user_testing:
+    prompt: |
+      Hand verification to the user. Give them everything needed to start
+      IMMEDIATELY — no digging on their side:
+
+      - **Web**: the exact URL(s) — host, port, and the deep path to the
+        affected screen (e.g. http://localhost:5173/settings/profile).
+        If the dev server is not running, start it first (background) and
+        confirm it responds BEFORE handing over the link.
+      - **Desktop / mobile**: how the app was launched and where it runs
+        (window, simulator, device) + how to reach the affected screen.
+      - Test credentials / fixture data if the flow needs them.
+      - The concrete check steps: each user action and its expected result
+        (reuse the manual_verify steps if that state ran).
+
+      Then WAIT for the user's verdict. If there is no interactive user
+      (headless / subagent run) → do NOT wait, transition `skip`.
+
+      - `ok` → user confirms the changes work
+      - `fix` → user found an issue
+      - `skip` → user unavailable; the steps stay in the final report
+    transitions:
+      ok: check_test_changes
+      fix: fix_user_issue
+      skip: check_test_changes
+
+  fix_user_issue:
+    prompt: |
+      The user found an issue during manual testing. Ask what exactly is
+      wrong if unclear. Fix the code, then:
+
+      - `retry` → re-verify: automated integration first if available,
+        otherwise manual_verify → user testing again
+      - `give_up` → unable to fix
+    transitions:
+      retry: check_integration
+      give_up: failed
+
+  check_test_changes:
+    prompt: |
+      Were any code changes made during the testing phase (visits to
+      fix_unit, fix_integration, or fix_user_issue)?
+
+      - `has_changes` → those fixes bypassed the normal review — review them now
+      - `no_changes` → clean pass, no fixes were needed
+    transitions:
+      has_changes: review_test_changes
+      no_changes: done
+
+  review_test_changes:
+    sub_workflow: code-review
+    on_complete: done
+    on_fail: done
 
   done:
     prompt: "Verification complete: required tests pass (manual steps, if any, reported)."
