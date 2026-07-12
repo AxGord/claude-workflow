@@ -30,7 +30,7 @@ description: AWS Lambda .NET deployment gotchas
 ## .NET Cold Start
 
 - **ReadyToRun (R2R) output is RID-specific — publish with `--runtime linux-x64` (or `linux-arm64`).** Since .NET 6, crossgen2 supports cross-OS compilation, so building ON macOS/Windows is fine as long as the target RID matches the Lambda runtime (dotnet8 runs on Amazon Linux 2023). R2R for the wrong RID silently has no effect.
-- **INIT-phase billing was standardized 2025-08: INIT is billed for ALL runtimes and packaging types.** Previously ZIP-deployed managed runtimes got the INIT phase free (container images were always billed). Heavy .NET startup now costs money either way — trim startup work or use SnapStart.
+- **INIT is billed for ALL runtimes and packaging types.** Older guidance that ZIP-deployed managed runtimes get the INIT phase free is obsolete (container images were always billed). Heavy .NET startup costs money either way — trim startup work or use SnapStart.
 - **EF Core `Database.Migrate()` default command timeout = 30s.** Heavy migrations fail with EF timeout, not Lambda timeout. Set `CommandTimeout` explicitly.
 
 ## Function URL

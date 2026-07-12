@@ -75,6 +75,14 @@ G) Use progressive disclosure:
    - SKILL.md body (<5k words) = loaded when triggered via Skill()
    - references/ = loaded on demand
 
+**Splitting an oversized skill into references/:**
+- Extract ONLY clusters that are NOT needed in every session (macro authoring, target-specific runtime edges, tool-self-development recipes). Everyday gotchas stay in the body — the model can't know it needs a gotcha it hasn't seen.
+- Split by error loudness: content whose absence fails LOUDLY (compiler error, CLI failure → model goes looking) is safe to extract; content preventing SILENT bugs keeps at least a one-line trigger in the body.
+- Each extracted section leaves a one-line index entry in the body: trap + fix in one line (recognition stays guaranteed, details load on demand).
+- Index header gets an IMPERATIVE trigger ("BEFORE writing macro code → Read references/macros.md"), never a passive "see also".
+- Move content VERBATIM (mechanical line-range split); verify every original heading appears exactly once across body + references.
+- If the skill has a repo/template source of truth, write BOTH copies and diff them.
+
 ### ⚠️ What to include vs exclude in skills
 
 **NEVER include** (Claude already knows this):
@@ -260,5 +268,6 @@ Before finishing any skill operation:
 - [ ] SKILL.md ≤500 lines (size driven by content, not arbitrary target)
 - [ ] Follows layered architecture (universal/lang/domain/target)
 - [ ] Only gotchas/pitfalls — no basic patterns Claude already knows
+- [ ] No provenance notes (dates, "verified on X", one-off measurements) — skill content is timeless method, not a change journal
 - [ ] If skill is nearly empty → maybe it's not needed
 - [ ] **selector domain mapping updated** (coding-skill-selector skill)

@@ -46,6 +46,10 @@ states:
         simulator, against a running service) → testing
       - review changes + commit + push ("review and push",
         "check and push", "push to github") → review_push
+      - commit/push work that was ALREADY produced and reviewed by a
+        just-completed workflow in this conversation ("commit", "commit and
+        push" right after a finished task) → commit (skips re-review).
+        If the changes were NOT reviewed in this conversation → review_push.
       - /init or "generate CLAUDE.md" or "create CLAUDE.md" → init
       - look up docs/web → research
       - conversation that does NOT require reading code (greetings, meta-questions
@@ -64,6 +68,7 @@ states:
       code_review: run_code_review
       testing: run_testing
       review_push: run_review_push
+      commit: quick_commit
       init: init_generate
       research: run_research
       explore: run_explore
@@ -190,6 +195,28 @@ states:
     on_complete: doc_sync
     on_fail: done
 
+  quick_commit:
+    prompt: |
+      Commit already-reviewed work — NO re-review.
+
+      This path is ONLY for changes produced and reviewed by a workflow that
+      completed earlier in this conversation. If the working tree also holds
+      unreviewed changes → transition `needs_review` instead.
+
+      1. `git status` + `git diff --stat` — confirm the dirty files match the
+         completed task, no surprises.
+      2. Stage those files explicitly — no blind `git add -A` when unrelated
+         files are dirty.
+      3. Commit with the message suggested at suggest_commit (or compose one:
+         1 line, imperative mood, max ~70 chars).
+      4. Push ONLY if the user asked to push.
+
+      → `done` after commit (and push if requested).
+      → `needs_review` if unreviewed changes are mixed in.
+    transitions:
+      done: done
+      needs_review: run_review_push
+
   run_research:
     sub_workflow: web-research
     on_complete: done
@@ -301,3 +328,8 @@ states:
   done:
     terminal: true
     outcome: complete
+    prompt: |
+      Session complete — no workflow session is active anymore.
+      On the user's NEXT message, call start() (no arguments) again and route
+      the new task. If that message only asks to commit/push the work just
+      finished here, route `commit` — it skips re-review.
