@@ -5,6 +5,13 @@ description: Reference for authoring workflow YAML — state types, skill gates,
 
 ## Workflow Authoring Reference
 
+### Deployment & reload
+
+- Bundled templates load from `templates/` next to the server's `build/` (i.e. `${CLAUDE_PLUGIN_ROOT}/templates`) — once, at server boot. Editing them does NOT hot-reload a running server.
+- Load order (later overrides earlier by workflow name): bundled `templates/` → `~/.claude/workflows/` → project `.claude/workflows/`.
+- `~/.claude/workflows/` and the project dir ARE fs.watch'ed; ANY `.yaml` change there triggers a FULL reload that also re-reads bundled templates. Hot-reload trick after editing bundled templates (no server restart): `echo "# t" > ~/.claude/workflows/_trigger.yaml && sleep 1 && rm ~/.claude/workflows/_trigger.yaml`, then verify via `list` (state counts change).
+- Active sessions keep their definition snapshot; only NEW `start()` sessions see reloaded workflows.
+
 ### State Types
 
 **prompt** (default) — Agent reads the prompt and acts. Standard behavior.

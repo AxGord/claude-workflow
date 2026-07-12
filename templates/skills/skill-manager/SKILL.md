@@ -269,5 +269,6 @@ Before finishing any skill operation:
 - [ ] Follows layered architecture (universal/lang/domain/target)
 - [ ] Only gotchas/pitfalls — no basic patterns Claude already knows
 - [ ] No provenance notes (dates, "verified on X", one-off measurements) — skill content is timeless method, not a change journal
+- [ ] No machine-specific facts (local paths, symlink layouts, this-machine install quirks) in skills that ship with a plugin/template — content must hold for ANY user; machine-specifics belong in memory
 - [ ] If skill is nearly empty → maybe it's not needed
 - [ ] **selector domain mapping updated** (coding-skill-selector skill)
