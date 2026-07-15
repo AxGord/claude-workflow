@@ -76,7 +76,20 @@ load_skills:
 - Subsequent visits: auto-transitions silently (agent sees nothing)
 - After context clear/plan resume: epoch increments, skills reload on next gate
 - `?`-prefix marks a skill **optional**: the gate lists it as "load if available, skip if not found" — use for project-local skills that may not be installed
+
 - Skill gate states have `transitions` (unlike action states) — exactly **one**, conventionally named `continue`. The engine auto-takes the *first* transition when all skills are loaded, and its blocking prompt tells the agent "transition to continue", so any other name breaks the instruction
+
+**digest_on_repeat** (per-state flag, prompt states): after the state's full
+prompt was delivered once in this server PROCESS, later deliveries send a
+2-line digest ("already delivered earlier — status() for the full text")
+instead — for large prompts re-delivered every task (routing rubrics,
+doc-sync/reflect ceremony). `status()` always returns the full text; a
+template reload clears the delivered-set; the same-session Revisit
+abbreviation takes precedence. Do NOT flag states whose prompt a FRESH
+agent context may hit mid-flow without having seen it (spawned-agent
+workflows share the server process — their first delivery may be a digest;
+the status() hint is the recovery, but don't rely on it for load-bearing
+one-shot instructions).
 
 ### Routing Modes
 

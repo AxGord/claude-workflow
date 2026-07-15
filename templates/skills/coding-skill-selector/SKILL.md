@@ -43,6 +43,8 @@ Load coding skills for the languages/domains THIS TASK will touch.
    - Pixi.js (imports from `pixi.js`, PIXI globals) → `Skill("domain-pixi")`
    - Person re-identification (ReID) → `Skill("domain-reid")`
    - Game dev (physics, precision, camera, sprites) → `Skill("domain-gamedev")`
+   - UI components / display-tree apps (ownership, state, events) → `Skill("domain-ui")`
+   - Diagnosing a bug / fixes that don't stick after 2+ rounds → `Skill("debugging")`
    - OpenFL / hxcpp native target → `Skill("target-openfl-native")`
    - Math overflow / numeric boundaries → `Skill("math")`
 
@@ -53,6 +55,10 @@ Load coding skills for the languages/domains THIS TASK will touch.
    - MCP server setup / .mcp.json / MCP troubleshooting → `Skill("mcp-setup")`
    - Claude Code settings.json / hooks / permissions / plugin config → `Skill("claude-code-config")`
    - Workflow YAML in templates/ or .claude/workflows/ → `Skill("workflow-authoring")`
+   - Setting up / tuning a project linter, or a new project with no lint
+     config → `Skill("lint-setup")` (skip if not installed; it loads the
+     user's `preferences-lint` lists itself — neither loads for normal
+     coding/review)
    - Fetching web docs / external content → `Skill("web-reading")`
    - Verifying a web/canvas app via Playwright or a browser MCP (screenshots, captures, perf) → `Skill("browser-verify")`
 

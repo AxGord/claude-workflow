@@ -33,21 +33,22 @@ var d = "cost $5";               // ✓ double quotes never interpolate → lite
 
 So for a literal `$` (or a literal `${`) the two correct forms are **`$$` inside `'...'`** or **just use `"..."`** (no interpolation at all). Reach for double quotes when the string is mostly literal `$`/`${`; use `$$` when you also want interpolation elsewhere in the same string.
 
-## String.replace() Requires `using StringTools`
+## Compile-traps — index (details: references/compile-traps.md)
 
-`String` in Haxe has NO built-in `.replace()` method. Calling `.replace()` without `using StringTools` fails with `String has no field replace`.
-
-```haxe
-// WRONG — compile error: String has no field replace
-t('Hello {name}').replace('{name}', userName)
-
-// RIGHT — add `using StringTools` at top of file
-using StringTools;
-// ...
-t('Hello {name}').replace('{name}', userName)
-```
-
-This is a common trap when using the i18n placeholder pattern: `t('...{key}...').replace('{key}', value)`.
+A Haxe compile error whose message does not obviously name the cause →
+Read references/compile-traps.md BEFORE trying fixes. It covers:
+`String has no field replace` (using StringTools) · `Cannot access
+property` in a subclass ((default,null)) · `Default argument value
+should be constant` (enum ctor with args) · @:privateAccess placement ·
+typedef→enum field-access breakage · `Type not found` for return types /
+sub-module types (imports) · `Unknown identifier` in single-quoted test
+fixtures with `$` (MISLEADING — points at the call argument; use double
+quotes, scan EVERY touched test file) · block comments dying on inner
+`*/` · `Cannot create closure on inline closure` · `Expected )` on
+`for (x:Type in xs)` · `Unexpected @` on enum-ctor param metadata ·
+keyword collisions (`untyped`, `cast`, `dynamic`, …) · regex `^A|B`
+parsing as `(^A)|B` — SILENT mid-buffer matches, wrap `^(?:A|B)` and
+treat `matchedPos().pos != 0` as no-match.
 
 ## Properties: Never Call set_/get_ Directly
 
@@ -69,93 +70,16 @@ redrawThumb(thumbSize);  // when only the side-effect matters
 - `this.thumbSize = thumbSize` (self-assignment) **does** trigger the setter — Haxe does not optimize it away
 - Direct `set_X()` calls are a Java/C# habit — in Haxe, always use property access
 
-## Property `(default, null)` — Subclass Write Restriction
+## Strict null-safety — index (details: references/null-safety.md)
 
-`null` write access restricts writes to the **declaring class only** — subclasses CANNOT assign to the field, even in their constructor.
-
-```haxe
-abstract class Base {
-    public var value(default, null):Int;
-}
-
-final class Child extends Base {
-    public function new() {
-        value = 42;  // ERROR: Cannot access property
-    }
-}
-```
-
-**Fix**: set via `super()` constructor in the declaring class:
-```haxe
-abstract class Base {
-    public var value(default, null):Int;
-    private function new(value:Int) { this.value = value; }
-}
-
-final class Child extends Base {
-    public function new() { super(42); }  // ✓
-}
-```
-
-This is distinct from `(default, set)` where the setter IS accessible from subclasses.
-
-## Null Safety: Narrowing Limitations
-
-### Basic (`@:nullSafety`)
-`if (x != null)` narrows for **argument passing** only. Does NOT narrow for:
-- **Lambda captures**: `() -> useString(x)` — x still nullable
-- **Method calls on nullable**: `handler.bind(...)`, `handler("x")` — error
-
-Fix: pass narrowed value through a helper with non-null param, or use `.bind()` at call site for value types.
-
-### Strict (`@:nullSafety(Strict)`)
-Fields DO narrow right after a null check, but the narrowing is fragile: ANY intervening statement that could mutate state (a call, a write to any field) resets it — the compiler assumes another thread/callback could modify the field. In practice a field is only usable as non-null on the line directly after its check. Local variables narrow normally and stay narrowed.
-
-**Pattern: capture field into local immediately after null check:**
-```haxe
-// WRONG — field not narrowed in Strict, any statement between check and use resets it
-if (_animate == null) return;
-_transitioning = true;             // ← field write invalidates narrowing
-final animate:AnimatePanel = _animate;  // ERROR: nullable
-
-// RIGHT — local assigned immediately after null check, before any field writes
-if (_animate == null) return;
-final animate:AnimatePanel = _animate;  // ✓ narrowed
-_transitioning = true;
-```
-
-**Pattern: field used multiple times — capture into local:**
-```haxe
-// WRONG — field access, Strict won't narrow
-if (_logo != null) _logo.y = h - _logo.height;  // ERROR
-
-// RIGHT — local variable narrows normally
-final logo:Null<DisplayObject> = _logo;
-if (logo != null) logo.y = h - logo.height;  // ✓
-```
-
-**Pattern: field assigned then used — use local for the non-null path:**
-```haxe
-// WRONG — _logo is Null<T> field, stays nullable after assignment
-_logo = new Bitmap(data);
-_logo.alpha = 0.3;  // ERROR
-
-// RIGHT — assign to local first, then store in field
-final logo:DisplayObject = new Bitmap(data);
-_logo = logo;
-logo.alpha = 0.3;  // ✓
-```
-
-**Key rule:** in Strict mode, ANY intervening statement (even writing to a *different* field) can invalidate narrowing of a nullable field. Always capture to local **immediately** after the null check.
-
-**Null safety with `?.` on abstract method returns:**
-```haxe
-// WRONG — && narrowing fails for method calls on nullable
-final scrolling:Bool = (_axis != null && _axis.isScrolling());
-
-// RIGHT — safe navigation + explicit comparison
-final scrolling:Bool = (_axis?.isScrolling() == true);
-```
+BEFORE writing `@:nullSafety(Strict)` code or fighting ANY narrowing
+error → Read references/null-safety.md. One-line rules: a FIELD never
+stays narrowed — capture it into a local IMMEDIATELY after the null
+check (any intervening statement resets it); `charCodeAt` → `fastCodeAt`
+in bounds-checked loops; `pop()`/`shift()` are `Null<T>` even behind a
+length guard (cast / capture-and-break / drop Strict); `?.` chains are
+expressions, not l-values — no `++`/`--`/`+=`; `x?.m() == true` for
+boolean methods.
 
 ## Map Key-Value Iteration
 
@@ -178,44 +102,14 @@ for (f => fData in _frames) { ... }
 for (data in frameData) { ... }
 ```
 
-**Rule: NEVER use `_ =>` in map iteration.** If the key is unused, drop it — `for (val in map)` iterates values directly.
+**Rule: NEVER use `_ =>` in map iteration.** If the key is unused, drop it — `for (val in map)` iterates values directly. (The `_ =>` case is linter-owned in hxq projects: `redundant-map-iter-key`; the keys-then-lookup case is not — keep catching it by hand.)
 
 ## Null Coalescing Operator `??`
 
-Use `??` to provide a fallback when left side is null. Combines well with `?.` for chained nullable access.
-
-```haxe
-// WRONG — ternary null check
-x != null ? x : defaultValue
-
-// RIGHT — null coalescing
-x ?? defaultValue
-
-// WRONG — verbose chained ternary
-fe != null && fe.action != null ? fe.action : (be != null ? be.action : null)
-
-// RIGHT — null-safe access + coalescing
-fe?.action ?? be?.action
-```
-
-- `a ?? b` → returns `a` if non-null, else `b`
-- ANY `x != null ? x : y` pattern → replace with `x ?? y`
-- `fe?.field ?? be?.field` → try `fe.field`, fall back to `be.field`
-
-## Null-Safe Access `?.` Does NOT Support `++`/`--`
-
-`?.` chains are expressions, not l-values. Increment/decrement operators require an l-value — combining them with `?.` is an `Invalid operation` at compile time.
-
-```haxe
-// WRONG — Invalid operation
-_readbackBmd?.image.version++;
-
-// RIGHT — capture into local, null-check, then increment
-final bmd:Null<BitmapData> = _readbackBmd;
-if (bmd != null) bmd.image.version++;
-```
-
-Same applies to `--`, `+=`, `-=` on the end of a `?.` chain.
+`a ?? b` returns `a` if non-null, else `b`. ANY `x != null ? x : y` → `x ?? y`
+(linter-owned in hxq projects: `prefer-null-coalescing`); chain with `?.` for
+nested fallbacks — `fe?.action ?? be?.action` replaces the verbose
+`fe != null && fe.action != null ? fe.action : (be != null ? be.action : null)`.
 
 ## Targets/runtime — index (full details: references/targets-runtime.md)
 
@@ -225,60 +119,6 @@ BEFORE writing target-conditional code (`#if sys`/`nodejs`), stdin handling, reg
 - `EReg.escape` on `--interp` fails to escape `)` / `]` → `new EReg` dies with "unmatched closing parenthesis" before any match — on interp use `indexOf`/manual scanning or literal patterns, never escape-built regexes.
 - `#if sys` is FALSE on hxnodejs builds (`sys.io.File` still compiles — the guarded branch is silently dead at runtime) — gate with `#if (sys || nodejs)`.
 - Each thrown `haxe.Exception` on JS eagerly captures a V8 stack trace at construction — catastrophic in throw-heavy control flow (parser backtracking); throw ONE pre-allocated immutable stackless sentinel instead of `new` per throw.
-
-## `String.charCodeAt` Returns `Null<Int>` — Use `StringTools.fastCodeAt` Under Strict Null Safety
-
-Under `@:nullSafety(Strict)`, `String.charCodeAt(i)` is typed `Null<Int>`. Assigning it to `final c:Int` fails even inside a bounds-checked loop.
-
-```haxe
-// WRONG — Null<Int> can't go into Int under Strict
-for (i in 0...s.length) {
-    final c:Int = s.charCodeAt(i);  // Null safety error
-}
-
-// RIGHT — fastCodeAt returns plain Int, designed for in-bounds access
-for (i in 0...s.length) {
-    final c:Int = StringTools.fastCodeAt(s, i);
-}
-```
-
-Use `charCodeAt` only when the caller genuinely may pass an out-of-bounds index and wants `null` back. For loops over `0...s.length`, always use `fastCodeAt`.
-
-Sister pattern: `Array.pop()` / `Array.shift()` have the same root cause — see below.
-
-## Array.pop() / shift() Return Null<T> — Strict Refuses to Narrow Despite Length Guard
-
-Under `@:nullSafety(Strict)`, `Array.pop()` and `Array.shift()` are typed `Null<T>`. The classic length-guarded stack-walker pattern fails to compile with `Cannot assign nullable value here` — the compiler does not narrow based on the runtime invariant proved by `stack.length > 0`.
-
-```haxe
-// WRONG — Null<T> cannot be assigned to T under Strict, even with the length guard
-while (stack.length > 0) {
-    final node:T = stack.pop();  // Null safety error
-}
-```
-
-Three valid fixes:
-
-**Option 1 — cast at assignment** (guard already proved correctness):
-```haxe
-final node:T = (cast stack.pop() : T);
-```
-
-**Option 2 — capture as `Null<T>` and break on null**:
-```haxe
-final node:Null<T> = stack.pop();
-if (node == null) break;
-```
-
-**Option 3 — drop `@:nullSafety(Strict)` from the walker class** (lowest friction when the file's only nullability concern is this stdlib accessor):
-```haxe
-@:nullSafety  // Basic, not Strict
-class MyWalker { ... }
-```
-
-Same root cause as `String.charCodeAt` returning `Null<Int>`: stdlib accessor is typed nullable for the out-of-bounds case; Strict has no mechanism to narrow on a runtime-proven invariant. Option 3 is the right default when Strict doesn't otherwise benefit the class; use option 1 or 2 when Strict genuinely matters for the rest of the file.
-
-Verified on Haxe 4.3.7.
 
 ## Enum Abstract for Simple Enums
 
@@ -303,85 +143,16 @@ enum abstract ScrollDirection(Int) {
 - Use regular `enum` only when you need associated data (`case Node(left, right)`) or pattern matching
 - `enum abstract` supports `==` comparison, switch, and all typical enum usage
 
-## Enum Abstract Operators — Which Work, and How to Enable the Rest
+## Abstract types — index (details: references/abstracts.md)
 
-Per-operator behavior on a plain `enum abstract(Int)`:
-- `==` / `!=` / `switch` — work bare.
-- `+` / `-` arithmetic — work through `to Int`.
-- **Ordered `<` `>` `<=` `>=`** — REFUSED, even between two values of the SAME abstract, even with `to Int`. Haxe blocks it deliberately (an enum abstract models a name set, not an ordinal). Enable with a bodyless `@:op(A < B)` forward.
-- **Bitwise `|` `&` `^` (bit-flags)** — a PLAIN abstract refuses them (`Flags should be Int` / `Int should be Flags`), but adding **`from Int to Int`** enables them completely — the idiomatic typed-flags pattern. `to Int` lets a value flow INTO the bitwise op; `from Int` lets the Int result flow BACK into the abstract.
-
-`@:forward` does NOT help with any operator — it forwards fields of the underlying type, not operators.
-
-```haxe
-// Bit-flags — WRONG (plain) vs RIGHT (from Int to Int)
-enum abstract Flags(Int) from Int to Int { var A = 1; var B = 2; var C = 4; }
-final combined:Flags = A | B;          // ✓ = 3
-final hasA:Bool = combined & A == A;   // ✓ true
-var f:Flags = A; f |= C;               // ✓ = 5
-```
-
-```haxe
-// WRONG — "Cannot compare MemberRank and MemberRank" (and MemberRank vs Int), despite `to Int`
-enum abstract MemberRank(Int) to Int { final A = 0; final B = 6; }
-if (rankA < rankB) { ... }   // compile error
-
-// RIGHT — declare the operators you need as bodyless @:op forwards
-enum abstract MemberRank(Int) {
-    final A = 0;
-    final B = 6;
-    @:op(A < B) static function lt(a:MemberRank, b:MemberRank):Bool;
-    @:op(A - B) static function sub(a:MemberRank, b:MemberRank):Int;
-}
-if (rankA < rankB) { ... }   // ✓ resolves to lt
-```
-
-Bodyless `@:op` functions get their body synthesized from the underlying type; once declared, `to Int` is unnecessary. When the value is a pure ordinal used mainly in comparison and the `@:op` boilerplate isn't worth it, a plain class of `static inline final Int` constants keeps every operator working with no ceremony — the abstract's payoff is a distinct type, its cost is the operator declarations.
-
-## Self-Resolving Enum Abstract with `@:from`
-
-When an enum maps to/from strings (or ints), use `enum abstract` with `@:from` — the enum resolves itself from raw values, no external mapping function needed.
-
-```haxe
-// WRONG — enum + separate resolve function outside
-enum XmlFieldType { XInt; XFloat; XBool; XString; }
-function resolveTypeName(name:String):Null<XmlFieldType> {
-    return switch name {
-        case 'Int': XInt; case 'Float': XFloat;
-        case 'Bool': XBool; case 'String': XString; case _: null;
-    };
-}
-
-// RIGHT — self-resolving Int-based enum, @:from converts String → Int
-enum abstract XmlFieldType(Int) {
-    final XInt = 0;
-    final XFloat = 1;
-    final XBool = 2;
-    final XString = 3;
-
-    @:from private static function resolve(name:String):Null<XmlFieldType> {
-        return switch name {
-            case 'Int': XInt;
-            case 'Float': XFloat;
-            case 'Bool': XBool;
-            case 'String': XString;
-            case _: null;
-        };
-    }
-}
-
-// Usage — implicit conversion, no explicit resolve call:
-final fieldType:Null<XmlFieldType> = inner.name; // @:from auto-converts
-```
-
-- Int-based → all switch/== comparisons are integer operations
-- `@:from` does real conversion (String → Int) with validation
-- Unknown strings become null — callers just assign a String where `Null<XmlFieldType>` is expected
-
-**`from Type` vs `@:from` method — choose one, not both:**
-- `enum abstract Foo(String) from String` — simple wrapping, no logic, no validation. Use when underlying type matches.
-- `@:from` method on `enum abstract(Int)` — real conversion with validation (String → Int). Use when types differ or you need to reject invalid values.
-- **Never mix:** don't `@:from` with `cast` inside — either wrap simply or convert properly.
+BEFORE designing an abstract / enum abstract with operators, conversions
+or catch behavior → Read references/abstracts.md. One-line rules: ordered
+`<`/`>=` need bodyless `@:op(A < B)` forwards (never work bare, even with
+`to Int`); bit-flags need `from Int to Int`; `@:from` static for
+validating conversions; `catch (e:Abstract)` tests the UNDERLYING type at
+runtime; `this` inside the body IS the underlying type; `to Underlying`
+is implicit; abstract→typedef flow needs explicit `to Typedef`; type
+helper params at the structural level, don't propagate the abstract.
 
 ## Optional Parameters: Type-Based Skipping
 
@@ -400,33 +171,6 @@ super(items, 30, 30, -1, 1, 0, "end");  // ✗ Hardcoding someone else's default
 **Never hardcode intermediate default values** to reach a later parameter — use type-based skipping instead.
 
 **DANGER: Float constant passed to Int parameter silently skips it.** An `inline final X:Float = 180` looks like an integer but is typed Float. When passed to `new Row(children, X, 16, ...)` where `boxWidth:Int`, the Float skips `boxWidth` and lands on the next Float parameter (e.g. `bgAlpha`). Fix: use `Int` type for constants passed to Int parameters, or cast with `Std.int()`.
-
-## Function Default Parameter Values Must Be Compile-Time Constants — Enum Ctors With Args Excluded
-
-Default values in ordinary function signatures (`param:T = default`) must be compile-time constants. Zero-arity enum constructors (e.g. `Empty`) qualify and DO work. Enum constructors that take arguments do NOT — even when every argument is itself a literal constant. The compiler rejects with `Default argument value should be constant`.
-
-```haxe
-enum Foo { A; B(s:String); }
-
-// WRONG — B('hi') is not a compile-time constant despite the literal arg
-function test(x:Foo = B('hi')):Foo return x;
-//                    ^^^^^^^ Default argument value should be constant
-
-// WRONG — same root cause, Line('\n') / Text("x") rejected
-function emit(?items:Array<Doc>, trailBreak:Doc = Line('\n')):Doc { ... }
-
-// RIGHT — make the param nullable, unwrap inside the body with `??`
-function emit(?items:Array<Doc>, ?trailBreak:Doc):Doc {
-    final trailBreakDoc:Doc = trailBreak ?? Line('\n');
-    ...
-}
-
-// RIGHT — zero-arity ctor IS allowed as default
-enum Mode { Empty; Filled(s:String); }
-function f(m:Mode = Empty):Void { ... }  // ✓
-```
-
-Verified on Haxe 4.3.7.
 
 ## Macros — index (full details: references/macros.md)
 
@@ -449,41 +193,6 @@ BEFORE writing or editing ANY macro code (build macros, `Context.*`, reification
 - Narrowing from `if (x == null) throw ...` does NOT propagate into anonymous struct literals — `{field: x}` still types the field as `Null<T>`; re-bind `final y:T = x` and use `y` in the literal.
 - `$v{flag}` dead branches STILL type-check before dead-code elimination — reflective calls (`Type.enumParameters`, `Reflect.field`, …) inside them need `cast` on the argument.
 - Helper method SIGNATURES cannot reference `Context.defineModule`-synth sub-module types (signature typing runs before static-init forcing) — inline the destructuring switch into method bodies instead of factoring a helper.
-
-## Abstract Classes (Haxe 4.2+)
-
-Native `abstract class` keyword — NOT the same as `abstract` types (which are compile-time wrappers over existing types).
-
-```haxe
-// Abstract base — cannot be instantiated directly
-@:nullSafety abstract class ScrollAxis {
-    abstract private function contentMeasure(content:DisplayObject):Float;
-    abstract private function getScroll(content:DisplayObject):Float;
-
-    // Concrete methods can call abstract ones (template method pattern)
-    public function maxScroll(content:DisplayObject, vp:Float):Float {
-        return Math.max(0, contentMeasure(content) - vp);
-    }
-}
-
-// Subclass — implements abstract methods WITHOUT `override`
-@:nullSafety(Strict) final class VerticalScrollAxis extends ScrollAxis {
-    private function contentMeasure(content:DisplayObject):Float {
-        return content.getBounds(content).bottom * content.scaleY;
-    }
-    private function getScroll(content:DisplayObject):Float {
-        return content.y;
-    }
-}
-```
-
-**Key rules:**
-- `abstract` methods have **no body** — just the signature
-- Subclasses implement abstract methods **WITHOUT** `override` keyword
-- Subclasses override concrete methods **WITH** `override` keyword
-- `abstract class` **cannot** combine with `final` or `inline`
-- Subclasses **can** be `final class`
-- Abstract method calls from constructor work fine (vtable is ready)
 
 ## Deep Pattern Matching in Switch
 
@@ -551,109 +260,6 @@ switch (value) { ... }
 // RIGHT — idiomatic Haxe
 switch value { ... }
 ```
-
-## Abstract Types in Catch Clauses: Runtime Type Is the Underlying Type
-
-`catch` accepts abstract types. The runtime check is against the abstract's **underlying type**, not its compile-time conversions. `from` declarations do NOT widen the runtime catch behavior.
-
-- `abstract Foo(Dynamic) from Dynamic` — catches **everything** (class instances, anonymous structs, plain strings) because the underlying runtime check is on `Dynamic`.
-- `abstract Foo(SomeClass) from SomeClass from Dynamic` — catches **only** runtime instances of `SomeClass`. The compile-time `from Dynamic` does not widen what is caught at runtime — anonymous structs and unrelated values fall through.
-
-```haxe
-abstract MyErr(Dynamic) from Dynamic {
-    public var name(get, never):String;
-    inline function get_name():String return this.name;
-}
-
-class Test {
-    static function main():Void {
-        try { throw { name: 'IOError' }; }
-        catch (e: MyErr) { trace('caught: ' + e.name); }  // works — anon struct caught
-    }
-}
-```
-
-Practical pattern: `abstract MyError(Dynamic) from Dynamic` as a typed unified catch surface that catches every thrown shape, with typed accessors via getters.
-
-Verified on Haxe 4.x — `--interp` and `-js` targets.
-
-## `this` Inside an Abstract Body IS the Underlying Type
-
-Inside abstract methods and getters, `this` is already typed as the **underlying type**. No cast is needed.
-
-```haxe
-// WRONG — redundant cast; this is already Dynamic
-abstract MyAbs(Dynamic) from Dynamic {
-    public var name(get, never):String;
-    inline function get_name():String return (this:Dynamic).name;  // noise
-}
-
-// RIGHT — direct field access; this IS Dynamic
-abstract MyAbs(Dynamic) from Dynamic {
-    public var name(get, never):String;
-    inline function get_name():String return this.name;
-}
-```
-
-Same for any underlying type: `abstract Foo(SomeClass)` makes `this` typed as `SomeClass` inside the body — field access goes direct.
-
-**Bonus: `to UnderlyingType` is implicit.** `abstract Foo(Bar) to Bar` — the `to Bar` direction is redundant; the compiler provides it automatically. Drop it.
-
-```haxe
-// REDUNDANT
-abstract MyAbs(Dynamic) from Dynamic to Dynamic { ... }
-
-// EQUIVALENT — less noise
-abstract MyAbs(Dynamic) from Dynamic { ... }
-```
-
-`from Dynamic` IS load-bearing (allows implicit conversion into the abstract from any value). `to Dynamic` is automatic.
-
-## Abstract over Dynamic Does NOT Auto-Convert to Typedef Without Explicit `to`
-
-`abstract Foo(Dynamic) from Dynamic` accepts any value as input (catch-all), but does NOT automatically convert to a `typedef` of an anonymous struct on output. The compiler treats abstract → typedef as a distinct conversion that must be declared with `to TypedefName`.
-
-```haxe
-// typedef in an extern web-API library
-typedef WebAPIError = { code: Float; name: String; message: String; };
-
-abstract MyAbs(Dynamic) from Dynamic { ... }
-
-function logError(e: WebAPIError): Void { /* uses e.code, e.name, e.message */ }
-
-final m: MyAbs = ...;
-logError(m);  // ❌ Compile error:
-              //   pkg.MyAbs should be webapi.WebAPIError
-              //   For function argument 'e'
-```
-
-The fix is to declare `to WebAPIError` on the abstract:
-
-```haxe
-abstract MyAbs(Dynamic) from Dynamic to WebAPIError { ... }  // ✓ now flows
-```
-
-This is asymmetric with the `from Dynamic` direction — Dynamic → typedef works at value level (structural matching), but abstract → typedef requires an explicit declaration. Failing to add `to` triggers a "viral retyping" cascade: every helper that took the typedef seemingly needs to accept the abstract, which is the wrong fix. The right fix is the one-line `to`.
-
-## Don't Propagate the Abstract Into Signatures That Only Need the Underlying Structural Shape
-
-When adding an abstract over an existing typedef (e.g. `DeviceError` over `WebAPIError`), the temptation is to retype every existing helper to accept the abstract. Resist.
-
-If a function only uses fields like `.code`, `.name`, `.message` — fields the typedef already has — its signature should stay on the typedef. The abstract auto-converts at call sites (with `to` declared per the section above). Propagating the abstract into structural-only helpers couples them to the unified-type concept needlessly.
-
-```haxe
-// WRONG — abstract propagated into a pure formatter that only needs {code, name, message}
-private function deviceError(err: DeviceError): Void {
-    error('${err.code} ${err.name} ${err.message}');
-}
-
-// RIGHT — typedef captures the structural need; DeviceError -> WebAPIError via `to`
-private function deviceError(err: WebAPIError): Void {
-    error('${err.code} ${err.name} ${err.message}');
-}
-```
-
-Rule of thumb: type the parameter at the level of structural need, not at the level of the most-typed source. The abstract's job is auto-conversion at the boundary — it should NOT bleed into every internal helper.
 
 ## Type Checking: `is` Operator and `Std.downcast`
 
@@ -735,39 +341,6 @@ else currentScroll;
 - Eliminates `var` + mutation pattern
 - Works with `switch` too: `final x:Int = switch v { case A: 1; case B: 2; }`
 
-## Private Access: `@:access` Over `@:privateAccess`
-
-Prefer `@:access(package.ClassName)` over `@:privateAccess` blocks. `@:access` is scoped to a specific class's internals — precise and doesn't clutter method bodies. `@:privateAccess` unlocks ALL private fields of ALL types — overly permissive.
-
-**Placement:** put `@:access` on the **method** when only one method needs it. Move to the **class** when multiple methods share the same access.
-
-```haxe
-// WRONG — @:privateAccess in method body, unlocks everything, clutters code
-private static function invalidateGraphics(obj:DisplayObject):Void {
-    @:privateAccess {
-        final g:Null<Graphics> = obj.__graphics;
-        if (g != null) g.__dirty = true;
-    }
-}
-
-// RIGHT — @:access on method (only this method needs it)
-@:access(openfl.display.DisplayObject)
-@:access(openfl.display.Graphics)
-private static function invalidateGraphics(obj:DisplayObject):Void {
-    final g:Null<Graphics> = obj.__graphics;
-    if (g != null) g.__dirty = true;
-}
-
-// RIGHT — @:access on class (multiple methods need it)
-@:access(openfl.display3D.Context3D)
-class MyClass {
-    private function methodA():Void { ctx.__present = true; }
-    private function methodB():Void { ctx.__contextState = ...; }
-}
-```
-
-**Placement gotcha:** `@:privateAccess` on a **function declaration** does NOT propagate to the function body — must be on a block or variable declaration inside, not on the function itself. This is another reason to prefer `@:access`.
-
 ## `using` + New Methods = Silent Name Hijacking
 
 When a class is imported via `using` globally (e.g., `using ASCompat` in `rootImports.hx` / `import.hx`), adding a new static method to that class makes it available as an extension method on the first parameter's type across the entire project. If the first parameter is `Dynamic`, ANY existing call matching that method name can be silently hijacked — the compiler resolves to the new extension instead of the previously imported function.
@@ -788,60 +361,6 @@ import Globals.flash_utils_getQualifiedClassName as getQualifiedClassName;
 ```
 
 **Rule:** Before adding any static method to a class that has global `using`, check if the method name conflicts with existing imports. Use `@:noUsing` on utility methods not meant as extensions.
-
-## Typedef-to-Enum Conversion Breaks Field Access
-
-Converting a `typedef` to an `enum` (e.g. adding sum-type variants) silently breaks all direct field access sites — `.fieldName` no longer compiles because enums don't have fields.
-
-```haxe
-// BEFORE — typedef, field access works
-typedef Ctor = { var name:String; }
-final n:String = ctor.name;  // ✓
-
-// AFTER — enum with variants, field access breaks
-enum Ctor { Simple(name:String); Param(decl:CtorDecl); }
-final n:String = ctor.name;  // ✗ compile error
-
-// FIX — destructure via switch
-final n:String = switch ctor {
-    case Simple(name): name;
-    case Param(decl): decl.name;
-};
-```
-
-**Before converting:** grep all consumers of the typedef's fields. Every `.fieldName` access must become a `switch` destructuring.
-
-## Imports for Return Types vs Pattern Match Positions
-
-When a function returns a type that callers only use in `switch/case` pattern matching, the import may appear "unnecessary" — but it IS required for the explicit return type annotation. Haxe resolves types in pattern positions (e.g. `case SimpleCtor(name):`) from the enum's own definition, but explicit type annotations (`final x:MyType = ...`) require the import in the consuming file.
-
-```haxe
-// This compiles WITHOUT importing HxIdentLit — pattern match resolves from enum def
-switch ctor { case SimpleCtor(name): name; }
-
-// This REQUIRES `import HxIdentLit` — explicit return type annotation
-function expectSimple(ctor:HxEnumCtor):HxIdentLit { ... }  // ✗ without import
-```
-
-**Rule:** When adding helper functions with return types from other packages, always verify the import exists — even if the type is already "visible" through pattern matching in the same file.
-
-## Sub-Module Types Require Explicit Import Even Within the Same Package
-
-If `pack/Helpers.hx` contains both `class Helpers` and `typedef Foo` at module top level, another file in the same package CANNOT use `Foo` without an explicit import — same-package auto-visibility covers main-module types only.
-
-```haxe
-// WRONG — Foo lives in Helpers.hx but is not the module's main type
-// compile error: Type not found : Foo
-var x:Foo = ...;
-
-// RIGHT — explicit sub-module import required
-import pack.Helpers.Foo;
-var x:Foo = ...;
-// OR fully qualify: var x:pack.Helpers.Foo = ...;
-// OR move Foo into its own Foo.hx file
-```
-
-This is the consumer-side counterpart to the macro-pipeline `Module.SubType` access rule.
 
 ## Metadata String Arguments Are Subject to String Interpolation
 
@@ -866,130 +385,6 @@ Dollar;
 
 **Rule:** Always use double-quoted strings for metadata arguments containing `$`. This applies to all `@:` metadata, not just specific tags.
 
-## Test Fixture Strings With `$identifier` Content Must Use Double Quotes
-
-Single-quoted strings in test files are subject to Haxe interpolation — any `$name` or `${...}` in a parser fixture input or an `Assert.equals` expected literal is treated as an identifier reference, not verbatim text. The compiler error is a **compile-time `Unknown identifier : <name>`** pointing at the call argument, which can mislead: the error looks like a scope or import problem, not a quoting mistake.
-
-```haxe
-// WRONG — single quotes: Haxe interpolates $name as an identifier
-final decl = parseSingleVarDecl('class Foo { var x:Int = a.$name; }');
-Assert.equals('$name', (f : String));
-// Error: Unknown identifier : name
-//        ... For function argument 'source'
-// Error: Unknown identifier : name
-//        ... For function argument 'expected'
-
-// RIGHT — double quotes: $ is literal text
-final decl = parseSingleVarDecl("class Foo { var x:Int = a.$name; }");
-Assert.equals("$name", (f : String));
-```
-
-Verbatim compiler error for reference:
-```
-HxPostfixSliceTest.hx:92: characters 73-77 : Unknown identifier : name
-HxPostfixSliceTest.hx:92: characters 73-77 : ... For function argument 'source'
-HxPostfixSliceTest.hx:96: characters 21-25 : Unknown identifier : name
-HxPostfixSliceTest.hx:96: characters 21-25 : ... For function argument 'expected'
-```
-
-The failure bites BOTH the fixture input string and the expected-value literal in `Assert.equals`. It survives self-review because `$name` in a string LOOKS intentional — it is reliably caught only by the compiler.
-
-**Prevention rule:** before building, scan newly-added or edited `.hx` test code for single-quoted string literals whose content contains `$` followed by a letter, underscore, or `{`; each is a bug unless interpolation is actually intended. The scan must cover **every** test file touched in the same change, not only the file currently in focus — a recurrence happened where the rule was applied correctly in one new test file but missed in a sibling file edited in the same change, caught only by file-review.
-
-## Block Comments Reject Embedded `*/` — Even Inside Backticks
-
-Inside any `/* ... */` block comment (doc comments `/** */` included) the lexer treats the first `*/` it sees as the closing delimiter — block comments do not nest, and backtick-wrapping for markdown code-span formatting does not escape it. Everything after the premature close is invalid syntax.
-
-```haxe
-// WRONG — the inner */ closes the doc comment; ` after it is an "Invalid character"
-/**
- * Comment style (`//` line vs `/* */` block) is not stored.
- */                //         ^^^^^ closes comment here
-class Foo {}  // Error: Invalid character '`'
-
-// RIGHT — rephrase without the */ sequence inside the doc comment
-/**
- * Comment style (line-style vs block-style delimiters) is not stored.
- */
-class Foo {}
-```
-
-The gotcha applies to ALL block comments — plain `/* */` and `/** */` doc comments alike; the lexer closes the comment at the first `*/` regardless of surrounding backticks. Simple backticks (`` `foo` ``, `` `//` ``) inside comments are fine — the problem is specifically the `*/` character sequence appearing by any means inside a block comment.
-
-Verified on Haxe 4.3.7.
-
-## Regex Alternation: `^A|B` Is `(^A)|B`, NOT `^(?:A|B)` — Wrap Both Alts in a Non-Capturing Group
-
-Regex alternation has lower precedence than every other operator including anchors. `^A|B` parses as `(^A)|B` — the `^` anchor binds ONLY to the first alternative. The second alt is unanchored and scans the rest of input for an arbitrary match anywhere — silently consuming mid-buffer bytes that the parser thought it was inspecting at the cursor.
-
-```haxe
-// WRONG — second alt scans mid-buffer
-var re = new EReg('^[0-9]+\\.[0-9]+|[0-9]+\\.(?![\\w.])', '');
-re.match('UI.get() ? 1. : 2.;');
-// re.matched(0) == '1.'   (matched at offset 11, NOT at start)
-// re.matchedPos().pos == 11  (NOT 0)
-// Consumer that does `ctx.pos += re.matched(0).length` advances by 2
-// but the matched bytes started 11 positions away — overwriting the
-// ident at the parser's actual cursor with the mid-buffer slice.
-
-// RIGHT — both alts inside a non-capturing group, so `^` binds to both
-var re = new EReg('^(?:[0-9]+\\.[0-9]+|[0-9]+\\.(?![\\w.]))', '');
-re.match('UI.get() ? 1. : 2.;');
-// re.match returns false — `U` is not a digit, regex fails to match at start.
-```
-
-**Defensive runtime check** for any code that builds regexes from `|`-alternations dynamically (or accepts user-supplied patterns): after `re.match(rest)`, verify `re.matchedPos().pos == 0`. If not, treat as no-match — the regex matched something but NOT at the cursor position.
-
-```haxe
-if (!re.match(_rest) || re.matchedPos().pos != 0) {
-    // either no match, or mid-buffer match — both are "not here"
-    throw new ParseError(...);
-}
-```
-
-**Symptom**: parser produces an AST where two nodes have identical source spans (`@from-to` ranges) at positions where one ident and one literal should sit. The mid-buffer match overwrites the cursor position, the cursor advances by the wrong amount, and the next parse step sees corrupted input. Reproducible only when the second alt's pattern HAPPENS to match somewhere later in the input — easy to miss in narrow unit tests.
-
-Verified on Haxe 4.3.7, JS / EReg path.
-
-## Inline Local Functions Cannot Be Passed as Arguments
-
-`inline function` on a local variable is a direct-call optimization only. The compiler cannot materialize a closure object for an inline-tagged local, so passing it as an argument to another function fails with `Cannot create closure on inline closure`.
-
-```haxe
-// WRONG — Cannot create closure on inline closure
-inline function evalAt(x:Int):Int { return x * 2; }
-helper(evalAt);  // Error: Cannot create closure on inline closure
-
-// RIGHT — drop `inline`; direct calls at the same site are still inlined by the optimizer
-function evalAt(x:Int):Int { return x * 2; }
-helper(evalAt);
-```
-
-This surfaces when factoring local helpers (e.g. a recursive `buildXTree`-style function that accepts a callback) and the helper was initially tagged `inline` per project style. `inline` is correct for locals called directly; remove it when the local needs to cross a function boundary as a parameter.
-
-Verified on Haxe 4.3.7.
-
-## `for (x:Type in array)` — Type Annotations Are NOT Allowed In For Loops
-
-Haxe's `for` loop iteration variable cannot carry an explicit type annotation. Unlike `var x:T = ...` or function parameters, the loop variable's type is always inferred from the iterable. Adding `:Type` produces `Expected )`.
-
-```haxe
-// WRONG — Expected )
-for (member:HxMemberDecl in iface.members) { ... }
-
-// RIGHT — type inferred from `iface.members:Array<HxMemberDecl>`
-for (member in iface.members) { ... }
-
-// RIGHT — when an explicit type annotation is required by null-safety
-// or to widen, capture into a typed local inside the body
-for (member in iface.members) {
-    final m:HxMemberDecl = member;
-    ...
-}
-```
-
-Same restriction applies to array-comprehension `[for (x in xs) ...]`. The "always specify types explicitly" rule (when applied as a project preference) does not apply to for-loop iteration variables — there is no syntax for it.
-
 ## Adding Enum Ctor: Grep Sister Ctor Literal Across Project
 
 Haxe's exhaustive switch detection fires `Unmatched patterns: <NewCtor>` at every switch missing an arm — but ONLY when that switch is reached during compile. Pre-flight grepping by function name (e.g. "find all walker functions") misses switches with non-obvious names. The reliable audit: grep on a sister-ctor literal that is already exhaustively handled.
@@ -1008,49 +403,6 @@ Haxe's exhaustive switch detection fires `Unmatched patterns: <NewCtor>` at ever
 **Rule**: when adding a new ctor to an enum used in multiple files, grep `case <SisterCtor>` on an existing exhaustively-handled ctor — this catches every switch regardless of function/variable name. Do this BEFORE committing the ctor; otherwise compile errors fire only when callers reach the unmatched switch and may surface late in the test cycle.
 
 Verified on Haxe 4.3.7.
-
-## Enum Constructor Parameters Cannot Have Metadata — Use a Typedef Instead
-
-Haxe does NOT allow field-level metadata on individual enum constructor parameters. Attempting `Ctor(a:Int, @:lead("{") b:String)` is a parse-time error — `Unexpected @` — before any macro or typing runs.
-
-```haxe
-// WRONG — parse error: Unexpected @ at the @ before the param
-enum E {
-    Ctor(a:Int, @:lead("{") b:String);
-}
-
-// RIGHT — wrap params in a typedef; metadata is legal on typedef/anon-struct var fields
-typedef CtorBody = {
-    var a:Int;
-    @:lead("{") var b:String;
-};
-enum E {
-    Ctor(v:CtorBody);
-}
-
-// ALSO RIGHT — metadata IS allowed on the constructor itself (not its params)
-enum E {
-    @:deprecated Ctor(a:Int, b:String);
-}
-```
-
-The restriction bites `@:build` / PEG-style DSLs that drive codegen from per-field metadata: the fix is the **ctor-wraps-typedef** pattern (one struct typedef per constructor), which also keeps per-field metadata working for macro inspection.
-
-Verified on Haxe 4.3.x.
-
-## `untyped` Is a Reserved Keyword — Cannot Be a Variable Name
-
-`untyped` is a Haxe keyword (the `untyped expr` escape hatch that disables type-checking), so it cannot be used as an identifier — a `var`/`final` named `untyped` fails at compile with `Keyword untyped cannot be used as variable name`. It reads like an ordinary descriptive word (e.g. a `final untyped:Array<Bool>` flag array), which is exactly why it slips in.
-
-```haxe
-// WRONG — compile error: Keyword untyped cannot be used as variable name
-final untyped:Array<Bool> = [for (c in clauses) isUntypedCatch(c)];
-
-// RIGHT — rename
-final untypedFlags:Array<Bool> = [for (c in clauses) isUntypedCatch(c)];
-```
-
-Other sneaky-looking reserved words in the same trap (read like normal nouns/verbs but are keywords): `cast`, `dynamic`, `inline`, `extern`, `macro`, `operator`, `overload`, `using`, `abstract`. When a local name collides, rename it (`untypedFlags`, `castNode`, …). Verified on Haxe 4.3.7.
 
 ## Safe Cast `cast(v, T)` Returns `null` for a `null` Value — Only Throws on a Non-Null Mismatch
 

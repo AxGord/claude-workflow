@@ -14,6 +14,62 @@ description: When and how to delegate to subagents
 
 **3+ yes → delegate**
 
+## Model Selection (mandatory)
+
+ALWAYS pass an explicit `model` to the Agent tool — never let a spawn
+silently inherit the session model (the session tier is the orchestrator's;
+paying it per worker doubles cost for no gain). Never haiku. Pick by
+**cost-of-error × mechanical safety net**: where a linter/test-suite/compiler
+catches mistakes, sonnet suffices; where nothing mechanical guards the
+output, opus.
+
+| Spawn | Model |
+|---|---|
+| Review batches with a lint report (.hx+hxq), instruction/config files, routine code | sonnet |
+| Review of macro-heavy / concurrency / engine-critical / no-linter code | opus |
+| Finding verification (one skeptic over aggregated findings) | opus |
+| Code-writing agents: non-trivial logic | opus |
+| Code-writing agents: mechanical edits from a detailed plan | sonnet |
+| Explore / locate fan-out (returns locations, not judgements) | sonnet |
+| Build/test/repro runners (verbatim-quote reporting) | sonnet |
+| Web-research fetch/extract fan-out (synthesis stays in the parent) | sonnet |
+| Analytical judgement subagents (blast-radius verdicts, design recon) | opus |
+
+On overlap, opus wins: a lint-covered batch that is ALSO macro-heavy /
+concurrency / engine-critical goes to opus — a style/structure linter does
+not mechanically guard against races or codegen-correctness bugs.
+
+## Top-Tier Orchestrator Unloading
+
+When THIS session runs on the top model tier — the STRONGEST model the
+harness offers (you know your own model from your system prompt; an
+opus/sonnet session is NOT top-tier and skips this section) — your output
+is JUDGMENT, not code: the session context is re-read every turn at
+top-tier rates, so file bodies must not flow through it:
+
+- **The PLAN is built HERE, inline** — it is the condensate of the user
+  dialog (intent, rejected options, constraints) that no brief can carry;
+  and the planner must be the dispatcher (contracts drift when split).
+  Recon FOR the plan delegates (Explore/Plan agents); the plan does not.
+  A top-tier plan sub-agent is an escalation tool for WEAKER main
+  sessions, never for a top-tier one (it would pay for the same
+  understanding twice).
+- **CODE above ~30 changed lines → implementer agent(s)**: a COUPLED
+  change goes to ONE implementer carrying the whole plan + contracts
+  (never fan out a coupled set per-file); independent files fan out in
+  parallel as usual.
+- **Implementer tier = f(plan detail × mechanical net)**: a detailed plan
+  (exact edits, contracts, order) + a net (linter/tests/compiler) →
+  `sonnet` — implementation became mechanics; the plan deliberately
+  leaves in-implementation freedom (algorithms, macros, concurrency,
+  engine-critical) or there is no net → `opus`. The economics of the
+  scheme: top-tier judgment buys a plan so precise that a cheap model
+  can write from it.
+- **Stays inline**: tiny edits (≤~30 lines — a yaml line, a config
+  tweak, memory notes) where agent round-trip costs more than it saves;
+  and PLAN-CLASS text generally (prompts, skill instructions, briefs,
+  plans, memory) — that text IS the orchestrator's own product.
+
 ## Agents
 
 Pick the agent type by task shape:

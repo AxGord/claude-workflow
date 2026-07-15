@@ -171,6 +171,13 @@ Triggered by reflection when Claude makes a verifiable mistake.
 3. Verify the correct answer by running code (if possible)
 4. Add ONLY the verified correction to the existing skill
 5. Format: show the wrong thing and the right thing with exact values
+6. ABSTRACT the incident before writing: a universal/lang skill must carry
+   NO project nouns or domain story details — rule + tell stay precise,
+   the example compresses to 1-3 abstract lines ("a moving object", "a
+   large file" — not the game entity or the repo it happened in).
+   A lesson whose substance IS domain-specific goes to a domain-* skill,
+   not the universal one. Project specifics leaking through incident
+   stories was a real recurring defect — this step is the gate.
 
 Example flow: Claude writes `Fib(46) overflows Int32` → verification shows Fib(46) fits,
 Fib(47) overflows → add verified table to math skill with exact numbers.

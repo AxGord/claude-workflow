@@ -13,10 +13,19 @@ They ALWAYS take priority over base skills.
 - Use Opus or Sonnet for subagents
 - Never use Haiku — quality too low for real work
 
-### Immutability
+### Linter-owned defaults
 
-- Prefer immutable by default — use `final`/`const`/`readonly`/`val` when value is not reassigned
-- Note: semantics differ per language (shallow vs deep), defer to lang-* skills for specifics
+The machine-checkable preferences (immutability, member order, explicit
+visibility, `_`-prefix naming, magic numbers, ternary returns, no swallowed
+exceptions, dead-weight removal) live as compilable lists in the user's
+`preferences-lint` skill and are compiled into each project's lint config
+by `lint-setup`. The PROJECT's lint config is authoritative — write to
+satisfy it; the linter is the correction net. In a project with no lint
+config (and where `lint-setup` is not installed), load `preferences-lint`
+deliberately if the machine-checkable details are needed; if
+`preferences-lint` is ALSO unavailable on this machine, these categories
+have no substitute text — say so in the report instead of silently
+proceeding without them.
 
 ### Field initialization
 
@@ -24,27 +33,9 @@ They ALWAYS take priority over base skills.
 - Only assign in the constructor when the value requires constructor args or complex logic
 - This applies to all languages: `final _bg:Sprite = new Sprite()`, `readonly List<int> _items = new()`, etc.
 
-### Class member ordering
-
-1. Constants — public first, then private
-2. Public variables — `final` before `var`
-3. Private variables — `final` before `var`
-4. Constructor
-5. Instance methods
-6. Static methods — public first, then private
-
-### Access modifiers
-
-- ALWAYS specify `private` or `public` on every field, method, and property — never rely on language-specific implicit defaults
-- Modifier order: `override` → visibility (`public`/`private`) → `static` → `inline` → `final`
-- Example: `override public static inline function`, NOT `public override static inline function`
-
 ### Naming
 
 - Event listener methods: use `Handler` suffix, not `on` prefix — e.g. `frameSelectHandler`, not `onFrameSelect`
-- Private fields (variables) must start with `_` prefix: `_count`, `_items`
-- This applies to instance variables (`var`/`final`/field), NOT to methods or constants
-- Public fields do NOT use underscore prefix
 
 ### Comments and documentation
 
@@ -54,20 +45,12 @@ They ALWAYS take priority over base skills.
 
 ### Formatting
 
-- Prefer ternary `return cond ? a : b` over `if (cond) return a; return b;` — one expression instead of two statements
-- No redundant parentheses around ternary conditions — `&&`/`||` bind tighter than `?:`, so `a && b ? x : y` is clear without wrapping `(a && b)`
 - No curly braces `{}` for single-line bodies (if, for, function, etc.) — reduces visual noise
 - Combine `for` + `if` into `for (...) if (...) {` — preferred over `if (!cond) continue;` inside loop body. Guard reads naturally, `continue` inverts the condition and wastes a line
 
-### Magic numbers
-
-- No magic number literals in logic — extract into a named constant. A value repeated consistently across files is still magic if it has no name
-- During review: when checking cross-file consistency of a literal, always ask "should this be a named constant?" — consistency does not justify a magic number
-
 ### Error handling
 
-- Never silently swallow invalid state — throw exceptions instead of returning quietly. Silent returns mask bugs and make debugging hard
-- Guard clauses for "should never happen" conditions: throw, don't return
+- Guard clauses for "should never happen" conditions: throw, don't return quietly — silent returns mask bugs and make debugging hard
 
 ### Abstraction threshold
 

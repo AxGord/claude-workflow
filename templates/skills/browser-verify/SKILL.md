@@ -78,6 +78,13 @@ A sub-200ms solid-color flash during page load (e.g. an unpainted WebGL canvas c
 - Analysis trick: downscale each frame to ~8×8 and take the mean RGB; print only frames where the mean jumps (delta > ~6 per channel). A solid flash shows up as an exact color match (e.g. mean exactly (135,206,235) = the CSS `skyblue` clear color), which immediately identifies WHICH constant in code painted it.
 - Companion diagnosis gotcha: a load-time flash usually has MULTIPLE independent layers, each with its own color source — body CSS background, the app container's own background (e.g. letterbox `#000`), and the canvas itself (composites BLACK between DOM insertion and its first render, then the renderer's clear color until the branded overlay mounts). Fixing one layer just exposes the next: enumerate every compositing layer top-down and re-capture after each fix — a single re-run "looks better" is not proof the flash chain is gone.
 
+### 7. "Element jumps/jerks" in a camera- or layout-driven canvas app — reproduce across a VIEWPORT MATRIX, not one window size
+
+A single test viewport can make the reported bug geometrically impossible. Observed: a camera "pull-back" re-anchor required `cameraX < 0`, which only happens on WIDE windows — at 1440×900 the camera clamped at its left world bound, the ball lost its screen anchor, and it jumped −209 px in ONE frame plus multi-frame drift; at the 500×700 repro viewport the camera had 21 px of slack, so the clamp never engaged and the bug could not occur. Four wrong fixes shipped before anyone resized the window.
+
+- Any behavior gated on camera clamps at world bounds, aspect breakpoints, letterbox math, or scroll limits is viewport-dependent — test at minimum one narrow (~500 px) AND one wide (≥1440 px) window via browser resize; add DPR variants when transforms scale by resolution.
+- Corollary: when the user insists a motion bug is real and your metrics are clean, suspect your repro CONDITIONS (viewport, dpr, frame rate) before suspecting the user.
+
 ### Framework-specific siblings
 
 Rendering-framework-specific verification recipes (freezing a scene's tickers for a deterministic screenshot, sampling motion on the render ticker instead of your own rAF) live in the domain skills — e.g. `domain-pixi` for Pixi.js.

@@ -438,3 +438,16 @@ Placing a vertical `FillGradient` (stops at 0/1) on a padded `Text` shows only t
 - Right: `new AlphaFilter({ alpha: 0.4, resolution: 'inherit', antialias: 'inherit' })` — renders the filter pass at the render target's resolution.
 - Applies to every Filter subclass and custom filters; check any `filters = [...]` on a project that inits Pixi with `resolution: window.devicePixelRatio`.
 - Invisible on desktop DPR-1 screenshots — verify with `deviceScaleFactor: 2` capture and zoom the edge.
+
+### 34. Presented-frame ground truth = monkeypatch `renderer.render`; heavy in-loop captures and ~25fps video both LIE about per-frame motion
+
+Complement to #30: when you can't order your callback after every driver (gsap and the Pixi ticker each rAF-drive the scene, in either order), wrap the render call itself — it samples the exact scene state of each PRESENTED frame regardless of which driver updated last:
+
+```js
+const orig = app.renderer.render.bind(app.renderer);
+app.renderer.render = (...a) => { sample(node.toGlobal({x: 0, y: 0})); return orig(...a); };
+```
+
+- Never diagnose per-frame motion from frames grabbed by heavy in-loop capture: `renderer.extract.canvas` per rAF stalls the main loop ~100 ms/frame, and in a two-driver gsap+ticker system that stall FABRICATED a sawtooth motion artifact that did not exist at real frame rates. Heavy capture perturbs the very timing under test.
+- ~25 fps video (Playwright `recordVideo`; CDP screencast in headless can drop to ~6 fps) aliases high-Hz per-frame motion — fine for coarse visual confirmation, useless for per-frame jitter claims.
+- Rule: numeric per-render sampling is the ground truth; video/screenshots only corroborate what the numbers already showed.
