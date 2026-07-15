@@ -37,7 +37,9 @@ states:
         fan-out (find files/symbols, paste back what's there, zero judgement)
         may use flat `Explore`-type agents; any agent that returns judgement,
         analysis, or a recommendation is ANALYTICAL — never spawn it flat,
-        use the VERBATIM preamble below.
+        use the VERBATIM preamble below. ALWAYS pass an explicit `model`:
+        `sonnet` for locate fan-out, `opus` for analytical judgement;
+        never haiku, never silent session-model inheritance.
       - Use Glob to find files by pattern
       - For "where is X / what is X's shape / which decls carry Y" use the
         STRUCTURAL navigation tool your loaded skills prescribe for the

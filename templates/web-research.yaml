@@ -27,7 +27,9 @@ states:
 
   delegate:
     prompt: |
-      Delegate to `general-purpose` subagents:
+      Delegate to `general-purpose` subagents with explicit `model: "sonnet"`
+      (fetch/extract fan-out — synthesis stays here; never inherit the
+      session model):
       - Split broad questions into 3-5 narrow ones, launch in parallel
       - Each returns only a concise answer
       - Follow the tool hierarchy from the loaded web-reading skill

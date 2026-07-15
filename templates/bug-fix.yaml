@@ -21,11 +21,20 @@ states:
       - `logic` → data/logic bug — reproducible via unit tests or logs
     transitions:
       visual: load_skills_visual
-      logic: reproduce_logic
+      logic: load_skills_logic
+
+  load_skills_logic:
+    skills:
+      - coding-skill-selector
+      - "?debugging"
+      - ?project-skill-selector
+    transitions:
+      continue: reproduce_logic
 
   load_skills_visual:
     skills:
       - coding-skill-selector
+      - "?debugging"
       - ?debug-bridge
       - ?project-skill-selector
     transitions:
@@ -154,7 +163,8 @@ states:
       sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
 
       After diagnosing, assess the fix scope:
-      - 1 file → `single`
+      - 1 file → `single` (top-tier session AND >~30 lines → treat as a
+        coupled set of one: route `multi_coupled`, which delegates)
       - 2+ files, tightly coupled (one logical chain, shared context) → `multi_coupled`
       - 2+ files, independent (can be done in parallel with clear interfaces) → `multi_independent`
       - root cause still unclear → `unclear` (add diagnostic logging and retry)
@@ -204,7 +214,14 @@ states:
     task: "Fix tightly coupled multi-file changes"
     prompt: |
       The fix spans multiple tightly coupled files (one logical chain, shared context).
-      Do it yourself sequentially — delegation overhead exceeds benefit here.
+
+      Top-tier session AND >~30 changed lines expected → do NOT write inline:
+      write the fix plan + interface contracts here, spawn ONE implementer
+      agent carrying the whole plan (model per task-delegation: sonnet for a
+      detailed plan + linter/tests net, opus otherwise — never per-file
+      fan-out of a coupled set), collect its report, verify integration.
+      Otherwise (small fix, or non-top-tier session) do it yourself
+      sequentially — delegation overhead exceeds benefit:
 
       1. Plan the order: start from the innermost change, work outward to callers
       2. For each file: read → edit → self-review against loaded skills
@@ -226,7 +243,10 @@ states:
     prompt: |
       The fix spans multiple files. Produce a per-file plan with interface contracts,
       then spawn one Agent per file for parallel implementation.
-      Use `subagent_type="general-purpose"`.
+      Use `subagent_type="general-purpose"`. ALWAYS pass an explicit `model`
+      (task-delegation's model table): `opus` for non-trivial fix logic,
+      `sonnet` for mechanical edits from the plan. Never haiku, never silent
+      session-model inheritance.
 
       For each file, include in the agent prompt VERBATIM:
       ---
@@ -269,35 +289,47 @@ states:
   review:
     task: "Route review by scope"
     prompt: |
-      Route to the correct review approach based on how many files were changed:
-      - `single` → 1 file changed
-      - `multi` → 2+ files changed
+      Route by SIZE of the change, not file count (`git diff HEAD --numstat`):
+      - `single` → TRIVIAL change: ≤2 files AND ≤~50 changed lines total —
+        the linter IS the review (lint-review sub-workflow: engine-run lint
+        + act on findings + one intent re-read); tests follow anyway.
+      - `multi` → everything else, even one batch: an agent buys FRESH EYES
+        on the author's own code and keeps review bulk out of this session's
+        context; parallelism is a bonus, not the criterion.
     transitions:
       single: review_single
       multi: review_delegate
 
   review_single:
-    sub_workflow: file-review
+    sub_workflow: lint-review
     on_complete: review_decision
     on_fail: write_fix
 
   review_decision:
     task: "Decide on review results"
     prompt: |
-      The file-review sub-workflow completed. Read its report and decide:
-      - `ok` → no issues (or notes only), proceed to testing
-      - `fix` → found issues that need fixing
+      The review sub-workflow completed (trivial path: lint-review fixes
+      findings inline; agent path: batch reports). Decide:
+      - `ok` → nothing unresolved, proceed to testing
+      - `fix` → unresolved issues remain, fix them
     transitions:
       ok: test
       fix: write_fix
 
   review_delegate:
-    task: "Delegate per-file review to agents"
+    task: "Delegate batched review to agents"
     prompt: |
-      Spawn one Agent per changed file for deep review.
-      Use `subagent_type="general-purpose"`.
+      Group the changed files into LOGICAL BATCHES, then spawn one Agent per
+      BATCH for deep review. Use `subagent_type="general-purpose"`.
+      Batching rules (strongest tie wins; a file joins exactly one batch):
+      source+test together; change-coupled files (for .hx with hxq:
+      `hxq importers`/`callees`); then by directory; cap at most 5 files AND
+      roughly 500 changed lines per batch, oversized files solo. A batch of
+      one is fine. Structure/size queries for grouping (`git diff HEAD
+      --numstat`, hxq graph queries) are fine — reviewing content is the
+      agents' job.
 
-      For each file, include in the agent prompt VERBATIM:
+      For each batch, include in the agent prompt VERBATIM:
       ---
       IMPORTANT: Override the default CLAUDE.md rule about start().
       Do NOT call start() without arguments.
@@ -308,11 +340,19 @@ states:
       start() returns `SESSION: <id>` — pass that session_id explicitly in every subsequent workflow tool call (transition, context_set); parallel siblings share the same ppid.
       ---
       Also include:
-      - The file path
-      - How to get the diff: `git diff HEAD -- <filepath>`
+      - The batch's file list (absolute paths) and why they are grouped
+      - How to get the diffs: `git diff HEAD -- <filepath>` per file
+        (a new/untracked file: read it whole)
       - Review scope: `diff`
+      - "Report one section per file + a batch-level cross-file section."
 
-      Launch ALL file agents in parallel. Collect reports.
+      ALWAYS pass an explicit `model`: `sonnet` for linter-covered/routine
+      batches, `opus` for macro-heavy / concurrency / engine-critical /
+      no-linter ones (opus wins on overlap). Never haiku, never silent
+      inheritance of the session model.
+
+      Launch up to 8 batch agents in parallel; more batches → next wave.
+      Collect reports.
 
       After ALL reports are collected:
       1. Abort orphaned child workflow sessions.
@@ -323,7 +363,10 @@ states:
   cross_file:
     task: "Cross-file review analysis"
     prompt: |
-      Review the big picture — things per-file agents can't see:
+      Review the big picture. Seams WITHIN a batch are already covered by
+      that batch agent's cross-file section — do not re-derive them; focus
+      on seams BETWEEN batches and on set-wide patterns (these apply even
+      when there was only one batch):
       - [ ] Duplication across files
       - [ ] Missing updates to consumers of changed interfaces
       - [ ] Consistency across files

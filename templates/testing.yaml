@@ -5,6 +5,7 @@ max_transitions: 30
 
 states:
   assess:
+    digest_on_repeat: true
     prompt: |
       Assess what verification is needed for the current change.
 
@@ -50,6 +51,8 @@ states:
 
       Run via a flat `general-purpose` subagent (build/run/report — no
       workflow, no skills) to keep build output out of main context.
+      Pass `model: "sonnet"` explicitly — a runner quotes results, it does
+      not judge; never inherit the session model.
       A flat subagent inherits none of this project's skills or env
       rules — it only knows what YOU put in its spawn prompt. So include
       VERBATIM in that prompt: (a) any tooling/hook constraints that
@@ -105,7 +108,8 @@ states:
       Run integration verification.
 
       1. Build and launch via a flat `general-purpose` subagent — the
-         subagent ONLY builds and launches, nothing else
+         subagent ONLY builds and launches, nothing else; pass
+         `model: "sonnet"` explicitly (runner, not judge)
       2. Drive the debug bridge YOURSELF (the parent): simulate the
          actual user workflow end-to-end
       3. Verify state changes propagated correctly YOURSELF via the

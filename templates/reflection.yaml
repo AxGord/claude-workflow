@@ -5,6 +5,7 @@ max_transitions: 25
 
 states:
   evaluate:
+    digest_on_repeat: true
     prompt: |
       Evaluate the completed task:
 

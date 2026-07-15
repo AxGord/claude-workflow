@@ -19,6 +19,7 @@ states:
     on_error: route
 
   route:
+    digest_on_repeat: true
     include_workflows: true
     prompt: |
       ROUTING STATE — do NOT perform any work, do NOT answer the user.
@@ -291,6 +292,7 @@ states:
       next_task: route
 
   doc_sync:
+    digest_on_repeat: true
     prompt: |
       Check if documentation needs updating after the code changes.
 
@@ -328,6 +330,7 @@ states:
     on_fail: suggest_commit
 
   suggest_commit:
+    digest_on_repeat: true
     prompt: |
       If code was changed during this session (any files modified, created, or deleted),
       suggest a short commit message (1 line, imperative mood, max ~70 chars).
