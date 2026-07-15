@@ -31,6 +31,7 @@ Pick the agent type by task shape:
 - Use SendMessage (agent ID or name) to continue an existing agent with its
   context intact — don't respawn for a follow-up question.
 - Launch ALL independent agents in **one message**, not sequentially.
+- **Worktree-isolated agents fork from the session-start HEAD, not the current branch tip.** Commits you make mid-session are NOT in a later-spawned agent's worktree base — the agent may see stale code, wrongly conclude your work "was never merged", or produce patches that conflict. Rule: COMMIT each phase before spawning the next dependent wave; when a wave's base is already stale, merge its patches with `git apply --3way` and expect to hand-reconcile files several agents touched. Also instruct agents to report their base commit (`git log --oneline -1`) so staleness is visible. One more trap in that merge flow: `git apply --3way` STAGES everything it applies — a later `git add <subset> && git commit` silently commits the WHOLE staged index, not your subset (the tell: the first chunk commit's stat lists every merged file and later chunk commits say "nothing to commit"). Run `git reset -q` to unstage all before building chunked commits, and if rebuilding botched history, soft-reset to the true pre-merge base, never to a mid-wave commit.
 
 ## ALWAYS Delegate to Subagent
 
@@ -59,13 +60,13 @@ A spawned subagent runs **flat by default** — no workflow session, no
   share the same ppid.` (its `route` self-classifies → skill-loaded
   sub-workflow).
 - **Light** — run a command and report (build/test/repro/extract), zero
-  judgement. Flat is fine, but a flat subagent inherits none of this
-  project's skills or env rules — it only knows what YOU put in its spawn
-  prompt. Include VERBATIM in that prompt: (a) any tooling/hook
-  constraints that apply in this project (required CLIs, blocked
-  commands), and (b) "Strip noise, but quote every error, failing
-  assertion, and number VERBATIM — don't paraphrase the signal or replace
-  it with a verdict; the parent judges."
+  judgement. Flat is fine, but prepend VERBATIM: `Environment rules: a
+  bash hook blocks grep/sed/cat/head/tail on parseable .hx — use the Read
+  tool or hxq, never shell text-extraction. hxq is multi-file: ONE
+  hxq <sub> <Type> <dir-or-glob> call, never a per-file loop. Strip
+  noise, but quote every error, failing assertion, and number VERBATIM —
+  don't paraphrase the signal or replace it with a verdict; the parent
+  judges.`
 
 This is the parent-side safety net: workflow states that instruct
 spawning carry their own preamble text, but those prompts can be stale

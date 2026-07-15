@@ -2,6 +2,14 @@
 
 ## 0.1.9
 
+- engine: every exec state gets `WF_PLUGIN_ROOT` in its env (plugin root, resolved from the executor module's own location) — templates reference bundled scripts portably (`sh "$WF_PLUGIN_ROOT/scripts/foo.sh"`), no per-machine script installation; a state's own `env:` can override it
+- templates: master.yaml starts with a `scan_project` exec state — engine-run project language scan (bundled `scripts/scan-project.sh`) whose per-extension menu (+ tool probes, e.g. `hx … (hxq OK)`) renders in the route prompt via `context.project_langs`; skill selectors pick from the menu instead of re-scanning (empty menu → manual fallback)
+- templates: file-review.yaml gains engine-run mechanics — `probe_hxq` exec (tool availability → `context.hxq_available`, consumed by a read_context top-up instruction) and `mechanical_pass` exec (bundled `scripts/hxq-lint-file.sh` on the reviewed file → `context.lint_report`); build_checklist carries lint findings as facts, drops linter-covered rules from the manual checklist (stale-report guard via `===` file headers), keeping only judgment rules
+- templates: exec states pass agent/context-derived values via `env:` (not template interpolation into `sh -c`) — a `$(cmd)`-named directory or reviewed file cannot execute
+- skills: coding-skill-selector reworked to menu-driven selection — pick languages the task touches from the engine scan, tool-bound skills (hxq) load only when the menu marks the tool available (or a probe succeeds), top-up rule for mid-task language widening
+- skills: anti-drift for bundled snapshots — `scripts/check-skill-sync.sh` diffs `templates/skills/*` against the live `~/.claude/skills/*` (same-named pairs; `.skillsyncignore` lists intentional divergence like the generic coding-skill-selector), wired as a local git pre-commit hook so a stale snapshot can't be committed; every silently-drifted bundled skill re-synced from live; skill-manager checklist now requires copying every live-skill edit onto the bundled twin
+- templates: file-review checklist dedup vs the linter — build_checklist decides report usability ONCE (stale/failed-lint guards) and records `context.lint_subtraction`; check_style/check_loops guard their hardcoded lists on that flag, subtracting at rule-description granularity by `hxq lint --list-rules` (residues named: local-var annotations, beyond-threshold complexity judgments)
+
 - engine: deliver hard-terminal state prompts — rendered and prepended (with `---` divider) to sub-workflow pop and root-completion output, so report contracts and push instructions actually fire
 - engine: resolveSessionId throws on ambiguous ppid (multiple active sessions) listing candidates — parallel subagents must pass explicit session_id
 - engine: add github-init to GLOBAL_WORKFLOWS; remove dead `needs_action` outcome from schema

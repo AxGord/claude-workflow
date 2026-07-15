@@ -53,6 +53,31 @@ When optimizing a WebGL scene for mobile/Safari GPU cost (resolution cap, MSAA, 
 - Trigger a mobile context so device-detection fires: `browser.newContext({ ...devices['iPhone 13'] })` gives iPhone UA + touch + DPR 3 + isMobile — but the ENGINE stays whatever you launched (the descriptor's `defaultBrowserType: 'webkit'` is honored only by the Playwright Test runner); launch `webkit` yourself to actually test WebKit.
 - Ground truth for absolute on-device FPS is a physical phone, which Playwright cannot drive.
 
+### 5. `browser_evaluate` returning a long-pending Promise blocks the MCP call until its idle timeout — poll with short sync evaluates
+
+A `browser_evaluate` whose function returns a Promise resolves only when that Promise settles. If the resolve condition never fires (app state never reaches it), the MCP tool call hangs until the server's idle timeout aborts it — observed 1800 s (30 min) lost on one call. The page keeps running fine; only your session is stuck, and you cannot cancel from your side.
+
+- Wrong: `() => new Promise(res => { const check = () => { if (window.__done) res(...); else setTimeout(check, 300); }; check(); })` as the wait mechanism for app progress.
+- Right: arm state-recording in the page (a flag/array on `window`), return immediately, then poll with SHORT synchronous evaluates (`() => ({ done: window.__done, n: window.__trace.length })`) between shell-side waits. Each poll returns in milliseconds regardless of app state.
+- Compounding trap: if the condition is set by an in-page per-frame hook (rAF/ticker callback) and that hook THROWS every frame (e.g. calling a debug global that turned out to be an object, not a function), the app's render loop can freeze too — the game hangs mid-state AND the promise never resolves. Verify a debug global's type/shape with one cheap evaluate (`typeof window.__probe`, `Object.keys(...)`) BEFORE calling it inside a hook.
+- Bounded promises (fixed `setTimeout` resolve, or a condition guaranteed by already-observed state) are fine — the rule is: never make an MCP evaluate's completion depend on app behavior you haven't yet confirmed.
+
+### 6. Catching a transient load-time color flash — CDP screencast, not a screenshot loop
+
+A sub-200ms solid-color flash during page load (e.g. an unpainted WebGL canvas compositing black, then the renderer's clear color, before the app's branded overlay mounts) is routinely MISSED by a `page.screenshot()` polling loop: each screenshot call has round-trip latency and forces a re-composite, yielding only ~2-5 captures/sec at unpredictable phases — the flash falls in the gaps.
+
+- Wrong: poll `page.screenshot()` in a tight loop around page load and hope one capture lands on the flash frame.
+- Right: open a CDP session and use the screencast — it delivers EVERY composited frame with compositor timestamps:
+  ```js
+  const cdp = await ctx.newCDPSession(page);
+  cdp.on('Page.screencastFrame', ev => { frames.push({ts: ev.metadata.timestamp, data: ev.data}); cdp.send('Page.screencastFrameAck', {sessionId: ev.sessionId}); });
+  await cdp.send('Page.startScreencast', {format: 'png', everyNthFrame: 1});
+  await page.goto(url, {waitUntil: 'commit'});  // start screencast BEFORE goto
+  ```
+  Must ack every frame (`Page.screencastFrameAck`) or delivery stalls. Start the screencast BEFORE `goto` so the first paint is captured.
+- Analysis trick: downscale each frame to ~8×8 and take the mean RGB; print only frames where the mean jumps (delta > ~6 per channel). A solid flash shows up as an exact color match (e.g. mean exactly (135,206,235) = the CSS `skyblue` clear color), which immediately identifies WHICH constant in code painted it.
+- Companion diagnosis gotcha: a load-time flash usually has MULTIPLE independent layers, each with its own color source — body CSS background, the app container's own background (e.g. letterbox `#000`), and the canvas itself (composites BLACK between DOM insertion and its first render, then the renderer's clear color until the branded overlay mounts). Fixing one layer just exposes the next: enumerate every compositing layer top-down and re-capture after each fix — a single re-run "looks better" is not proof the flash chain is gone.
+
 ### Framework-specific siblings
 
 Rendering-framework-specific verification recipes (freezing a scene's tickers for a deterministic screenshot, sampling motion on the render ticker instead of your own rAF) live in the domain skills — e.g. `domain-pixi` for Pixi.js.

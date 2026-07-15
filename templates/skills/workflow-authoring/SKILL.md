@@ -113,6 +113,12 @@ After exec/fetch, also available:
 
 Templates are single-pass, no recursion. `undefined` → empty string.
 
+Exec env always includes `WF_PLUGIN_ROOT` — the plugin root (dir holding
+`templates/` and `scripts/`), resolved from the engine's own module location.
+Reference bundled scripts as `command: "sh \"$WF_PLUGIN_ROOT/scripts/foo.sh\""`
+— portable across install paths, no per-machine setup. A state's own `env:`
+key of the same name overrides it.
+
 ### Background Exec
 
 ```yaml
@@ -151,6 +157,13 @@ finish:
 
 ### Common Patterns
 
+**Decide once, flag in context**: when several states share one decision
+(is the file user-authored? is the lint report usable?), have ONE state
+evaluate it and `context_set` a verdict flag; downstream prompts guard on
+`{{context.flag}}`. Re-stating the decision criteria in each consumer
+drifts (guards diverge, agents re-evaluate inconsistently) — exactly the
+bug class a single flag eliminates.
+
 **Test-before-commit**: `exec(npm test)` → success → `exec(git commit)` → done
 
 **Health check polling**: `fetch(url, retry: 60x500ms)` → success → interact
@@ -170,7 +183,7 @@ finish:
 - `success_prompt`/`error_prompt` are templates, rendered with action result vars
 - If neither prompt template is set, the next prompt state's own prompt is used
 - Background processes are NOT monitored — use a subsequent fetch/exec to check
-- **Template injection**: `{{...}}` values are substituted **unescaped** into `command:` and run via `sh -c`. A context value containing quotes, `$`, `;`, or backticks breaks the command — or executes as shell. Never interpolate untrusted/free-form context into commands; keep interpolated values to known-safe tokens (paths you set, enum-like flags)
+- **Template injection**: `{{...}}` values are substituted **unescaped** into `command:` and run via `sh -c`. A context value containing quotes, `$`, `;`, or backticks breaks the command — or executes as shell. Never interpolate untrusted/free-form context into commands; keep interpolated values to known-safe tokens (paths you set, enum-like flags). **Safe channel for everything else — `env:`**: env values are set on the process, never parsed by the shell, so `env: { REVIEW_FILE: "{{context.file_path}}" }` + `command: "script.sh \"$REVIEW_FILE\""` is injection-proof. Any AGENT-set context value (a `context_set` an agent made — e.g. a file path from a reviewed repo, where a hostile `$(cmd).hx` filename would otherwise execute) and even engine-set paths (`{{context.cwd}}` — a `$(payload)`-named directory) must go via `env:`, not into `command:`
 - **Guards throw, they don't reroute**: exceeding a state's `max_visits` throws an error (the transition is refused); hitting `max_transitions` likewise throws
 - `max_transitions` accounting is **per stack frame** — each sub-workflow push starts a fresh counter checked against that workflow's own `max_transitions` (default 50)
 - **Duplicate YAML keys** — parser rejects the entire file with a `YAMLParseError`; the loader logs it to stderr and skips the file (workflow not loaded). Always validate YAML before deploying (no duplicate `success_prompt`, `error_prompt`, etc. on the same state)

@@ -236,6 +236,18 @@ The mirror of "Impossible in the Limit ≠ Cheap Lever Fails": just as you must 
 
 **Principle:** "I think this is worse" is a hypothesis, not a finding. Before it reaches the user as a reason to hesitate, derive it on the real input — the cost of measuring is usually one command; the cost of a wrong negative is a wasted round-trip and a user who now distrusts your tradeoff calls.
 
+## Size/Savings Numbers: Measure the Full Closure Through the Real Pipeline
+
+A quantitative claim ("switching source X→Y makes the bundle 3× smaller") given to the user becomes a decision input — if it's wrong in either direction, the user picks the wrong option. Two failure modes that both bit in one task:
+
+1. **Hidden ambient resolution understates the honest size.** A bundle "worked" in an on-device test at 68MB — but its libs silently resolved a 110MB LLVM dependency from the SYSTEM (via ldconfig/LD_LIBRARY_PATH). The honest self-contained closure was ~250MB, same as the alternative. Check the transitive NEEDED closure (`objdump -p | grep NEEDED`, recursively) against what the bundle itself ships before quoting its size.
+2. **The packaging path itself distorts the number.** A 254MB directory "zipped to 218MB" — because `zip` without `-y` dereferences symlinks, storing a 91MB lib once per symlink name (×3). The honest compressed size was 95MB. Measure through the EXACT pipeline that ships (same zip flags, same cp semantics), not a hand-rolled equivalent.
+
+**Tell:** you're comparing options by size and one number came from a test that "just worked" on a machine with the dependency's ecosystem already installed, or from a different archiver/flags than production uses.
+
+**DON'T:** Present partial-closure or wrong-pipeline numbers as the decision matrix.
+**DO:** Verify both sides' numbers with the full dependency closure and the production packaging command before the user chooses.
+
 ## "How Did It Work Before?" = Revert Signal
 
 When the user asks "how did the old way work?", "why not keep it simple / slightly different?", or "did you even try the original approach?" — that is not a request to polish the new mechanism. It is evidence the new direction is wrong.

@@ -410,3 +410,31 @@ To verify/diagnose a per-frame animation artifact (judder, stutter, "moves every
   ```
 - Discriminator: compute `zeroFrac` (fraction of frames with ≈0 delta). A render-synced smooth build is `zeroFrac ≈ 0`; a real every-other-frame stutter is `zeroFrac ≈ 0.5`. Your-own-rAF can't tell them apart.
 - Sibling cause to watch for: a fixed-timestep accumulator (`while (acc >= SIM_STEP_MS) step(SIM_STEP_MS)`) on a `>62.5 Hz` display releases a step only every ~N frames → the object visibly moves in quantized bursts. If the camera is static (so the object's own motion is the only thing on screen), this reads as judder. Fix: step with the real (capped) frame `dt` where determinism isn't required.
+
+### 31. Translucent text stroke darkens where glyphs overlap — in BOTH Text and BitmapText; bake the stroke OPAQUE and alpha the whole layer
+
+A `stroke: { color: 0x000000, alpha: 0.4 }` on a TextStyle produces DARKER seams between adjacent letters: Pixi rasterises `Text` glyph-by-glyph (each glyph's strokeText composites separately even at letterSpacing 0), and `BitmapText` draws one quad per glyph — wherever two glyphs' stroke rings overlap, 40% black over 40% black ≈ 64%. Design tools (Figma) stroke the whole text outline once, so mocks show a uniform stroke — the game shows dark blotches between every letter pair.
+
+- Wrong: `stroke: { color: 0x000000, alpha: 0.4, width: 8 }` — dark seams at every glyph junction.
+- Right — split into an OPAQUE stroke silhouette layer flattened to the target alpha, under a fill-only layer:
+  - `Text` (infrequent updates): bottom Text with fill black + stroke black alpha 1, shown at `alpha = 0.4` — a single rasterised texture is already flat, plain element alpha is uniform. Top Text with the real fill + SAME-width stroke at alpha 0 (metrics parity).
+  - `BitmapText` (per-frame counters): plain container alpha does NOT work — alpha applies per glyph-quad and re-compounds the seams. Wrap the stroke-layer BitmapText in a `Container` with `filters: [new AlphaFilter({ alpha: 0.4 })]` — the filter flattens the subtree to a texture before applying alpha. Cheap (label-sized pass), keeps BitmapText's no-reraster benefit.
+- The silhouette layer's FILL can simply be the stroke colour (opaque) — the fill layers above cover it; no transparent-fill styles needed.
+- Disable the layer by setting its text to `''`, not by unmounting (see #29 late-mount z-order trap).
+
+### 32. FillGradient `textureSpace: 'local'` on Text — the gradient axis anchors to the measured text box, NOT the padded texture, and shifts per string
+
+Placing a vertical `FillGradient` (stops at 0/1) on a padded `Text` shows only the middle of the ramp on the glyph ink — the mock's edge colours never appear (e.g. a salmon→red mock reads flat red). But computing stop offsets from naive texture-height fractions (padding + lineHeight) ALSO misses: the local axis is anchored to Pixi's measured text box, and empirically the ink lands at DIFFERENT axis fractions for different strings of the same style (observed ~0.12..0.92 for one 70px string vs ~0.24..1.0 for another — the sign/symbol mix changes measured bounds).
+
+- Fix procedure (empirical, converges in 2-3 iterations): render with a 0→1 gradient, row-profile the rendered ink (median fill colour per row), invert the sampled colours to ramp positions, fit `ink_y(f) = A + B·f`, then solve gradient `start.y`/`end.y` so the ink sees the mock's sampled ramp band. Out-of-[0,1] start/end values are valid (canvas gradients accept off-canvas endpoints) — keep the pure design hexes in the stops and move the LINE, don't lerp the colours.
+- Calibrate PER STRING-SHAPE (win/loss/half skins each get their own start/end pair); re-calibrate if font size, lineHeight, or padding change.
+- Row-profile trick: median of fill-family pixels per row (filter by hue family to exclude stroke/AA), compare `f→colour` curves between mock screenshot and render — both measured the same way, so mock zoom level doesn't matter.
+
+### 33. Filter default `resolution: 1` half-res-blurs the filtered subtree on a DPR-2 canvas — pass `resolution: 'inherit'`
+
+`Filter.defaultOptions` in v8 is `{ resolution: 1, antialias: 'off', ... }`. On a renderer at `resolution: 2` (retina/mobile), ANY filtered container (`AlphaFilter`, `BlurFilter`-less passes included) is rendered into a texture at HALF the device resolution and upscaled — the subtree comes out visibly blurry while unfiltered siblings stay crisp. Classic symptom: a text stroke/silhouette layer flattened via `AlphaFilter` (gotcha #31) reads soft and low-contrast next to its crisp fill layer; users report it as "less contrast than the mock".
+
+- Wrong: `new AlphaFilter({ alpha: 0.4 })` — device-res-blind, blurry at DPR ≥ 2.
+- Right: `new AlphaFilter({ alpha: 0.4, resolution: 'inherit', antialias: 'inherit' })` — renders the filter pass at the render target's resolution.
+- Applies to every Filter subclass and custom filters; check any `filters = [...]` on a project that inits Pixi with `resolution: window.devicePixelRatio`.
+- Invisible on desktop DPR-1 screenshots — verify with `deviceScaleFactor: 2` capture and zoom the edge.

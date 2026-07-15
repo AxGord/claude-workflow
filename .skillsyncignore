@@ -1,0 +1,4 @@
+# Skills whose bundled copy INTENTIONALLY diverges from the live one
+# (checked by scripts/check-skill-sync.sh; one name per line).
+# coding-skill-selector: live = personal mappings (hxq etc.), bundled = generic template with placeholders.
+coding-skill-selector

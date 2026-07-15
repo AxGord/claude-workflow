@@ -5,11 +5,25 @@ description: Select and load coding skills by file extensions and domains
 
 ## Coding skill selector
 
-Load coding skills for files/context in this task.
+Load coding skills for the languages/domains THIS TASK will touch.
 
 1. Always: `Skill("preferences")` + `Skill("architecture")`
 
-2. By file extension:
+2. **Language menu** (preferred path): the session's routing prompt included a
+   "Project language menu" block — an engine-run scan with per-extension file
+   counts and tool probes. Pick from it ONLY the languages this task will
+   actually touch: counts are a hint (1 stray file ≠ project language), the
+   task text decides. Do NOT re-scan the project yourself.
+   No menu in this session (spawned agent, scanner unavailable, empty block) →
+   fallback: determine extensions from the task's files yourself.
+   Tool-bound skills (a skill that mandates a CLI tool) load ONLY when the
+   language's menu line ends in an available-probe marker — `(<tool> OK)`
+   vs `(<tool> missing)` — or, when there is no menu or the language's line
+   is absent from it, after one `command -v <tool>` probe succeeds. Tool
+   unavailable → skip the tool skill and work with regular tools; a tool
+   discipline only applies where the tool exists.
+
+3. By file extension (menu-picked or fallback):
    - .py → `Skill("lang-python")`
    - .hx → `Skill("lang-haxe")`
    - .as → `Skill("lang-as3")`
@@ -19,7 +33,12 @@ Load coding skills for files/context in this task.
    <!-- - .c → `Skill("preferences-c")` -->
    <!-- Pair language skill with personal preferences skill if you have one (e.g. `preferences-haxe`) -->
 
-3. By domain (detect from imports, paths, or task description):
+4. **Top-up rule**: if mid-task you touch a file of a language whose skills
+   are not loaded (task turned out wider than it looked) — load that
+   language's skills per rule 3, including its tool conditions, BEFORE
+   editing the file.
+
+5. By domain (detect from imports, paths, or task description):
    - YOLO / object detection → `Skill("domain-yolo")`
    - Pixi.js (imports from `pixi.js`, PIXI globals) → `Skill("domain-pixi")`
    - Person re-identification (ReID) → `Skill("domain-reid")`
@@ -27,7 +46,7 @@ Load coding skills for files/context in this task.
    - OpenFL / hxcpp native target → `Skill("target-openfl-native")`
    - Math overflow / numeric boundaries → `Skill("math")`
 
-4. By tooling/platform:
+6. By tooling/platform:
    - CMakeLists.txt / CMake build → `Skill("build-cmake")`
    - .github/workflows / CI / GitHub Actions → `Skill("ci-github-actions")`
    - AWS Lambda / .NET deploy → `Skill("aws-lambda")`
@@ -37,7 +56,7 @@ Load coding skills for files/context in this task.
    - Fetching web docs / external content → `Skill("web-reading")`
    - Verifying a web/canvas app via Playwright or a browser MCP (screenshots, captures, perf) → `Skill("browser-verify")`
 
-5. If 3+ independent files or parallel work → `Skill("task-delegation")`
+7. If 3+ independent files or parallel work → `Skill("task-delegation")`
 
 Call `Skill(name)` for EVERY matched skill.
 

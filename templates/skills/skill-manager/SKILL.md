@@ -272,3 +272,9 @@ Before finishing any skill operation:
 - [ ] No machine-specific facts (local paths, symlink layouts, this-machine install quirks) in skills that ship with a plugin/template — content must hold for ANY user; machine-specifics belong in memory
 - [ ] If skill is nearly empty → maybe it's not needed
 - [ ] **selector domain mapping updated** (coding-skill-selector skill)
+- [ ] **Bundled twin updated**: if the skill also ships inside a plugin repo
+      (e.g. `mcp-workflow-engine/templates/skills/<name>/`), COPY the edited
+      file over the twin (`cp`, never re-type — hand-applied "same" edits
+      drift by whitespace) and verify with the repo's
+      `scripts/check-skill-sync.sh`. An intentionally-different twin
+      (generic template vs personal copy) belongs in `.skillsyncignore`

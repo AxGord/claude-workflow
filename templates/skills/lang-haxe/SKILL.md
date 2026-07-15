@@ -303,6 +303,41 @@ enum abstract ScrollDirection(Int) {
 - Use regular `enum` only when you need associated data (`case Node(left, right)`) or pattern matching
 - `enum abstract` supports `==` comparison, switch, and all typical enum usage
 
+## Enum Abstract Operators — Which Work, and How to Enable the Rest
+
+Per-operator behavior on a plain `enum abstract(Int)`:
+- `==` / `!=` / `switch` — work bare.
+- `+` / `-` arithmetic — work through `to Int`.
+- **Ordered `<` `>` `<=` `>=`** — REFUSED, even between two values of the SAME abstract, even with `to Int`. Haxe blocks it deliberately (an enum abstract models a name set, not an ordinal). Enable with a bodyless `@:op(A < B)` forward.
+- **Bitwise `|` `&` `^` (bit-flags)** — a PLAIN abstract refuses them (`Flags should be Int` / `Int should be Flags`), but adding **`from Int to Int`** enables them completely — the idiomatic typed-flags pattern. `to Int` lets a value flow INTO the bitwise op; `from Int` lets the Int result flow BACK into the abstract.
+
+`@:forward` does NOT help with any operator — it forwards fields of the underlying type, not operators.
+
+```haxe
+// Bit-flags — WRONG (plain) vs RIGHT (from Int to Int)
+enum abstract Flags(Int) from Int to Int { var A = 1; var B = 2; var C = 4; }
+final combined:Flags = A | B;          // ✓ = 3
+final hasA:Bool = combined & A == A;   // ✓ true
+var f:Flags = A; f |= C;               // ✓ = 5
+```
+
+```haxe
+// WRONG — "Cannot compare MemberRank and MemberRank" (and MemberRank vs Int), despite `to Int`
+enum abstract MemberRank(Int) to Int { final A = 0; final B = 6; }
+if (rankA < rankB) { ... }   // compile error
+
+// RIGHT — declare the operators you need as bodyless @:op forwards
+enum abstract MemberRank(Int) {
+    final A = 0;
+    final B = 6;
+    @:op(A < B) static function lt(a:MemberRank, b:MemberRank):Bool;
+    @:op(A - B) static function sub(a:MemberRank, b:MemberRank):Int;
+}
+if (rankA < rankB) { ... }   // ✓ resolves to lt
+```
+
+Bodyless `@:op` functions get their body synthesized from the underlying type; once declared, `to Int` is unnecessary. When the value is a pure ordinal used mainly in comparison and the `@:op` boilerplate isn't worth it, a plain class of `static inline final Int` constants keeps every operator working with no ceremony — the abstract's payoff is a distinct type, its cost is the operator declarations.
+
 ## Self-Resolving Enum Abstract with `@:from`
 
 When an enum maps to/from strings (or ints), use `enum abstract` with `@:from` — the enum resolves itself from raw values, no external mapping function needed.

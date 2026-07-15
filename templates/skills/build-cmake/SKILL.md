@@ -72,3 +72,12 @@ FetchContent_Declare(Foo
     URL_HASH SHA256=<tarball-sha256>  # pin integrity — without it the download is unverified
 )
 ```
+
+## OpenCV: legacy ENABLE_AVX* toggles silently override CPU_BASELINE
+
+Building OpenCV with `-DENABLE_AVX=ON -DENABLE_AVX2=ON` (legacy toggles) appends those features to `CPU_BASELINE_REQUIRE` (FORCE cache) — they **win over** an explicit `-DCPU_BASELINE=SSE2`, and the `IMPLIES` chain drags in the whole ladder (AVX2 ⇒ FMA3+FP16+AVX ⇒ SSE4_2 ⇒ …). The built lib then hard-aborts at runtime on any CPU missing a required feature ("FATAL ERROR: This OpenCV build doesn't support current CPU/HW configuration"), instead of falling back.
+
+- The deprecation notice is `message(STATUS ...)` — invisible under `-DCMAKE_MESSAGE_LOG_LEVEL=WARNING`.
+- Build-info tell: `strings libopencv_core.so | grep -A3 Baseline:` shows `requested: SSE2` but `required: AVX AVX2`.
+- Fix: drop the legacy toggles entirely; use `CPU_BASELINE` (portable floor) + `CPU_DISPATCH` (per-ISA hot kernels selected at runtime — fast CPUs lose nothing).
+- Spelling quirk: the legacy option is `ENABLE_SSE42`; `-DENABLE_SSE4_2=ON` is silently ignored (unknown var).

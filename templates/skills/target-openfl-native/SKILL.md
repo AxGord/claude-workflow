@@ -310,6 +310,10 @@ Assets are **synchronous** on native — `Assets.getImage()` etc. return immedia
 
 No leading slashes in asset paths — `"/manifest/default.json"` crashes on some native targets.
 
+### SWF assets: Graphic symbols lose instance names
+
+`getChildByName()` fails on children that are **Graphic** symbols in the SWF — OpenFL renders them inline and assigns auto-names (`instance1425`). Only **MovieClip** symbol type preserves the Animate instance name. If name-based access is needed on a Graphic, convert it to MovieClip in Animate and re-publish.
+
 ## Display Filters (GlowFilter, DropShadowFilter, etc.)
 
 **GlowFilter on Label/Sprite container** — apply to the parent container (Label, Sprite), NOT to TextField directly. `label.filters = [new GlowFilter(...)]` works. `textField.filters` inside a Label wrapper does NOT produce visible results.
@@ -488,6 +492,8 @@ iOS supports hover (Apple Pencil 2, trackpad, mouse). Some Android devices too (
 Use `event.buttonDown` in ROLL_OVER handler for runtime detection:
 - Touch: ROLL_OVER fires with `buttonDown=true` (finger already pressing) → register one-shot stage MOUSE_UP to reset highlight
 - Mouse/trackpad hover: ROLL_OVER fires with `buttonDown=false` → rely on ROLL_OUT as usual
+
+ROLL_OVER on a direct finger tap is UNRELIABLE (observed missing on iPad native) — don't depend on it for press feedback. `MOUSE_DOWN` IS reliable (SDL synthesizes it from touch, `SDL_HINT_TOUCH_MOUSE_EVENTS="1"` in Lime): add a MOUSE_DOWN handler with the same body as the ROLL_OVER one, keep TOUCH_END for reset. No ENTER_FRAME/flags needed.
 
 ```haxe
 private function hoverInHandler(event:MouseEvent):Void {

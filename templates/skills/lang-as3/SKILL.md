@@ -1,6 +1,6 @@
 ---
 name: lang-as3
-description: AS3 / AIR 51 language gotchas — optional chaining bugs, immutability limits
+description: AS3 / AIR 51 language gotchas — optional chaining bugs, immutability limits, event dispatch semantics
 ---
 
 # AS3 / AIR 51 — Verified Gotchas
@@ -16,6 +16,17 @@ description: AS3 / AIR 51 language gotchas — optional chaining bugs, immutabil
 - `final` only works on **methods and classes**, NOT on fields — `final var` is a compile error
 - Use `const` for never-reassigned fields instead: `private const _items:Array = [];` — assign at the declaration, or once in the constructor
 - `const` is shallow — the binding is fixed, the object's contents stay mutable
+
+## `removeEventListener` does not take effect during an in-flight dispatch
+
+Adobe docs (`EventDispatcher`): *"If an event listener is removed from a node while an event is being processed on the node, it is still triggered by the current actions."* The listener list is snapshotted when the dispatch starts.
+
+- Listener **added** during dispatch → not called in the current phase.
+- Listener **removed** during dispatch → **still called** in the current dispatch.
+
+Consequence: a handler can run *after* its own cleanup already nulled the fields it reads → `TypeError #1009`. Classic shape — many objects listen to `stage` `ENTER_FRAME`; handler A synchronously disposes object B; B's handler is still in the snapshot and fires with `_field == null`.
+
+Removing a listener is therefore **not** a sufficient guard. Any handler on a shared dispatcher must also null-check the state it touches, or check a `disposed` flag first.
 
 ## `as` operator with primitive types
 
