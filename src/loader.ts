@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
+import { resetDeliveredPrompts } from "./tools.js";
 import type { WorkflowDefinition } from "./types.js";
 import { WorkflowDefinitionSchema } from "./types.js";
 
@@ -101,6 +102,10 @@ export class Loader {
   }
 
   private _loadAll(): void {
+    // Template text may have changed — digest_on_repeat states must deliver
+    // their (possibly new) full prompt once more before digesting again.
+    resetDeliveredPrompts();
+
     const next = new Map<string, WorkflowDefinition>();
 
     // Load bundled first (read-only defaults)

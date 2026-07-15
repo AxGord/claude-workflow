@@ -34,7 +34,17 @@ function formatStateHeader(status: StatusResult): string {
     .join("\n");
 }
 
-function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): string {
+// Process-level memory of digest_on_repeat states whose FULL prompt already
+// went out once. Keyed per workflow+state; a hot-reload of templates does not
+// clear it (status() always returns the full, current text).
+const deliveredFullPrompts = new Set<string>();
+
+/** Test seam: forget which digest_on_repeat prompts were already delivered. */
+export function resetDeliveredPrompts(): void {
+  deliveredFullPrompts.clear();
+}
+
+export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): string {
   const { showSessionId = false, forceFullPrompt = false } = opts;
   const parts: string[] = [];
 
@@ -44,11 +54,17 @@ function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): 
   parts.push(formatStateHeader(status));
   parts.push("");
 
+  const digestKey = `${status.currentWorkflow}:${status.currentStateName}`;
+  const digestable = status.currentState.digest_on_repeat === true;
   if (!forceFullPrompt && !status.forcePrompt && status.visitCount > 1) {
     parts.push(`Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`);
     parts.push(`If you don't remember them, call status() to re-read.`);
+  } else if (!forceFullPrompt && !status.forcePrompt && digestable && deliveredFullPrompts.has(digestKey)) {
+    parts.push(`This state's full prompt was already delivered earlier in this process — follow those instructions.`);
+    parts.push(`If THIS context has not seen them (or templates may have changed), call status() for the current full text.`);
   } else {
     parts.push(status.prompt);
+    if (digestable) deliveredFullPrompts.add(digestKey);
   }
 
   const transitionNames = Object.keys(status.availableTransitions);
@@ -110,7 +126,10 @@ export function registerTools(
   }, async (args) => {
     try {
       const status = await engine.start(args.workflow ?? "master", args.actor, args.parent_session_id);
-      const text = formatStatus(status, { showSessionId: true, forceFullPrompt: true })
+      // No forceFullPrompt here: a digest_on_repeat initial state (master
+      // route) digests on repeat start() calls in the same process — the
+      // main ceremony saving. status() still always returns the full text.
+      const text = formatStatus(status, { showSessionId: true })
         + "\n\n---\nWORKFLOW RULES:\n"
         + "- Transitions in real-time only — never batch multiple transitions in one step.\n"
         + "- Complete each state fully before transitioning to the next.\n"

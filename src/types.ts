@@ -21,6 +21,11 @@ export const StateDefinitionSchema = z.object({
   // Include project-specific workflow list in prompt
   include_workflows: z.boolean().optional(),
 
+  // Deliver a short digest instead of the full prompt when this state's
+  // full prompt was already delivered once in this server process (the
+  // agent's context already holds it; status() always returns the full text)
+  digest_on_repeat: z.boolean().optional(),
+
   // Action state fields
   type: z.enum(["prompt", "exec", "fetch"]).optional(),
 

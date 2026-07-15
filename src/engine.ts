@@ -52,7 +52,7 @@ export class Engine {
   private static readonly GLOBAL_WORKFLOWS = new Set([
     "coding", "debugging", "bug-fix", "new-feature", "code-review",
     "explore", "web-research", "planning", "testing", "reflection",
-    "investigate", "master", "file-code", "file-review", "subagent", "review-push",
+    "investigate", "master", "file-code", "file-review", "lint-review", "subagent", "review-push",
     "github-init",
   ]);
 
