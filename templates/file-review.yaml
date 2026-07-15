@@ -1,9 +1,20 @@
 name: file-review
 description: "Per-file deep review — spawned as an agent for each changed file, or run inline as a sub-workflow for a single file"
-initial: load_skills
+initial: probe_hxq
 max_transitions: 25
 
 states:
+  # Spawned agents start a fresh session — parent context does not carry over,
+  # so tool availability is probed here, deterministically, by the engine.
+  probe_hxq:
+    type: exec
+    command: "command -v hxq >/dev/null 2>&1 && HXQ_QUIET=1 hxq probe 'class C{}' >/dev/null 2>&1"
+    timeout: 15000
+    context_set:
+      hxq_available: "true"
+    on_success: load_skills
+    on_error: load_skills
+
   load_skills:
     skills:
       - coding-skill-selector
@@ -26,10 +37,35 @@ states:
       3. Read related files: imports, files that call this one, siblings in the same module.
          Check if similar code already exists elsewhere that could be reused or unified.
       4. Understand what changed and why.
+      5. Save the file path for the engine's mechanical pass — MUST be absolute
+         (the engine's exec cwd is the server's, not the reviewed project's):
+         `context_set(key: "file_path", value: "<ABSOLUTE path of the reviewed file>")`
+      6. hxq availability (engine probe): "{{context.hxq_available}}" (empty = unavailable).
+         If it is non-empty, the file is .hx, and `Skill("hxq")` was not loaded at the
+         skill gate → load it now (top-up); if empty, do not attempt hxq at all.
 
       Then → transition `done`.
     transitions:
-      done: determine_authorship
+      done: mechanical_pass
+
+  # Engine-run lint pass — the agent cannot skip or water it down. The script
+  # self-gates (non-.hx file or missing hxq → "SKIP: ..." output, exit 0).
+  # Runs before authorship is known on purpose: for external/vendored files
+  # the report is computed and then dropped by build_checklist — acceptable
+  # cost for keeping the exec chain linear. The path goes via env, not
+  # template interpolation into sh -c: a hostile filename ($(cmd).hx) in a
+  # reviewed repo must not execute.
+  mechanical_pass:
+    type: exec
+    command: "sh \"$WF_PLUGIN_ROOT/scripts/hxq-lint-file.sh\" \"$REVIEW_FILE\""
+    env:
+      REVIEW_FILE: "{{context.file_path}}"
+    timeout: 60000
+    max_output: 51200
+    context_set:
+      lint_report: "{{stdout}}"
+    on_success: determine_authorship
+    on_error: determine_authorship
 
   determine_authorship:
     task: "Determine code authorship"
@@ -78,6 +114,33 @@ states:
       Do NOT summarize, group, or prioritize — every rule matters equally.
       If your total is under 25 rules across all skills, you missed some — re-read.
 
+      **Mechanical-pass subtraction.** The engine already ran the project
+      linter on this file; its report:
+      ---
+      {{context.lint_report}}
+      ---
+      Decide ONCE whether the report is usable, and record the verdict for
+      the downstream states:
+      - USABLE = non-empty, its `===` headers name THIS file (a different
+        file = stale report from an earlier pass in a reused session), and
+        the lint section is real output — not "SKIP: ..." and not a
+        mid-report "SKIP: hxq lint failed" (a broken linter verified nothing).
+      - USABLE → `context_set(key: "lint_subtraction", value: "applied")`, then:
+        - Its findings are review facts — carry them into your report as-is.
+        - DROP from the manual checklist every rule the linter verifies
+          mechanically. The authoritative list of what the linter owns: run
+          `HXQ_QUIET=1 hxq lint --list-rules` (one call, id + description per
+          line) — subtract by that list, not from memory, and subtract at
+          rule granularity: a rule covers exactly what its description says,
+          no more (e.g. explicit-type covers fields/params/returns, NOT
+          local variables).
+        - Keep judgment rules a linter cannot verify: comment quality,
+          abstraction threshold, naming semantics, API shape, symmetry of
+          add/remove listener pairs, domain correctness.
+        - The 25-rule floor does not apply after subtraction.
+      - NOT usable → `context_set(key: "lint_subtraction", value: "none")`,
+        no subtraction — run the full manual checklist as written above.
+
       Escape hatch: if NO lang/preferences skills apply to this file type
       (e.g. config, YAML, docs), state so explicitly and continue — the
       language-agnostic checks in the following states still run.
@@ -121,6 +184,11 @@ states:
       Rules 5-6 are personal style preferences — apply them ONLY when
       `{{context.is_user_authored}}` is not "false" (treat empty as "true");
       for external/forked/vendored code check rules 1-4 only.
+      If `{{context.lint_subtraction}}` is "applied", rules the linter owns
+      (per the --list-rules subtraction already done in build_checklist) are
+      pre-verified — do not re-derive them by hand (e.g. the if/else-if
+      chain → switch rule); still walk EVERY loop for the rules the linter
+      does NOT own.
 
       1. **Range-over-sparse-container**: the loop iterates an index range (`0...n`,
          `i++`) but uses the index to look up a Map/Dict/HashMap, with a null check
@@ -181,6 +249,14 @@ states:
       Scope: `diff` = scan only lines in the diff; `full` = scan entire file.
       If a line appears in the diff, it is part of the change and must meet
       current style standards. Report with file:line.
+
+      If `{{context.lint_subtraction}}` is "applied", skip the parts of the
+      items below the linter already verified (per the build_checklist
+      subtraction) and hand-check only the residues its rule descriptions
+      do not cover — e.g. type annotations on LOCAL variables (explicit-type
+      covers fields/params/returns only), "function doing too many things"
+      beyond the cyclomatic threshold, semantics of names, commented-out
+      code, cross-file duplication, consistency judgments.
 
       Language-agnostic checks (apply regardless of authorship):
       - [ ] Missing type annotations: if a variable/field/parameter has no explicit type

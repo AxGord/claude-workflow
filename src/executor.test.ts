@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { fileURLToPath } from "node:url";
 import { Executor } from "./executor.js";
 import type { StateDefinition } from "./types.js";
 
@@ -24,6 +25,27 @@ describe("Executor", () => {
       const result = await executor.execute(state, {});
       expect(result.success).toBe(true);
       expect(result.stderr).toContain("err");
+    });
+
+    it("injects WF_PLUGIN_ROOT pointing at the plugin root", async () => {
+      const state: StateDefinition = { type: "exec", command: 'echo "$WF_PLUGIN_ROOT"' };
+      const result = await executor.execute(state, {});
+      expect(result.success).toBe(true);
+      // executor.ts and this test both live one level below the repo root
+      // (src/, or build/ when compiled), so ".." from this file is the plugin
+      // root. fileURLToPath mirrors the src derivation (decodes %-escapes).
+      const expectedRoot = fileURLToPath(new URL("..", import.meta.url)).replace(/[\\/]$/, "");
+      expect(result.stdout!.trim()).toBe(expectedRoot);
+    });
+
+    it("state env overrides WF_PLUGIN_ROOT", async () => {
+      const state: StateDefinition = {
+        type: "exec",
+        command: 'echo "$WF_PLUGIN_ROOT"',
+        env: { WF_PLUGIN_ROOT: "/custom" },
+      };
+      const result = await executor.execute(state, {});
+      expect(result.stdout!.trim()).toBe("/custom");
     });
 
     it("reports failure for non-zero exit", async () => {

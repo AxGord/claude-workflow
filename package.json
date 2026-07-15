@@ -28,6 +28,7 @@
   "files": [
     "build/",
     "templates/",
+    "scripts/",
     "hooks/",
     "dashboard/",
     ".claude-plugin/",

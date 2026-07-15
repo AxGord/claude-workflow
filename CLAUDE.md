@@ -17,8 +17,13 @@ Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 | `hooks/hooks.json` | Hook declarations (SessionStart, SessionEnd) |
 | `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start |
 | `hooks/workflow-cleanup.sh` | Abandons this instance's active sessions on session end, caps retained terminal sessions |
+| `scripts/` | Shell scripts exec states run via the engine-injected `$WF_PLUGIN_ROOT`, plus `check-skill-sync.sh` (bundled-vs-live skill drift check; `.skillsyncignore` lists intentional divergence) |
 
 **Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__start`).
+
+**Dev-machine setup after clone**: wire the drift check as a local git hook —
+`printf '#!/bin/sh\nsh "$(git rev-parse --show-toplevel)/scripts/check-skill-sync.sh"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit` —
+so a commit cannot ship a bundled skill snapshot that silently lags its live `~/.claude/skills/` copy.
 
 ## Build & Run
 

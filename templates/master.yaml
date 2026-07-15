@@ -1,9 +1,23 @@
 name: master
 description: "Master workflow — single entry point. Analyzes task, loads knowledge skills, routes to process sub-workflows."
-initial: route
+initial: scan_project
 max_transitions: 100
 
 states:
+  scan_project:
+    type: exec
+    # cwd passed via env, not template interpolation — env values bypass the
+    # sh -c parser, so a $(...)-named directory cannot execute. WF_PLUGIN_ROOT
+    # is injected by the engine — the script ships with the plugin.
+    command: "sh \"$WF_PLUGIN_ROOT/scripts/scan-project.sh\" \"$SCAN_DIR\""
+    env:
+      SCAN_DIR: "{{context.cwd}}"
+    timeout: 20000
+    context_set:
+      project_langs: "{{stdout}}"
+    on_success: route
+    on_error: route
+
   route:
     include_workflows: true
     prompt: |
@@ -57,6 +71,12 @@ states:
       - unclear → unclear
 
       Code reference in system-reminder → code-related (code_review, explore, or coding), NEVER chat.
+
+      ---
+      Project language menu (engine scan; per-extension file counts + tool
+      probes; empty if the scanner is unavailable). Skill selectors pick
+      from this menu per task — do not re-scan:
+      {{context.project_langs}}
     transitions:
       plan: plan
       project: run_project

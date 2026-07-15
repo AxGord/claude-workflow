@@ -2,8 +2,15 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { StateDefinition, ActionResult } from "./types.js";
 import { render } from "./template.js";
+
+// Plugin root (the dir holding templates/ and scripts/) — injected into every
+// exec's env so templates can reference bundled scripts portably:
+// command: "sh \"$WF_PLUGIN_ROOT/scripts/foo.sh\"". Works out of the box on
+// any install path; no per-machine script installation.
+const PLUGIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const DEFAULT_MAX_OUTPUT = 10 * 1024; // 10KB truncation limit
 const DEFAULT_EXEC_TIMEOUT = 30_000;
@@ -30,15 +37,23 @@ export class Executor {
     throw new Error(`Unknown action type: ${state.type}`);
   }
 
+  /**
+   * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT,
+   * overridable by the state's own rendered env: entries. Single source for
+   * both foreground and background spawns so the injection contract can't drift.
+   */
+  private _buildEnv(state: StateDefinition, vars: Record<string, unknown>): NodeJS.ProcessEnv {
+    const envVars = state.env
+      ? Object.fromEntries(Object.entries(state.env).map(([k, v]) => [k, render(v, vars)]))
+      : undefined;
+    return { ...process.env, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...envVars };
+  }
+
   private _exec(state: StateDefinition, vars: Record<string, unknown>): Promise<ActionResult> {
     const command = render(state.command!, vars);
     const cwd = state.cwd ? render(state.cwd, vars) : undefined;
     const timeout = state.timeout ?? DEFAULT_EXEC_TIMEOUT;
     const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
-
-    const envVars = state.env
-      ? Object.fromEntries(Object.entries(state.env).map(([k, v]) => [k, render(v, vars)]))
-      : undefined;
 
     return new Promise((resolve) => {
       let stdout = "";
@@ -47,7 +62,7 @@ export class Executor {
 
       const child = spawn("sh", ["-c", command], {
         cwd,
-        env: envVars ? { ...process.env, ...envVars } : undefined,
+        env: this._buildEnv(state, vars),
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
       });
@@ -105,10 +120,6 @@ export class Executor {
     const command = render(state.command!, vars);
     const cwd = state.cwd ? render(state.cwd, vars) : undefined;
 
-    const envVars = state.env
-      ? Object.fromEntries(Object.entries(state.env).map(([k, v]) => [k, render(v, vars)]))
-      : undefined;
-
     const logFile = path.join(os.tmpdir(), `wf-bg-${Date.now()}.log`);
     const out = fs.openSync(logFile, "a");
 
@@ -116,7 +127,7 @@ export class Executor {
     try {
       child = spawn("sh", ["-c", command], {
         cwd,
-        env: envVars ? { ...process.env, ...envVars } : undefined,
+        env: this._buildEnv(state, vars),
         detached: true,
         stdio: ["ignore", out, out],
       });
