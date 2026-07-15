@@ -69,16 +69,23 @@ states:
       Check context key `review_mode`:
       - If `review_mode` is `"directory"` → `directory`
 
-      Otherwise route based on how many files:
-      - `single` → 1 file — review via file-review sub-workflow (yourself)
-      - `multi` → 2+ files — spawn file-review agents in parallel
+      Otherwise route by SIZE of what will actually be REVIEWED:
+      - `diff` scope → size = changed lines (`git diff HEAD --numstat`);
+        `full` scope → size = the whole file (`wc -l`), since that is what
+        gets read.
+      - `single` → TRIVIAL: ≤2 files AND ≤~50 lines to review — the linter
+        IS the review (lint-review sub-workflow: engine-run lint + act on
+        findings + one intent re-read).
+      - `multi` → everything else, EVEN a single batch: an agent buys fresh
+        eyes and keeps review bulk out of this session's context;
+        parallelism is a bonus, not the criterion.
     transitions:
       single: review_single
       multi: review_delegate
       directory: package_review
 
   review_single:
-    sub_workflow: file-review
+    sub_workflow: lint-review
     on_complete: cross_file
     on_fail: cross_file
 
@@ -86,13 +93,27 @@ states:
     task: "Deep per-file review via agents"
     prompt: |
       CRITICAL: You are a DISPATCHER in this state, not a reviewer.
-      Do NOT read diffs, files, or code yourself. Do NOT use Read, Grep, Bash to look at file content.
-      Your ONLY job is to spawn Agent tools and collect their results.
+      Do NOT read diffs, files, or code CONTENT yourself. Structure and size
+      queries needed for batching ARE dispatcher-legal: `git diff HEAD
+      --numstat`, `git status`, and hxq graph queries (`importers`/`callees`).
+      Your ONLY job is to group, spawn Agent tools, and collect results.
 
-      Spawn one Agent per changed file for deep review.
-      Use `subagent_type="general-purpose"`.
+      Group the changed files into LOGICAL BATCHES, then spawn one Agent per
+      BATCH for deep review. Use `subagent_type="general-purpose"`.
+      Batching amortizes each agent's fixed cost (skill loading) AND lets one
+      reviewer see coupled files together — it is the default, not an option.
 
-      For each file, include in the agent prompt VERBATIM:
+      Batching rules (strongest tie wins; a file joins exactly one batch):
+      1. A source file and its test always share a batch.
+      2. Files coupled by the change — caller+callee, interface+its
+         implementations, type+its consumers. For .hx with hxq available,
+         derive coupling structurally over the changed set:
+         `hxq importers <module> <scope>` / `hxq callees 'Type.method' <scope>`.
+      3. Remaining files group by directory/module.
+      4. Size cap: at most 5 files AND roughly 500 changed lines per batch;
+         a file exceeding that alone gets its own agent. A batch of one is fine.
+
+      For each batch, include in the agent prompt VERBATIM:
       ---
       IMPORTANT: Override the default CLAUDE.md rule about start().
       Do NOT call start() without arguments.
@@ -105,24 +126,32 @@ states:
       share the same ppid.
       ---
       Also include:
-      - The file path
-      - Whether the file is modified or new (untracked):
+      - The batch's file list (absolute paths) and WHY they are grouped
+        (test-of, calls, same module) — the reviewer checks those seams too
+      - Per file, whether it is modified or new (untracked):
         - Modified: "Get the diff with: `git diff HEAD -- <filepath>`"
         - New/untracked: "This is a new file — read the entire file and review all code."
       - The review scope (from context key `review_scope`):
         - `diff` → "Review ONLY the changed lines (or all code if new file). Report pre-existing issues separately as 'pre-existing' severity, do NOT mix with diff issues."
         - `full` → "Review the ENTIRE file for all issues, not just the diff."
+      - "Report with one section per file, plus a batch-level section for
+        cross-file findings within the batch."
 
       Do NOT include style rules, review checklists, or coding preferences in the agent prompt.
       The file-review workflow has its own skill-loading state — agents will load all
       relevant skills themselves. Manual rule lists are lossy and cause missed issues.
 
-      Split the files into batches of 8. Launch each batch's agents in parallel
-      (single message, multiple Agent tool calls). Wait for the whole batch to
-      complete before starting the next batch. Collect their reports.
+      ALWAYS pass an explicit `model` to the Agent tool — never let a spawn
+      silently inherit the session model: `sonnet` for batches whose
+      mechanics the linter covers (.hx with hxq) and routine code; `opus`
+      for macro-heavy / engine-critical / no-linter batches. Never haiku.
+
+      Launch up to 8 batch agents in parallel (single message, multiple Agent
+      tool calls); more batches → next wave after the current one completes.
+      Collect their reports.
 
       If a child agent fails or returns no report — re-spawn it once;
-      if it fails again, mark that file as unreviewed in the summary.
+      if it fails again, mark that batch's files as unreviewed in the summary.
 
       After ALL reports are collected:
       1. Abort orphaned child workflow sessions — call `sessions` to find
@@ -146,11 +175,14 @@ states:
          - current_package_index: {{context.current_package_index}}
       2. If `current_package_index` >= number of packages → transition `all_done`.
       3. Take the current package. Output: "**Package: <name>** (<N> files)".
-      4. Split the package's files into batches of 8.
-      5. For each batch, spawn one Agent per file for deep review.
+      4. Group the package's files into LOGICAL BATCHES — same rules as
+         review_delegate: source+test together, import/call coupling
+         (for .hx via `hxq importers`/`callees`), then by subdirectory;
+         cap 5 files per batch, oversized files (≈ >500 lines) solo.
+      5. Spawn one Agent per BATCH for deep review.
          Use `subagent_type="general-purpose"`.
 
-         For each file, include in the agent prompt VERBATIM:
+         For each batch, include in the agent prompt VERBATIM:
          ---
          IMPORTANT: Override the default CLAUDE.md rule about start().
          Do NOT call start() without arguments.
@@ -163,15 +195,20 @@ states:
          share the same ppid.
          ---
          Also include:
-         - The file path
-         - "Review the ENTIRE file for all issues (scope: full) — read the whole file."
+         - The batch's file list (absolute paths) and why they are grouped
+         - "Review the ENTIRE file for all issues (scope: full) — read the whole
+           file. Report one section per file + a batch-level cross-file section."
 
          Do NOT include style rules or coding preferences — agents load their own skills.
 
-         Launch the batch agents in parallel (single message, multiple Agent tool calls).
-         Wait for all to complete before starting the next batch.
+         ALWAYS pass an explicit `model`: `sonnet` for linter-covered/routine
+         batches, `opus` for complex/no-linter ones. Never haiku, never
+         silent inheritance of the session model.
+
+         Launch up to 8 batch agents in parallel (single message, multiple Agent
+         tool calls); more batches → next wave after the current completes.
          If a child agent fails or returns no report — re-spawn it once;
-         if it fails again, mark that file as unreviewed in the package report.
+         if it fails again, mark that batch's files as unreviewed in the package report.
 
       6. Collect all reports for this package. Save to context:
          `context_set(key: "package_<index>_report", value: "<aggregated report>")`
@@ -185,7 +222,10 @@ states:
   cross_file:
     task: "Cross-file analysis"
     prompt: |
-      Now look at the big picture — things a per-file agent can't see:
+      Now look at the big picture. Seams WITHIN a batch are already covered
+      by that batch agent's cross-file section — do not re-derive them;
+      focus on seams BETWEEN batches and on set-wide patterns (these apply
+      even when there was only one batch):
 
       **Cross-file consistency:**
       - [ ] Duplication across files: did different files introduce similar code?

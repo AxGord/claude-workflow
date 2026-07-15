@@ -1,0 +1,53 @@
+name: lint-review
+description: "Trivial-change review — the linter IS the review: one engine-run mechanical pass + act on findings; no checklist ceremony"
+initial: files
+max_transitions: 10
+
+states:
+  files:
+    task: "Collect changed file paths"
+    prompt: |
+      Trivial-change review (routing already guaranteed ≤2 files / ≤~50
+      lines): the linter is the review. Save the ABSOLUTE paths of every
+      changed file as ONE space-separated value (the engine's exec cwd is
+      the server's, not the project's):
+      `context_set(key: "file_path", value: "<ABSOLUTE paths, space-separated>")`
+      Then → `run`.
+    transitions:
+      run: run
+
+  # Engine-run lint on the whole change — the same self-gating script the
+  # full file-review uses (non-.hx / missing hxq -> observable SKIP lines).
+  run:
+    type: exec
+    command: "sh \"$WF_PLUGIN_ROOT/scripts/hxq-lint-file.sh\" \"$REVIEW_FILE\""
+    env:
+      REVIEW_FILE: "{{context.file_path}}"
+    timeout: 120000
+    max_output: 204800
+    context_set:
+      lint_report: "{{stdout}}"
+    on_success: act
+    on_error: act
+
+  act:
+    task: "Act on lint findings"
+    prompt: |
+      Lint report:
+      ---
+      {{context.lint_report}}
+      ---
+      1. Fix every error/warning finding now (respect `// noqa` and findings
+         documented as BY-DESIGN in project memory — do not silence those);
+         Info advisories — fix or consciously accept.
+      2. A SKIP-only report (no linter for these files) → nothing mechanical
+         to act on; correctness rides on the tests that follow.
+      3. Re-read the diff ONCE against the task intent — the one thing no
+         linter checks.
+      → `done`.
+    transitions:
+      done: finish
+
+  finish:
+    terminal: true
+    outcome: complete

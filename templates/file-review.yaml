@@ -1,5 +1,5 @@
 name: file-review
-description: "Per-file deep review — spawned as an agent for each changed file, or run inline as a sub-workflow for a single file"
+description: "Deep review of one file or a small coupled batch — spawned as an agent per batch, or run inline as a sub-workflow for a single file"
 initial: probe_hxq
 max_transitions: 25
 
@@ -25,9 +25,12 @@ states:
   read_context:
     task: "Read file and context"
     prompt: |
-      You are reviewing a single file as part of a code review.
-      The file path and diff info come from your task prompt (spawned agent)
-      or from the conversation so far (inline sub-workflow).
+      You are reviewing ONE file or a small COUPLED BATCH as part of a code
+      review. The file list, why the files are grouped, and diff info come
+      from your task prompt (spawned agent) or from the conversation so far
+      (inline sub-workflow). Every "this file" below means "each file in
+      your batch"; read the batch's shared context (imports, siblings) once,
+      and also check the seams the grouping names (caller↔callee, test↔source).
 
       1. Read the diff for this file to understand what changed.
       2. Check the review scope from your task prompt:
@@ -37,12 +40,14 @@ states:
       3. Read related files: imports, files that call this one, siblings in the same module.
          Check if similar code already exists elsewhere that could be reused or unified.
       4. Understand what changed and why.
-      5. Save the file path for the engine's mechanical pass — MUST be absolute
-         (the engine's exec cwd is the server's, not the reviewed project's):
-         `context_set(key: "file_path", value: "<ABSOLUTE path of the reviewed file>")`
+      5. Save the file path(s) for the engine's mechanical pass — MUST be
+         absolute (the engine's exec cwd is the server's, not the reviewed
+         project's); a batch = one space-separated value (paths containing
+         spaces are unsupported in batch mode):
+         `context_set(key: "file_path", value: "<ABSOLUTE path(s), space-separated>")`
       6. hxq availability (engine probe): "{{context.hxq_available}}" (empty = unavailable).
-         If it is non-empty, the file is .hx, and `Skill("hxq")` was not loaded at the
-         skill gate → load it now (top-up); if empty, do not attempt hxq at all.
+         If it is non-empty, any batch file is .hx, and `Skill("hxq")` was not loaded
+         at the skill gate → load it now (top-up); if empty, do not attempt hxq at all.
 
       Then → transition `done`.
     transitions:
@@ -60,8 +65,8 @@ states:
     command: "sh \"$WF_PLUGIN_ROOT/scripts/hxq-lint-file.sh\" \"$REVIEW_FILE\""
     env:
       REVIEW_FILE: "{{context.file_path}}"
-    timeout: 60000
-    max_output: 51200
+    timeout: 120000
+    max_output: 204800
     context_set:
       lint_report: "{{stdout}}"
     on_success: determine_authorship
@@ -121,10 +126,13 @@ states:
       ---
       Decide ONCE whether the report is usable, and record the verdict for
       the downstream states:
-      - USABLE = non-empty, its `===` headers name THIS file (a different
-        file = stale report from an earlier pass in a reused session), and
+      - USABLE = non-empty, its `===` headers name THIS batch's files (other
+        files = stale report from an earlier pass in a reused session), and
         the lint section is real output — not "SKIP: ..." and not a
         mid-report "SKIP: hxq lint failed" (a broken linter verified nothing).
+        Per-file SKIP lines for the batch's non-.hx files are normal — the
+        report is usable for the .hx files it covers; but a report with NO
+        `===` lint section at all (only SKIP lines) is NOT usable.
       - USABLE → `context_set(key: "lint_subtraction", value: "applied")`, then:
         - Its findings are review facts — carry them into your report as-is.
         - DROP from the manual checklist every rule the linter verifies
@@ -331,7 +339,9 @@ states:
   report:
     task: "Write file review report"
     prompt: |
-      Write a structured report for this file:
+      Write a structured report — ONE section per batch file, then (for a
+      multi-file batch) a closing **Cross-file** section for findings on the
+      seams between them. Per file:
 
       **File**: <path>
       **What changed**: <one-paragraph summary of the changes>
