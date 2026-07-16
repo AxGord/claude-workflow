@@ -84,6 +84,17 @@ Pick the agent type by task shape:
 - The Agent tool runs subagents **in the background by default** — you are
   notified on completion. Pass `run_in_background: false` when the result
   gates your next step.
+- **A background agent's first "final report" can be PREMATURE.** The
+  completion notification fires whenever the agent stops; it may then
+  resume and keep writing, delivering a refined report later. Artifact-
+  checking the tree at first-notification can falsely read as
+  "agent fabricated its report" and trigger a duplicate re-spawn (two
+  agents then race the same fix on one tree). Rules: for WRITE tasks,
+  prefer `run_in_background: false`; when a background write-agent's
+  report doesn't match the tree, check whether its workflow session is
+  still active before concluding fabrication; treat the LAST report as
+  authoritative. Re-verify with a REBUILT tool — a verification probe
+  through a stale cached binary refutes a fix that actually landed.
 - Use SendMessage (agent ID or name) to continue an existing agent with its
   context intact — don't respawn for a follow-up question.
 - Launch ALL independent agents in **one message**, not sequentially.
