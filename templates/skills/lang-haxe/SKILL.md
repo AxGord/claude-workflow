@@ -102,7 +102,19 @@ for (f => fData in _frames) { ... }
 for (data in frameData) { ... }
 ```
 
-**Rule: NEVER use `_ =>` in map iteration.** If the key is unused, drop it — `for (val in map)` iterates values directly. (The `_ =>` case is linter-owned in hxq projects: `redundant-map-iter-key`; the keys-then-lookup case is not — keep catching it by hand.)
+**Rule: NEVER use `_ =>` in map iteration.** If the key is unused, drop it — `for (val in map)` iterates values directly. (Both cases are linter-owned in hxq projects: `redundant-map-iter-key` for `_ =>`, `map-keys-lookup` for keys-then-lookup.)
+
+## `catch (e:Exception)` IS a full catch-all — Dynamic is never needed for coverage
+
+Since Haxe 4.1 (unified exceptions), ANY thrown value — raw string, Int, anonymous object — is wrapped into `haxe.ValueException extends Exception`, so `catch (e:Exception)` catches everything `catch (e:Dynamic)` does, on every target INCLUDING eval/macro context, in both statement and expression position:
+
+```haxe
+try throw 'raw' catch (e: Exception) {}  // ✓ caught — e.message == 'raw'
+try throw 42 catch (e: Exception) {}     // ✓ caught
+```
+
+- Do NOT claim `Dynamic` catches more — that is pre-4.1 knowledge.
+- The ONLY difference is the BODY's view of the value: `Dynamic` binds the raw thrown value; `Exception` binds the wrapper (raw value via `.unwrap()` / `ValueException.value`). A `catch (e:Dynamic)` body that uses `e`'s raw-value API needs that migration; a body that ignores `e` swaps type with zero behavior change.
 
 ## Null Coalescing Operator `??`
 
