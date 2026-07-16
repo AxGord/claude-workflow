@@ -20,6 +20,7 @@ description: When and how to use hxq for structural Haxe navigation
 `haxe bin/apq-js.hxml` builds the JS runner. **The `hxq` shim AUTO-REBUILDS by default** when `find -newer` detects stale `.hx` under `src/`; aborts on build failure. Opt-out:
 - `HXQ_AUTO_REBUILD=0` — legacy warn-once-per-mtime mode (cache at `$XDG_CACHE_HOME/hxq/warned`).
 - `HXQ_QUIET=1` — skip stale check entirely. Takes precedence.
+  ⚠️ NEVER use it for a VERIFICATION probe right after src/ edits — it runs the STALE binary and can "refute" a fix that actually landed (or "confirm" one that didn't). Verification probes need an explicit `haxe bin/apq-js.hxml` first, or a bare `hxq` call (auto-rebuild on).
 
 **Rebuild matrix — `apq.js` and `test.js` are SEPARATE binaries.** `haxe bin/apq-js.hxml` builds `apq.js`; `haxe test-js.hxml` builds `test.js`. Edits to macro-driven src (`WriterLowering`/`ShapeBuilder`/`Codegen`/`Build`/`Lowering`/`TriviaTypeSynth`…) require rebuilding BOTH before trusting results: a stale `apq.js` makes probes/ops lie, a stale `test.js` makes the sweep lie. Quick staleness check: `grep -c <newSymbol> bin/apq.js`.
 

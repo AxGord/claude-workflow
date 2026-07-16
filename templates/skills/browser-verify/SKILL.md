@@ -85,6 +85,12 @@ A single test viewport can make the reported bug geometrically impossible. Obser
 - Any behavior gated on camera clamps at world bounds, aspect breakpoints, letterbox math, or scroll limits is viewport-dependent — test at minimum one narrow (~500 px) AND one wide (≥1440 px) window via browser resize; add DPR variants when transforms scale by resolution.
 - Corollary: when the user insists a motion bug is real and your metrics are clean, suspect your repro CONDITIONS (viewport, dpr, frame rate) before suspecting the user.
 
+### 8. `browser_run_code_unsafe` runs in the Playwright SERVER sandbox — no `setTimeout`, and a mid-script throw still leaves earlier side effects applied
+
+The snippet passed to `browser_run_code_unsafe` executes in the Playwright server process, not the page — timer globals aren't defined there, so `await new Promise(r => setTimeout(r, ms))` throws `ReferenceError: setTimeout is not defined`. Use `await page.waitForTimeout(ms)` for delays; `setTimeout` inside `page.evaluate(...)` is fine since that runs in-page.
+
+- Corollary: when such a script throws partway through, every `await` BEFORE the crash already ran — dispatched events, clicks, and state changes persist in the page. A conditional early `break`/branch can let execution reach further than "the first timer call" before crashing. If the page later shows "impossible" state, reconstruct exactly which statements executed before the throw instead of assuming the whole script was a no-op.
+
 ### Framework-specific siblings
 
 Rendering-framework-specific verification recipes (freezing a scene's tickers for a deterministic screenshot, sampling motion on the render ticker instead of your own rAF) live in the domain skills — e.g. `domain-pixi` for Pixi.js.
