@@ -201,9 +201,27 @@ Validate the EV model with a sweep across multiple fixed cashout targets before 
 **GOTCHA — economic model must not silently override a player-visible physics event.**
 When a deterministic outcome layer (pre-drawn crash point / book-based result) is draped over a physics renderer, scope any economic reclassification to outcomes the player CANNOT SEE. A physical impact the player watches happen (the ball rams an obstacle and bounces) MUST terminate consistently with what was shown — overriding it back to "safe, continue" so the book stays tidy produces a contradiction caught in the first playtest (observed: the ball visibly hit an obstacle yet the multiplier kept climbing). Rule: renderer-derived classification wins for any event the player can see; the economic model may only override outcomes that are visually indistinguishable.
 
+## Render-Glue Guards: Degrade Gracefully, Never Throw Mid-Action
+
+A "should never happen" throw in presentation/render glue that executes
+inside an event/state-machine action (xstate action, input handler, tween
+callback) doesn't fail safe — it wedges the machine mid-transition and the
+whole game hangs on the triggering input. Observed: a geometry guard
+(`dx <= 0` on a knockback landing) threw inside the shoot action because a
+SIBLING subsystem legitimately produced the "impossible" input (an
+interceptor placed past the scripted landing point) — every fresh boot froze
+on the first shot. Presentation code must handle any geometry another
+subsystem can produce (here: signed dx, fall backward); reserve throws for
+corrupted DATA, not spatial edge cases. Corollary: verify guards against the
+DEFAULT entry path (no debug params, real input events) — debug-seeded
+harness sweeps can systematically miss the default session's deterministic
+first outcome.
+
 ## Virtual-Scroll / Treadmill Takeover — Match Speed at the Handoff Seam
 
 When forward motion transitions from **real translation** (object moves in world-X, camera follows) to a **virtual scroll / treadmill** (object parked at a fixed screen X, background streamed past it to fake motion), the streamed background speed must MATCH the object's prior real forward speed at the seam, then ease down. A speed discontinuity — especially a collapse — reads as the object STOPPING, not as continued motion.
+
+**The rule covers EVERY motion-authority handoff, not just treadmills** — including a projectile PHASE CHANGE (powered flight → post-impact ballistic fall). Designing the second phase from the landing geometry alone ("fall must land at X, closed-form time t, so vx = dx/t, vy0 = 0") ignores the arrival speed: measured case — arrival 1.15 px/ms, geometric fall restarted at 0.45 px/ms (−61% in one frame) → read as "hits an invisible wall, then parachutes". Fix shape: carry a fraction of the arrival velocity across the seam (KEEP ≈ 0.75), clamp, then solve the remaining free parameter (fall time / initial vertical speed) from the landing constraint — satisfy continuity AND the required endpoint together.
 
 **Concrete case**: a flying ball soared at ~1700 px/s (real X travel, camera following), then a "cruise" phase parked the ball and streamed the sky at a constant 280 px/s — a ~6× speed collapse at the seam. Players read it as "the ball stopped." Fix: start the treadmill at the soar's exit speed (`≈ (end.x − start.x) / duration`, clamped to a sane max), then smoothstep-decelerate to the idle drift speed (280 px/s). The background keeps moving at the prior rate and gently settles — reads as continuous forward flight arriving into a hover.
 

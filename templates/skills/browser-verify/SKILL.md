@@ -91,6 +91,27 @@ The snippet passed to `browser_run_code_unsafe` executes in the Playwright serve
 
 - Corollary: when such a script throws partway through, every `await` BEFORE the crash already ran — dispatched events, clicks, and state changes persist in the page. A conditional early `break`/branch can let execution reach further than "the first timer call" before crashing. If the page later shows "impossible" state, reconstruct exactly which statements executed before the throw instead of assuming the whole script was a no-op.
 
+### 9. Long-lived Vite dev server serves a STALE optimizeDeps prebundle of workspace packages — silent wrong behavior, ZERO console errors
+
+Vite pre-bundles linked workspace deps (`@scope/*` monorepo packages) into
+`node_modules/.vite`. A dev server left running across a large edit session
+can keep serving the OLD prebundle of an edited workspace package while the
+app's own files are fresh — a mixed module graph. The symptom is NOT a crash:
+the app runs, state machines advance, but behavior computed by the stale
+package is silently wrong (observed: animations completing instantly — an
+object teleporting to its end state for one frame — with a clean console,
+which perfectly mimics an application bug in the new code).
+
+- Tell: freshly-implemented behavior "breaks" in the browser while the full
+  unit/typecheck suite for the same code is green, and the console shows no
+  errors. Suspect the serving layer BEFORE the code.
+- Fix: kill the dev server, `rm -rf node_modules/.vite`, restart with
+  `--force`, hard-navigate a fresh tab — THEN re-test; only debug the code if
+  the symptom survives a provably fresh serve.
+- A fresh `browser_close` + navigate does NOT help — the staleness is
+  server-side, not browser-cache-side (compare gotcha 3, which this can
+  compound with).
+
 ### Framework-specific siblings
 
 Rendering-framework-specific verification recipes (freezing a scene's tickers for a deterministic screenshot, sampling motion on the render ticker instead of your own rAF) live in the domain skills — e.g. `domain-pixi` for Pixi.js.
