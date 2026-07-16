@@ -95,6 +95,16 @@ Pick the agent type by task shape:
   still active before concluding fabrication; treat the LAST report as
   authoritative. Re-verify with a REBUILT tool — a verification probe
   through a stale cached binary refutes a fix that actually landed.
+- **The complement: don't BLOCK on a late narrative either.** A background
+  agent can stop mid-wait (e.g. yielding for its own children's
+  notifications) and deliver only an interim note. If its deliverable
+  already verifies on-tree — commit present, tree clean, gates recorded in
+  the commit/report trail — proceed on the artifacts: verify them
+  directly, abort the agent's orphaned workflow session, move to the next
+  wave. The narrative report is context; the artifacts are the
+  deliverable. Symmetric rule: artifacts outrank the report in BOTH
+  directions (don't trust an early report the tree contradicts; don't
+  wait for a final report the tree already proves).
 - Use SendMessage (agent ID or name) to continue an existing agent with its
   context intact — don't respawn for a follow-up question.
 - Launch ALL independent agents in **one message**, not sequentially.
