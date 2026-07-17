@@ -81,9 +81,13 @@ Pick the agent type by task shape:
 
 ## Lifecycle
 
-- The Agent tool runs subagents **in the background by default** — you are
-  notified on completion. Pass `run_in_background: false` when the result
-  gates your next step.
+- **Sync vs background is an explicit per-spawn DECISION — always pass
+  `run_in_background`.** ONE spawn whose result gates your next step →
+  ALWAYS `run_in_background: false`; backgrounding it buys nothing and
+  costs an idle turn + a wake-up round-trip. A small batch needed
+  all-at-once → sync too (all calls in one message). Background ONLY
+  when completions are consumed one-by-one as they finish (rolling
+  window over a queue) or you genuinely do other work meanwhile.
 - **A background agent's first "final report" can be PREMATURE.** The
   completion notification fires whenever the agent stops; it may then
   resume and keep writing, delivering a refined report later. Artifact-
@@ -151,7 +155,9 @@ A spawned subagent runs **flat by default** — no workflow session, no
   hxq <sub> <Type> <dir-or-glob> call, never a per-file loop. Strip
   noise, but quote every error, failing assertion, and number VERBATIM —
   don't paraphrase the signal or replace it with a verdict; the parent
-  judges.`
+  judges. Bash: run commands FOREGROUND with an explicit timeout sized
+  to the command; background ONLY for never-exiting processes (servers,
+  watchers) or runs genuinely over the 10-min foreground ceiling.`
 
 This is the parent-side safety net: workflow states that instruct
 spawning carry their own preamble text, but those prompts can be stale

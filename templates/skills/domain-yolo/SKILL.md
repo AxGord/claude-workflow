@@ -28,6 +28,20 @@ Passing a list of image paths to `model.predict(source=...)` runs **one forward 
 - WRONG: `model.predict(source=all_128_paths, batch=1)`  # runs ONE batch-128 forward → OOM
 - RIGHT: `for sub in chunks(paths, 8): model.predict(source=sub)`  # batch bounded to 8
 
+## Verified Gotcha — Matching Shapes ≠ Same Model
+
+When picking a source model to convert/requantize into a new precision variant, don't infer "same model" from matching input shape or overlapping backbone conv-layer shapes alone. A single-class fine-tune and the 80-class COCO base model of the same YOLO family (same width/depth, same input resolution) share nearly identical backbones — dozens of conv layers will have IDENTICAL shapes in both — because only the detection head's final output channel count differs (e.g. `[1, 5, N]` = 4 bbox coords + 1 class score, vs `[1, 84, N]` = 4 bbox coords + 80 class scores). Trusting partial shape matches can pick the WRONG source file — architecturally similar but a different model (different class count / task).
+
+Fix: check the actual OUTPUT tensor shape before committing to a source file, not just the input shape.
+
+```python
+import openvino as ov
+m = ov.Core().read_model(path)
+print([o.get_partial_shape() for o in m.outputs])  # channel-axis last dim reveals class count
+```
+
+A mismatch here (e.g. expecting 84 channels but seeing 5) means the wrong file was picked — even if input shape and many backbone layers matched.
+
 ## Model Selection Quick Reference
 
 | Model | When | Key Feature |

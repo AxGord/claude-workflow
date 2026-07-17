@@ -63,6 +63,19 @@ proceeding without them.
 - When a shared constant/style/config has only one caller — modify it in-place instead of creating a new variant alongside
 - Check usage count (grep) before deciding to add vs modify — creating a new variant when the old one is unused is unnecessary duplication
 
+### Config placement — JIT over global
+
+- Global CLAUDE.md is not a rule dump. A rule needed at a specific process
+  moment (agent spawning, commit, review) belongs in that moment's JIT
+  carrier — the workflow state prompt or skill that is in context right
+  then. CLAUDE.md keeps only: process bootstrap, every-reply rules
+  (language, style), and user-specific facts with no JIT carrier (e.g.
+  git identity)
+- Discipline ≠ preference: universal correct tool usage (sync vs
+  background, timeouts) goes into the distributed carriers (bundled
+  skills, workflow templates), never into preferences-* — those hold
+  only personal taste set by the user
+
 ### Asking vs proceeding
 
 - A task/plan instruction to "confirm with user before X" is NOT an absolute mandate to use AskUserQuestion. If the recommended option is just "consistent with the existing established system / default behavior", state it in one line and proceed — don't ask
