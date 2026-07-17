@@ -43,7 +43,10 @@ states:
       constraints your spawn prompt specified (required CLIs, blocked
       commands). Strip noise, but quote every error, failing assertion,
       and number VERBATIM — don't paraphrase the signal or replace it
-      with a verdict; the parent judges.
+      with a verdict; the parent judges. Bash: run commands FOREGROUND
+      with an explicit timeout sized to the command; background ONLY for
+      never-exiting processes (servers, watchers) or runs over the
+      10-min foreground ceiling.
 
       When done → transition `done`.
     transitions:

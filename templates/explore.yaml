@@ -39,7 +39,10 @@ states:
         analysis, or a recommendation is ANALYTICAL — never spawn it flat,
         use the VERBATIM preamble below. ALWAYS pass an explicit `model`:
         `sonnet` for locate fan-out, `opus` for analytical judgement;
-        never haiku, never silent session-model inheritance.
+        never haiku, never silent session-model inheritance. Their
+        findings gate your next transition → ALL calls in ONE message,
+        each with `run_in_background: false` (a single spawn especially —
+        never background one gating agent).
       - Use Glob to find files by pattern
       - For "where is X / what is X's shape / which decls carry Y" use the
         STRUCTURAL navigation tool your loaded skills prescribe for the

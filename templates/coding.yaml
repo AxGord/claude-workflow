@@ -42,6 +42,7 @@ states:
       ---
       After collecting reports: `sessions` → `abort` orphaned child `subagent`
       sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
+      Its report gates your routing → spawn with `run_in_background: false`.
 
       Route based on scope:
       - `single` → 1 file to change (top-tier session AND >~30 lines →
@@ -93,6 +94,7 @@ states:
       ---
       After collecting reports: `sessions` → `abort` orphaned child `subagent`
       sessions. NEVER spawn an analytical subagent flat (no workflow = no skills).
+      Its report gates your edits → spawn with `run_in_background: false`.
 
       Do NOT build or verify compilation here — testing workflow handles that.
       Just write code and transition `done`.
@@ -129,7 +131,9 @@ states:
         and what it can expect from other files
       - How to get current state: `git diff HEAD -- <filepath>`
 
-      Launch ALL file agents in parallel (single message, multiple Agent tool calls).
+      Launch ALL file agents in ONE message, each with `run_in_background:
+      false` — their reports gate integration; a "batch" of ONE file is
+      still a gating single, not a background task.
       Wait for all to complete. Collect their reports.
 
       After ALL reports are collected:
@@ -228,8 +232,10 @@ states:
       (opus wins on overlap). Never haiku, never silent inheritance of
       the session model.
 
-      Launch up to 8 batch agents in parallel (single message, multiple Agent
-      tool calls); more batches → next wave after the current one completes.
+      Launch up to 8 batch agents in ONE message, each with
+      `run_in_background: false` — reports gate the merge; a single batch
+      is still a gating single, not a background task. More batches →
+      next wave after the current one completes.
       Wait for all to complete. Collect their reports.
 
       After ALL reports are collected:

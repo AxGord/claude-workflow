@@ -146,8 +146,10 @@ states:
       mechanics the linter covers (.hx with hxq) and routine code; `opus`
       for macro-heavy / engine-critical / no-linter batches. Never haiku.
 
-      Launch up to 8 batch agents in parallel (single message, multiple Agent
-      tool calls); more batches → next wave after the current one completes.
+      Launch up to 8 batch agents in ONE message, each with
+      `run_in_background: false` — reports gate the merge; a single batch
+      is still a gating single, not a background task. More batches →
+      next wave after the current one completes.
       Collect their reports.
 
       If a child agent fails or returns no report — re-spawn it once;
@@ -205,8 +207,10 @@ states:
          batches, `opus` for complex/no-linter ones. Never haiku, never
          silent inheritance of the session model.
 
-         Launch up to 8 batch agents in parallel (single message, multiple Agent
-         tool calls); more batches → next wave after the current completes.
+         Launch up to 8 batch agents in ONE message, each with
+         `run_in_background: false` — reports gate the package report; a
+         single batch is still a gating single, not a background task.
+         More batches → next wave after the current completes.
          If a child agent fails or returns no report — re-spawn it once;
          if it fails again, mark that batch's files as unreviewed in the package report.
 
