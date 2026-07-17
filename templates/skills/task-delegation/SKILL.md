@@ -105,6 +105,14 @@ Pick the agent type by task shape:
   deliverable. Symmetric rule: artifacts outrank the report in BOTH
   directions (don't trust an early report the tree contradicts; don't
   wait for a final report the tree already proves).
+- **A worktree COMMIT is itself an interim artifact until the agent's
+  terminal report.** A clean tree + a plausible commit can still be
+  AMENDED — an agent's internal review pass may find real bugs and
+  rewrite the tip (same message, new SHA). Merging at first sight of the
+  commit ships the pre-review version. Rule: cherry-pick/merge only after
+  the agent's terminal report (or confirmed session end), and re-read the
+  branch tip AT merge time — never from an earlier observation; after
+  merging, diff the merged SHA against the SHA the final report names.
 - Use SendMessage (agent ID or name) to continue an existing agent with its
   context intact — don't respawn for a follow-up question.
 - Launch ALL independent agents in **one message**, not sequentially.

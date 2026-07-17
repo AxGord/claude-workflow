@@ -53,3 +53,30 @@ When the user asks "how did the old way work?", "why not keep it simple / slight
 **Tell:** You are on the 3rd+ iteration fixing your own new mechanism; each fix introduces a new symptom; the user's questions consistently reference what it used to do. The thrash itself is the signal — the baseline was right.
 
 **Principle:** Repeated pushback that references prior/simpler behavior is not polish feedback — it is a direction correction. Reverting to a known-good baseline is a first-class fix, not a failure.
+
+## A Regression YOU Introduced Is a REVERT, Never a Redesign
+
+Special case of the above with a sharper rule. When the user's complaint is
+about behavior that broke AFTER your own change (especially collateral from a
+fix aimed at a DIFFERENT symptom), the spec for "fixed" is the pre-change
+baseline — not your judgment of what the mechanism should be. Redesigning it
+means guessing the baseline from memory; every guess that misses costs a full
+user round-trip and erodes trust.
+
+**DON'T:** Iterate replacement designs for the thing you broke (observed
+cascade: synthesis → tune-to-measured-baseline → full-physics rewrite — each
+"fix" more ambitious than the last while the user kept saying "it worked
+before").
+**DO:** Identify the exact edit of yours that first changed the behavior,
+restore that code path verbatim, and prove the restoration with a mechanical
+oracle (frozen fixtures re-passing WITHOUT regeneration, byte-diff of
+generated outputs, golden files) — not with "looks right".
+
+**Tell:** Your successive fixes for one complaint GROW in scope. Scope growth
+while the user references the past is the strongest possible revert signal —
+by the time you're proposing an architecture, the answer was `git diff` to
+the baseline three rounds ago.
+
+**Corollary:** In a long-running UNCOMMITTED working tree, "revert" may mean
+hand-reconstruction. Commit checkpoints at every user-visible-good state so a
+revert is one command, not an archaeology project.
