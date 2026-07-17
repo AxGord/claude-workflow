@@ -22,7 +22,7 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 - **Runtime overlays** — modify workflows on the fly without touching YAML files
 - **Action states** — `exec` runs shell commands, `fetch` makes HTTP requests, with auto-routing by exit code or HTTP status
 - **Web dashboard** — real-time session monitoring with DAG graph visualization
-- **18 bundled workflows** — complete agent lifecycle from routing to reflection
+- **19 bundled workflows** — complete agent lifecycle from routing to reflection, including long-running batch orchestration
 - **20 bundled skills** — reusable knowledge modules auto-provisioned on first run
 - **SessionStart hook** — auto-provisions missing skills and injects workflow context
 

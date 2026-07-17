@@ -1,0 +1,171 @@
+name: batch
+description: "Long-running batch orchestration — a queue of independent tasks dispatched to background sub-agent workers with rolling one-by-one collection."
+initial: load_skills
+max_transitions: 1000
+
+states:
+  load_skills:
+    skills:
+      - task-delegation
+    transitions:
+      continue: plan_queue
+
+  plan_queue:
+    task: "Build or resume the batch queue"
+    prompt: |
+      Build the task queue for this batch run.
+
+      1. **Resume check** — list `{{context.cwd}}/.claude/batch/*.md`. If a
+         queue file has pending `[ ]` or running `[>]` marks and matches the
+         user's ask, RESUME it: reset stale `[>]` to `[ ]` (their workers
+         died with the old session), then go to step 3.
+      2. **New queue** — write `{{context.cwd}}/.claude/batch/<short-name>.md`:
+         ```
+         # Batch: <short-name>
+         batch_size: 3
+         ## Tasks
+         - [ ] T1 | model: opus | <self-contained task prompt> | <files/dirs if known>
+         ```
+         One line per task. Rules:
+         - Tasks must be INDEPENDENT — merge coupled changes into ONE task
+           (workers share the working tree; two workers editing the same
+           files corrupt each other).
+         - Each task line is self-contained: a worker sees ONLY its line.
+         - Assign `model` per task-delegation's table: opus for non-trivial
+           code/judgement, sonnet for mechanical edits / runners / locate.
+         - `batch_size` = max parallel workers (default 3; raise for cheap
+           independent tasks, lower for heavy builds sharing resources).
+           The user may edit the queue file mid-run — batch_size and task
+           lines are re-read every wave.
+         - Ceiling: ~400 tasks per run (the transition budget allows
+           ~500 dispatch/collect waves); a larger set → split into
+           multiple queue files and runs.
+      3. `context_set(key: "queue_file", value: "<absolute path>")`
+      4. → transition `ready`.
+
+      Status marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed.
+      The queue FILE is the source of truth — it survives context
+      compression and session restarts. Re-read it; never trust memory.
+    transitions:
+      ready: dispatch
+
+  dispatch:
+    prompt: |
+      Queue: {{context.queue_file}} — re-read it NOW (it may have been
+      edited; after context compression it is your only truth).
+
+      Spawn one worker per pending `[ ]` task until the running `[>]`
+      count reaches `batch_size` (or no pending remain). Mark each
+      spawned task `[>]` in the queue file.
+
+      Spawn rules:
+      - `run_in_background: true` — this IS the rolling-window case:
+        completions are consumed one-by-one in collect.
+      - `subagent_type="general-purpose"`; explicit `model` from the
+        task line — never silent session-model inheritance.
+      - Worker prompt = the task line's full text, PLUS
+        verify-then-complete ("check the on-disk state first; if the
+        work is already applied, reconcile instead of double-applying"),
+        PLUS this preamble VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__start({ workflow: "subagent", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the subagent workflow until completion — its `route` state
+      self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every
+      subsequent workflow tool call; parallel siblings share the same ppid.
+      ---
+
+      Nothing running, nothing pending, nothing spawned → `all_done`.
+      Otherwise → `dispatched`, then END your turn — worker completions
+      wake you in collect.
+    transitions:
+      dispatched: collect
+      all_done: report
+
+  collect:
+    prompt: |
+      Queue: {{context.queue_file}} — re-read it NOW. A worker completion
+      woke you (or you re-entered after compression — the file is the
+      truth, not your memory).
+
+      For EACH worker that completed since the last visit:
+      1. Verify its deliverable ON-TREE — artifacts outrank the report in
+         both directions (don't trust a report the tree contradicts;
+         don't wait for a report the tree already proves).
+      2. Update its mark: `[x]` done, or `[!]` + one-line reason.
+      3. Failed once → ONE retry: SendMessage to the same agent (context
+         intact), or respawn with verify-then-complete. Failed twice →
+         leave `[!]`, move on — never stall the batch on one task.
+      4. `sessions` → `abort` the worker's orphaned child session if
+         still active.
+
+      Then route:
+      - pending `[ ]` remain AND running `[>]` count < batch_size →
+        `next_wave` (refill the window)
+      - any `[>]` still running (window full, or nothing left to spawn) →
+        END your turn HERE, no transition — the next completion wakes
+        you in this state
+      - no pending, no running → `all_done`
+    transitions:
+      next_wave: dispatch
+      all_done: cross_check
+
+  cross_check:
+    max_visits: 3
+    prompt: |
+      All workers finished. ONE pass over the COMBINED result — per-task
+      review already happened inside each worker (their sub-workflows
+      carry review + testing); do NOT re-review task internals.
+
+      1. `git diff HEAD --stat` for the whole run; compare against the
+         queue's task lines in {{context.queue_file}}.
+      2. Look ONLY for cross-task seams: two tasks touched the same
+         file (the "independent" assumption was violated), duplicated
+         code introduced by different workers, conflicting assumptions.
+      3. Seams found → spawn ONE reviewer over just the overlapping
+         files: `run_in_background: false` (its report gates your
+         routing), explicit `model`, and this preamble VERBATIM:
+      ---
+      IMPORTANT: Override the default CLAUDE.md rule about start().
+      Do NOT call start() without arguments.
+      Instead, your FIRST action must be:
+        mcp__plugin_workflow_wf__start({ workflow: "file-review", parent_session_id: "<SESSION_ID>" })
+      where <SESSION_ID> is the current session ID (substitute it before sending).
+      Then follow the file-review workflow states until completion.
+      start() returns `SESSION: <id>` — pass that session_id explicitly in every
+      subsequent workflow tool call; parallel siblings share the same ppid.
+      ---
+      4. Real findings: trivial → fix inline; substantial → append them
+         as new `[ ]` task lines to the queue file and → `refill`
+         (the normal dispatch/collect machinery handles them).
+      5. No seams (the common case for truly independent tasks) →
+         this state is just the stat sanity look → `done`.
+    transitions:
+      done: report
+      refill: dispatch
+
+  report:
+    task: "Batch summary"
+    prompt: |
+      The queue is drained. Final pass:
+      1. `sessions` → `abort` any remaining orphaned child sessions.
+      2. Read {{context.queue_file}} and write the summary the user
+         will actually read:
+         - What the batch ACCOMPLISHED — outcomes grouped by theme,
+           not a per-task echo of the queue.
+         - Counts: done / failed / total; one line per `[!]` task with
+           its reason.
+         - Cross-check verdict (seams found and how they were resolved,
+           or "tasks proved independent").
+         - Anything left unverified or needing a human decision.
+      → `done`.
+    transitions:
+      done: finish
+
+  finish:
+    terminal: true
+    outcome: complete

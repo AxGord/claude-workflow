@@ -55,6 +55,9 @@ states:
         When in doubt between bug_fix and investigate → bug_fix.
       - write/modify code (1-4 files), scope is clear → coding
       - new feature e2e → feature
+      - a QUEUE of many independent tasks to grind through workers
+        (task list in the message or a file, "do all of these", long
+        unattended multi-task runs) → batch
       - restructure code, refactoring, fix formatting, cleanup, lint across files/directories → code_review
       - review PR/code → code_review
       - test / verify / check runtime behavior (locally, on a device, in a
@@ -83,6 +86,7 @@ states:
       project: run_project
       coding: run_coding
       feature: run_feature
+      batch: run_batch
       bug_fix: run_bug_fix
       debugging: run_debugging
       investigate: run_investigate
@@ -208,6 +212,11 @@ states:
 
   run_code_review:
     sub_workflow: code-review
+    on_complete: doc_sync
+    on_fail: doc_sync
+
+  run_batch:
+    sub_workflow: batch
     on_complete: doc_sync
     on_fail: doc_sync
 
