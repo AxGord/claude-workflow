@@ -31,9 +31,10 @@ so a commit cannot ship a bundled skill snapshot that silently lags its live `~/
 npm run build    # tsc → compiles src/ to build/
 npm run dev      # tsc --watch
 npm start        # node build/index.js
+npm test         # vitest run (src/*.test.ts)
 ```
 
-No test runner, linter, or formatter is configured.
+No linter or formatter is configured.
 
 ## Environment Variables
 

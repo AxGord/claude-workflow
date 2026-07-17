@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.9
+## 0.1.10
+
+- templates: batch workflow — long-running batch orchestration over a file-backed task queue: rolling waves of background workers with one-by-one collection, cross_check gate; sync-vs-background decided per wave (a wave holding a single worker spawns sync — its report gates collect); per-worker git worktrees when logically-independent tasks collide only on infrastructure (registration files, build artifacts) with mechanical branch merge at collect
+- templates: testing — `reassess` re-entry state after `fix_user_issue`: a user-reported fix re-runs unit tests when it touched logic (Red-Green on the user's exact scenario) before integration → user re-testing; dedicated state instead of a jump into `assess` so no `skip_all` escape hatch can end the loop without the user's verdict
+- templates: explicit sync-spawn + bash fg/bg discipline in spawn states — gating agents spawn with `run_in_background: false`, bash runs foreground with an explicit timeout, background only for never-exiting processes
+- skills: task-delegation — sync-vs-bg spawn rule, background-agent premature-report gotcha, artifacts-outrank-report symmetric rule, worktree-commit-is-interim merge rule
+- skills: workflow-authoring — loop re-entry needs a dedicated state: audit a decision state's outbound transitions for early-exits before routing a retry into it (dual of the inbound gate-bypass audit)
+- skills: enrichments + bundled resyncs — hxq (HXQ_QUIET=1 stale-binary probe, clusters dir-scope warning, `#if`-blindness of unused-private/refs, `--fix` fixpoint discipline gated on the project typecheck), lang-haxe (`Exception` is a full catch-all since 4.1), claude-code-config (hook payload capture recipe, Stop-hook `background_tasks` shape), browser-verify/domain-gamedev/domain-yolo/debugging live-side syncs
+- skills: preferences JIT-placement rule (rules live in the process moment's carrier, not global CLAUDE.md); skill-manager machine-specifics gate; deployment notes generalized
 
 - engine: every exec state gets `WF_PLUGIN_ROOT` in its env (plugin root, resolved from the executor module's own location) — templates reference bundled scripts portably (`sh "$WF_PLUGIN_ROOT/scripts/foo.sh"`), no per-machine script installation; a state's own `env:` can override it
 - templates: master.yaml starts with a `scan_project` exec state — engine-run project language scan (bundled `scripts/scan-project.sh`) whose per-extension menu (+ tool probes, e.g. `hx … (hxq OK)`) renders in the route prompt via `context.project_langs`; skill selectors pick from the menu instead of re-scanning (empty menu → manual fallback)
@@ -19,6 +27,8 @@
 - templates: review routing is size-based, not count-based — trivial (≤2 files AND ≤~50 lines to review; full scope measures the FILE, diff scope the diff) → inline self-review, everything else → batched agents even for a single batch (fresh eyes on the author's code + main-context offload); dispatchers must pass an explicit Agent `model` (sonnet for linter-covered/routine batches, opus for macro-heavy/no-linter; never haiku, never silent session-model inheritance)
 - templates: review dispatchers batch files logically instead of one-agent-per-file — source+test together, change-coupling (hxq importers/callees for .hx), directory grouping, cap 5 files/~500 diff lines, oversized solo — amortizing each agent's fixed skill-load cost (~35-45k tokens) and putting coupled files in front of ONE reviewer; file-review consumes one file or a batch (space-separated `file_path`, per-file report sections + cross-file section), `hxq-lint-file.sh` lints a whole batch in one call (glob-safe: `set -f` held through the unquoted list expansion); applied to all three dispatchers (code-review, coding, bug-fix)
 - templates: file-review checklist dedup vs the linter — build_checklist decides report usability ONCE (stale/failed-lint guards) and records `context.lint_subtraction`; check_style/check_loops guard their hardcoded lists on that flag, subtracting at rule-description granularity by `hxq lint --list-rules` (residues named: local-var annotations, beyond-threshold complexity judgments)
+
+## 0.1.9
 
 - engine: deliver hard-terminal state prompts — rendered and prepended (with `---` divider) to sub-workflow pop and root-completion output, so report contracts and push instructions actually fire
 - engine: resolveSessionId throws on ambiguous ppid (multiple active sessions) listing candidates — parallel subagents must pass explicit session_id
