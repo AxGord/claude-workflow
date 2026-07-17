@@ -205,12 +205,27 @@ states:
       The user found an issue during manual testing. Ask what exactly is
       wrong if unclear. Fix the code, then:
 
-      - `retry` → re-verify: automated integration first if available,
-        otherwise manual_verify → user testing again
+      - `retry` → re-assess verification (unit tests if the fix touched
+        logic, then integration/manual verify → user testing again)
       - `give_up` → unable to fix
     transitions:
-      retry: check_integration
+      retry: reassess
       give_up: failed
+
+  reassess:
+    prompt: |
+      Re-verify after fixing a user-reported issue. The bug slipped past the
+      earlier checks, so no level may be skipped outright — and the loop MUST
+      end with the user confirming the fix.
+
+      - `unit` → fix touched logic: cover the user's exact scenario Red-Green
+        (write a unit test that fails on the old behavior first), then the
+        chain re-runs through integration → user testing
+      - `no_unit` → pure UI fix, nothing unit-testable: go straight to
+        integration/manual verify → user testing
+    transitions:
+      unit: load_skills
+      no_unit: check_integration
 
   check_test_changes:
     prompt: |
