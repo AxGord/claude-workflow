@@ -30,6 +30,20 @@ states:
          - Tasks must be INDEPENDENT — merge coupled changes into ONE task
            (workers share the working tree; two workers editing the same
            files corrupt each other).
+         - Shared-tree conflicts are NOT a reason to serialize when tasks
+           are logically independent and only collide on infrastructure
+           (a common registration file, build artifacts, `git add -A`
+           commits): give each worker its OWN git worktree — the task
+           line/prompt instructs `git -C <repo> worktree add
+           /tmp/<batch>-<TN> -b batch/<TN>`, ALL work with CWD inside it,
+           commit on that branch, never touch the main tree. Parent
+           merges branches at collect (registration-file conflicts =
+           mechanical union), reruns the gate suite once on the merged
+           tree. Reserve serial (batch_size: 1) for tasks editing the
+           SAME logic files or building on each other's results. NOTE:
+           the Agent tool's `isolation: "worktree"` isolates the
+           SESSION's repo — for work in another repo the worker must
+           create the worktree itself as above.
          - Each task line is self-contained: a worker sees ONLY its line.
          - Assign `model` per task-delegation's table: opus for non-trivial
            code/judgement, sonnet for mechanical edits / runners / locate.
@@ -59,8 +73,14 @@ states:
       spawned task `[>]` in the queue file.
 
       Spawn rules:
-      - `run_in_background: true` — this IS the rolling-window case:
-        completions are consumed one-by-one in collect.
+      - Sync vs background is decided PER WAVE: a wave that leaves exactly
+        ONE worker running is a gating single, not a background task —
+        spawn it with `run_in_background: false` (its report gates
+        collect; a serial batch_size:1 queue runs every worker sync).
+        Only when the window holds 2+ CONCURRENT workers spawn with
+        `run_in_background: true` — that is the rolling-window case:
+        completions are consumed one-by-one in collect while the rest
+        keep running.
       - `subagent_type="general-purpose"`; explicit `model` from the
         task line — never silent session-model inheritance.
       - Worker prompt = the task line's full text, PLUS
