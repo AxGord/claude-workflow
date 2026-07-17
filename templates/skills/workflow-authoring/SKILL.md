@@ -186,6 +186,14 @@ bug class a single flag eliminates.
 **Multi-step pipeline**: chain action states — exec → exec → fetch → prompt
 (max chain depth: 20, no agent involvement between action states)
 
+**Loop re-entry needs its own state, not a jump into assess**: when a
+fix/retry transition routes back into a general decision state, audit that
+state's OUTBOUND transitions first — an early-exit there (`skip → done`)
+lets the agent end the loop without re-running the verification the loop
+exists to guarantee. Give the retry a dedicated re-entry state that offers
+only loop-preserving routes. Dual of the inbound rule: adding a gate before
+state X requires auditing ALL transitions INTO X for bypasses.
+
 ### Gotchas
 
 - stdout/stderr truncated to `max_output` bytes (default 10KB, configurable per state). Truncation keeps the **tail** (last N bytes), not the head — errors at the end of output are preserved. Use higher values for verbose builds (e.g. `max_output: 51200`)
