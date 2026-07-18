@@ -104,31 +104,20 @@ regardless of execution quality.
 value the simulation never reached; or you're about to ship a fix pattern
 the project's history already rejected under a different symptom.
 
-## A Rate Step in a Smooth-Input System = Look for a Clamp Boundary First; a Simulated Time Mismatch = Falsified, Not "Noise"
+## Predicted-vs-Measured Mismatch = Falsified Hypothesis; Verify the Fix Against the ORIGINAL Metric
 
-When a visible discontinuity localizes to one variable's RATE stepping
-(×2-3 within 1-2 frames) while every input to it stays smooth, the operative
-mechanism is almost always a hard bound being engaged or left — and a
-clamped variable LOOKS like a smooth signal until you test it against the
-bound.
+Two disciplines for "my fix is principled but the bug persists".
 
-**DO (first, cheap):** print `value − bound(t)` per frame for every
-computable clamp/floor/min-max in the path. An exact `0.0` run means the
-variable is riding the bound; the "mysterious step" is the frame it leaves
-(or engages) it. Only after bounds are ruled out, hunt subtler causes.
+**Falsifier rule:** when a candidate mechanism lets you PREDICT an observable
+consequence — the time, place, or value at which something should happen —
+and the prediction MISSES what you measured (even slightly), the hypothesis
+is FALSIFIED, not "measurement noise / seeding uncertainty". A real but
+MASKED cause (a second effect hiding behind the one you're studying) produces
+exactly this trap: the fix is sound in isolation, measures zero effect, and
+the mismatch was the tell all along. Don't absorb the gap — find what your
+model didn't account for.
 
-**Falsifier rule:** if you simulate a candidate mechanism and its predicted
-event time misses the measured step (even by ~100 ms), the hypothesis is
-FALSIFIED — do not absorb the gap as "seeding/measurement uncertainty".
-A real-but-MASKED discontinuity (an input-side clamp hidden behind an
-output-side clamp) produces exactly this trap: the fix is principled,
-measures zero effect, and the timing gap was the tell all along.
-
-**Post-fix gate:** re-run the ORIGINAL failing metric. Byte-identical
-numbers = wrong mechanism → return to diagnosis; never start tuning the
-fix's parameters to chase the symptom.
-
-**Metric caveat:** threshold-based detectors on resampled paths (heading
-delta per arc-step, per-frame jumps) flip verdicts with sampling rate —
-judge continuity on the raw velocity/rate series, not on a thresholded
-flag.
+**Post-fix gate:** after applying the fix, re-run the ORIGINAL failing metric,
+not a proxy. A byte-identical result means you changed the wrong thing →
+return to diagnosis; never start tuning the fix's parameters to chase the
+symptom (that's curve-fitting, not fixing).

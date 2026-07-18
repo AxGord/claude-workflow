@@ -228,3 +228,24 @@ When forward motion transitions from **real translation** (object moves in world
 **Measurement gotcha**: if the engine time-scales animation (e.g. `gsap.globalTimeline.timeScale(speed)` for a `?speed` param), the sampled background px/s is `game-speed × timeScale`. Multiply back by `1/timeScale` before comparing to your intended game-time speed, or a correct value reads as "too slow."
 
 **Secondary motion gotcha**: a vertical overlay (e.g. wind weave) at large amplitude (±70 px) on a now-slow background DOMINATES perception — reads as "bobbing in place." Keep secondary motion small relative to apparent forward speed (±70 → ±26 px fixed it).
+
+## A Rate Step in a Smooth-Input System = Look for a Clamp Boundary First
+
+When a visible discontinuity localizes to one variable's RATE stepping
+(×2-3 within 1-2 frames) while every input to it stays smooth, the operative
+mechanism is almost always a hard bound being engaged or left — a clamped
+variable LOOKS like a smooth signal until you test it against the bound.
+
+**DO (first, cheap):** print `value − bound(t)` per frame for every
+computable clamp/floor/min-max in the path. An exact `0.0` run means the
+variable is riding the bound; the "mysterious step" is the frame it leaves
+(or engages) it. Only after bounds are ruled out, hunt subtler causes.
+
+**Masked-clamp trap**: an input-side clamp hidden behind an output-side clamp
+makes a principled fix measure zero effect — the discontinuity is real but
+one bound masks the other. Confirm the mechanism with the general falsifier /
+post-fix-metric discipline (debugging skill), not by eyeballing the curve.
+
+**Metric caveat:** threshold-based detectors on resampled paths (heading
+delta per arc-step, per-frame jumps) flip verdicts with sampling rate —
+judge continuity on the raw velocity/rate series, not on a thresholded flag.
