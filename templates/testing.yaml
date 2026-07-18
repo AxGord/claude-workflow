@@ -79,6 +79,10 @@ states:
       Unit tests are failing. Analyze the failures and fix the code.
 
       Do NOT fix tests to match wrong behavior — fix the implementation.
+      A small, already-diagnosed fix → edit inline YOURSELF; do NOT hand it to
+      a background SendMessage-resume and idle-wait — that path is
+      background-only and can't gate synchronously (see task-delegation
+      Lifecycle). Delegate only a large/coupled fix.
       After fixing, transition back to re-run unit tests.
 
       Choose transition:
@@ -146,6 +150,10 @@ states:
     prompt: |
       Integration test failed. Analyze what broke and fix it.
 
+      A small, already-diagnosed fix → edit inline YOURSELF; do NOT hand it to
+      a background SendMessage-resume and idle-wait — that path is
+      background-only and can't gate synchronously (see task-delegation
+      Lifecycle). Delegate only a large/coupled fix.
       After fixing, transition back to re-run integration.
 
       Choose transition:
@@ -203,7 +211,10 @@ states:
   fix_user_issue:
     prompt: |
       The user found an issue during manual testing. Ask what exactly is
-      wrong if unclear. Fix the code, then:
+      wrong if unclear. Fix the code — a small, already-diagnosed fix → edit
+      inline YOURSELF; do NOT hand it to a background SendMessage-resume and
+      idle-wait, that path is background-only and can't gate synchronously
+      (see task-delegation Lifecycle). Delegate only a large/coupled fix. Then:
 
       - `retry` → re-assess verification (unit tests if the fix touched
         logic, then integration/manual verify → user testing again)

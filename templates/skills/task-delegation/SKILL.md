@@ -118,7 +118,18 @@ Pick the agent type by task shape:
   branch tip AT merge time — never from an earlier observation; after
   merging, diff the merged SHA against the SHA the final report names.
 - Use SendMessage (agent ID or name) to continue an existing agent with its
-  context intact — don't respawn for a follow-up question.
+  context intact — don't respawn for a follow-up question. **But SendMessage-
+  resume of a COMPLETED agent is always background** — that path has no
+  `run_in_background: false`, so it cannot honour the "one gating spawn →
+  sync" rule: you send, then idle-wait for a wake-up. So when the follow-up
+  gates your next step, decide by SIZE, not by "an agent already has the
+  context": a small, already-precisely-diagnosed fix (≤~30 lines — the same
+  threshold as tiny-edits-stay-inline above) → edit it inline YOURSELF; the
+  background round-trip costs more than it saves, and repeating it becomes
+  spawn-one-and-wait, the exact anti-pattern the sync rule forbids. Reserve
+  SendMessage-resume for a LARGE or coupled follow-up where re-establishing
+  the agent's own context is worth the background wait — and then don't idle:
+  it's the rolling-window case (do other work, expect the wake-up).
 - Launch ALL independent agents in **one message**, not sequentially.
 - **Worktree-isolated agents fork from the session-start HEAD, not the current branch tip.** Commits you make mid-session are NOT in a later-spawned agent's worktree base — the agent may see stale code, wrongly conclude your work "was never merged", or produce patches that conflict. Rule: COMMIT each phase before spawning the next dependent wave; when a wave's base is already stale, merge its patches with `git apply --3way` and expect to hand-reconcile files several agents touched. Also instruct agents to report their base commit (`git log --oneline -1`) so staleness is visible. One more trap in that merge flow: `git apply --3way` STAGES everything it applies — a later `git add <subset> && git commit` silently commits the WHOLE staged index, not your subset (the tell: the first chunk commit's stat lists every merged file and later chunk commits say "nothing to commit"). Run `git reset -q` to unstage all before building chunked commits, and if rebuilding botched history, soft-reset to the true pre-merge base, never to a mid-wave commit.
 
