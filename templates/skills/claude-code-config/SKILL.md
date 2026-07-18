@@ -148,6 +148,7 @@ Entry shape: `{"id","type","status","description"}` + type-specific fields (`com
 
 - `id` is stable across Stop firings; there are **NO timestamps** or turn counters. Distinguishing "started this turn" from "long-lived since an earlier turn" (dev server, watcher) requires persisting seen ids between Stop firings yourself (state file keyed by `session_id`).
 - Non-empty `background_tasks` ≠ new work in progress: a persistent dev server stays listed at EVERY Stop — a hook that suppresses on non-empty silences itself for the whole session.
+- Suppression heuristics must be TYPE-aware: `subagent`/`workflow` tasks always complete and re-invoke the main agent (their Stop is not the real finish), but `shell` tasks may NEVER complete (`npm run dev`) — a Stop with a freshly started shell task IS a real completion. "Started this turn ⇒ still working" is false for shell.
 - Only live tasks are listed (completed ones are removed), and `session_crons` entries also carry `id`.
 - `prompt_id` (v2.1.196+) identifies the current prompt; `last_assistant_message` (v2.1.145+) holds the final text.
 - JSON string values escape quotes as `\"`, so a naive grep for `"key":"` cannot false-match text inside `command`/`description` values.

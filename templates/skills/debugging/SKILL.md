@@ -80,3 +80,55 @@ the baseline three rounds ago.
 **Corollary:** In a long-running UNCOMMITTED working tree, "revert" may mean
 hand-reconstruction. Commit checkpoints at every user-visible-good state so a
 revert is one command, not an archaeology project.
+
+## Model Emits What the Presenter Can't Deliver → Fix the Emitter, Check the Rejected-Fix Ledger First
+
+When a bug is a contract violation between a data/model layer and a
+presentation layer — the model emitted an outcome the presenter cannot
+honestly produce (an unreachable target, a state the UI can't render as one
+coherent motion) — the durable fix is in the EMITTER: stop emitting
+undeliverable pairings, constrained against the presenter's real capability.
+
+**DON'T:** Patch the presenter to fake the model's claimed outcome (splicing
+a canned glide/animation to "reach" a value the simulation never hit) —
+however small the visual gap, it reads as fake physics and gets rejected.
+**DO:** Measure the presenter's honest capability empirically — drive its
+real pipeline over a parameter grid, not a hand-derived geometric bound
+(chaotic outcomes have no clean closed-form threshold). Constrain the
+emitter to the measured-deliverable region. Before designing the fix, check
+the project's record of previously rejected fix families (memory/docs/commit
+lore) — a design in a rejected family costs a full user round-trip
+regardless of execution quality.
+
+**Tell:** Your fix adds presentation-side code animating toward a model
+value the simulation never reached; or you're about to ship a fix pattern
+the project's history already rejected under a different symptom.
+
+## A Rate Step in a Smooth-Input System = Look for a Clamp Boundary First; a Simulated Time Mismatch = Falsified, Not "Noise"
+
+When a visible discontinuity localizes to one variable's RATE stepping
+(×2-3 within 1-2 frames) while every input to it stays smooth, the operative
+mechanism is almost always a hard bound being engaged or left — and a
+clamped variable LOOKS like a smooth signal until you test it against the
+bound.
+
+**DO (first, cheap):** print `value − bound(t)` per frame for every
+computable clamp/floor/min-max in the path. An exact `0.0` run means the
+variable is riding the bound; the "mysterious step" is the frame it leaves
+(or engages) it. Only after bounds are ruled out, hunt subtler causes.
+
+**Falsifier rule:** if you simulate a candidate mechanism and its predicted
+event time misses the measured step (even by ~100 ms), the hypothesis is
+FALSIFIED — do not absorb the gap as "seeding/measurement uncertainty".
+A real-but-MASKED discontinuity (an input-side clamp hidden behind an
+output-side clamp) produces exactly this trap: the fix is principled,
+measures zero effect, and the timing gap was the tell all along.
+
+**Post-fix gate:** re-run the ORIGINAL failing metric. Byte-identical
+numbers = wrong mechanism → return to diagnosis; never start tuning the
+fix's parameters to chase the symptom.
+
+**Metric caveat:** threshold-based detectors on resampled paths (heading
+delta per arc-step, per-frame jumps) flip verdicts with sampling rate —
+judge continuity on the raw velocity/rate series, not on a thresholded
+flag.
