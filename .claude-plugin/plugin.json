@@ -1,7 +1,7 @@
 {
   "name": "workflow",
   "displayName": "Workflow Engine",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Structured workflow orchestration for AI agents via finite-state machines.",
   "keywords": ["workflow", "fsm", "orchestration", "state-machine", "mcp"],
   "author": {

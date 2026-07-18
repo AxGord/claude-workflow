@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.11
+
+- templates: testing — the fix-loop states (`fix_unit` / `fix_integration` / `fix_user_issue`) gain delegation discipline: a small, already-diagnosed fix is edited INLINE, not handed to a background `SendMessage`-resume and idle-waited on. A completed agent's `SendMessage`-resume is background-only — it has no `run_in_background: false`, so re-using it to gate a small follow-up becomes spawn-one-and-wait, the exact anti-pattern the sync-spawn rule forbids. This is the release's user-facing fix — it reaches every user through the live-loaded workflow template (unlike bundled skills, which only provision on first run)
+- skills: task-delegation — the same `SendMessage`-resume-is-background-only rule in the Lifecycle section: decide a follow-up by SIZE, not by "an agent already has the context"; a small precisely-diagnosed fix goes inline, `SendMessage`-resume is reserved for a large/coupled follow-up where the background wait is worth it
+- skills: debugging / domain-gamedev — the simulation-specific "A Rate Step in a Smooth-Input System = clamp boundary" entry moved out of the universal `debugging` skill into `domain-gamedev` (its `value − bound(t)` per-frame clamp probe, masked-clamp trap, resampled-path metric caveat); `debugging` keeps only the transferable disciplines (predicted-vs-measured mismatch = falsified hypothesis; verify a fix against the ORIGINAL failing metric)
+- skills: bundled-snapshot resyncs (maintenance) — `debugging`, `hxq`, `claude-code-config` brought back in line with their live copies so `check-skill-sync` is green again
+
 ## 0.1.10
 
 - templates: batch workflow — long-running batch orchestration over a file-backed task queue: rolling waves of background workers with one-by-one collection, cross_check gate; sync-vs-background decided per wave (a wave holding a single worker spawns sync — its report gates collect); per-worker git worktrees when logically-independent tasks collide only on infrastructure (registration files, build artifacts) with mechanical branch merge at collect
