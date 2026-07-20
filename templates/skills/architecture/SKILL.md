@@ -187,3 +187,11 @@ When the requirement names a concrete observable event — a specific transition
 1. Enumerate every named beat from the request.
 2. For each, define how it will be **distinctly observable** (numerically or visually) and assert it before claiming done.
 3. If you're about to drop a beat because it's hard or feels unphysical, surface that trade-off explicitly — don't silently omit it.
+
+## A Fix That Crosses a Repo Boundary Is a Scope Escalation — Ask First
+
+When the "architecturally honest" fix for a task lives in a DIFFERENT repository than the one the task was scoped to (a shared library, a team-owned fork, a sibling service), do not just make it because it's cleaner. A shared artifact carries costs invisible from the call site: rebuild/deploy of dependents, upstream merge burden, other projects' compatibility, team review conventions.
+
+**DON'T:** Silently extend the change into the second repo because the type/API there is "the root cause" and the team owns it.
+**DO:** Implement the in-scope workaround locally, and surface the cross-repo fix as an OPTION ("the honest fix is changing X in <lib> — want that instead?"). Let the user pick.
+**Tell:** you're about to run the first `git status`/edit in a repo the user's request never mentioned. That's the moment to stop and ask — ownership of the fork is not consent to change it.

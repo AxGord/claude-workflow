@@ -79,7 +79,16 @@ check (any intervening statement resets it); `charCodeAt` → `fastCodeAt`
 in bounds-checked loops; `pop()`/`shift()` are `Null<T>` even behind a
 length guard (cast / capture-and-break / drop Strict); `?.` chains are
 expressions, not l-values — no `++`/`--`/`+=`; `x?.m() == true` for
-boolean methods.
+boolean methods; a param's BODY type ≠ its written annotation for `?p:T`
+and `p:T = null` (both `Null<T>`, the `null` default is nullable even
+without `?`) and `...p:T` (`haxe.Rest<T>`); an error inside an `inline`
+function body is reported at EVERY call site, naming the callee but
+pointing at the caller — read the callee's body, not the callers;
+a non-null-safe library's declared types are trusted literally and can
+lie in both directions — bridge locally with `cast` in a NON-inline
+wrapper (Loose accepts it, Strict callers re-check inline bodies → drop
+inline), or a SPEC-equivalent sentinel; changing the fork's type =
+cross-repo scope escalation, ask first; never `@:nullSafety(Off)`.
 
 ## Map Key-Value Iteration
 

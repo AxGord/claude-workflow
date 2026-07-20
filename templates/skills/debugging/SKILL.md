@@ -121,3 +121,28 @@ model didn't account for.
 not a proxy. A byte-identical result means you changed the wrong thing →
 return to diagnosis; never start tuning the fix's parameters to chase the
 symptom (that's curve-fitting, not fixing).
+
+## A Never-Reset Latch Is Stale on Occurrence 2 — Test the Second Run, Not the First
+
+When a value is latched once per occurrence (per request, per run, per
+cycle) behind a "0/null = unset" sentinel, and the code only ASSIGNS that
+field and never RESETS it, the field is stale starting on the occurrence
+AFTER the one that set it. First-occurrence testing — fresh process, first
+request, clean start — always passes, because the sentinel is genuinely
+unset the first time; the bug is invisible to single-shot verification by
+construction. It surfaces on occurrence 2+ (the prior value persists) or on
+a variant path that's supposed to leave the field unset (the consumer reads
+the stale leftover and acts on it).
+
+**DON'T:** Verify a stateful feature with one clean-start run and call it
+done. A green first run proves nothing about lifecycle correctness.
+
+**DO:** Exercise occurrence 2+ of the same operation back to back, plus the
+variant path meant to leave the field unset — confirm the sentinel is
+actually cleared between occurrences, not just correctly read on the first
+one. The durable fix is a teardown that clears the latch at end-of-occurrence
+or start-of-next, not a consumer-side guess at the stale value.
+
+**Tell:** Your fix relies on "0/null means unset," but grep shows the field
+is assigned in exactly one place and reset nowhere — the previous
+occurrence's value survives into the next.
