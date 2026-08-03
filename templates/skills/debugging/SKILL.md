@@ -122,6 +122,31 @@ not a proxy. A byte-identical result means you changed the wrong thing →
 return to diagnosis; never start tuning the fix's parameters to chase the
 symptom (that's curve-fitting, not fixing).
 
+**"No effect" report ⇒ check the artifact before the logic:** when someone
+reports "I don't see the change" / "looks the same" after a change you
+believe you made, your FIRST move is not to re-explain or re-diagnose the
+logic — it's to confirm you and they are observing the SAME, freshly-built
+artifact. A stale build (a build/test script that rebuilds only one target)
+or a proxy (a simulation, a different binary, a reimplementation of the
+logic in another language) makes a correct fix look broken and a broken fix
+look correct — the two are indistinguishable from the symptom alone.
+
+**Tell:** you're about to defend a change with evidence from something OTHER
+than the exact artifact under observation — test output, a script that
+reimplements the logic, a binary built by a different command than the one
+that produced what the user is running.
+
+**Do:** before trusting what an artifact shows, verify it was built from
+current sources — compare its mtime against the changed sources, or confirm
+the build command actually rebuilds THAT target (many build/test scripts
+rebuild only a subset). Reproduce the effect through the exact artifact the
+user runs, not a proxy.
+
+Abstract example: a "no effect" report traced to a stale interactive
+binary — the test script rebuilt only the test target, so the tool under
+observation still ran old code while the suite passed. A simulation of the
+logic had "proved" the fix; the shipped artifact never had it.
+
 ## A Never-Reset Latch Is Stale on Occurrence 2 — Test the Second Run, Not the First
 
 When a value is latched once per occurrence (per request, per run, per
@@ -146,3 +171,47 @@ or start-of-next, not a consumer-side guess at the stale value.
 **Tell:** Your fix relies on "0/null means unset," but grep shows the field
 is assigned in exactly one place and reset nowhere — the previous
 occurrence's value survives into the next.
+
+## A Positional Join of Two Lists Silently Mispairs — Cross-Check Before Reporting
+
+Zipping two separately-produced sequences by position (not an explicit shared key) mispairs every row once their internal ordering diverges — yet the join succeeds and row counts match, so the result looks entirely plausible:
+
+```sh
+find . -exec md5 -q {} \; > sums.txt    # traversal order
+find . | sort              > names.txt  # different order
+paste sums.txt names.txt                # rows now mismatched
+```
+
+**DON'T:** Trust matching line counts as proof of correct pairing — derive both sides from ONE ordered list, or carry the key with the value per line, avoiding the join entirely.
+**DO:** Before reporting any derived list, count, or diff, cross-check it against a source built by a different mechanism — that's the reusable discipline; the ordering bug is just one way to trigger it.
+
+**Tell:** You're about to report a list/count/diff with no independent confirmation. Same risk for any index-zipped parallel sequences — log lines↔timestamps, ids↔results, rows↔headers.
+
+## An Untested Explanation Is a Guess — Manipulate the Cause Before Reasoning From It
+
+A component fails to surface something it plausibly should have. The observation is real, but the explanation you reach for — "the needed input was never in scope for that query" — is invented on the spot, sounds mechanical, and is never tested. Reasoning forward from it hands the user a confident, wrong verdict ("nothing can be done short of a much bigger change").
+
+**DON'T:** Treat a fluent, plausible-sounding mechanism as a finding. The symptom being real doesn't make your story about it real.
+**DO:** Test the claimed cause by changing it — supply the "missing" input and re-run, reorder if the claim is about ordering, clear the cache if the claim is staleness. One flip is usually cheap; a cause that survives the flip is worth reasoning from. Only fall back to reading the implementation when manipulation isn't practical — and when the two disagree, the manipulation wins.
+
+**Tell:** You're about to write "because" about behavior you haven't varied — especially right before the next sentence rules an option out.
+
+**Principle:** A conclusion inherits the confidence of its weakest premise. "It doesn't fire and I haven't established why" beats a fast, wrong "nothing can be done."
+
+## A Check Coarser Than the Symptom Can't Eliminate a Hypothesis — Re-Test the Reporter's Own Theory First, at Matching Resolution
+
+When the reporter names a mechanism up front (a boundary, seam, or junction in the affected content) and an early check "rules it out," distrust the check before the theory. A check whose granularity — window size, sampling interval — exceeds the symptom's own scale (e.g. analysis windows several times larger than the object that vanishes) structurally cannot detect an effect confined to that scale; it reports "no effect" whether or not one exists.
+
+**DON'T:** Accept "ruled out" from a coarse probe and spend the investigation inventing self-made mechanisms instead.
+**DO:** When investigation stalls, re-test the reporter's stated mechanism FIRST at a resolution finer than the symptom itself, before trying anything else. Log WHERE (screen location, index, coordinate) each occurrence is caught from the very first detection — a positional fingerprint (always the same edge/side) is itself evidence for the mechanism.
+
+**Tell:** You "ruled out" a hypothesis with a check whose granularity is coarser than the thing measured, and hours later you're still inventing new mechanisms instead of tightening that one check.
+
+## A Pixel/Threshold Detector Is Blind Without a Positive Control — Calibrate Against the Live Frame
+
+An automated visual detector built on a fixed color mask or threshold silently reports "cannot reproduce" the moment the live palette drifts from the one it was tuned on (a different lighting/theme/tint state) — the target contributes zero masked pixels, so the detector is blind, not the bug absent. Many clean runs are not evidence of absence if the mask was never checked against the CURRENT frame.
+
+**DON'T:** Trust a color/threshold detector's "found nothing" after N runs without proving it can find a known-present target under current conditions.
+**DO:** Before relying on such a detector, sample actual pixels from a live frame and derive thresholds from the sample; re-calibrate whenever the app's visual state changes. Run a positive control — a known target it must catch — before trusting any null result.
+
+**Tell:** A detector reports zero hits across many runs, but its mask/threshold was authored against a different visual state than the one under test.

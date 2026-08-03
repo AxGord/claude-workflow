@@ -105,7 +105,7 @@ hxq extract-var f.hx --match 'a * 2' doubled --write
 | List all top-level type decls across a scope (cross-file) | `symbols <scope> [--kind ClassDecl/…]` |
 | Which files import a module (cross-file) | `importers <module> <scope>` |
 | Declaration site(s) of ONE named type + ambiguity check | `declares <type> <scope>` (matches simple name or qualified path; >1 row = ambiguous, 0 = not declared) |
-| Run analysis checks + report violations (grouped-by-file) | `lint <scope> [--rule <id>]… [--fix] [--all] [--flat] [--fail-on <sev>] [--format text\|json\|checkstyle]` (analysis/check layer; **lint --list-rules** prints every check as id+description — THE authoritative list. Inline suppression: trailing // noqa[: rules] or CHECKSTYLE:OFF/ON region. --fix has a HUGE blast radius — scope to a file and/or --rule; looping --fix to a fixpoint without a typecheck between passes compounds cascade deletions. Full semantics: BEFORE relying on lint verdicts or configuring apqlint.json → Read references/lint.md) |
+| Run analysis checks + report violations (grouped-by-file) | `lint <scope> [--rule <id>]… [--fix] [--all] [--flat] [--fail-on <sev>] [--format text\|json\|checkstyle]` (analysis/check layer; **lint --list-rules** prints every check as id+description — THE authoritative list of REGISTERED rules, not of what runs here: it never reads `apqlint.json`, so a config-disabled rule still prints, and the opt-in `explicit-local-type` (default OFF) prints while firing only under `--rule` or a config that enables it. Inline suppression: trailing // noqa[: rules] or CHECKSTYLE:OFF/ON region. --fix has a HUGE blast radius — scope to a file and/or --rule; looping --fix to a fixpoint without a typecheck between passes compounds cascade deletions. Full semantics: BEFORE relying on lint verdicts or configuring apqlint.json → Read references/lint.md) |
 | Every occurrence of name X (incl. case-patterns) | `mentions X <dir>` |
 | Who does function F call (direct/transitive) | `callees 'Type.method' <scope> [--depth N] [--kinds call,ref,new,virtual,contains]` (approximate call graph: name + declared-type resolution, `Null<T>` unwrapped, virtual edges to overrides, `Ref` edges for lambdas/method-values/`.bind` with the receiving call as `via`; out-of-scope targets `[external]`; unresolved sites counted to stderr; builds graph over the whole scope — ~25s on TM-sized 800 files) |
 | Who calls function F (direct/transitive) | `callers 'Type.method' <scope> [--depth N]` (same graph, in-edges) |
@@ -117,6 +117,7 @@ hxq extract-var f.hx --match 'a * 2' doubled --write
 | Match expression / statement shape with metavars | `search 'pattern with $x' <dir>` |
 | Find string-literal / annotation key | `lit '<text>' <dir>` |
 | Find text in comments / TODO / doc-comment | `lit '<text>' <dir> --include-comments` or `--kind Comment` |
+| Find text in `#if`/`#elseif` directive lines (condition text is NOT a node — plain lit/search can't see it) | `lit '<text>' <dir> --include-directives` or `--kind Directive` |
 | Subtree at line:col / by selector | `ast file.hx --at L:C` / `--select Kind:name` |
 | Filter `--select` by arity | `--min-children N` / `--max-children N` |
 | Cap rendered child count per level | `--depth N --children-limit M` |
@@ -152,6 +153,8 @@ hxq extract-var f.hx --match 'a * 2' doubled --write
 
 **Confusion-buster:** `refs` = VALUE bindings, `uses` = TYPE positions, `search` = AST SHAPES, `lit` = CAPTURED STRING CONTENT in leaves. They are not interchangeable. **Neither `refs` nor `uses` catches `expr.field` on a value of type T** — use `blast <Type>` (union + heuristic field-access; `--all` to disable smart 20-hit cap on heuristic section).
 
+**`refs` is blind to EVERY member access, including a QUALIFIED STATIC.** `Type.f()` looks like it must resolve — the receiver is a type name, no inference needed — but the name sits on a field-access node, not an identifier, so `refs f` shows only the declaration. Same for `obj?.f()` / `obj!.f()`, the forms strict null-safety pushes you toward. This is by design (`refs` feeds `rename`, which must not drag `obj.f` along when renaming a local `f`), and `refs` now warns on stderr with a count when it resolved no read/write but the scope holds accesses. **Never turn a bare `refs` result into "unused" / "only one caller" / "safe to delete" for a member or static — confirm with `hxq mentions <name> <dir>` first.** Sibling of the `#if`-blindness rule below: a 0-hit structural query is not proof of absence.
+
 ## Mutation ops — index. BEFORE running ANY mutation op → Read references/ops.md
 
 hxq has full-CRUD, scope-correct, format-preserving, re-parse-validated
@@ -169,7 +172,33 @@ add-element · remove-element · remove-import · remove-member · safe-delete �
 encapsulate-field · set-doc · set-modifier · set-comment · rewrite ·
 comment-rewrite · patch · extract-method.
 
-Three SILENT hazards that must never wait for the reference read:
+Four SILENT hazards that must never wait for the reference read:
+- A de-prefixing `rename` whose new name a PARAM/LOCAL already holds produces a
+  self-assignment that COMPILES — `m_x` -> `x` where `new(x)` does `m_x = x`
+  yields `x = x;`, and stripping a trailing `_` that disambiguated param from
+  field (`f = f_` -> `f = f`) is the same trap; no error, no oracle catch, the
+  field silently stays unassigned. `rename` now REFUSES this (it re-resolves the
+  rewritten tree and requires the occurrence set to be unchanged), naming the
+  re-bound position. Pass `--qualify-shadowed` to get `this.x = x` instead of the
+  refusal — it applies ONLY to a capture by a PARAMETER in a non-static function
+  (the param idiom); a capture by a local or in a static context stays a refusal,
+  since `this.` there would be confusing or invalid. `rename` still cannot refuse
+  a collision with a member INHERITED from outside `--scope` (a library
+  supertype) — that one at least fails to compile. `rename` also REFUSES two
+  resolution blind spots (2026-07-25) instead of silently part-applying: a
+  `$name` string-interpolation read (not indexed — was left bound to whatever
+  the old name still meant) and a same-block REdeclaration of the name
+  (references after the second decl mis-bind to the first). Until the
+  resolution index learns both, run the project's compiler oracle right after
+  ANY `rename --write` — reparse validation alone does not prove semantics.
+- **Never `2>/dev/null` a mutation op.** Every rejection is a stderr line with a
+  zero-ish-looking shell result inside a chained command, so a suppressed
+  `the old fragment does not occur` / `matched no nodes` reads as success: the
+  file is untouched, the follow-up build is green, and you go on to reason about
+  a fixture or a fix that was never applied. Same for a `for`-loop of ops where
+  only the last exit code survives. If output volume is the problem, keep stderr
+  and drop stdout (`1>/dev/null`), and confirm the edit landed by reading the
+  node back (`hxq source --select`) rather than by the command "not erroring".
 - Every mutation op is PRINT-ONLY without `--write` — a forgotten --write
   looks like success (stdout echoes the result) but changes nothing.
   EXCEPTION: `lint --fix` is NOT a node mutation op — `--fix` itself WRITES
@@ -231,6 +260,7 @@ Create-side + whole-file counterparts of the node-level writer-emit ops. **Raw `
 
 - **`probe`/`ast --depth N` SILENTLY TRUNCATES below N — never conclude a node LACKS a child from a depth-limited dump.** A `--depth 5` probe of `abstract A(Int){ function f() return this.x; }` printed `(FieldAccess x)` with no receiver, so I wrongly concluded abstract `this.x` carries no `IdentExpr this` child (and built a check around that); at full depth it is `(FieldAccess x (IdentExpr this))` — the child was just past the depth cap. When verifying a node's CHILD structure (does X have child Y?), use depth deep enough to reach the leaf, or `--select` the node and read it unbounded. A unit test caught the false invariant; a deeper probe would have caught it first.
 - **0 hits on `search`** — almost always a kind mismatch. Re-run with `--explain` to see parsed pattern + input-kind histogram. If the pattern's root kind isn't in the histogram, the search never hits — read actual node shape via `hxq ast` and rewrite.
+- **`search` pattern BOOL LITERALS match by KIND, not VALUE** — `false == true` matches `true == true` (the operator `==` vs `!=` IS discriminated; the literal's text is not). A literal-literal search over-matches by value — confirm each hit with `hxq source --range`, or use `lit` for exact text.
 - **"Find string `'foo.bar'`"** — that's `lit`, not `search`. Use `hxq lit 'foo.bar' <dir>`.
 - **"Find annotation `@:trailOpt`"** — `hxq lit '@:trailOpt' src/ --kind Literal,Meta`.
 - **`search 'function foo'` returns no decls** — `search` is expressions/statements (call sites), not declarations. Use `refs foo --decls` or `ast --select 'FnMember:foo'`.
@@ -239,10 +269,14 @@ Create-side + whole-file counterparts of the node-level writer-emit ops. **Raw `
 - **Want `| head -N`** — every walker has `--limit N`; walkers also auto-cap at 500 hits without `--limit`. ⚠️ **`--limit 0` returns ZERO hits (a hard cap of 0), NOT "unlimited"** — verified on `lit`/`refs`; a `--limit 0` scan looks empty and silently mis-reports "no matches". To exceed the 500 default cap pass a large explicit `--limit N` (e.g. `--limit 9999`); to get ≤500 just omit `--limit`. Hits go to STDOUT (progress `scanned N/M…` goes to stderr) — capture stdout, not `2>/dev/null`-suppress it, when counting.
 - **Script-checking "is X gone?"** — pass `--exit-on-empty` (alias `--require-match`) to a find-walker (refs/uses/meta/lit/cases/blast/mentions/search): 0 hits → non-zero exit instead of the default 0. Without the flag a walk always exits 0, so a bare `hxq refs X …; echo $?` can't distinguish found-vs-gone.
 - **Output flood** (e.g. `lit '/*' src/ --any-kind`) — auto-truncated per-hit content (multi-line block-comments → first line + ` … +N lines`); auto-cap at 500 hits with stderr nudge. Both opt-out via a large `--limit N` (NOT `--limit 0`, which returns nothing — see the `--limit 0` warning above).
-- **`#if`…`#end` bodies are invisible to walkers and lint — a 0-hit `refs` is NOT proof of "unused".** A conditional-compilation region projects as one `Conditional` node whose interior is raw preserved trivia; `refs`/`uses`/`mentions`/`lit` and lint rules (notably `unused-private`) never see identifiers used only inside an `#if` body. Before deleting something a structural query calls unused in a codebase with conditional compilation, cross-check with a raw-text search (`hxq source`) over the file — `lint --fix` can and does delete private members whose only callers live behind an `#if`.
+- **`#if`…`#end` interiors ARE parsed and visible to walkers/lint — a 0-hit `refs` still means unused.** A conditional-compilation region is a single `Conditional` node whose children are every branch's statements flattened as siblings (no per-branch grouping) — `refs`/`uses`/`mentions`/`lit` and node-local rules (`unused-private`, `unused-local`, `collapsible-if`, `prefer-null-coalescing`) all see inside it fine. The real blind spot: STATEMENT-LIST rules only visit direct children of `ControlFlowSupport.blockKinds()` (`BlockBody`/`BlockStmt`/`BlockExpr` for Haxe) — `Conditional` is deliberately excluded, else `dead-code` would call branches 2..N unreachable after branch 1's `return`. So `redundant-else-after-return`/`prefer-ternary-return`/`join-return`/`dead-code`/`empty-block` stay silent on a statement that's a direct child of a `Conditional` — fix those by hand via `hxq patch`; there's no report to point at.
+- **A token the parser folds into TRIVIA is invisible to BOTH lint and `fmt --list` — "0 findings + canonical" is not proof it isn't there.** A stray `;` after a block-terminated statement (`for (…) { … };`) gets absorbed into that statement's own span: no node, so every node-based rule reports nothing, and the writer re-emits it verbatim, so the file counts as writer-canonical. It was also load-bearing — its presence SUPPRESSED brace collapsing, so the same construct kept `{ }` around a single statement. Two consequences: (1) when a construct looks wrong but the linter is silent, dump the AST WITH SPANS (`ast --spans` / `probe --spans`) and compare a node's span end against its last child's — the gap is where absorbed tokens hide; (2) detecting them is span arithmetic, not tree walking. Beware the mirror trap: most `};` ARE mandatory (typedef, object literal, `= if/switch/try (…) {…};`, lambda), so gate a detector on a discriminator you verified on a real tree, not on the shape alone.
+- **Raw-text search across many `.hx` has no batch reader** — `hxq source` is one file per call and `strip` takes neither a directory nor a glob (`EISDIR` / `ENOENT`). The gate-legal sweep is a loop of `hxq source "$F" > out/$F.txt` and then grepping the `.txt` copies (no `.hx` path in the grep command). Expect ~1 process per file; background it for a large tree.
 - **`patch` anatomy — the three failure modes in one line each.** (1) The payload is ONE argument: `old` / `new` fragments alternating, separated by `====` on its OWN line (even section count; N pairs = one call) — multiple payload arguments are rejected. (2) Exactly one of `--select`/`--match`/`--at` is required, and the old-fragment must occur — uniquely — INSIDE the resolved node: `--at` resolves the NARROWEST node (often a bare `IdentExpr`, too small to contain any pair) and `--match` must itself parse as a pattern node (a typedef header or modifier-bearing decl fragment doesn't) → for statement-level edits default to `--select` on the enclosing member/class and widen the old-fragment with surrounding lines until unique. (3) Copy old-fragments from `hxq source --select` output VERBATIM — it is writer-reformatted (colon spacing, collapsed one-line `if`), so bytes you remember from writing the code may not be the bytes in the node.
 - **Widening an interface with many implementors is impossible under per-op auto-rebuild** — every mutation op rebuilds first and ABORTS on the transient state where implementors lack the new method. Ship a separate capability interface instead (`X implements NewCapability`) so every intermediate compile is green. Same trap in miniature: a multi-step patch that USES a constant before the patch that DECLARES it — run the intermediate op with `HXQ_AUTO_REBUILD=0` (stale binary is safe for a patch; the binary doesn't depend on the file being edited), then rebuild once at the end. Never HXQ_QUIET (kills the staleness check entirely → later probes lie).
 - **`test-summary -` TRUNCATES a large piped stream** — `node bin/test.js | hxq test-summary -` read only ~1583 of 5023 tests and still printed `0 failures` (a partial slice looks green; same hxnodejs stdin pipe limitation as the `Sys.stdin().readAll()` gotcha). For a full-suite run ALWAYS redirect to a file first: `node bin/test.js > out.txt 2>&1; hxq test-summary out.txt`. Piping is safe only for short filtered runs (`APQ_TEST=X node bin/test.js | hxq test-summary -`).
+- **A new lint/fix rule green on its unit suite + scratch probes is NOT done yet — run it over a large real tree and READ every site it would change.** A shipped autofix rule, fully green on tests and probes, turned out to make 2 of 10 real matched sites read WORSE than the input (an interior comment preserved but stranded, breaking the construct's shape) — no unit test or scratch probe surfaces that; it's a precondition gap only real code's variety exposes. The real-tree finding list IS the design review — a fixer that makes any real site worse needs a narrower precondition, not a docs caveat.
+- **A scratch-file probe of a LAYOUT-sensitive fix (line wrap/indent/braces) is config-blind — same root cause as the `/tmp`-canonical false-refuse and `--fix` no-op notes (references/ops.md, references/lint.md).** `fmt`/`lint --fix` discover `hxformat.json` by walking up from the file being probed, so a bare scratch file gets compiled DEFAULTS, not the target project's style — a probe can show a 1-line result where the project's own config canonicalises the same input to 2 lines. Copy the target's `hxformat.json` next to the probe file, or probe a file inside the project tree instead.
 
 ## Report on hxq gaps
 
