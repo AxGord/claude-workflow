@@ -55,8 +55,9 @@ states:
 
   # Engine-run lint pass — the agent cannot skip or water it down. The script
   # self-gates (non-.hx file or missing hxq → "SKIP: ..." output, exit 0).
-  # LINT_LIST_RULES=1 prepends the linter's rule registry and lint config:
-  # build_checklist subtracts by them instead of spending a call on --list-rules.
+  # LINT_LIST_RULES=1 prepends the rule state hxq actually runs for these
+  # files (on/off per rule, per config chain): build_checklist subtracts by it
+  # instead of spending a call on --list-rules.
   # Runs before authorship is known on purpose: for external/vendored files
   # the report is computed and then dropped by build_checklist — acceptable
   # cost for keeping the exec chain linear. The path goes via env, not
@@ -108,30 +109,37 @@ states:
       ---
       {{context.lint_report}}
       ---
-      Decide ONCE whether the report is usable, and record the verdict for
-      the downstream states:
+      Decide ONCE what the linter verified, and record it for the
+      downstream states — they read these two keys and never re-derive them:
       - USABLE = non-empty, the `=== hxq lint` / `=== fmt drift` headers name
-        THIS batch's files (other files = stale report from an earlier pass in
-        a reused session; the `=== hxq lint rules` header carries no file list
-        — that one is expected), and the lint section is real output — not
-        "SKIP: ..." and not a mid-report "SKIP: hxq lint failed" (a broken
-        linter verified nothing). Per-file SKIP lines for the batch's non-.hx
-        files are normal — the report is usable for the .hx files it covers;
-        but a report with NO `===` lint section at all (only SKIP lines) is
-        NOT usable.
-      - USABLE → `context_set(key: "lint_subtraction", value: "applied")`.
-        Its findings are review facts — carry them into your report as-is.
-        The report contains the linter's rule registry (`=== hxq lint rules`
-        section, id + description per line): THAT list is what the linter
-        owns — subtract by it, not from memory.
-        Registry ≠ what actually ran. It lists every REGISTERED rule; the
-        report's config section shows the project's lint config (or its
-        absence). So: subtract a registry rule UNLESS the config disables it.
-        Opt-in rules — registered but default OFF, `explicit-local-type`
-        (local-var type annotations) being the one that bites — run ONLY
-        where the config enables them by name: no config, or no entry for
-        the rule → it did NOT run, keep that checklist rule manual.
-      - NOT usable → `context_set(key: "lint_subtraction", value: "none")`.
+        THIS batch's files, and so do the `file:` lines under each
+        `=== effective lint rules` block (other files anywhere = stale report
+        from an earlier pass in a reused session), and the lint section is
+        real output — not "SKIP: ..." and not a mid-report "SKIP: hxq lint
+        failed" (a broken linter verified nothing). Per-file SKIP lines for
+        the batch's non-.hx files are normal — the report is usable for the
+        .hx files it covers; but a report with NO `===` lint section at all
+        (only SKIP lines) is NOT usable.
+      - NOT usable → `context_set(key: "lint_subtraction", value: "none")`
+        and `context_set(key: "lint_rules_ran", value: "")`.
+      - USABLE → its findings are review facts: carry them into your report
+        as-is, whatever the rule-state section says. Then read that section:
+        - `=== hxq lint rules: effective state per file` → one block per
+          config chain, each listing its `file:` lines and then
+          `<rule-id>  on|off  <reason>  <description>` per rule. A rule
+          counts as RAN only if it is `on` in the block of EVERY batch .hx
+          file (a rule on for some files only stays manual for the whole
+          batch). Record them:
+          `context_set(key: "lint_rules_ran", value: "<comma-separated ids>")`
+          and `context_set(key: "lint_subtraction", value: "applied")`.
+          `off` rules — config-disabled, `default-off` (opt-in, never
+          enabled), `needs-language-<v>` — did NOT run: never subtract them.
+        - `=== hxq lint rules: registry only` (hxq too old to report the
+          effective state), `=== hxq lint rules: unavailable`, a SKIP there,
+          or no rule-state section at all → the linter's coverage is
+          unknown: subtract nothing. Record
+          `context_set(key: "lint_rules_ran", value: "")` and
+          `context_set(key: "lint_subtraction", value: "none")`.
 
       **Step 2 — authorship gate.** Check `{{context.is_user_authored}}`.
       Treat empty as `"true"` (default).
@@ -148,8 +156,8 @@ states:
       1. Re-read the FULL skill text
       2. For EVERY rule in it — each `// WRONG` example, explicit rule, or
          convention:
-         - subtraction "applied" AND a registry rule covers it → DROP it,
-           write no check line. Subtract at rule granularity: a registry rule
+         - subtraction "applied" AND a rule in `lint_rules_ran` covers it →
+           DROP it, write no check line. Subtract at rule granularity: a rule
            covers exactly what its description says, no more.
          - otherwise → one line with the wrong pattern AND the correct one
       3. Output this skill's kept count and dropped count
@@ -177,11 +185,12 @@ states:
       logical context around them — the full method, callers of changed signatures,
       other uses of changed fields. A change can break surrounding code.
 
-      If `{{context.lint_subtraction}}` is "applied", the mechanically
-      decidable slice of the items below is already decided — its findings
-      are in the report. Do not re-derive by hand what the registry's rules
-      cover (provable null dereferences, dead null guards, swallowed
-      exceptions, unreachable code, self-comparisons, `=` in a condition).
+      If `{{context.lint_subtraction}}` is "applied", the linter ran exactly
+      these rules: `{{context.lint_rules_ran}}` — their findings are in the
+      report. Do not re-derive by hand what THOSE rules cover (e.g.
+      `null-dereference`, `dead-null-guard`, `swallowed-exception`,
+      `dead-code`, `identical-operands`, `assignment-in-condition` — each only
+      if it is in that list). Anything not in the list is still yours.
       Your job here is the part no linter can prove: whether the logic is
       what the change INTENDED.
 
@@ -213,9 +222,9 @@ states:
       Rules 5-6 are personal style preferences — apply them ONLY when
       `{{context.is_user_authored}}` is not "false" (treat empty as "true");
       for external/forked/vendored code check rules 1-4 only.
-      If `{{context.lint_subtraction}}` is "applied", skip every rule below
-      whose counterpart the report's rule registry lists — typically 2
-      (map-keys-lookup), 5 (loop-guard) and 6 (prefer-switch). Rules 1, 3
+      If `{{context.lint_subtraction}}` is "applied", skip a rule below ONLY
+      when its counterpart rule id is in `{{context.lint_rules_ran}}`: 2 ↔
+      `map-keys-lookup`, 5 ↔ `loop-guard`, 6 ↔ `prefer-switch`. Rules 1, 3
       and 4 are pure judgment, owned by no linter — walk EVERY loop for those.
 
       1. **Range-over-sparse-container**: the loop iterates an index range (`0...n`,
@@ -279,8 +288,8 @@ states:
       current style standards. Report with file:line.
 
       If `{{context.lint_subtraction}}` is "applied", skip the parts of the
-      items below the linter already verified (per the build_checklist
-      subtraction) and hand-check only the residues its rule descriptions
+      items below that a rule in `{{context.lint_rules_ran}}` already
+      verified and hand-check only the residues those rules' descriptions
       do not cover — e.g. "function doing too many things" beyond the
       cyclomatic threshold, semantics of names (the `naming` rule checks the
       convention, not whether the name says the right thing), commented-out
