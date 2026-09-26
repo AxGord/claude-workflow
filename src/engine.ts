@@ -543,7 +543,13 @@ export class Engine {
   }
 
   private _buildTemplateVars(session: SessionState): Record<string, unknown> {
-    const vars: Record<string, unknown> = { context: session.context };
+    // visits/root_workflow let action states route on engine-known facts
+    // (fix loops taken, running as a spawned sub-agent) with no agent turn.
+    const vars: Record<string, unknown> = {
+      context: session.context,
+      visits: session.stack[session.active_frame].state_visits,
+      root_workflow: session.stack[0].workflow,
+    };
     const ar = session.last_action_result;
     if (ar) {
       if (ar.stdout !== undefined) vars.stdout = ar.stdout;

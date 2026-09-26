@@ -295,6 +295,40 @@ describe("Engine", () => {
       expect(result.stack).toHaveLength(0);
     });
 
+    it("exposes active-frame visits and root_workflow to action states", async () => {
+      setup({
+        parent: {
+          initial: "go",
+          states: {
+            go: { sub_workflow: "child", on_complete: "end" },
+            end: { terminal: true, outcome: "complete" },
+          },
+        },
+        child: {
+          initial: "a",
+          states: {
+            a: { prompt: "A", transitions: { again: "a", next: "probe" } },
+            probe: {
+              type: "exec",
+              command: 'echo "$V|$R|$G"',
+              env: { V: "{{visits.a}}", R: "{{root_workflow}}", G: "{{visits.go}}" },
+              on_success: "show",
+              on_error: "show",
+              success_prompt: "{{stdout}}",
+            },
+            show: { prompt: "show", transitions: { done: "fin" } },
+            fin: { terminal: true, outcome: "complete" },
+          },
+        },
+      });
+
+      const { sessionId } = await engine.start("parent");
+      await engine.transition(sessionId, "again");
+      const result = await engine.transition(sessionId, "next");
+      // visits.go belongs to the parent frame — not visible from the child
+      expect(result.prompt.trim()).toBe("2|parent|");
+    });
+
     it("chains exec→exec→prompt", async () => {
       setup({
         chain: {

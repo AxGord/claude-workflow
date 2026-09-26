@@ -294,10 +294,28 @@ states:
       done: review
 
   review:
+    type: exec
+    command: "sh \"$WF_PLUGIN_ROOT/scripts/review-size.sh\""
+    cwd: "{{context.cwd}}"
+    env:
+      REVIEW_BASE: "{{context.review_base}}"
+      ROOT_WORKFLOW: "{{root_workflow}}"
+    cases:
+      "0": review_single
+      "10": review_delegate
+    default: review_route
+
+  # Fallback when review-size.sh cannot measure the diff (exit 2: not a
+  # repo, bad baseline) — the agent sizes it by hand.
+  review_route:
     task: "Route review by scope"
     prompt: |
+      The engine could not measure the diff (cwd not in a git repo, bad
+      baseline, or no change found there — e.g. the edits live in another
+      repo). Size it by hand.
+
       Diff baseline: `HEAD`, unless context `review_base` (now:
-      "{{context.review_base}}") was set for THIS task — by write_fix before a
+      "{{context.review_base}}") is set — by write_fix before a
       fix round, or by code-review before handing its agreed changes over;
       then size and review `git diff <review_base>`. Either way add untracked
       files (`git ls-files --others --exclude-standard`): with a
@@ -311,12 +329,6 @@ states:
       - `multi` → everything else, even one batch: an agent buys FRESH EYES
         on the author's own code and keeps review bulk out of this session's
         context; parallelism is a bonus, not the criterion.
-
-      EXCEPTION — you are a SUB-AGENT (the stack's root is `subagent`):
-      ALWAYS `single`, whatever the size. Your parent reviews your result
-      with its own fresh-eyes reviewer after your report; a reviewer you
-      spawn here is a second, paid-twice review of the same diff. Do the
-      intent re-read yourself inside lint-review.
     transitions:
       single: review_single
       multi: review_delegate
@@ -340,6 +352,12 @@ states:
   review_delegate:
     task: "Delegate batched review to agents"
     prompt: |
+      Diff baseline `<baseline>`: context `review_base` (now:
+      "{{context.review_base}}") if set — by write_fix before a fix round,
+      or by code-review before handing its agreed changes over — else
+      `HEAD`. Plus untracked files (`git ls-files --others
+      --exclude-standard`): with a `review_base`, only those modified since it.
+
       Group the changed files into LOGICAL BATCHES, then spawn one Agent per
       BATCH for deep review. Use `subagent_type="general-purpose"`.
       Batching rules (strongest tie wins; a file joins exactly one batch):
@@ -351,7 +369,7 @@ states:
       assertions, registrations) fold into the nearest logical batch, and a
       would-be batch of under ~40 changed lines of purely mechanical/wiring
       diffs gets NO agent at all — you review those lines inline at
-      cross_file. Structure/size queries for grouping (`git diff HEAD
+      cross_file. Structure/size queries for grouping (`git diff <baseline>
       --numstat`, hxq graph queries) are fine — reviewing content is the
       agents' job.
 
@@ -374,7 +392,7 @@ states:
       Also include:
       - The batch's file list (absolute paths) and why they are grouped
       - How to get the diffs: `git diff <baseline> -- <filepath>` per file
-        (baseline per the review state: `review_base` or HEAD)
+        (substitute `<baseline>` with the sha or HEAD chosen above)
         (a new/untracked file: read it whole)
       - Review scope: `diff`
       - "Report one section per file + a batch-level cross-file section."
@@ -424,7 +442,11 @@ states:
 
       BEFORE the first edit: `context_set(key: "review_base", value: <sha>)` — <sha> = the output of
       `git stash create` (a snapshot of the dirty tree; the tree itself is
-      untouched), or `git rev-parse HEAD` when it prints nothing (clean tree).
+      untouched), or — when it prints nothing (clean tree) — a fresh commit of
+      HEAD's tree: `git commit-tree "HEAD^{tree}" -p HEAD -m review-base`
+      (a dangling object: no branch or ref changes, nothing enters history;
+      its date lets review routing skip files that predate this round;
+      `git rev-parse HEAD` only if commit-tree fails).
       The re-entry review then sees the fix delta only.
 
       Size the round BEFORE delegating. A NIT round — assertions, doc
@@ -445,11 +467,23 @@ states:
     on_fail: write_fix
 
   verify_route:
+    type: exec
+    command: 'case "$BUG_TYPE" in logic) exit 0;; visual) exit 10;; *) exit 2;; esac'
+    env:
+      BUG_TYPE: "{{context.bug_type}}"
+    cases:
+      "0": done
+      "10": load_skills_verify
+    default: verify_route_manual
+
+  # Fallback when context bug_type is missing or unrecognized.
+  verify_route_manual:
     task: "Route to correct verification"
     prompt: |
-      Bug type classified at the start: {{context.bug_type}}
-      (If empty — context was lost. Re-classify now: was the original report a
-      visual problem or a logic problem?)
+      Bug type classified at the start: "{{context.bug_type}}" — missing or
+      unrecognized (context was lost). Re-classify now: was the original report a
+      visual problem or a logic problem? Persist it for later rounds:
+      `context_set({ key: "bug_type", value: "visual" })` (or `"logic"`).
 
       - Visual bug → `visual` (needs screenshot verification)
       - Logic bug → `logic` (tests already passed in testing workflow)

@@ -207,7 +207,7 @@ run_tests:
 
 ### Template variables
 
-All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`. After action execution, result variables are also available:
+All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited) and `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`). After action execution, result variables are also available:
 
 | Source | Variables |
 |--------|-----------|

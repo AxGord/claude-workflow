@@ -327,7 +327,11 @@ states:
 
       Before `plan` or `code`: `context_set(key: "review_base", value: <sha>)` — <sha> = the output of
       `git stash create` (a snapshot of the dirty tree; the tree itself is
-      untouched), or `git rev-parse HEAD` when it prints nothing (clean tree).
+      untouched), or — when it prints nothing (clean tree) — a fresh commit of
+      HEAD's tree: `git commit-tree "HEAD^{tree}" -p HEAD -m review-base`
+      (a dangling object: no branch or ref changes, nothing enters history;
+      its date lets review routing skip files that predate this round;
+      `git rev-parse HEAD` only if commit-tree fails).
       coding's review then covers only the agreed changes, not the code this
       review already covered.
 

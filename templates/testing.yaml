@@ -107,7 +107,7 @@ states:
     transitions:
       need_integration: integration
       manual_verify: manual_verify
-      skip: done
+      skip: check_test_changes
 
   integration:
     max_visits: 5
@@ -238,16 +238,17 @@ states:
       unit: load_skills
       no_unit: check_integration
 
+  # Fixes made during testing (any fix_* visit) bypassed the normal review —
+  # review them now; a clean pass goes straight to done.
   check_test_changes:
-    prompt: |
-      Were any code changes made during the testing phase (visits to
-      fix_unit, fix_integration, or fix_user_issue)?
-
-      - `has_changes` → those fixes bypassed the normal review — review them now
-      - `no_changes` → clean pass, no fixes were needed
-    transitions:
-      has_changes: review_test_changes
-      no_changes: done
+    type: exec
+    command: '[ -z "$FIX_VISITS" ] && exit 0; exit 10'
+    env:
+      FIX_VISITS: "{{visits.fix_unit}}{{visits.fix_integration}}{{visits.fix_user_issue}}"
+    cases:
+      "0": done
+      "10": review_test_changes
+    default: review_test_changes
 
   review_test_changes:
     sub_workflow: code-review

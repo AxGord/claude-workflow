@@ -118,6 +118,8 @@ Cases overrides on_success/on_error when both are present.
 Available in ALL prompts (not just action states):
 - `{{context.cwd}}` — working directory
 - `{{context.<key>}}` — any context value set via context_set
+- `{{visits.<state>}}` — visit count of `<state>` in the ACTIVE stack frame (empty if never visited) — route on "did the fix loop run?" without an agent turn
+- `{{root_workflow}}` — workflow at the stack root (`subagent` = running as a spawned sub-agent)
 
 After exec/fetch, also available:
 - `{{stdout}}`, `{{stderr}}`, `{{exit_code}}` — exec results
