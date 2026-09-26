@@ -51,8 +51,14 @@ states:
         comments/strings. The loaded coding skills are authoritative here;
         follow the tool-usage gate defined by the loaded skills, do not
         default to grep.
-      - Use Read to examine specific files — targeted (offset/limit on the
-        located window), never a blind whole-file dump as a grep substitute
+
+      **Reading budget** (tool-agnostic — the loaded skills map it onto the tool):
+      - Read the NODE a hit pointed at, never the file: `file:line` buys that
+        member or that range, not the whole file.
+      - A walker's scope is the narrowest directory the previous hit named;
+        the whole tree is for the FIRST query only.
+      - A file no hit named stays closed. "Just in case" is where whole-file
+        reads come from.
 
       **Rules:**
       - Locate with the structural tool first, then narrow with Read

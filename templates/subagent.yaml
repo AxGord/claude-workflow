@@ -18,6 +18,10 @@ states:
       - Read/understand/explore/verify code, blast-radius, recon, deep
         investigation → explore
       - Write/modify code → coding
+      - Edit TEXT only — skill SKILL.md, workflow YAML prompts, CLAUDE.md,
+        memory, reports, plans, README prose — with NO code file touched →
+        docs (a doc edit that accompanies a code change stays in coding).
+        When in doubt between docs and coding → coding.
       - Review or refactor code: refactoring (edits code) → coding;
         review-only (report findings, no edits) → explore
       - Debug/investigate an issue → debugging
@@ -28,6 +32,7 @@ states:
         output verbatim, zero judgement) → execute
     transitions:
       coding: run_coding
+      docs: run_docs
       explore: run_explore
       debugging: run_debugging
       bug_fix: run_bug_fix
@@ -56,6 +61,11 @@ states:
     sub_workflow: coding
     on_complete: done
     on_fail: failed
+
+  run_docs:
+    sub_workflow: docs
+    on_complete: done
+    on_fail: run_coding
 
   run_explore:
     sub_workflow: explore

@@ -11,6 +11,7 @@ description: Reference for authoring workflow YAML — state types, skill gates,
 - Load order (later overrides earlier by workflow name): bundled `templates/` → `~/.claude/workflows/` → project `.claude/workflows/`.
 - `~/.claude/workflows/` and the project dir ARE fs.watch'ed; ANY `.yaml` change there triggers a FULL reload that also re-reads bundled templates. Hot-reload trick after editing bundled templates (no server restart): `echo "# t" > ~/.claude/workflows/_trigger.yaml && sleep 1 && rm ~/.claude/workflows/_trigger.yaml`, then verify via `list` (state counts change).
 - Active sessions keep their definition snapshot; only NEW `start()` sessions see reloaded workflows.
+- A NEW bundled workflow must also be added to `Engine.GLOBAL_WORKFLOWS` (`src/engine.ts`, a hardcoded name set) — otherwise the route prompt lists it under "Available workflows" as if it were a PROJECT workflow and Step 1 routes it via `project`. That is a code change: `npm run build` + server restart (templates hot-reload, code does not). Before deploying anything, check WHICH tree the running server loads: `ps -axo command | grep build/index.js` — a local-marketplace install can be a symlink straight to the repo, and a copy made into the plugin cache then changes nothing.
 
 ### State Types
 
@@ -170,6 +171,16 @@ finish:
 
 ### Common Patterns
 
+**Review lives with the spawner**: a workflow that spawns code-writing
+workers owns the ONE fresh-eyes review of their diff; the worker itself
+stops at lint + its own intent re-read (a reviewer spawned inside the
+worker re-pays what the spawner already pays, and cannot see seams
+between workers). Never both — a worker review plus a parent review of
+the same diff is paid twice; and never neither — a parent that assumes
+the workers reviewed ships unreviewed code. Only a root session with no
+spawner reviews its own writes (reviewer agents; lint-only for a trivial
+diff).
+
 **Decide once, flag in context**: when several states share one decision
 (is the file user-authored? is the lint report usable?), have ONE state
 evaluate it and `context_set` a verdict flag; downstream prompts guard on
@@ -203,6 +214,7 @@ state X requires auditing ALL transitions INTO X for bypasses.
 - Action states route via on_success/on_error or cases/default only
 - `success_prompt`/`error_prompt` are templates, rendered with action result vars
 - If neither prompt template is set, the next prompt state's own prompt is used
+- **A chained action state's prompt is DISCARDED**: in an exec→exec→… chain only the LAST state's `success_prompt`/`error_prompt` reaches the agent. The engine renders each state's prompt, then recurses into the next action state without passing it on — every intermediate one is dropped silently. So an intermediate state can never REPORT anything: a check whose whole value is its output (a `--list`, a `--dry-run`, a diff stat) is invisible where it sits. Either make it the chain's last state, have it ACT rather than report (`--write` over `--list`), or gate it on a non-zero exit into its own prompt state — and note that a `--list`-style check usually exits 0 whether or not it found anything, so `cases` never fires and the chain sails past
 - Background processes are NOT monitored — use a subsequent fetch/exec to check
 - **Template injection**: `{{...}}` values are substituted **unescaped** into `command:` and run via `sh -c`. A context value containing quotes, `$`, `;`, or backticks breaks the command — or executes as shell. Never interpolate untrusted/free-form context into commands; keep interpolated values to known-safe tokens (paths you set, enum-like flags). **Safe channel for everything else — `env:`**: env values are set on the process, never parsed by the shell, so `env: { REVIEW_FILE: "{{context.file_path}}" }` + `command: "script.sh \"$REVIEW_FILE\""` is injection-proof. Any AGENT-set context value (a `context_set` an agent made — e.g. a file path from a reviewed repo, where a hostile `$(cmd).hx` filename would otherwise execute) and even engine-set paths (`{{context.cwd}}` — a `$(payload)`-named directory) must go via `env:`, not into `command:`
 - **Guards throw, they don't reroute**: exceeding a state's `max_visits` throws an error (the transition is refused); hitting `max_transitions` likewise throws

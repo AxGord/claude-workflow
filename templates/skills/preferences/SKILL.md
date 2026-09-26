@@ -86,6 +86,7 @@ proceeding without them.
 
 - When the user scopes a request narrowly ("only about X", "I told you just X"), answer strictly within X. Don't pad with reassurances about adjacent areas they didn't ask about (e.g. "the other rules stay untouched") — that reads as noise/scope-creep and wastes their time
 - If an adjacent concern is genuinely load-bearing for the answer, mention it in ≤1 short clause, not a recurring caveat
+- **Never allocate an identifier that an external system owns** (a server-side translation key, a DB id, a ticket number). "Wire the IDs and check what's missing" means: wire exactly the IDs handed over, and report the items without one as a plain list — never "continue the numbering" and wire the guessed numbers, and never present guessed numbers as "the rows to insert" (that is the same invention with a polite framing). A guessed id is worse than no id: the graceful fallback for a missing key hides it, and once the owner assigns that number elsewhere the wrong value shows up
 
 ### Patterns
 

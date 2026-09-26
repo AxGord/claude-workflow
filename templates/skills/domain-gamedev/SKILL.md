@@ -1,11 +1,9 @@
 ---
 name: domain-gamedev
-description: Game dev precision and physics gotchas
+description: Game dev precision and physics gotchas — incl. FP modulo-wrap pitfalls
 ---
 
 # Game Development Gotchas
-
-See also: math skill for overflow boundaries (factorial, Fibonacci, float absorption tables).
 
 ## Float32 World Precision (verified)
 
@@ -59,6 +57,70 @@ When integrating an artist-authored asset (e.g. `landmark.png`) into a row of cy
 **Failure mode**: overlaying a full "same-width" panel on top of the stitched row creates a visible seam/silhouette mismatch where the overlay's terrain doesn't line up with the cyclic tiles' silhouette or pattern (grass stripes, hill peaks, etc.).
 
 **Fix shape**: extend the stitcher to accept an optional `anchor: { leftWorldX, texture }`. When provided, place the anchor at its target X, then cycle remaining tiles outward (left and right). Ordering: place left tiles first (farthest → nearest), then anchor, then right tiles — so each tile's right edge correctly covers its left neighbor's seam overlap.
+
+## A Tiling Strip's Period Being Wider Than the Viewport Does NOT Stop a Landmark Appearing Twice
+
+A scrolling backdrop is one image repeated every `period` px, and it usually carries exactly one
+distinctive thing — a moon, a lone tower, a sign. The condition everyone writes down is "make the
+period wider than the screen so it never repeats on screen", and it is the WRONG sum. It only rules
+out two WHOLE landmarks. What actually happens at a period barely over the viewport is that one
+landmark is still leaving by one edge while the next is already arriving at the other, so the
+screen holds two halves at once — which reads as a much worse bug than a repeat, and it appears
+only in the narrow band of scroll offsets where the wrap seam crosses the landmark.
+
+The condition is that a whole viewport fits BETWEEN two landmarks:
+
+    period - viewport >= landmarkWidth
+
+equivalently, when the period comes from a blow-up factor, `scale * (tileW - landmarkW) >= viewport`.
+
+**Tell:** a tiling layer holds a unique feature, and the justification in code or comments compares
+the period to the viewport alone. Also: a "sometimes there are two of them" report that nobody can
+reproduce on demand — the offending offsets are a `landmarkWidth - (period - viewport)` wide window
+out of the whole period.
+
+**Fix shape:** the landmark's layer takes its own, larger blow-up rather than the whole backdrop
+taking one — raising the shared factor re-composes every other layer and changes a look nobody
+asked to change. Layers at different pixel sizes are unnoticeable when they never touch and the odd
+one is the farthest.
+
+**Reproducing it deliberately:** the layer's own drift is usually a small fraction, so the seam
+takes minutes of play to come round. Temporarily set that layer's drift to 1 (ground speed), sample
+frames a few hundred ms apart, and count bright/landmark pixels in a band at each screen edge. The
+fixed version shows frames with the landmark at NEITHER edge — that moon-free gap is the positive
+evidence, not merely the absence of a split.
+
+## A Side-Scroller Has ONE Motion Reference — an Object Slower Than the Camera Reads as Moving Backwards
+
+In a scrolling world the only thing on screen saying which way anything is going is the scroll
+itself. So a moving prop's legibility is decided by the SIGN of its screen velocity against its
+sprite's facing, not by whether its world velocity is physically right. Three relative-velocity
+cases exist and only two survive that:
+
+| world velocity vs camera | screen motion | facing needed | reads as |
+|---|---|---|---|
+| against the camera | backwards, fast | backwards | coming toward you — fine |
+| forward, faster than the camera | forwards | forwards | pulling ahead — fine |
+| forward, **slower** than the camera | backwards | forwards | **flying/running backwards** |
+
+The third row is honest arithmetic — the camera really is overtaking it — and it is what a
+naive "props drift at a fraction of ground speed" rule produces by default. It is not a tuning
+problem: any speed in that band is wrong, because the contradiction is between the facing and
+the screen direction, and both are correct. Cut the case, don't slow it down.
+
+**Tell:** you mirrored a sprite so it faces the direction of travel, and it still looks wrong.
+Also: the report is vague ("странно", "can't tell what it is") rather than naming a defect —
+nobody can articulate a sign error they are only feeling.
+
+**A still frame passes it.** The bug exists only in motion, so a screenshot review — yours or a
+reviewer's — approves it. Verify a decorative mover by sampling several frames and checking the
+sign of its screen displacement against its facing, not by looking at one.
+
+**Consequence for the design:** the two legible cases are not interchangeable. An object coming
+the other way has its own speed ADDED to the scroll, so its time on screen is bounded from above
+by the viewport over the ground speed — a couple of seconds, whatever number you pick. Only the
+faster-than-camera case can linger. If a prop is meant to be noticed, it has to be the one
+overtaking the player, and no amount of tuning makes the head-on one last.
 
 ## 2D Camera Zoom-Out Trade-offs
 
@@ -251,3 +313,29 @@ post-fix-metric discipline (debugging skill), not by eyeballing the curve.
 **Metric caveat:** threshold-based detectors on resampled paths (heading
 delta per arc-step, per-frame jumps) flip verdicts with sampling rate —
 judge continuity on the raw velocity/rate series, not on a thresholded flag.
+
+## Modulo-wrap round-trip is NOT identity for in-range floats — never gate "did it wrap?" on FP equality
+
+`wrapped = lo + (((x - lo) % span) + span) % span` for `x` ALREADY in
+`[lo, hi)` returns a value that differs from `x` by ~1 ULP(span) on a large
+fraction of inputs. The `%` ops themselves are exact — `%` is
+truncated-division remainder (C `fmod` semantics), which IEEE 754 requires
+to be exact; note it is NOT the IEEE `remainder()` operation (round-nearest
+quotient), a different op. The error comes from the surrounding `x-lo`,
+`+span`, `lo+m` adds, each of which rounds. Measured: 41–67% of in-range
+values fail `wrapped === x` depending on the window; with `lo` and `x` of
+matching magnitude the subtraction is Sterbenz-exact and the identity HOLDS
+(0/1e6 failures) — so the spurious rate silently depends on runtime state
+(camera position), making it look fine in one regime and fire constantly in
+another.
+
+**Failure mode**: `if (wrapped !== x) onWrap()` as a "teleport happened"
+detector fired the callback ~60 Hz for every entity instead of once per
+recycle — and a simulation harness with the same window shape "validated"
+the degenerate behavior convincingly.
+
+**Right**: detect the wrap by RANGE, then normalize:
+```js
+if (x < lo || x >= hi) { x = lo + (((x - lo) % span) + span) % span; onWrap(); }
+```
+Also skips the modulo (and its FP noise re-write) in the common in-range case.

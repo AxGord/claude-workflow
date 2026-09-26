@@ -278,10 +278,16 @@ Companion: to RENDER a specific frame for a visual check, set `spine.autoUpdate 
 ```ts
 const e = spine.state.setAnimation(0, clip, false);
 e.trackTime = t;
+e.animationLast = t;
+e.nextAnimationLast = t;
 spine.update(0);
 ```
 
+Setting `trackTime` alone applies colour/transform timelines but NOT attachment timelines — slots the clip attaches at time `t` stay at their setup attachment, so a skeleton whose setup pose has no attachments renders the frame completely empty. `animationLast`/`nextAnimationLast` must be set too, or the recipe silently half-works. The tell: colours and positions look right for the scrubbed time but attachments are missing or stale — reads as a visibility/alpha/z-order bug when it isn't one.
+
 Do NOT call `skeleton.updateWorldTransform()` directly in spine-pixi v8 — it requires a `Physics` argument and throws `physics is undefined`. `spine.update(0)` applies state + transforms correctly.
+
+If frames look stale across MULTIPLE samples (not just empty on the first), the more common cause is the manual-apply path never flagging attachments for re-validation — see #39. Posing via `spine.update(0)` is required either way.
 
 ### 23. A BlurFilter on a fully-transparent sprite still renders its padded region — detach it, don't rely on alpha 0
 
@@ -387,6 +393,89 @@ pixi-svelte components call `parentContext.addToParent(node)` at mount time. Chi
   ```
 - Late-mounting is fine for nodes that SHOULD be on top (overlays, masked top layers) — append order is exactly what they need.
 - Verify layering by ZOOMING a screenshot at an actual overlap point (glyph stroke crisp over the background = correct); a row-scan "stroke pixels exist somewhere" check passes in BOTH orders and proves nothing about z.
+
+### 35. spine-pixi-v8 4.2 NEVER validates `skeleton.spine` — a 3.8 skeleton JSON loads clean and animates wrong. Upgrade the JSON at build time.
+
+`SkeletonJson.readSkeletonData` copies `skeletonMap.spine` into `skeletonData.version` and does nothing else with it; the reader then ignores every key it doesn't recognise. Feed it a Spine **3.8** export and you get no throw, no warning, a full bone/slot/skin tree, and correct setup-pose bounds — but the animation is silently gutted (rotation timelines drop to their default, bezier segments flatten, mesh deform never applies). It reads as "the artist's file is broken" or "the rig needs a rescale".
+
+The 3.8 → 4.x deltas that actually bite (everything else — slots, skins, mesh attachments, `hull`/`edges`/`uvs`/`triangles` — is byte-identical):
+
+| 3.8 | 4.x |
+|---|---|
+| 1-value bone timeline value key `angle` | `value` (`readTimeline1` reads `"value"`) |
+| `curve` = 4 NORMALISED coords spread over `curve`/`c2`/`c3`/`c4` (0..1 across the segment to the next key) | `curve` = ABSOLUTE array in (time, value) space, 4 numbers PER animated component — so translate/scale/shear need **8** (`readCurve` indexes `curve[value << 2]`); 3.8's single curve applied to both components |
+| `animation.deform[skin][slot][attachment]` | `animation.attachments[skin][slot][attachment].deform` (4.x nests to make room for sibling `sequence` timelines) |
+| bone `transform` (TransformMode) | bone `inherit` (Inherit enum) |
+| slot `color` timeline | `rgba` / `rgb` |
+
+Normalised → absolute: `cx1 = t1 + c1·(t2−t1)`, `cy1 = v1 + c2·(v2−v1)`, likewise `c3`/`c4`. Deform curves interpolate the MIX, which 4.x reads over the fixed range `value1 = 0 → value2 = 1`, so `cy1 = c2`, `cy2 = c4` directly. `"stepped"` passes through unchanged; a missing `curve` means linear and 4.x wants the key absent.
+
+- The `.atlas` is NOT the tell: the 4.2 `TextureAtlas` reader still accepts the legacy region format (`xy:`, `size:`, `orig:`, `offset:`, `rotate: true`) alongside the new one (`bounds:`, `offsets:`, `rotate: 90`), and silently ignores unknown header fields. Only the skeleton JSON breaks.
+- A legacy atlas has no `pma:` line → the parser defaults `pma = false`. Check the page for straight vs premultiplied alpha yourself (any pixel with a channel > its alpha ⇒ straight) instead of trusting the absence.
+- Converter discipline: THROW on every 3.8 feature the converter doesn't handle (constraint timelines, draw-order, events, two-colour slots) rather than passing it through — pass-through is exactly the silent-wrong-animation failure the conversion exists to prevent. Then self-check the output: no `angle`/`c2`/`c3`/`c4` may survive, and every emitted `curve` must be a 4- or 8-number finite array. Also reject a `curve` that is neither a number nor `"stepped"` on INPUT — an already-4.x array would otherwise be stripped and flatten the segment to linear.
+- Verify the upgrade in Node before touching the renderer: `new TextureAtlas(text)` + stub `page.setTexture({ getImage: () => ({width, height}), setFilters(){}, setWraps(){}, dispose(){} })` needs no GPU, then sample `skeleton.getBounds()` across `trackTime = 0…duration`. **Distinct bounds per sample is the proof the timelines survived** — a version-mismatched load returns the same box on every frame.
+
+### 36. A tween-library delay runs on its own clock, not `spine.state.timeScale` — key clip-relative events on `trackTime`
+
+A Spine animation's playback clock is `spine.state.timeScale` applied to the Pixi ticker's `deltaMS`. A tween library's own scheduler (e.g. gsap's `delayedCall`, scaled by that library's global timeline) runs on a DIFFERENT clock. Scheduling "change something at time X of the clip" with a tween-library delay drifts against the clip: whenever the ticker drops frames or its `deltaMS` is capped, the clip falls behind the timer and the scheduled event lands at the wrong frame of the animation. Concrete shape: a two-rate playback (fast wind-up, then drop to the authored rate for the payoff) switched rates at ~0.25s of clip time instead of the intended ~0.333s — a whole beat early — because the delay elapsed while the clip had advanced less than `timeScale × wall` predicted.
+
+- Wrong: `gsap.delayedCall(clipSeconds / rate, () => { spine.state.timeScale = target; });`
+- Right: check the clip's own time in a per-frame loop:
+  ```ts
+  if (pending && (spine.state.tracks[0]?.trackTime ?? 0) >= atClipSec) {
+    spine.state.timeScale = target;
+    pending = false;
+  }
+  ```
+- Rule: an event expressed in the CLIP's own time (at 0.333s of the clip, when the debris appears) must be keyed on `trackTime`; a timer is only correct for things expressed in EXTERNAL time (a delay before a fade starts, a pause between stages).
+- Diagnosis: expose `tracks[0].trackTime` and `state.timeScale` in a debug readout, sample on the `renderer.render` hook (#34) — comparing "clip advance per frame" against `timeScale × dt` shows the divergence immediately.
+
+### 37. `addEmptyAnimation(track, mix, 0)` cuts the clip's own tail
+
+With a delay of 0 (or any value ≤ 0), `AnimationState.addEmptyAnimation` resolves the start time as `previousDuration + delay − mixDuration` — i.e. the empty animation begins `mixDuration` BEFORE the previous clip ends. Mixing OUT of an entry drops its attachments immediately (`mixAttachmentThreshold` defaults to 0, so attachments restore to the setup pose as soon as the mix starts — they do not cross-fade). A one-shot clip whose author faded its slot alpha down to 0 at its final key gets cut at `duration − mixDuration` with alpha still high: it disappears instead of fading, and the art looks like it was clipped.
+
+Numbers that make it checkable: a 0.667 s clip released with a 0.15 s mix starts mixing at 0.517 — 78% through — where the authored alpha is still around 0.45.
+
+- Wrong: `state.addEmptyAnimation(track, 0.15, 0)` — the release eats the last 0.15 s.
+- Right: `state.addEmptyAnimation(track, 0.15, clipDurationSeconds)` — an explicit positive delay is taken literally, so the mix starts at the clip's own end where the authored alpha has already reached 0 and there is nothing left to snap.
+- Corollary: to ease a one-shot's tail yourself, multiply `slot.color.a` in `afterUpdateWorldTransforms` (it runs after `state.apply`, so the pose rewrites the base value every frame and the multiply cannot compound) — but ONLY for slots the clip keys with a COLOUR timeline. On a slot the clip only attaches or deforms, nothing rewrites the colour, the `*=` compounds every frame, and no mix-out ever restores it — that slot stays black for the rest of the session. Filter the animation's timelines by `instanceof RGBATimeline | RGBTimeline | AlphaTimeline` (all exported from the runtime) rather than by "has a slotIndex", which also matches attachment, deform and sequence timelines.
+
+### 38. One Spine instance is ONE display object — a mirrored second instance must not self-tick
+
+A Spine instance is a single node in the display list, so you cannot put some of its slots behind another sprite and the rest in front. When art is authored to wrap a sprite that is not part of the skeleton, mount a SECOND instance of the same `SkeletonData` on the other side of that sprite — `new Spine(spine.skeleton.data)` shares the data and the atlas, so it costs no extra load. Each instance nulls the slots the other one draws, in `afterUpdateWorldTransforms` (runs after the pose, so it wins over attachment timelines every frame). If the shared skeleton's setup pose has no attachments, an instance that plays only the front clips draws exactly those slots and nothing else.
+
+Keeping the copy phase-locked is the second trap: do NOT leave `autoUpdate` on. It then ticks itself at whatever point it was constructed, before the mirror copies `state.timeScale`, so any playback-rate change leaves the copy one frame behind the original — permanently, and once more per change.
+
+- Wrong: leave `copy.autoUpdate` at its default `true` — the copy free-runs on its own tick and drifts out of phase on every rate change.
+- Right: `copy.autoUpdate = false;` and drive it from the same per-frame handler that mirrors the rest of the original's state:
+  ```ts
+  copy.visible = src.visible; copy.alpha = src.alpha; copy.rotation = src.rotation;
+  copy.scale.copyFrom(src.scale); copy.pivot.copyFrom(src.pivot);
+  copy.state.timeScale = src.state.timeScale;
+  copy.update(Ticker.shared.deltaMS / 1000);
+  ```
+- Corollary: a per-frame mirror is not enough on its own. Anything that writes the original's visibility/alpha/transform OUTSIDE the ticker — an event handler lighting an effect and setting `alpha` synchronously — must call the property copy synchronously too, or the copy misses the first frame. Invisible at 60 fps, total at a low frame rate, where a short one-shot can be over before the next tick.
+
+### 39. Manual `state.apply` never re-validates attachments — pose through `spine.update(0)`; slot edits go in `afterUpdateWorldTransforms`
+
+The render pipe only rebuilds attachment geometry when a private `_stateChanged` flag is set, and that flag is set ONLY at the end of the `spine.update(dt)` path (`state.update → state.apply → beforeUpdateWorldTransforms → skeleton.updateWorldTransform → afterUpdateWorldTransforms → _stateChanged = true`). Posing manually — calling `state.update`/`state.apply`/`skeleton.updateWorldTransform` yourself with `autoUpdate = false` — moves the bones (`bone.worldX` reads are live) but never flags attachments: every later render keeps redrawing the attachment geometry of the FIRST posed frame, shifted only by whatever you do to the container. Sampling N phases of a clip this way silently produces N copies of phase 0.
+
+- Wrong (bones update, attachments frozen at the first pose):
+  ```ts
+  spine.autoUpdate = false;
+  spine.state.update(0);
+  spine.state.apply(spine.skeleton);
+  spine.skeleton.updateWorldTransform(Physics.update);
+  ```
+- Right (pose through the real update path; do slot edits inside the hook it calls before flagging):
+  ```ts
+  spine.autoUpdate = false;
+  spine.afterUpdateWorldTransforms = (s) => { s.slots[i].setAttachment(null); };
+  track.trackTime = t;
+  spine.update(0);
+  ```
+- Tell: bones move correctly across samples but the rendered shape/silhouette doesn't change; a slot hidden via `setAttachment(null)` reappears later.
+- Related trap: the first bounds read (`getBounds()`, or `renderer.extract.*({target: spine})`) on an instance that has never rendered (`hasNeverUpdated`) triggers its own `_updateAndApplyState(0)`, re-applying the animation — so any slot edit made before that first read gets silently overwritten.
 
 ## Verification & capture
 

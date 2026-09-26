@@ -325,6 +325,12 @@ states:
       a specific item — do the research here, present findings, get a decision.
       Do NOT transition out to fix one item and leave others unresolved.
 
+      Before `plan` or `code`: `context_set(key: "review_base", value: <sha>)` — <sha> = the output of
+      `git stash create` (a snapshot of the dirty tree; the tree itself is
+      untouched), or `git rev-parse HEAD` when it prints nothing (clean tree).
+      coding's review then covers only the agreed changes, not the code this
+      review already covered.
+
       Only after ALL items have a decision, route based on scope of agreed changes:
       - Many changes / architectural / multi-file refactoring → `plan` (enters planning mode)
       - Few small stylistic or localized fixes → `code` (direct coding)
@@ -337,7 +343,7 @@ states:
   plan_changes:
     task: "Plan agreed changes"
     sub_workflow: planning
-    on_complete: done
+    on_complete: code_changes
     on_fail: done
 
   code_changes:

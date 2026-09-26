@@ -37,7 +37,7 @@ HOOK_CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 # compares equal to the engine's getcwd()-resolved context.cwd.
 HOOK_CWD=$(cd "${HOOK_CWD:-$PWD}" 2>/dev/null && pwd -P || echo "$PWD")
 STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
-PLANS_DIR="$HOME/.claude/plans"
+PLANS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plans"
 
 # Session IDs are 8 hex chars; the {7,} length filter skips shorter incidental hex words.
 SID_RE='[a-f0-9]{7,}'

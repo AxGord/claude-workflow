@@ -77,7 +77,7 @@ hxq ast File.hx --select ClassDecl --doc --source
 # to inspect .hx the Read tool fabricates. 1-based inclusive; clamps out-of-range.
 hxq source src/anyparse/grammar/haxe/HxIfExpr.hx --range 122:127   # range
 hxq source src/anyparse/query/Cli.hx --range 5800: --number       # line N→EOF, cat -n style
-hxq source <file>                                                  # whole file
+hxq source <file> --all                                            # whole file (refused past 120 lines without --all)
 
 # @:fmt(flag)-driven search — which ctors/fields carry a specific @:fmt arg.
 # Matches a top-level arg = bare ident `flag` OR call `flag(...)` (callee), EXACT

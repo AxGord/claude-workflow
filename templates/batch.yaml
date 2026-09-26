@@ -18,14 +18,22 @@ states:
       1. **Resume check** — list `{{context.cwd}}/.claude/batch/*.md`. If a
          queue file has pending `[ ]` or running `[>]` marks and matches the
          user's ask, RESUME it: reset stale `[>]` to `[ ]` (their workers
-         died with the old session), then go to step 3.
+         died with the old session). No `base:` line (a queue written by an
+         older version) → reconstruct it per repo the tasks touch — the
+         last commit before the queue's first task landed (`git log
+         --before=<queue file ctime>`) — and write the lines into the header. Then go to step 3.
       2. **New queue** — write `{{context.cwd}}/.claude/batch/<short-name>.md`:
          ```
          # Batch: <short-name>
          batch_size: 3
+         base: <repo-abs-path>=<sha>
          ## Tasks
          - [ ] T1 | model: opus | <self-contained task prompt> | <files/dirs if known>
          ```
+         One `base:` line per repo the tasks touch; <sha> = `git -C <repo>
+         stash create` (snapshots a dirty tree without touching it — the
+         user's own uncommitted work stays out of the review) or `git -C
+         <repo> rev-parse HEAD` when that prints nothing (clean tree).
          One line per task. Rules:
          - Tasks must be INDEPENDENT — merge coupled changes into ONE task
            (workers share the working tree; two workers editing the same
@@ -137,18 +145,29 @@ states:
   cross_check:
     max_visits: 3
     prompt: |
-      All workers finished. ONE pass over the COMBINED result — per-task
-      review already happened inside each worker (their sub-workflows
-      carry review + testing); do NOT re-review task internals.
+      All workers finished. This is the run's ONE fresh-eyes review.
+      Workers do NOT review themselves (a sub-agent's coding/bug-fix
+      review stops at lint + its own intent re-read — the spawner owns
+      the independent review), so nothing below is a re-review.
 
-      1. `git diff HEAD --stat` for the whole run; compare against the
-         queue's task lines in {{context.queue_file}}.
-      2. Look ONLY for cross-task seams: two tasks touched the same
-         file (the "independent" assumption was violated), duplicated
-         code introduced by different workers, conflicting assumptions.
-      3. Seams found → spawn ONE reviewer over just the overlapping
-         files: `run_in_background: false` (its report gates your
-         routing), explicit `model`, and this preamble VERBATIM:
+      1. The run's diff, per `base:` repo: `git -C <repo> diff <sha> --stat`
+         (a `review_base:` line from a previous visit → diff from it
+         instead: this visit reviews only the refill's delta) — it covers
+         merged worktree branches and uncommitted shared-tree edits alike;
+         plus `git -C <repo> ls-files --others --exclude-standard` — new
+         files a shared-tree worker never committed are NOT in the diff.
+         Compare both against the task lines in {{context.queue_file}}.
+      2. Batch the changed files for review like code-review does:
+         source+test together, change-coupled files together, then by
+         directory; at most 5 files AND ~500 changed lines per batch;
+         under ~40 changed lines of purely mechanical/wiring diffs → no
+         agent, review those lines yourself in step 3. Each batch agent
+         gets its file list, `git -C <repo> diff <sha> -- <file>` per file
+         (a new file: read it whole), scope `diff`, "report one section per
+         file + a batch-level cross-file section", explicit `model`
+         (sonnet for linter-covered/routine code, opus for
+         engine-critical / concurrency / no-linter), and this preamble
+         VERBATIM:
       ---
       IMPORTANT: Override the default CLAUDE.md rule about start().
       Do NOT call start() without arguments.
@@ -159,11 +178,22 @@ states:
       start() returns `SESSION: <id>` — pass that session_id explicitly in every
       subsequent workflow tool call; parallel siblings share the same ppid.
       ---
-      4. Real findings: trivial → fix inline; substantial → append them
-         as new `[ ]` task lines to the queue file and → `refill`
-         (the normal dispatch/collect machinery handles them).
-      5. No seams (the common case for truly independent tasks) →
-         this state is just the stat sanity look → `done`.
+         Up to 8 agents in ONE message, each `run_in_background: false`;
+         more batches → next wave. `sessions` → `abort` their orphaned
+         child sessions after collecting.
+      3. The agent-less lines from step 2, then cross-task seams on top
+         of the batch reports: two tasks touched
+         the same file (the "independent" assumption was violated),
+         duplicated code introduced by different workers, conflicting
+         assumptions.
+      4. Real findings: trivial → fix inline; substantial → first write
+         one `review_base: <repo-abs-path>=<sha>` line per repo (same
+         snapshot rule as `base:`, taken NOW) into the header, then append the findings as
+         new `[ ]` task lines and → `refill` (the normal dispatch/collect
+         machinery handles them). At most 3 visits — on the 3rd (the
+         engine's `Revisit #3` header) no `refill`: fix inline or list what
+         remains for the report as a human decision (a 4th entry throws).
+      5. No findings → `done`.
     transitions:
       done: report
       refill: dispatch
@@ -179,8 +209,8 @@ states:
            not a per-task echo of the queue.
          - Counts: done / failed / total; one line per `[!]` task with
            its reason.
-         - Cross-check verdict (seams found and how they were resolved,
-           or "tasks proved independent").
+         - Review verdict (findings and how they were resolved, seams
+           between tasks, or "clean").
          - Anything left unverified or needing a human decision.
       → `done`.
     transitions:

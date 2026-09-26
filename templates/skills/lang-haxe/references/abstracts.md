@@ -115,6 +115,25 @@ Native `abstract class` keyword — NOT the same as `abstract` types (which are 
 - Subclasses **can** be `final class`
 - Abstract method calls from constructor work fine (vtable is ready)
 
+## `this` Reassignment: Inline-Only, and `final` Blocks It Transitively
+
+Rebinding an abstract's underlying value (`this = expr`) is legal ONLY inside `inline` members and the constructor. A non-inline method containing `this = ...` does not compile at all:
+
+```haxe
+abstract A(Int) from Int {
+    public function new(v:Int) this = v;                     // ✓ ctor exempt
+    public inline function bump():Void this = this + 1;      // ✓ inline
+    public function bumpPlain():Void this = this + 1;        // ✗ "Abstract 'this' value can only be modified inside an inline function"
+}
+```
+
+Calling an inline `this`-writer on a `final` binding is a compile error — "Cannot modify abstract value of final local" — and the check is TRANSITIVE through nested inline calls (`inline f()` calling `inline g()` that writes `this` poisons `f` too).
+
+Consequences for reasoning about mutation:
+- A non-inline abstract method can NEVER rebind the caller's variable (it receives the underlying by value); only inline members (including property accessors) can.
+- `@:forward`-ed methods live on the underlying type — on a class underlying they mutate the object, never the binding, so they are always `final`-safe; recurse only when the underlying is itself an abstract.
+- Static analysis for "can a method call rebind this local?" therefore only needs: inline members transitively writing `this`, ctor excluded.
+
 ## Abstract Types in Catch Clauses: Runtime Type Is the Underlying Type
 
 `catch` accepts abstract types. The runtime check is against the abstract's **underlying type**, not its compile-time conversions. `from` declarations do NOT widen the runtime catch behavior.
@@ -159,6 +178,19 @@ abstract MyAbs(Dynamic) from Dynamic {
 ```
 
 Same for any underlying type: `abstract Foo(SomeClass)` makes `this` typed as `SomeClass` inside the body — field access goes direct.
+
+**Consequence: the abstract's OWN members are unreachable through `this`, and a `using` extension wins there.** Since `this` carries the underlying type, `this.m()` is resolved against that type's members — a same-named member declared on the abstract itself does NOT shadow it, and when the underlying type lacks `m`, a static extension in scope supplies it:
+
+```haxe
+using StringTools;
+
+abstract Color(Int) {
+    public function hex(digits:Int):String return "OWN";     // never reached via `this`
+    public function f():String return this.hex(6);           // StringTools.hex(this, 6) → "0000FF"
+}
+```
+
+So `StringTools.hex(this, 6)` and `this.hex(6)` are interchangeable inside the abstract, and any reasoning about which member a `this.` access binds to must consult the UNDERLYING type's member list, never the abstract's.
 
 **Bonus: `to UnderlyingType` is implicit.** `abstract Foo(Bar) to Bar` — the `to Bar` direction is redundant; the compiler provides it automatically. Drop it.
 
@@ -217,3 +249,39 @@ private function deviceError(err: WebAPIError): Void {
 ```
 
 Rule of thumb: type the parameter at the level of structural need, not at the level of the most-typed source. The abstract's job is auto-conversion at the boundary — it should NOT bleed into every internal helper.
+
+## String Interpolation Can Resolve to Abstract ARITHMETIC, Not Concatenation
+
+`'label=$v'` is `"label=" + v`, and `+` is resolved by overload search before Haxe falls
+back to string concatenation. An abstract that defines an `@:op(A + B)` whose LEFT operand
+type accepts `String` implicitly therefore WINS that search: the literal is converted
+through that type's `@:from String`, the sum is computed as numbers, and the result is
+rendered by the abstract's `@:to String`. Nothing errors, and the printed value looks like
+a plausible number — which is exactly why it survives review.
+
+```haxe
+abstract Ms(Float) from Float to Float {
+    @:from public static function fromString(s: String): Ms return Std.parseFloat(s);
+}
+
+abstract Sec(Float) from Float to Float {
+    @:op(A + B) static function addFromMs(a: Ms, b: Sec): Sec return (a: Float) / 1000 + (b: Float);
+    @:to public function toString(): String return this + 's';
+}
+
+final d: Sec = 0.25;
+trace('d=$d');                  // "nans"  — "d=" parsed as Ms -> NaN, NaN/1000 + 0.25
+trace('d=' + Std.string(d));    // "d=0.25s"
+```
+
+The hijacking overload does NOT have to live on the interpolated type — here it is `Sec`'s
+operator that pulls `Ms`'s `@:from String` in, so reading `Sec` alone shows nothing wrong.
+Any of the arithmetic operators can do it; `+` is simply the one interpolation uses.
+
+**Tell:** a `trace`/log line prints a bare number where you wrote a labelled string, or the
+generated code for an interpolation contains a conversion call on your literal
+(`SomeType.fromString("label=")`) instead of a concatenation.
+
+**Fix:** wrap the value — `'label=' + Std.string(v)` or `'label=${(v : Float)}'`. Prefer this
+in any logging of a units-style abstract (durations, sizes, angles), where "accepts a string
+spelling of itself" and "supports arithmetic" routinely coexist.

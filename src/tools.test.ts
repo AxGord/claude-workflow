@@ -1,6 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { formatStatus, resetDeliveredPrompts } from "./tools.js";
-import type { StatusResult } from "./engine.js";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { formatStatus, registerTools, resetDeliveredPrompts } from "./tools.js";
+import { Engine, type StatusResult } from "./engine.js";
+import { Executor } from "./executor.js";
+import { InMemoryStorage, createTestLoader, cleanupDir, SIMPLE_WORKFLOW } from "./test-helpers.js";
+import type { SessionState } from "./types.js";
 
 function makeStatus(overrides: Partial<StatusResult> = {}): StatusResult {
   return {
@@ -69,5 +72,87 @@ describe("formatStatus digest_on_repeat", () => {
     });
     const out = formatStatus(other);
     expect(out).toContain("DOC SYNC RULES");
+  });
+});
+
+describe("registerTools mutation serialization", () => {
+  // Storage whose write yields before landing, like the real lockfile-backed one.
+  class SlowStorage extends InMemoryStorage {
+    override async write(sessionId: string, state: SessionState): Promise<void> {
+      await new Promise(r => setTimeout(r, 5));
+      await super.write(sessionId, state);
+    }
+  }
+
+  let dir: string | undefined;
+  afterEach(() => { if (dir) cleanupDir(dir); });
+
+  function mountTools(workflows: Record<string, object>) {
+    const storage = new SlowStorage();
+    const result = createTestLoader(workflows);
+    dir = result.dir;
+    const engine = new Engine(storage, result.loader, new Executor());
+    const handlers = new Map<string, (args: object) => Promise<{ isError?: boolean }>>();
+    const server = { registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h) };
+    registerTools(server as never, engine, {} as never, result.loader, storage);
+    return { storage, engine, call: (name: string, args: object) => handlers.get(name)!(args) };
+  }
+
+  it("parallel context_set + transition keep both changes", async () => {
+    const { storage, engine, call } = mountTools({ simple: SIMPLE_WORKFLOW });
+
+    const { sessionId } = await engine.start("simple");
+    await Promise.all([
+      call("context_set", { session_id: sessionId, key: "k", value: "v" }),
+      call("transition", { session_id: sessionId, transition: "next" }),
+    ]);
+
+    const session = storage.read(sessionId)!;
+    expect(session.context.k).toBe("v");
+    expect(session.stack.length === 0 || session.stack[0].current_state === "end").toBe(true);
+  });
+
+  it("a slow mutation on one session does not hold back another session", async () => {
+    const { engine, call } = mountTools({
+      simple: SIMPLE_WORKFLOW,
+      slow: {
+        initial: "start",
+        states: {
+          start: { prompt: "go", transitions: { next: "wait" } },
+          wait: { type: "exec", command: "sleep 0.3", on_success: "work", on_error: "work" },
+          work: { prompt: "working", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+
+    const a = await engine.start("slow");
+    const b = await engine.start("simple", undefined, a.sessionId);
+    const finished: string[] = [];
+    const [ra, rb] = await Promise.all([
+      call("transition", { session_id: a.sessionId, transition: "next" }).then(r => { finished.push("a"); return r; }),
+      call("context_set", { session_id: b.sessionId, key: "k", value: "v" }).then(r => { finished.push("b"); return r; }),
+    ]);
+
+    expect(ra.isError).toBeUndefined();
+    expect(rb.isError).toBeUndefined();
+    expect(finished).toEqual(["b", "a"]);
+  });
+});
+
+describe("registerTools annotations", () => {
+  it("readOnlyHint marks exactly the engine-state tools", () => {
+    const annotations = new Map<string, unknown>();
+    const server = {
+      registerTool: (name: string, cfg: { annotations?: unknown }) => annotations.set(name, cfg.annotations),
+    };
+    registerTools(server as never, {} as never, {} as never, {} as never, {} as never);
+
+    const readOnly = ["list", "start", "status", "transition", "context_set", "sessions"];
+    // Mutating tools keep their confirmation prompt
+    const confirmed = ["modify", "create", "delete", "abort"];
+    expect([...annotations.keys()].sort()).toEqual([...readOnly, ...confirmed].sort());
+    for (const name of readOnly) expect(annotations.get(name)).toEqual({ readOnlyHint: true });
+    for (const name of confirmed) expect(annotations.get(name)).toBeUndefined();
   });
 });

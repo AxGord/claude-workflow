@@ -38,6 +38,51 @@ class NativeHelper {
 
 Invalidates raw C++ pointers to Haxe objects after collection. Also shows erratic memory growth during long load/unload cycles — may exceed non-moving GC over time.
 
+## Static Init Boot Order (`__boot_all`)
+
+Each class's static-variable initializers AND its RTTI payload (`__mClass->__rtti__`, from `@:rtti`) are set inside that class's generated `__boot()`. `__boot_all()` calls these in a generator-chosen order — not declaration order, not strictly alphabetical.
+
+**Observed (hxcpp 4.x)**: for a class `A` with an eager static `static var _instance:A = new A();`, dependency objects constructed inside `A`'s **constructor body** get hoisted to boot before `A`. The same dependency constructed in a **field-declaration initializer** (`public final child:B = new B();`) does NOT get hoisted — it boots after `A`, in roughly module-alphabetical order.
+
+Consequence: a runtime guard that inspects another class's boot state during construction (e.g. `haxe.rtti.Rtti.hasRtti(Type.getClass(this))` in a base-class constructor) passes when `new B()` sits in the ctor body, but throws ("requires @:rtti notation") when the identical init is moved to the field declaration — `B.__boot()` hasn't assigned `__rtti__` yet.
+
+```haxe
+// RISKY — field-decl init boots AFTER A; RTTI guard in B's base ctor can fire too early
+class A {
+    public static var _instance:A = new A();
+    public final child:B = new B();
+}
+
+// SAFER — construct in ctor body; observed to hoist B ahead of A
+class A {
+    public static var _instance:A = new A();
+    public final child:B;
+    public function new() { child = new B(); }
+}
+```
+
+Nothing at compile time catches this (typecheck clean, lint clean) — only launching the binary does, and it crashes before any test runner starts. Check the process exit code and log tail, not just "did output stop".
+
+**Robust fix**: never build an object graph that depends on other classes' boot state (RTTI guards, static registries) from an EAGER static initializer — make the static lazy (nullable, create on first accessor call). Fighting generator-chosen boot order from Haxe code is not controllable.
+
+## Diff the GENERATED C++ — a typecheck is blind, a full build is not the only alternative
+
+"Does this refactor change anything on hxcpp?" (moving a ctor init to a field declaration, relocating an `untyped __cpp__` splice, reordering statics) reads as unanswerable without a full native build, so it gets settled by guessing — either shipping the change unverified or reverting a harmless one. Both are avoidable: hxcpp's `-D no-compilation` emits the whole C++ tree and skips the compiler, so the question becomes a text diff that costs seconds.
+
+```sh
+haxe <target>.hxml            # hxml already carries -D no-compilation + -cpp <objdir>
+cp -R <objdir> /tmp/gen-before
+# apply the change
+haxe <target>.hxml
+diff -r /tmp/gen-before <objdir>
+```
+
+Diff the WHOLE output dir, not one class's `.cpp`. Per-class emit lives in `<Class>.cpp`; the boot ordering the section above warns about lives in the generated `__boot__.cpp`, whose `__boot_all()` is an explicit ordered list of `__boot()` calls. Only a tree-wide diff covers both.
+
+Expect line-number churn: `HX_STACKFRAME` / `HXDLIN(n)` macros embed source line numbers, so a pure statement move shows up as renumbering with identical bodies — that IS the "no-op" verdict, not noise to explain away.
+
+What this does and does not prove: it settles CODEGEN equivalence (same emitted statements, same boot order). It says nothing about whether the emitted C++ compiles when the change introduces new native constructs — for that you still need the real build.
+
 ## Pointer Types
 
 | Type | C++ | GC? | Use case |
@@ -204,6 +249,22 @@ final class CleanExit {
 
 **Warning**: `_Exit` skips ALL atexit handlers. Any pending writes (DB flushes, file saves) are lost. Only call after cooperative cleanup. Keep this as a small shared utility class.
 
+## Sockets
+
+### Read-timeout error string differs by platform — classify by elapsed time, not text
+
+hxcpp's `block_error()` throws `"Blocking"` only for EAGAIN/EWOULDBLOCK/EINPROGRESS/EALREADY on POSIX and WSAEWOULDBLOCK/WSAEALREADY on Windows; everything else — including WSAETIMEDOUT, what `SO_RCVTIMEO` actually produces on Windows — falls into the generic `"EOF"` string. The Haxe std maps `"Blocking"` → `haxe.io.Error.Blocked`, anything else → `Error.Custom(e)`. So a `socket.setTimeout()` / `Http.cnxTimeout` read timeout surfaces as `Blocked` on macOS/Linux and over TLS on every platform (mbedtls maps its own WANT_READ to `"Blocking"`), but as `Custom(EOF)` for a plain socket on Windows — `sys.Http.customRequest` hands that string straight to `onError`.
+
+```haxe
+// WRONG — misses the timeout on Windows plain sockets; treats it as a connection error, retries a non-idempotent POST
+if (msg == "Blocked") isTimeout = true;
+
+// RIGHT — classify by elapsed time, not error text
+if (failed && Timer.stamp() - started >= timeoutSeconds) isTimeout = true;
+```
+
+A real peer close is `haxe.io.Eof` (0-byte recv) on every platform — distinct from the `"EOF"` string above, which is a read-error code, not end-of-stream.
+
 ## Extern Patterns (@:native)
 
 ### Pointer suffix for heap-allocated types
@@ -290,19 +351,57 @@ hxcpp Build.xml uses `macos` for macOS conditionals — NOT `mac`. Using `mac` s
 
 Other valid platform identifiers: `windows`, `linux`, `android`, `iphoneos`, `iphonesim`.
 
-### Build.xml `outdir` is relative to Build.xml location, not project root
+### project.xml: `if="release"` does NOT gate — use `unless="debug"`
 
-When Build.xml lives in a `project/` subdirectory (standard Lime extension layout), `outdir name="ndll/${BINDIR}"` outputs to `project/ndll/` — not the root `ndll/` that Lime expects.
+In Lime's project.xml, the `release` define can be set even in `-debug` builds, so `if="release"` entries (haxedefs, sections) silently leak into debug. Unknown identifiers ARE falsy — `release` is specifically unreliable, not a parser quirk. The reliable gate is the `debug` define, set only by `-debug`:
 
 ```xml
-<!-- WRONG — outputs to project/ndll/ when Build.xml is in project/ -->
-<outdir name="ndll/${BINDIR}" />
+<!-- WRONG — leaks into -debug builds -->
+<haxedef name="analyzer-optimize" if="release" />
 
-<!-- RIGHT — ../ndll/ resolves to root ndll/ -->
-<outdir name="../ndll/${BINDIR}" />
+<!-- RIGHT — 'debug' is set only by -debug -->
+<haxedef name="analyzer-optimize" unless="debug" />
 ```
 
-Always verify with `lime rebuild` locally after moving Build.xml or changing `outdir`.
+Verify gating with `lime display <target> -debug | grep <define>` vs `-release` — never trust the conditional by reading it.
+
+### Build.xml `outdir` resolves against the CWD, not the Build.xml location — and a misplaced artifact still prints `Link:` and exits 0
+
+A relative `outdir` is joined to the directory hxcpp was INVOKED from. The standard Lime extension layout puts Build.xml in `project/` and writes `<outdir name="../ndll/${BINDIR}" />`, which is correct **only when the build runs from `project/`** — that is what `lime rebuild` does. Invoke the same file from the extension root and `../ndll/` climbs one level ABOVE the extension:
+
+```sh
+# WRONG — ../ndll/ resolves against the extension root → <parent-of-extension>/ndll/
+cd <extension> && haxelib run hxcpp project/Build.xml -D<platform>
+
+# RIGHT — ../ndll/ resolves to <extension>/ndll/, where the app links from
+cd <extension>/project && haxelib run hxcpp Build.xml -D<platform>
+```
+
+This fails in the worst possible way: compilation succeeds, the build prints `Link: ../ndll/<BINDIR>/<lib>` (its own relative spelling, so it reads as correct), and the exit status is 0. Nothing is stale-checked, so the app keeps linking the OLD artifact and a newly added `DEFINE_PRIME*` entry point is simply absent at runtime — surfacing as a `Could not find primitive` / signature-mismatch crash far from the build.
+
+**Never treat a green build as proof the artifact landed.** Check the file the app actually bundles:
+
+```sh
+stat -f "%Sm %z" <extension>/ndll/<BINDIR>/<lib>   # did the mtime move?
+nm -gU <extension>/ndll/<BINDIR>/<lib> | grep <new_symbol>
+```
+
+A stray `ndll/` tree one level above an extension is the fingerprint of this mistake — from this build or an earlier one.
+
+### `lime display` prints the CACHED hxml when the project file is older than it — it is not a fresh parse
+
+`lime display <target> [-Dfoo]` reuses `<app path>/<target>/haxe/<buildType>.hxml` left by the last `lime build`/`update`, and only re-generates it when the project file's mtime is newer than that hxml (`MacPlatform.getDisplayHXML`, same in the other desktop platforms). So the output reflects the LAST BUILD's defines, not the flags on the command line: after a `-DUNIT_TESTS` build every later `lime display mac` still lists `-D UNIT_TESTS`, with the test haxelibs and `-D HEADLESS`, while `-D` flags you pass now are silently absent. Nothing in the output marks it as stale. Bisecting project.xml with copies under another name "works" only because a freshly copied file is newer than the hxml — the copy is parsed, the original is not, which makes the two look different for reasons that have nothing to do with their content.
+
+```sh
+# WRONG — reads the hxml of whatever was built last
+lime display mac -debug -DFOO | grep '^-D'
+
+# RIGHT — regenerate first, then read the file lime wrote
+lime update mac -debug -DFOO >/dev/null && grep '^-D' dist/macos/haxe/debug.hxml
+# (or: touch project.xml before `lime display`)
+```
+
+`buildType` is `debug` / `release` / `final`, so a `-debug` display reads `debug.hxml` — a test build (release) and an IDE debug build only collide on the `.app` bundle they both write into `<app path>/<target>/bin/`, not on the hxml.
 
 ### Native assets
 
@@ -442,6 +541,8 @@ Key: solid rect goes PAST `containerWidth`, not before it. Parent mask clips the
 
 **dispatchEvent during tween kills animation** — when a method starts a tween AND dispatches an event synchronously, event listeners may call a property setter that instantly sets the animated property to its target value, killing the tween. Fix: add early-return guard in setter when value unchanged (`if (_field == value) return`), and `Actuate.stop(target)` before instant-setting for programmatic changes.
 
+**`Actuate.stop(target)` FIRES `onComplete`** — its defaults are `complete = false, sendEvent = true`, and with no `properties` the actuator runs `complete(sendEvent)`, which invokes the `onComplete` handler synchronously (Actuate 1.9.0, `SimpleActuator.stop` → `GenericActuator.complete`). A "stop the fade-in" in `dispose()` therefore starts the chained fade-out on the disposed object, and stopping the previous overlay inside a re-triggered flash runs its handler against state not yet reassigned. Pass `Actuate.stop(target, null, false, false)` whenever the tween has a completion you do not want.
+
 ## Built-in Utility Methods
 
 OpenFL provides utility methods that are easy to miss. Use them instead of writing manual implementations:
@@ -450,6 +551,20 @@ OpenFL provides utility methods that are easy to miss. Use them instead of writi
 - `Point.distance(pt1, pt2)` — distance between two points
 - `Point.polar(len, angle)` — create point from polar coordinates
 - `Rectangle.intersection()`, `Rectangle.union()` — rectangle math
+
+## TextField Line Metrics
+
+**A line advances by `ascent + descent + format.leading` — the FONT's line gap is ignored.**
+`TextEngine` reads `leading` from the `TextFormat` (default 0), never from the face's `hhea.lineGap`
+/ `OS/2.sTypoLineGap`. So a 12 px face whose file says ascent 750 / descent 250 / lineGap 200
+advances 12.0 per line in OpenFL, not 14.4 — a line height derived from the font file (fontTools,
+FreeType metrics) over-reserves by the gap on every line. Measure instead:
+`field.getLineMetrics(0).height` after setting text, or `TextLineMetrics.ascent + descent`.
+
+**Every line after the first renders 1 px below where that advance puts it.** A multi-line field
+sized as `lines * advance + 4` (the 2 px gutter above and below) shears the descenders of its last
+line by exactly one pixel per extra line. Reserve `(lines - 1)` extra pixels on top of the advance
+sum; a height helper that walks `getLineMetrics(i)` per line has to add the same term.
 
 ## Performance
 
@@ -462,6 +577,8 @@ OpenFL provides utility methods that are easy to miss. Use them instead of writi
 **Iterator for-loops allocate** — `for (item in array)` creates GC iterator object. Use `for (i in 0...array.length)`.
 
 **Map degrades after ~50k keys** — becomes 50%+ slower than neko at 100k. Use custom structures for large maps.
+
+**A declaration's SCOPE is transliterated 1:1 — narrowing one into a loop costs nothing.** hxcpp emits a local exactly where it was written: `var x:Int;` inside a `while` body becomes `int x;` inside that C++ block, not a hoisted slot. The frame is allocated once on function entry and the value lives in a register, so the hoisted and the sunk spelling produce identical machine code — there is no per-iteration allocation to fear. Same for a reference type: `::String s = …` in a loop body is a stack slot with an empty constructor, and heap traffic comes from the INITIALIZER, which ran per-iteration in the hoisted spelling too. So "will moving this declaration inside the loop re-allocate?" is always no; the only reason to refuse is SEMANTIC (a value carried across iterations, or a closure that captured one shared binding). Settle any such question in seconds with the `-D no-compilation` recipe above rather than reasoning about it.
 
 ## Cross-Target Differences
 
@@ -548,6 +665,40 @@ openfl.Lib.current.stage.addEventListener(Event.RESIZE, handler);
 _button.stage.addEventListener(Event.RESIZE, handler);
 this.stage.addEventListener(Event.RESIZE, handler);  // if 'this' is a DisplayObject
 ```
+
+### `KeyboardEvent.keyCode` is the LAYOUT's character, not the physical key — letter shortcuts die on a non-Latin layout
+
+`switch event.keyCode { case Keyboard.C: copy(); }` silently stops matching the moment the user types in a
+Cyrillic/Greek/Hebrew/… layout: SDL reports the keycode the CURRENT layout produces, so the physical C key arrives as
+`1089` (`с`), V as `1084` (`м`), Z as `1103` (`я`). Nothing errors — the shortcut just never fires, and the same build
+works for anyone on a Latin layout, which is what makes it read as "works on my machine". The modifier keys themselves
+also arrive through the handler (`15` = Command, `17` = Control on mac).
+
+The physical scan code IS in the SDL event and lime THROWS IT AWAY at the C++ boundary: `lime/project/include/ui/KeyEvent.h`
+declares `{ keyCode, modifier, type, windowID }` and `SDLApplication.cpp` copies only `keysym.sym` / `keysym.mod` — never
+`keysym.scancode`. `Window.onKeyDown` is typed `KeyCode -> KeyModifier -> Void`, and openfl's `KeyboardEvent` carries
+`keyCode`/`charCode`/`keyLocation`, so no layer downstream can hand it to you. Recovering it first-hand means patching both
+forks and rebuilding the native libraries per platform.
+
+What works without touching either fork: `lime.ui.ScanCode.fromKeyCode(keyCode)` — that is `SDL_GetScancodeFromKey` against
+the CURRENT keymap (`lime/project/src/backend/sdl/SDLKeyCode.cpp`), i.e. SDL's own reverse lookup, not a hand-built table.
+Letter scan codes are alphabetical (`ScanCode.A` = 4 … `ScanCode.Z` = 29), so the Latin code comes back by offset:
+
+```haxe
+// Latin layouts keep CHARACTER matching on purpose: on Dvorak/AZERTY the user expects
+// cmd+C on the key that produces `c`, not on the QWERTY position of C. Only a layout
+// with no `c` at all falls back to the physical key — the rule macOS and Windows follow.
+if (keyCode >= Keyboard.A && keyCode <= Keyboard.Z) return keyCode;
+final scanCode:Int = ScanCode.fromKeyCode(keyCode);
+final firstLetterScanCode:Int = ScanCode.A;
+final lastLetterScanCode:Int = ScanCode.Z;
+return scanCode < firstLetterScanCode || scanCode > lastLetterScanCode ? keyCode : Keyboard.A + scanCode - firstLetterScanCode;
+```
+
+Two consequences worth carrying: "always use the scan code" is WRONG (it would move Dvorak/AZERTY shortcuts onto QWERTY
+positions), and on a target without `lime_cffi` the lookup answers `ScanCode.UNKNOWN` (0), so the fallback must return the
+original `keyCode` rather than trusting the result. Non-letter shortcuts (`ESCAPE`, `ENTER`, arrows) need none of this —
+their key codes are layout-independent by construction.
 
 ## OpenFL Internal APIs (for synthetic events / debug bridges)
 

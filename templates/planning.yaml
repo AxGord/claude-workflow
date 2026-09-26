@@ -86,7 +86,7 @@ states:
          - **Session**: `<session_id>`
          - **Current state**: `planning @ design`
          - **After approve**: transition `planned` → returns to parent
-         - **Execution workflow**: coding / feature / bug_fix / testing / refactoring / <workflow-name>
+         - **Execution workflow**: coding / docs / feature / bug_fix / testing / refactoring / <workflow-name>
          - **Resume**: `transition("<session_id>", "planned")`
          ```
       5. Call `ExitPlanMode` for user approval

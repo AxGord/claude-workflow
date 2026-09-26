@@ -180,7 +180,7 @@ Triggered by reflection when Claude makes a verifiable mistake.
    stories was a real recurring defect — this step is the gate.
 
 Example flow: Claude writes `Fib(46) overflows Int32` → verification shows Fib(46) fits,
-Fib(47) overflows → add verified table to math skill with exact numbers.
+Fib(47) overflows → add the verified table, with exact numbers, to the skill that owns the domain.
 
 ### 6. UPDATE an existing skill (manual)
 

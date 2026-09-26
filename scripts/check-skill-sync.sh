@@ -5,7 +5,8 @@
 # same-named pair that differs means the snapshot went stale (or an edit
 # landed only bundled-side). Names listed in .skillsyncignore (one per
 # line, # comments, trailing whitespace ignored) are intentionally
-# divergent and skipped.
+# divergent: skipped, except that an ignored pair which became IDENTICAL
+# is reported (a blanket sync overwrote the generic bundled template).
 #
 # Exit 0 = in sync; exit 1 = drift reported (used by the pre-commit hook).
 # Skills existing on only one side are not drift (user-local skills are
@@ -22,8 +23,18 @@ ignore="$root/.skillsyncignore"
 fail=0
 for dir in "$root/templates/skills"/*/; do
     name=$(basename "$dir")
-    if [ -f "$ignore" ] && sed 's/[[:space:]]*$//' "$ignore" | grep -qxF -e "$name"; then continue; fi
     [ -d "$live/$name" ] || continue
+    if [ -f "$ignore" ] && sed 's/[[:space:]]*$//' "$ignore" | grep -qxF -e "$name"; then
+        # An ignored pair that became IDENTICAL means a blanket sync overwrote
+        # the bundled template with the personal live copy — the listed
+        # divergence silently vanished.
+        if diff -rq "$live/$name" "$dir" >/dev/null 2>&1; then
+            echo "DRIFT: $name — listed in .skillsyncignore but IDENTICAL to live"
+            echo "    the bundled copy must stay the generic template; restore it (git show HEAD:templates/skills/$name/...)"
+            fail=1
+        fi
+        continue
+    fi
     drift=$(diff -rq "$live/$name" "$dir" 2>&1) || {
         echo "DRIFT: $name"
         echo "$drift" | sed 's/^/    /'

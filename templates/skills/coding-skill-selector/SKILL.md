@@ -7,7 +7,14 @@ description: Select and load coding skills by file extensions and domains
 
 Load coding skills for the languages/domains THIS TASK will touch.
 
-1. Always: `Skill("preferences")` + `Skill("architecture")`
+1. `Skill("preferences")` + `Skill("architecture")` — EXCEPT on a read-only
+   route. The gate prompt's stack line names the active workflow
+   (`[N] explore @ load_skills`, `[N] debugging @ load_skills`): those two
+   never write code, and both skills only govern WRITING (style, abstraction
+   thresholds), so on them skip this step, and skip any personal
+   `preferences-<lang>` skill from rule 3 too (keep `lang-<x>` and tool
+   skills — they are needed to READ code correctly). `investigate`,
+   `planning`, review and every coding route load the full set.
 
 2. **Language menu** (preferred path): the session's routing prompt included a
    "Project language menu" block — an engine-run scan with per-extension file
@@ -25,7 +32,8 @@ Load coding skills for the languages/domains THIS TASK will touch.
 
 3. By file extension (menu-picked or fallback):
    - .py → `Skill("lang-python")`
-   - .hx → `Skill("lang-haxe")`
+   - .hx → `Skill("lang-haxe")`, plus `Skill("hxq")` per the tool-bound rule
+     above (`hx … (hxq OK)`, or `command -v hxq` succeeds)
    - .as → `Skill("lang-as3")`
    <!-- Add your own language mappings, e.g.: -->
    <!-- - .cs → `Skill("preferences-csharp")` -->
@@ -39,6 +47,7 @@ Load coding skills for the languages/domains THIS TASK will touch.
    editing the file.
 
 5. By domain (detect from imports, paths, or task description):
+   - Pony (`-lib pony`, `pony.xml`, `pony.*` imports, `@:listen`/`@:auto`/`@:own` metas) → `Skill("domain-pony")`
    - YOLO / object detection → `Skill("domain-yolo")`
    - Pixi.js (imports from `pixi.js`, PIXI globals) → `Skill("domain-pixi")`
    - Person re-identification (ReID) → `Skill("domain-reid")`
@@ -46,7 +55,6 @@ Load coding skills for the languages/domains THIS TASK will touch.
    - UI components / display-tree apps (ownership, state, events) → `Skill("domain-ui")`
    - Diagnosing a bug / fixes that don't stick after 2+ rounds → `Skill("debugging")`
    - OpenFL / hxcpp native target → `Skill("target-openfl-native")`
-   - Math overflow / numeric boundaries → `Skill("math")`
 
 6. By tooling/platform:
    - CMakeLists.txt / CMake build → `Skill("build-cmake")`
@@ -62,7 +70,10 @@ Load coding skills for the languages/domains THIS TASK will touch.
    - Fetching web docs / external content → `Skill("web-reading")`
    - Verifying a web/canvas app via Playwright or a browser MCP (screenshots, captures, perf) → `Skill("browser-verify")`
 
-7. If 3+ independent files or parallel work → `Skill("task-delegation")`
+7. If 3+ independent files or parallel work → `Skill("task-delegation")` —
+   EXCEPT when you are a spawned sub-agent (the gate prompt's stack shows
+   `subagent` at the root): a worker never spawns agents of its own, so the
+   skill is dead weight there — skip it.
 
 Call `Skill(name)` for EVERY matched skill.
 

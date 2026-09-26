@@ -22,8 +22,8 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 - **Runtime overlays** — modify workflows on the fly without touching YAML files
 - **Action states** — `exec` runs shell commands, `fetch` makes HTTP requests, with auto-routing by exit code or HTTP status
 - **Web dashboard** — real-time session monitoring with DAG graph visualization
-- **19 bundled workflows** — complete agent lifecycle from routing to reflection, including long-running batch orchestration
-- **20 bundled skills** — reusable knowledge modules auto-provisioned on first run
+- **20 bundled workflows** — complete agent lifecycle from routing to reflection, including long-running batch orchestration and a text-only `docs` route
+- **28 bundled skills** — reusable knowledge modules auto-provisioned on first run
 - **SessionStart hook** — auto-provisions missing skills and injects workflow context
 
 ## Quick Start
@@ -234,6 +234,7 @@ A project workflow named `coding` overrides the bundled `coding` template. Same-
 |----------|-------------|
 | `master` | Single entry point — analyzes task, loads skills, routes to sub-workflows |
 | `coding` | Code writing pipeline: think → delegate → write → review → verify |
+| `docs` | Text-only edits (skills, prompts, CLAUDE.md, memory, reports): write → verify — no lint, tests, or reviewer agent |
 | `bug-fix` | Standard bug fix: classify → diagnose → fix → verify |
 | `new-feature` | New feature implementation with planning and testing |
 | `debugging` | Diagnose first, fix never (until diagnosed) |
@@ -247,6 +248,8 @@ A project workflow named `coding` overrides the bundled `coding` template. Same-
 | `subagent` | Lightweight routing for sub-agents (no chat/plan/reflect) |
 | `file-code` | Per-file coding — spawned by coding/bug-fix for each file |
 | `file-review` | Per-file deep review — spawned by code-review for each file |
+| `lint-review` | Trivial-diff review — engine-run lint, act on findings, one intent re-read |
+| `batch` | Long-running queue of independent tasks dispatched to sub-agent workers, one fresh-eyes review of the combined diff |
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 
@@ -263,6 +266,7 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-pr
 | `preferences` | Template for personal coding preferences (fill in your own) |
 | `architecture` | Simplicity-first architecture decisions |
 | `task-delegation` | When and how to delegate to subagents |
+| `debugging` | Debugging meta-patterns — what to do when fixes don't stick |
 | `coding-skill-selector` | Select and load coding skills by file extensions and domains |
 | `workflow-authoring` | Reference for creating workflows with exec/fetch action states |
 
@@ -282,6 +286,8 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-pr
 | `domain-pixi` | Pixi.js v8 masking and graphics gotchas |
 | `domain-reid` | Person re-identification ML gotchas |
 | `domain-gamedev` | Game dev precision and physics gotchas |
+| `domain-pony` | Pony (Haxe cross-library) gotchas |
+| `domain-ui` | UI component architecture — ownership, state, events |
 
 **Platforms & Tooling**
 
@@ -293,13 +299,18 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-pr
 | `aws-lambda` | AWS Lambda .NET deployment gotchas |
 | `mcp-setup` | MCP server setup and troubleshooting |
 | `claude-code-config` | Claude Code configuration gotchas |
+| `hxq` | When and how to use hxq for structural Haxe navigation |
+| `browser-verify` | Browser-automation verification gotchas — stale captures, caches, headless limits |
+| `debug-bridge-scaffold` | Meta-skill for creating debug bridges for new technologies |
+| `ide-zed` | Zed IDE integration rules |
 
 **Utility**
 
 | Skill | Description |
 |-------|-------------|
-| `math` | Math overflow boundary gotchas |
 | `web-reading` | Fetch web content via subagents |
+| `skill-manager` | Create, install, update, optimize skills |
+| `cleanup` | Clean .claude directory data |
 
 ## MCP Tools
 

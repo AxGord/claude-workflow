@@ -1,14 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import {
   InMemoryStorage,
   createTestLoader,
+  createFixtureDir,
   cleanupDir,
   SIMPLE_WORKFLOW,
   MULTI_STATE_WORKFLOW,
 } from "./test-helpers.js";
-import type { Loader } from "./loader.js";
+import { Loader } from "./loader.js";
 import type { ActionResult } from "./types.js";
 import { KEEP_TERMINAL_SESSIONS } from "./types.js";
 
@@ -447,7 +450,8 @@ describe("Engine", () => {
   });
 
   describe("GLOBAL_WORKFLOWS", () => {
-    it("excludes github-init from the project workflow list", async () => {
+    it("excludes bundled workflows (github-init, docs, batch) from the project workflow list", async () => {
+      const bundled = ["github-init", "docs", "batch"];
       setup({
         hub: {
           initial: "menu",
@@ -460,15 +464,41 @@ describe("Engine", () => {
             end: { terminal: true, outcome: "complete" },
           },
         },
-        "github-init": SIMPLE_WORKFLOW,
+        ...Object.fromEntries(bundled.map(name => [name, SIMPLE_WORKFLOW])),
         "my-project-flow": SIMPLE_WORKFLOW,
       });
 
       const result = await engine.start("hub");
-      // Guard: the fixture actually loaded — otherwise not.toContain passes vacuously
-      expect(loader.get("github-init")).toBeTruthy();
       expect(result.prompt).toContain("my-project-flow");
-      expect(result.prompt).not.toContain("github-init");
+      for (const name of bundled) {
+        // Guard: the fixture actually loaded — otherwise not.toContain passes vacuously
+        expect(loader.get(name)).toBeTruthy();
+        expect(result.prompt).not.toContain(name);
+      }
+    });
+
+    it("lists no bundled template as a project workflow", async () => {
+      const fixtureDir = createFixtureDir({
+        hub: {
+          initial: "menu",
+          states: {
+            menu: { prompt: "Choose a workflow.", include_workflows: true, transitions: { done: "end" } },
+            end: { terminal: true, outcome: "complete" },
+          },
+        },
+        "my-project-flow": SIMPLE_WORKFLOW,
+      });
+      try {
+        const bundledDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
+        const realEngine = new Engine(new InMemoryStorage(), new Loader(bundledDir, fixtureDir, null), new Executor());
+        const result = await realEngine.start("hub");
+        const listed = result.prompt.split("Available workflows:\n")[1].split("\n")
+          .map(line => line.replace(/^- (\S+) — .*$/, "$1"));
+        // A new bundled template missing from GLOBAL_WORKFLOWS shows up here
+        expect(listed).toEqual(["hub", "my-project-flow"]);
+      } finally {
+        cleanupDir(fixtureDir);
+      }
     });
   });
 
@@ -515,6 +545,54 @@ describe("Engine", () => {
       const status = engine.getStatus(sessionId);
       expect(status.stack).toHaveLength(0);
       expect(status.prompt).toContain("abandoned");
+    });
+
+    it("a parent abort during a child's exec is not overwritten when the exec returns", async () => {
+      setup({
+        parent: SIMPLE_WORKFLOW,
+        slow: {
+          initial: "start",
+          states: {
+            start: { prompt: "go", transitions: { next: "wait" } },
+            wait: { type: "exec", command: "sleep 0.3", on_success: "work", on_error: "work" },
+            work: { prompt: "working", transitions: { done: "end" } },
+            end: { terminal: true, outcome: "complete" },
+          },
+        },
+      });
+      const parent = await engine.start("parent");
+      const child = await engine.start("slow", undefined, parent.sessionId);
+
+      const running = engine.transition(child.sessionId, "next");
+      await engine.abort(parent.sessionId);
+
+      await expect(running).rejects.toThrow("ended while its action state ran");
+      const session = storage.read(child.sessionId)!;
+      expect(session.outcome).toBe("abandoned");
+      expect(session.stack).toHaveLength(0);
+    });
+
+    it("a context_set that lands during an exec survives the action chain's write", async () => {
+      setup({
+        slow: {
+          initial: "start",
+          states: {
+            start: { prompt: "go", transitions: { next: "wait" } },
+            wait: { type: "exec", command: "sleep 0.2", on_success: "work", on_error: "work" },
+            work: { prompt: "working", transitions: { done: "end" } },
+            end: { terminal: true, outcome: "complete" },
+          },
+        },
+      });
+      const { sessionId } = await engine.start("slow");
+
+      const running = engine.transition(sessionId, "next");
+      await engine.setContext(sessionId, "k", "v");
+      await running;
+
+      const session = storage.read(sessionId)!;
+      expect(session.stack[0].current_state).toBe("work");
+      expect(session.context.k).toBe("v");
     });
   });
 

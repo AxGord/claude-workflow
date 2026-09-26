@@ -42,6 +42,22 @@ print([o.get_partial_shape() for o in m.outputs])  # channel-axis last dim revea
 
 A mismatch here (e.g. expecting 84 channels but seeing 5) means the wrong file was picked — even if input shape and many backbone layers matched.
 
+## ByteTrack: Birth Threshold vs Sustain Floor — Track Flicker
+
+ByteTrack-style two-stage association trackers expose TWO distinct thresholds that are easy to conflate:
+- **Birth threshold** (`high_thresh`): gates whether an unmatched high-score detection may **create a NEW track**.
+- **Detection score floor**: the postprocess confidence gate deciding a detection exists at all. This floor doubles as the **sustain floor** — the second association pass re-matches already-confirmed tracks against low-score detections (between the floor and the high-score split), letting a track survive frames where its score dips, as long as the score still clears the floor.
+
+Trap: setting the score floor INSIDE the frame-to-frame score-noise band of the tracked class makes the score cross the floor repeatedly — each dip deletes the detection, the track loses its match, and (absent an appearance/ReID bridge) the box flickers on/off. Measured: a class whose confidence crossed a 0.20 floor ~40 times across 80 frames produced ~20 visible flickers; dropping the floor to ~0.10 while keeping the birth threshold at ~0.30 eliminated all crossings — the same strong tracks stayed drawn every frame.
+
+Fix: DECOUPLE birth from sustain. Keep the birth threshold high enough to block junk detections from spawning new tracks; set the sustain floor well BELOW the score-noise band of the tracked objects. Unmatched low-score detections never create tracks (birth threshold still gates that) — they only sustain existing ones — so lowering the floor does not flood the output with junk track births.
+
+Corollary: tuning detection thresholds for **yield** (how many objects appear) is a different objective from tuning for **track stability** (no flicker) — optimizing one can leave the other broken. Check both.
+
+**Refinement — effective birth threshold is a MAX, not `high_thresh` alone:** a detection only reaches the birth check after first landing in the high-score pool, i.e. its score already cleared the high/low split (`track_thresh`). So effective birth = `max(track_thresh, high_thresh)`. Lowering `high_thresh` alone is a no-op once it drops below `track_thresh` — a sub-`track_thresh` detection never reaches the birth check at all, it lands in the low pool instead (sustain-only). Example: `track_thresh=0.25, high_thresh=0.30` → effective birth 0.30; dropping `high_thresh` to 0.22 alone leaves effective birth at 0.25 (`track_thresh` now dominates); only lowering both, e.g. to `track_thresh=0.20, high_thresh=0.22`, gets effective birth to 0.22.
+
+Appear-latency vs flicker: an object present in frame for seconds with no track at all is this birth-threshold problem; per-frame flicker of an already-confirmed track is the separate sustain-floor problem above — different timescales, different knobs.
+
 ## Model Selection Quick Reference
 
 | Model | When | Key Feature |

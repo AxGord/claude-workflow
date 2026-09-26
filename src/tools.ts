@@ -84,6 +84,15 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
   return parts.join("\n");
 }
 
+// Claude Code treats an MCP tool as read-only only via readOnlyHint; without
+// it, plan mode (and every subagent spawned under it) prompts on each call and
+// ignores allow rules. These tools write only the engine's own session files —
+// EXCEPT that start/transition entering an exec/fetch state runs that state's
+// command/request, so a user or project workflow's exec states run unprompted
+// under plan mode too. modify/create/delete/abort stay unannotated so they
+// keep their confirmation.
+const ENGINE_STATE_ONLY = { readOnlyHint: true } as const;
+
 export function registerTools(
   server: McpServer,
   engine: Engine,
@@ -91,9 +100,36 @@ export function registerTools(
   loader: Loader,
   storage: Storage
 ): void {
+  // ENGINE_STATE_ONLY also makes Claude Code treat these tools as
+  // concurrency-safe, so a context_set + transition from one message may
+  // arrive in parallel. Engine mutations read the session, then await the
+  // write — run them one at a time in arrival order, or the later write
+  // silently drops the earlier one's change. One queue PER SESSION: a
+  // sibling agent's call is not held behind another session's exec/fetch
+  // chain (a lint run, a retrying fetch). Cross-session writes (abort's
+  // and root completion's child cascade, a child abort's retryPendingPop on
+  // its parent) run outside the target's queue; the engine re-reads a
+  // session after an exec, which narrows that race to one write's latency.
+  const queues = new Map<string, Promise<unknown>>();
+  const serialized = <T>(key: string | null, fn: () => Promise<T>): Promise<T> => {
+    if (key === null) return fn();
+    const run = (queues.get(key) ?? Promise.resolve()).then(fn);
+    const tail = run.catch(() => undefined);
+    queues.set(key, tail);
+    void tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
+    return run;
+  };
+  // An id that does not resolve yet — the session a parallel top-level start
+  // is creating — queues behind that start (once the session is written,
+  // later calls key by its id); otherwise the handler reports the error itself.
+  const sessionKey = (sessionId?: string): string => {
+    try { return engine.resolveSessionId(sessionId); } catch { return "start"; }
+  };
+
   // 1. list
   server.registerTool("list", {
     description: "List all available workflow definitions in the project",
+    annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({}).strict(),
   }, async () => {
     const workflows = loader.getAll();
@@ -116,14 +152,18 @@ export function registerTools(
   });
 
   // 2. start
+  // Only top-level starts race each other (duplicate-session check, then
+  // write); a child start creates its own session and must not wait behind
+  // a sibling's initial exec.
   server.registerTool("start", {
     description: "Start a workflow. Returns the first prompt, session ID, and available transitions.",
+    annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       workflow: z.string().optional().describe("Name of the workflow to start. Defaults to \"master\""),
       actor: z.string().optional().describe("Identity of the agent performing this action"),
       parent_session_id: z.string().optional().describe("Parent session ID for sub-agent tracking"),
     }).strict(),
-  }, async (args) => {
+  }, (args) => serialized(args.parent_session_id ? null : "start", async () => {
     try {
       const status = await engine.start(args.workflow ?? "master", args.actor, args.parent_session_id);
       // No forceFullPrompt here: a digest_on_repeat initial state (master
@@ -140,11 +180,12 @@ export function registerTools(
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
-  });
+  }));
 
   // 3. status
   server.registerTool("status", {
     description: "Get current state, full stack, available transitions, and history for a session.",
+    annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
     }).strict(),
@@ -177,13 +218,14 @@ export function registerTools(
   // 4. transition
   server.registerTool("transition", {
     description: "Transition to the next state in the active workflow. If the new state has a sub_workflow, it auto-pushes. If terminal, it auto-pops to parent.",
+    annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
       transition: z.string().describe("Name of the transition to take"),
       actor: z.string().optional().describe("Identity of the agent performing this action"),
       force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations)"),
     }).strict(),
-  }, async (args) => {
+  }, (args) => serialized(sessionKey(args.session_id), async () => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
       const warning = engine.assertOwnership(sid, args.force);
@@ -193,11 +235,12 @@ export function registerTools(
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
-  });
+  }));
 
   // 5. context_set
   server.registerTool("context_set", {
     description: "Save key-value data in the session context for later use.",
+    annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
       key: z.string().describe("Context key"),
@@ -205,7 +248,7 @@ export function registerTools(
       actor: z.string().optional().describe("Identity of the agent performing this action"),
       force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations)"),
     }).strict(),
-  }, async (args) => {
+  }, (args) => serialized(sessionKey(args.session_id), async () => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
       const warning = engine.assertOwnership(sid, args.force);
@@ -215,7 +258,7 @@ export function registerTools(
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
-  });
+  }));
 
   // 6. modify
   server.registerTool("modify", {
@@ -234,7 +277,7 @@ export function registerTools(
       }).optional().describe("Remove a transition"),
       force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations)"),
     }).strict(),
-  }, async (args) => {
+  }, (args) => serialized(sessionKey(args.session_id), async () => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
       const warning = engine.assertOwnership(sid, args.force);
@@ -248,7 +291,7 @@ export function registerTools(
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
-  });
+  }));
 
   // 7. create
   server.registerTool("create", {
@@ -305,7 +348,7 @@ export function registerTools(
       session_id: z.string().optional().describe("Session identifier"),
       force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations, e.g. aborting stale sessions from dead processes)"),
     }).strict(),
-  }, async (args) => {
+  }, (args) => serialized(sessionKey(args.session_id), async () => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
       const warning = engine.assertOwnership(sid, args.force);
@@ -315,11 +358,12 @@ export function registerTools(
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
-  });
+  }));
 
   // 10. sessions
   server.registerTool("sessions", {
     description: "List all workflow sessions (active shown first, recent inactive limited to 3).",
+    annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       all: z.boolean().optional().describe("Show sessions from all processes. Default: only current process."),
     }).strict(),

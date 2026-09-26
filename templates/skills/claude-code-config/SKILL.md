@@ -5,6 +5,83 @@ description: Claude Code configuration gotchas — permission rule syntax and ev
 
 # Claude Code Configuration Gotchas
 
+## CLAUDE_CONFIG_DIR Partitions Session History — Symlink to Share It
+
+`CLAUDE_CONFIG_DIR` is the ONLY knob for where transcripts live: the store is
+hardcoded as `(CLAUDE_CONFIG_DIR ?? ~/.claude) + "/projects"`, and `/resume`
+builds its list by walking that tree for `<projectKey>/<sessionId>.jsonl`.
+Consequence: a wrapper script that exports a different `CLAUDE_CONFIG_DIR`
+(the usual way to run several accounts side by side) gets its OWN session
+history — a session started under one wrapper is invisible to `/resume` under
+another. Not a bug, and no setting toggles it.
+
+`CLAUDE_CODE_PROJECT_DIR_NAME` is NOT the escape hatch: it overrides only the
+per-project SLUG inside `projects/` (validated against `^[A-Za-z0-9_-]{1,64}$`,
+so it cannot hold a path), and it is read only when `CLAUDE_CONFIG_DIR` is set.
+
+To share history across config dirs, symlink the storage directories to one
+canonical `~/.claude`:
+
+```sh
+# merge first (session ids are UUIDs, so collisions are practically impossible)
+rsync -a "$ALT/projects/" ~/.claude/projects/
+mv "$ALT/projects" "$ALT/projects.bak" && ln -s ~/.claude/projects "$ALT/projects"
+```
+
+- `projects/` — transcripts (and `projects/<slug>/memory/`). Shareable, but
+  needs the allow rules below.
+- `plans/` — saved plan-mode files. Do NOT symlink it, and do not share it by
+  any other means: `/resume` finds no `<slug>.md` in the local `plans/` and
+  recovers the plan from the transcript (file snapshot or message history), so
+  a real per-config-dir directory loses nothing. Tools that look for plans
+  should use `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plans`. The `plansDirectory`
+  setting cannot redirect it to a shared place: the value must resolve inside
+  the project root.
+- `history.jsonl` — prompt history (up-arrow). Shareable, but merge by sorting
+  the union of lines on each record's `timestamp` field; blind concatenation
+  leaves it out of order.
+- `.claude.json` — holds `oauthAccount` and per-project trust. Per-account, do
+  NOT share.
+
+Two prerequisites, both easy to miss:
+- **Kill every CLI using the directory first.** A live session holds an open fd
+  on its `.jsonl`; swapping the directory for a symlink underneath it sends the
+  rest of that session into the orphaned inode.
+- Transcripts carry no owner field, so a session written under account A
+  resumes under account B with no complaint — sharing merges the accounts'
+  session lists by design.
+
+### A symlinked subdir loses the built-in "own files" allowances
+
+Claude Code lets its own files through without a prompt: plan files (read and
+write), `projects/<slug>/<session>/tool-results/` (read — where oversized tool
+outputs are persisted), `projects/<slug>/<session>/workflows/scripts/`
+(write), and others. The check runs on EVERY form of the path, the original
+and the symlink-resolved one, and each must pass. A resolved path is mapped
+back to its root only when the ROOT itself (`$CLAUDE_CONFIG_DIR`, the cwd) is
+the symlink — a symlinked SUBDIR such as `projects/ -> ~/.claude/projects`
+resolves outside `$CLAUDE_CONFIG_DIR`, the allowance fails, and every such
+access prompts (in `-p`, it is denied).
+
+For a subdir that must stay shared (`projects/`), add allow rules to the
+shared `settings.json` covering BOTH path forms — a rule on the resolved path
+alone does not help, and `~/.claude-*` globs over several config dirs:
+
+```json
+"Read(//Users/me/.claude/**)",
+"Read(//Users/me/.claude-*/projects/**)",
+"Edit(//Users/me/.claude/projects/*/*/workflows/scripts/**)",
+"Edit(//Users/me/.claude-*/projects/*/*/workflows/scripts/**)"
+```
+
+The two-form requirement and the glob were verified on the `Read` rule; the
+`Edit` rules follow the same shape but were not exercised.
+
+Anything else newly symlinked into a config dir needs the same audit. Test in
+the alternate config dir, not the base one: in headless `-p`, have a
+pre-approved command overflow its output (`seq 1 40000`), then `Read` the
+persisted file, and check `permission_denials` in `--output-format json`.
+
 ## Permission Path Syntax (Critical)
 
 **Single vs Double Slash**:
@@ -13,6 +90,11 @@ description: Claude Code configuration gotchas — permission rule syntax and ev
 - `~/path` = home directory (works in both)
 
 **Common mistake**: Writing `Read(/tmp/**)` when you mean absolute path. Correct: `Read(//tmp/**)`.
+
+**File-write rules use `Edit(...)`, never `Write(...)`**: file permission
+checks match only `Edit(path)` rules — `Edit` covers all file-editing tools
+(Write, Edit, NotebookEdit). A `Write(//tmp/**)` allow rule is dead and
+Claude Code warns about it at startup. Correct: `Edit(//tmp/**)`.
 
 **Pattern format must match tool signature**:
 - Correct: `Read(//tmp/**)`, `Bash(npm run:*)`
@@ -128,6 +210,14 @@ SubagentStop     → fires when a Task-tool subagent completes
 PostToolUse      → fires after each individual tool call within a turn
 ```
 
+The full current hook event list is much longer than the four above — it also
+includes `StopFailure`, `PostToolUseFailure`, `PostToolBatch`, `SubagentStart`,
+`PostCompact`, `PermissionRequest`, `PermissionDenied`, `Setup`, `TeammateIdle`,
+`TaskCreated`, `TaskCompleted`, `Elicitation`, `ElicitationResult`,
+`ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`,
+`CwdChanged`, `FileChanged`, `DirectoryAdded`, `MessageDisplay`,
+`PreModelSwitch`, `PostModelSwitch`, `UserPromptExpansion`.
+
 ## Capturing a Real Hook Payload
 
 To see the exact JSON a hook receives, run headless claude with a dump hook — faster and more reliable than docs or grepping the compiled CLI binary:
@@ -141,6 +231,42 @@ printf 'start a background sleep 180 via Bash run_in_background, reply done' \
 Gotchas:
 - Pass the prompt via **stdin** — the argument form can fail with `Error: Input must be provided either through stdin or as a prompt argument` when a PreToolUse rewriter hook mangles quoting.
 - A nested `claude -p --dangerously-skip-permissions` gets denied by the auto-mode classifier; a narrow `--allowedTools "Bash(<cmd>:*)"` passes.
+
+## PostToolUse for Bash: the command's output lands in `stdout`, never `stderr`
+
+A hook that reacts to what a command PRINTED must read `.tool_response.stdout`.
+The Bash tool hands the hook ONE merged capture and files it under `stdout`, so
+a command that wrote **only** to stderr still arrives with
+`.tool_response.stderr` as an empty string. Reading stderr alone makes every such
+command look silent and the hook fails quiet — no error, no output, just a hook
+that never fires. Read both and concatenate.
+
+Full key set for a Bash `PostToolUse` payload: `cwd`, `duration_ms`,
+`hook_event_name`, `permission_mode`, `prompt_id`, `session_id`, `tool_input`,
+`tool_name`, `tool_response`, `tool_use_id`, `transcript_path`; `tool_response`
+= `{stdout, stderr, interrupted, isImage, noOutputExpected}`. `cwd` is the tool
+call's working directory — resolve against it any relative path the command
+printed, since the hook's own cwd is not guaranteed to match.
+
+Two more things that bite a `matcher: "Bash"` PostToolUse hook:
+
+- **It fires after EVERY bash command**, including the ones your own hook's work
+  would trigger. Anything expensive needs an early exit that is pure shell
+  string matching on the raw stdin, reached BEFORE the first `jq` — otherwise
+  the cost lands on every command in the session. A
+  `case "$input" in *marker*) ;; *) exit 0 ;; esac` costs ~5 ms including the
+  process spawn; one `jq` invocation is an order of magnitude more.
+  (A command the hook runs itself is a plain subprocess, not a Bash tool call,
+  so it does NOT re-enter the hook — the recursion worry is misplaced, the
+  per-command cost is the real one.)
+- **`tool_response.stdout` may be TRUNCATED** by anything that post-processes
+  tool output (an output-compressing wrapper hook, for instance), which
+  substitutes a pointer to a full-output log. Never make a hook's only signal a
+  line that could be scrolled out of the capture; cross-check it against
+  `tool_input.command`.
+
+**Hook edits take effect immediately.** A new entry added to a settings file
+mid-session fires on the very next tool call — no restart, no `/hooks` visit.
 
 ## Stop Hook `background_tasks` (v2.1.145+)
 
@@ -167,3 +293,65 @@ Workaround: invoke through a wrapper that bypasses the rewriter (e.g. an explici
 **Race-condition trap**: If entry A writes a marker file and entry B deletes it, the outcome depends on timing, not position. A fast B (~0 ms) completes before a slow A (~30–50 ms), so A's delete wins even when B is declared last. Symptom: your write appears to have no effect.
 
 **Fix**: One hook entry per event. Inspect stdin JSON inside that single script/command and branch on `tool_name` or other fields to dispatch logic. This guarantees deterministic ordering because it's a single process.
+
+## Usage-Limit Stops: StopFailure, autoContinueAtUsageLimit, and the Session Messaging Socket
+
+**Wrong assumption**: A turn that ends because the API itself returned an error (usage limit / 429, overloaded, auth, billing…) fires `Stop` or `Notification` like a normal turn end.
+**Correct**: It fires **neither**. The only hook for it is `StopFailure` (v2.1.78+) — "runs instead of Stop when the turn ends due to an API error."
+
+Payload = common fields (`session_id`, `transcript_path`, `cwd`, `hook_event_name`) plus:
+- `error` ∈ `rate_limit | overloaded | authentication_failed | oauth_org_not_allowed | account_on_hold | billing_error | invalid_request | model_not_found | server_error | max_output_tokens | unknown`
+- optional `error_details`
+- optional `last_assistant_message` — the rendered error text shown to the user, e.g. `You've hit your session limit · resets 4:30pm (Europe/London)` (weekly form: `resets Sep 9 at 3pm (…)`)
+
+The CLI **ignores the hook's output and exit code** — `StopFailure` is notification-only, it cannot block, continue the turn, or inject a prompt. (`decision: "block"` to keep a turn going only works for `Stop`/`SubagentStop`.) No hook can start a new turn by itself.
+
+File-level marker for the same event (useful when no hook was configured, or when scanning history after the fact): the transcript line is a synthetic assistant message with top-level `"isApiErrorMessage": true`.
+
+**`autoContinueAtUsageLimit`** (v2.1.234+, standard settings.json hierarchy; key **absent ⇒ enabled** for claude.ai logins): on hitting the 5-hour limit the CLI shows `Usage limit reached · continuing automatically at HH:MM · esc to cancel`, waits, and re-prompts itself once the limit resets. Toggle via `/config` ("Continue automatically at usage limit"), or arm/disarm a single instance via `/rate-limit-options`.
+- Re-arms at most twice in a row.
+- Not available for `-p`, background sessions, or API-key auth.
+- Covers the 5-hour limit only — not the weekly limit.
+- Only fires if the machine is awake at the reset time.
+- Arming has open bug reports (a limit hit while inside a background-agent/task-notification turn may not arm) — confirm with the on-screen "continuing automatically" line rather than assuming it armed.
+
+**Session messaging socket**: every child process of a session — hook scripts and Bash tool commands included — inherits `CLAUDE_CODE_MESSAGING_SOCKET=/tmp/cc-socks/<cli-pid>.sock`, `CLAUDE_CODE_MESSAGING_TOKEN=<32 hex>`, and `CLAUDE_CODE_SESSION_ID`. This is the internal Unix-socket channel behind cross-session `SendMessage` / Remote Control (internally "uds-messaging", peer protocol 1 — undocumented, may change without notice). Two newline-terminated JSON lines inject a prompt into that session:
+
+```sh
+{ echo '{"type":"auth","token":"'"$CLAUDE_CODE_MESSAGING_TOKEN"'"}';
+  echo '{"type":"user","message":{"role":"user","content":"hello"}}'; } \
+  | nc -U -w 2 "$CLAUDE_CODE_MESSAGING_SOCKET"
+```
+
+An idle session starts a turn on it; the message is enqueued in the transcript immediately, labelled as a message from another Claude session (peer) — never as the user's own typing. Peer tokens for *other* sessions live at `~/.claude/sessions/<pid>.<sha256>.key` (mode 600, readable only by the same OS user).
+
+Gotchas:
+- The auto-mode permission classifier **blocks** any Bash command that writes to a real `/tmp/cc-socks/*.sock` path even after the user approves it in chat — test against a fake `AF_UNIX` listener on a scratch path instead, or have the user run the command themselves via the `!` prefix (the env vars are present in that shell too).
+- Keep the socket path under 104 bytes (`sockaddr_un` limit).
+- Escape `\` and `"` when interpolating the token or message content into the JSON frames.
+
+**Built-in sleep prevention**: on macOS the CLI itself spawns `caffeinate -i -t 300` as a child of `claude`, re-spawned roughly every 4 minutes while a turn is running and killed when the turn ends. It shows up in `pmset -g assertions` / `pmset -g log` as short-lived caffeinate assertions — not a plugin or hook leak. It does **not** cover an `autoContinueAtUsageLimit` wait: the Mac can still sleep before the scheduled reset.
+
+**Method**: none of the above is documented; all of it is in the shipped binary. `strings ~/.local/share/claude/versions/<version> > /tmp/cc.txt`, then `LC_ALL=C /usr/bin/grep -F` or a Python `re.finditer` with ±300-char context turns up hook event lists, zod-like payload schemas (`hook_event_name:x("StopFailure"),error:…`), settings keys with their defaults, and internal protocol strings — the binary is consistently ahead of the docs. Never `cat` the dump (tens of MB). To date a feature, pull the changelog and search it: `gh api repos/anthropics/claude-code/contents/CHANGELOG.md -H "Accept: application/vnd.github.raw" | grep -n <term>`, then take the nearest `## <version>` header above the hit.
+
+## statusLine Payload: Undocumented Optional Keys
+
+Beyond the documented `model`/`workspace`/`context_window`/`cost`/`output_style`, the
+stdin JSON carries optional keys that are simply ABSENT when not applicable —
+always read them with `// empty` and branch on non-empty:
+
+- `effort.level` — `"low" | "medium" | "high" | "max"` (`xhigh` on models that support it); present only for effort-capable models
+- `thinking.enabled`, `fast_mode`, `exceeds_200k_tokens`
+- `rate_limits.{five_hour,seven_day,spend_limit}.{used_percentage,resets_at}` — `resets_at` is a unix epoch
+- `vim.mode`, `agent.name`, `session_name`, `remote.session_id`, `pr.{number,url,review_state,kind}`, `worktree.{name,path,...}`
+
+Quick test without a live session: pipe a hand-written JSON into the script
+and check both the with-key and without-key renders.
+
+**Subscription tier is NOT in the payload** — read it from the local account
+cache instead: `${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json` →
+`.oauthAccount.organizationRateLimitTier` (`default_claude_max_5x` /
+`default_claude_max_20x`; Team orgs carry an opaque name like `default_raven`
+— fall back to `.oauthAccount.organizationType` ∈ `claude_max | claude_team |
+claude_pro`). The statusline command is a child of the CLI, so it inherits
+`CLAUDE_CONFIG_DIR` and resolves the right account automatically.

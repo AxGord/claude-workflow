@@ -160,6 +160,29 @@ var x:Foo = ...;
 
 This is the consumer-side counterpart to the macro-pipeline `Module.SubType` access rule.
 
+**Full visibility matrix** (verified: `haxe -cp src -main app.Main --interp`, Haxe 4.3.x). Given `pkg/Mod.hx` declaring `class Mod` (main type, name == file basename) and `class Helper` (sub-module type):
+
+| Access form | From sibling file in `pkg` | From another package |
+|---|---|---|
+| `Mod` bare | works | works |
+| `Helper` bare | **`Type not found : Helper`** | fails |
+| `import pkg.Mod.Helper;` then `Helper` bare | works | works |
+| `Mod.Helper` (module-qualified) | works | **fails even after `import pkg.Mod;`** — `Class<pkg.Mod> has no field Helper` |
+| `pkg.Mod.Helper` (fully qualified) | works | works |
+
+Other confirmed rules:
+- Types declared in the *same file* always see each other bare.
+- Wildcard `import pkg.*;` does NOT expose sub-module types — `Helper` bare still fails.
+- A per-directory `import.hx` containing `import pkg.Mod.Helper;` makes `Helper` bare resolve for every file in that directory.
+- Self-import (`import pkg.Mod.Helper;` written inside `pkg/Mod.hx` itself) compiles — redundant, not an error.
+
+**Root package** (a module with no `package` declaration, e.g. `Root.hx` with `class Root` + `class RootSub`):
+- `Root` bare resolves from every package — no import needed.
+- `RootSub` bare does not — needs `import Root.RootSub;` or `Root.RootSub`.
+- **Shadowing gotcha**: bare `Root` from a file in package `app` binds to `app.Root` when `app/Root.hx` exists — the near one wins silently, no error. An explicit `import Root;` in that file DOES reach the root-package one. A bare root-package name is only safe when the reading file's own package is known not to declare the same name; a generator that can't prove that should emit the import (redundant but never wrong).
+
+**Consequence for codegen**: "does this file need an import for type X" must test `X == moduleBasename(X) && filePkg == declaringModulePkg(X)`, not "same package as X's module" — same-package does not imply bare-name visibility for sub-module types.
+
 ## Test Fixture Strings With `$identifier` Content Must Use Double Quotes
 
 Single-quoted strings in test files are subject to Haxe interpolation — any `$name` or `${...}` in a parser fixture input or an `Assert.equals` expected literal is treated as an identifier reference, not verbatim text. The compiler error is a **compile-time `Unknown identifier : <name>`** pointing at the call argument, which can mislead: the error looks like a scope or import problem, not a quoting mistake.
@@ -187,6 +210,11 @@ HxPostfixSliceTest.hx:96: characters 21-25 : ... For function argument 'expected
 ```
 
 The failure bites BOTH the fixture input string and the expected-value literal in `Assert.equals`. It survives self-review because `$name` in a string LOOKS intentional — it is reliably caught only by the compiler.
+
+**Two spellings whose error message names something else entirely** (both hit while writing a manifest reader that searches for the literal two characters `${`):
+
+- `'${'` — a single-quoted string whose content is a BARE opening interpolation. The compiler scans for the closing `}`, runs off the end of the file and reports **`Unterminated string`** at a line that may be far from the literal (it named a line 25 further down, inside an unrelated function). Fix: `"${"`.
+- `'\$'` — the C reflex for escaping a dollar. Haxe rejects it: **`Invalid escape sequence \$`**. The literal-dollar escape inside a single-quoted string is `$$`; in a double-quoted string `$` is already literal.
 
 **Prevention rule:** before building, scan newly-added or edited `.hx` test code for single-quoted string literals whose content contains `$` followed by a letter, underscore, or `{`; each is a bug unless interpolation is actually intended. The scan must cover **every** test file touched in the same change, not only the file currently in focus — a recurrence happened where the rule was applied correctly in one new test file but missed in a sibling file edited in the same change, caught only by file-review.
 
@@ -312,6 +340,41 @@ enum E {
 The restriction bites `@:build` / PEG-style DSLs that drive codegen from per-field metadata: the fix is the **ctor-wraps-typedef** pattern (one struct typedef per constructor), which also keeps per-field metadata working for macro inspection.
 
 Verified on Haxe 4.3.x.
+
+## `@:access` on a Sub-Module Type's Dotted Path Silently Fails to Grant Access
+
+`@:access(pkg.M.Sub)` — naming a SECOND, non-primary type declared inside `M.hx` via the dotted `Module.SubType` path — compiles the metadata without complaint but does NOT grant access. The access-site error is `Cannot access private field`, giving no hint that the metadata itself was the problem. Placement (on the method vs. the class) makes no difference.
+
+```haxe
+// pkg/M.hx
+class M {}
+class Sub {
+    private var _flag:Bool = true;
+}
+
+// Main.hx
+import pkg.M;
+
+class Main {
+    @:access(pkg.M.Sub)     // ✗ compiles, but grants nothing
+    static function main() {
+        final s = new Sub();
+        trace(s._flag);      // Cannot access private field _flag
+    }
+}
+
+// RIGHT — @:allow declared ON the sub-module type works
+// pkg/M.hx
+class M {}
+@:allow(Main)
+class Sub {
+    private var _flag:Bool = true;
+}
+```
+
+**Rule:** to reach a private field on a sub-module type, put `@:allow(ConsumerType)` on the sub-module type itself — don't rely on `@:access` naming its dotted path.
+
+Verified on Haxe 4.3.7 / `--interp`.
 
 ## `untyped` Is a Reserved Keyword — Cannot Be a Variable Name
 

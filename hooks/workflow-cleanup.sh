@@ -6,7 +6,7 @@
 # Modifies JSON files directly — does NOT depend on MCP server being alive.
 read -t 1 -r INPUT
 STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
-PLANS_DIR="$HOME/.claude/plans"
+PLANS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plans"
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 # Mirror of KEEP_TERMINAL_SESSIONS in src/types.ts
 KEEP_TERMINAL=3

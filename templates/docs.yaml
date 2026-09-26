@@ -1,0 +1,75 @@
+name: docs
+description: "Text-only change — skill/prompt/CLAUDE.md/memory/report files that no compiler or linter checks: write → verify (intent re-read + kind-specific check) → done. No lint, no tests, no reviewer agent."
+initial: write
+max_transitions: 12
+
+states:
+  write:
+    task: "Write the text change"
+    prompt: |
+      Text-only change: every file touched is prose that no compiler or linter
+      checks (skill SKILL.md, workflow YAML, CLAUDE.md, memory files, reports,
+      plans, README prose). If ANY touched file is code or tool config
+      (settings.json, .mcp.json, package.json…) → transition `not_docs` (the
+      parent re-routes to coding). A NEW bundled workflow also needs its name in
+      `Engine.GLOBAL_WORKFLOWS` (src/engine.ts) — that is code → `not_docs`.
+
+      1. Set `context_set("doc_kind", <kind>)` to the STRICTEST kind present:
+         - `workflow` — a workflow YAML (templates/, ~/.claude/workflows/,
+           .claude/workflows/). Load `Skill("workflow-authoring")` first if it
+           is not loaded.
+         - `knowledge` — SKILL.md, CLAUDE.md, memory: durable instructions every
+           future session obeys. Every rule you write must be sourced from THIS
+           session (a command output, a user statement, a file you read) — never
+           from how a tool "usually" behaves. Prefer recording the convention over
+           recording a defect.
+         - `note` — reports, plans, scratch notes, README prose.
+      2. See the original before changing: `git show HEAD:<file>` (tracked) or the
+         file itself. Edit within the requested scope — no rewrites of accurate
+         neighbouring text.
+
+      → `verify`
+    transitions:
+      verify: verify
+      not_docs: abort
+
+  verify:
+    task: "Verify the text change"
+    prompt: |
+      Re-read the diff ONCE against the request — the one check no tool runs.
+      Then the kind-specific check (`doc_kind` = {{context.doc_kind}}):
+      - `workflow` →
+        - a BUNDLED template (the plugin's `templates/`): make sure the edit sits
+          in the dir the RUNNING server loads from (`ps -axo command | grep
+          build/index.js` shows the path — a plugin cache copy may be dead
+          weight), then trigger the reload per workflow-authoring;
+        - a user/project workflow (`~/.claude/workflows/`, `.claude/workflows/`):
+          those dirs are fs.watch'ed — no trigger needed.
+        Then confirm with `list` that the workflow is present with the expected
+        state count: a file with a YAML error (duplicate key, unknown
+        `transitions`/`cases`/`default`/`on_success`/`on_error` target) is
+        skipped silently and vanishes from it. `list` does NOT catch a bad
+        `on_complete`/`on_fail` target or an unknown `sub_workflow` name —
+        check every one you added or renamed by hand. `npm test` does not
+        validate your file either (a malformed template is skipped there too).
+      - `knowledge` → for each factual claim you added, name its in-session
+        evidence; a claim without evidence is removed or marked unverified.
+      - `note` → nothing further.
+
+      No reviewer agent, no lint, no tests: fresh eyes pay off on logic the author
+      is blind to, not on a paragraph the author already sees whole.
+
+      → `done` when the edit matches the request; `fix` when the re-read found it
+      wrong (back to write).
+    transitions:
+      done: finish
+      fix: write
+
+  abort:
+    prompt: "Not a text-only change — the parent workflow re-routes to coding."
+    terminal: true
+    outcome: fail
+
+  finish:
+    terminal: true
+    outcome: complete

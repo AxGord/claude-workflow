@@ -53,6 +53,11 @@ states:
         "how should this be structured?", multiple interleaved design questions.
         When in doubt between coding and investigate → investigate.
         When in doubt between bug_fix and investigate → bug_fix.
+      - edit TEXT only — skill SKILL.md, workflow YAML prompts, CLAUDE.md,
+        memory, reports, plans, README prose — with NO code file touched → docs
+        (a doc edit that accompanies a code change stays in coding: doc_sync
+        covers it)
+        When in doubt between docs and coding → coding.
       - write/modify code (1-4 files), scope is clear → coding
       - new feature e2e → feature
       - a QUEUE of many independent tasks to grind through workers
@@ -85,6 +90,7 @@ states:
       plan: plan
       project: run_project
       coding: run_coding
+      docs: run_docs
       feature: run_feature
       batch: run_batch
       bug_fix: run_bug_fix
@@ -124,6 +130,7 @@ states:
 
       Choose transition:
       - `coding` → plan says coding
+      - `docs` → plan says docs (text-only edits, no code file)
       - `refactoring` → plan says refactoring (routes to code_review)
       - `feature` → plan says feature
       - `bug_fix` → plan says bug_fix
@@ -133,6 +140,7 @@ states:
         then transition `dynamic`.
     transitions:
       coding: run_coding
+      docs: run_docs
       refactoring: run_code_review
       feature: run_feature
       bug_fix: run_bug_fix
@@ -189,6 +197,13 @@ states:
     sub_workflow: coding
     on_complete: doc_sync
     on_fail: doc_sync
+
+  # Text-only edits: no doc_sync (the change IS the doc), straight to reflect.
+  # A docs run that turns out to touch code fails out and re-routes to coding.
+  run_docs:
+    sub_workflow: docs
+    on_complete: reflect
+    on_fail: run_coding
 
   run_debugging:
     sub_workflow: debugging

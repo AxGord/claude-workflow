@@ -130,8 +130,26 @@ Pick the agent type by task shape:
   SendMessage-resume for a LARGE or coupled follow-up where re-establishing
   the agent's own context is worth the background wait — and then don't idle:
   it's the rolling-window case (do other work, expect the wake-up).
+- **A subagent's result is its LAST message, not everything it did — a
+  multi-section brief can come back truncated.** An agent that worked
+  through a staged brief (e.g. several correctness sections then a final
+  security pass) may report only the final stage; earlier sections it
+  wrote mid-run are lost from the result even though the work happened.
+  Tell: the report answers only one axis of a multi-axis brief. Fix:
+  SendMessage the SAME agent to emit the missing sections — its context
+  is intact and returns instantly; respawning re-does the whole analysis.
 - **A "stalled / no-progress" watchdog kill can be a SYMPTOM, not the cause — don't over-diagnose it.** The harness reaps a background agent after a fixed no-output gap, but the gap itself may be the agent's TOOLS failing silently (a permission classifier down, an API stall, connection drops) rather than a legitimately slow command. So a watchdog status alone does NOT prove the agent's task (a build, a full test-run) was "too heavy to delegate": a healthy agent runs long build/test work fine — evidence is a same-session agent that did exactly that for tens of minutes and completed, while a *later* fleet all died in one window to an outage. Before concluding "don't delegate this kind of work," check the fleet-wide-outage signature below; that generalization is usually WRONG. If you do want to harden against a genuine silent-long-command gap, have the agent run the command via its own `run_in_background` + poll so its stream keeps ticking — but that is a cheap precaution, not a reason to stop delegating.
+- **A subagent's transcript file mtime is not a liveness signal — and a plain `stat` on it can be doubly misleading.** Two independent failure modes stack: the harness buffers transcript writes, so a working agent's file goes quiet between steps; and the path handed to you as the agent's output file can be a SYMLINK into the real transcript, in which case `stat`'s mtime reports the LINK's creation time and never changes at all. A monitor built on that check reports an actively-working agent as idle indefinitely. Do not derive "stalled", "finished", or "safe to kill/re-spawn" from transcript mtime — wait for the agent's own completion notification; when an interim liveness check is genuinely needed, read a state source the agent itself advances as it works (e.g. its workflow session state), not a file timestamp.
+- **Polling a background agent's output path for idleness can measure a SYMLINK, not the transcript.** The harness may expose an agent's output file as a symlink to the real transcript; a modification-time test (`find -mmin`, `stat`, `ls -l`) applied to that path answers about the LINK, whose mtime is fixed at creation, so an actively-writing agent reads as idle and gets wrongly concluded finished or dead. Tell: an idle check fires almost immediately, or reports a long-idle agent whose completion notification never arrives. Rule: resolve the path first (`readlink -f`, or test the target explicitly) before polling it — or better, skip the liveness probe entirely and wait for the completion notification; treat "looks idle" as evidence about the path tested, not about the agent.
+- **On macOS, `date -r <path>` does NOT print a file's mtime.** BSD `date -r`
+  takes SECONDS SINCE EPOCH; a non-numeric path argument is silently ignored
+  and it prints the CURRENT time — so checking whether a background agent's
+  transcript is still being written this way always reads "just modified",
+  i.e. always says the agent is alive. Use `stat -f '%Sm' -t '%H:%M:%S' <path>`
+  (BSD/macOS) or `stat -c '%y' <path>` (GNU/Linux) instead.
 - **A whole fleet dying at once = one shared infra fault, not N independent stalls.** When every parallel agent stops with zero progress in the same window — worktrees empty, some with `Connection closed mid-response` or a "tool unavailable" tool-error — suspect a shared dependency down (a tool-permission classifier that gates ALL their Bash calls, an API outage), NOT that each agent independently mishandled its task. Probe it directly (run one trivial command yourself), wait for recovery, THEN resume — re-spawning into the same broken substrate just burns more agents. This is the real, confirmed lesson; the watchdog kills above were its downstream effect.
+- **A review/verification agent running empirical probes (revert a hunk, rebuild, restore) MUTATES the shared tree — a build racing mid-probe compiles the probe state, and the parent sees phantom regressions** (failures in a suite that was green minutes earlier) plus mtime churn on files it never touched. Debugging chased a nonexistent regression until a COLD rebuild (delete the built artifact, rebuild) restored truth. Rule: constrain such an agent READ-ONLY when the parent keeps building/testing the same repo — no source writes, no rebuilding shared artifacts; an agent that genuinely needs mutation probes needs an isolated COPY of the repo (worktree isolation can point at the wrong repo when the target repo differs from the session root — an explicit copy is safer), or the parent pauses its own builds/tests until the agent completes.
+- **A background measurement agent reads the WORKING TREE — editing while it runs fabricates its result.** A before/after measurement delegated to a background agent (a lint report diff, a benchmark, a corpus sweep) samples whatever state happens to be on disk at the moment each of its arms runs; keep editing source in the same tree meanwhile and the output stays well-formed and plausible — an "after" arm can report findings that belong to a temporary experimental edit (mutation testing, a stubbed function, a reverted gate), reading exactly like a regression the change introduced, with nothing in the report marking it as sampled mid-edit. Tell: a measurement agent is in flight AND edits — including deliberately temporary ones — are landing on files in its scope. Rule: serialize the two activities, measure or mutate but never both at once; build any needed baseline arm in a throwaway isolated copy so the agent never depends on the live tree's current state; re-run a suspicious result on a quiescent tree before believing or reporting it. (E.g. a diff reported new warnings on a helper's parameters that were genuinely unused only during a mutation applied and reverted while the agent ran — a rerun on a quiet tree came back byte-identical.)
 - Launch ALL independent agents in **one message**, not sequentially.
 - **Worktree-isolated agents fork from the session-start HEAD, not the current branch tip.** Commits you make mid-session are NOT in a later-spawned agent's worktree base — the agent may see stale code, wrongly conclude your work "was never merged", or produce patches that conflict. Rule: COMMIT each phase before spawning the next dependent wave; when a wave's base is already stale, merge its patches with `git apply --3way` and expect to hand-reconcile files several agents touched. Also instruct agents to report their base commit (`git log --oneline -1`) so staleness is visible. One more trap in that merge flow: `git apply --3way` STAGES everything it applies — a later `git add <subset> && git commit` silently commits the WHOLE staged index, not your subset (the tell: the first chunk commit's stat lists every merged file and later chunk commits say "nothing to commit"). Run `git reset -q` to unstage all before building chunked commits, and if rebuilding botched history, soft-reset to the true pre-merge base, never to a mid-wave commit.
 - **Identical-change auto-merge is silent and WRONG for shared counters.** When every parallel branch applies the same textual bump to a shared aggregate (a hard-coded count assertion, a registry size), merging them produces ONE bump, not N — git treats identical hunks as already-applied, so no conflict fires. Loud conflicts appear only where branch texts differ (distinct list-append entries). Rule: after merging parallel branches, recompute every shared aggregate as base + Σ(per-branch deltas) and fix it explicitly; the tell is a merge that conflicts on the append-list files but is suspiciously clean on the counter files every branch touched.
@@ -151,6 +169,11 @@ Preserves main context for decision-making.
 
 A spawned subagent runs **flat by default** — no workflow session, no
 `load_skills` gate, no skills. Classify every spawn:
+
+- **A code-writing `subagent` worker does NOT review itself** — its
+  coding/bug-fix review stops at lint + its own intent re-read. YOU own
+  the fresh-eyes review of its diff: review it once, after its report
+  (never assume "the worker already reviewed").
 
 - **Analytical** — correctness depends on project skills, or it returns a
   judgement/recommendation (blast-radius, verify-writer-path, recon, deep
@@ -200,6 +223,12 @@ verify facts can rabbit-hole into open-ended web verification. Say "apply
 the plan text as given; quick checks only; list unverified items in the
 report instead of digging."
 
+- **A fresh queue authored from a finished campaign's plan file inherits
+  its FINAL state** — completed marks and result SHAs pattern-match into
+  the new file as fabricated history. Write every new queue item
+  unmarked; after writing any plan/queue file, re-read just the state
+  marks before using it.
+
 ## Orphan Cleanup
 
 After collecting all reports: `sessions` → `abort` any orphaned child
@@ -222,6 +251,8 @@ active session behind, which blocks the parent session's completion.
 - Split by **logical component**, not per file
 - Stabilize interfaces **before** parallelizing
 - Give agents **specific prompts** with file paths and signatures
+- **In bug/gap briefs, state the SYMPTOM and its evidence — never assert your assumed root cause as fact.** A worker that trusts a wrong stated mechanism builds a duplicate of machinery that already exists (or patches the wrong layer). If you must name a suspected mechanism, label it "hypothesis — verify first"; a good worker's re-diagnosis regularly overturns the orchestrator's guess (e.g. "no wrap policy for this construct" turned out to be an off-by-one in an existing fit probe)
+- **On a branch with uncommitted work, a review brief MUST name the baseline the user's report is against.** A reviewer told only "review the diff" runs `git diff HEAD`, so it compares the fix to the last COMMIT — while the symptom the user photographed is the WORKING TREE, whose uncommitted changes may already contain the regression the fix repairs. The verdict then reads as authoritative and is wrong in the most convincing way available: it calls a real fix a "semantic no-op" because the committed code and the fixed code happen to agree. Say which state the report describes, and check a "no-op" claim against that state before you act on it
 - After agents complete: verify integration, link components, test
 - **Review subagent code against loaded skills** — subagents fix problems mechanically (compile errors, type mismatches). Their fixes compile but may violate style rules (missing types, verbose patterns, redundant code). ALWAYS read each file the subagent changed and apply loaded preference/lang skills before considering done
 - **Verify lifecycle edits** — after subagent touches start/stop/dispose: (1) every `removeEventListener` in stop/dispose has a matching `addEventListener` in `start`, not just constructor (listener orphaning on restart); (2) new init code is inside the correct conditional block, not placed before a guard where it runs in wrong state

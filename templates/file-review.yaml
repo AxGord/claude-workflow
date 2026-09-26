@@ -55,6 +55,8 @@ states:
 
   # Engine-run lint pass — the agent cannot skip or water it down. The script
   # self-gates (non-.hx file or missing hxq → "SKIP: ..." output, exit 0).
+  # LINT_LIST_RULES=1 prepends the linter's rule registry and lint config:
+  # build_checklist subtracts by them instead of spending a call on --list-rules.
   # Runs before authorship is known on purpose: for external/vendored files
   # the report is computed and then dropped by build_checklist — acceptable
   # cost for keeping the exec chain linear. The path goes via env, not
@@ -65,6 +67,7 @@ states:
     command: "sh \"$WF_PLUGIN_ROOT/scripts/hxq-lint-file.sh\" \"$REVIEW_FILE\""
     env:
       REVIEW_FILE: "{{context.file_path}}"
+      LINT_LIST_RULES: "1"
     timeout: 120000
     max_output: 204800
     context_set:
@@ -99,55 +102,64 @@ states:
   build_checklist:
     task: "Build style checklist from skills"
     prompt: |
-      Check `{{context.is_user_authored}}`. Treat empty as `"true"` (default).
-
-      If `"false"` → personal style rules do not apply. Output:
-      "Skipping personal-style checklist — file is external/forked/vendored.
-      check_style will use only language-agnostic checks."
-      Then → transition `done`.
-
-      Otherwise (user-authored), build a concrete style checklist from loaded skills:
-
-      Process the bare `preferences` skill plus each loaded `lang-*` and
-      `preferences-*` skill ONE AT A TIME.
-      For each skill:
-      1. Re-read the FULL skill text
-      2. Extract EVERY rule — each `// WRONG` example, explicit rule, or convention
-         becomes a one-line check with the wrong pattern AND the correct one
-      3. Count rules extracted from this skill and output the count
-
-      Do NOT summarize, group, or prioritize — every rule matters equally.
-      If your total is under 25 rules across all skills, you missed some — re-read.
-
-      **Mechanical-pass subtraction.** The engine already ran the project
-      linter on this file; its report:
+      **Step 1 — mechanical-pass verdict (run this whatever the authorship —
+      the linter's report is about the code, not about who wrote it).**
+      The engine already ran the project linter on this file; its report:
       ---
       {{context.lint_report}}
       ---
       Decide ONCE whether the report is usable, and record the verdict for
       the downstream states:
-      - USABLE = non-empty, its `===` headers name THIS batch's files (other
-        files = stale report from an earlier pass in a reused session), and
-        the lint section is real output — not "SKIP: ..." and not a
-        mid-report "SKIP: hxq lint failed" (a broken linter verified nothing).
-        Per-file SKIP lines for the batch's non-.hx files are normal — the
-        report is usable for the .hx files it covers; but a report with NO
-        `===` lint section at all (only SKIP lines) is NOT usable.
-      - USABLE → `context_set(key: "lint_subtraction", value: "applied")`, then:
-        - Its findings are review facts — carry them into your report as-is.
-        - DROP from the manual checklist every rule the linter verifies
-          mechanically. The authoritative list of what the linter owns: run
-          `HXQ_QUIET=1 hxq lint --list-rules` (one call, id + description per
-          line) — subtract by that list, not from memory, and subtract at
-          rule granularity: a rule covers exactly what its description says,
-          no more (e.g. explicit-type covers fields/params/returns, NOT
-          local variables).
-        - Keep judgment rules a linter cannot verify: comment quality,
-          abstraction threshold, naming semantics, API shape, symmetry of
-          add/remove listener pairs, domain correctness.
-        - The 25-rule floor does not apply after subtraction.
-      - NOT usable → `context_set(key: "lint_subtraction", value: "none")`,
-        no subtraction — run the full manual checklist as written above.
+      - USABLE = non-empty, the `=== hxq lint` / `=== fmt drift` headers name
+        THIS batch's files (other files = stale report from an earlier pass in
+        a reused session; the `=== hxq lint rules` header carries no file list
+        — that one is expected), and the lint section is real output — not
+        "SKIP: ..." and not a mid-report "SKIP: hxq lint failed" (a broken
+        linter verified nothing). Per-file SKIP lines for the batch's non-.hx
+        files are normal — the report is usable for the .hx files it covers;
+        but a report with NO `===` lint section at all (only SKIP lines) is
+        NOT usable.
+      - USABLE → `context_set(key: "lint_subtraction", value: "applied")`.
+        Its findings are review facts — carry them into your report as-is.
+        The report contains the linter's rule registry (`=== hxq lint rules`
+        section, id + description per line): THAT list is what the linter
+        owns — subtract by it, not from memory.
+        Registry ≠ what actually ran. It lists every REGISTERED rule; the
+        report's config section shows the project's lint config (or its
+        absence). So: subtract a registry rule UNLESS the config disables it.
+        Opt-in rules — registered but default OFF, `explicit-local-type`
+        (local-var type annotations) being the one that bites — run ONLY
+        where the config enables them by name: no config, or no entry for
+        the rule → it did NOT run, keep that checklist rule manual.
+      - NOT usable → `context_set(key: "lint_subtraction", value: "none")`.
+
+      **Step 2 — authorship gate.** Check `{{context.is_user_authored}}`.
+      Treat empty as `"true"` (default).
+      If `"false"` → personal style rules do not apply. Output:
+      "Skipping personal-style checklist — file is external/forked/vendored.
+      check_style will use only language-agnostic checks."
+      Then → transition `done` (the Step 1 verdict still stands: downstream
+      states subtract by it for their language-agnostic checks).
+
+      **Step 3 — build the checklist out of what is LEFT.**
+      Process the bare `preferences` skill plus each loaded `lang-*` and
+      `preferences-*` skill ONE AT A TIME.
+      For each skill:
+      1. Re-read the FULL skill text
+      2. For EVERY rule in it — each `// WRONG` example, explicit rule, or
+         convention:
+         - subtraction "applied" AND a registry rule covers it → DROP it,
+           write no check line. Subtract at rule granularity: a registry rule
+           covers exactly what its description says, no more.
+         - otherwise → one line with the wrong pattern AND the correct one
+      3. Output this skill's kept count and dropped count
+
+      Do NOT summarize, group, or prioritize — every kept rule matters equally.
+      Rules no linter can verify always stay: comment quality, abstraction
+      threshold, naming semantics, API shape, domain correctness.
+
+      With subtraction "none" nothing is dropped — and if your total is then
+      under 25 rules across all skills, you missed some: re-read.
 
       Escape hatch: if NO lang/preferences skills apply to this file type
       (e.g. config, YAML, docs), state so explicitly and continue — the
@@ -164,6 +176,15 @@ states:
       For `diff` scope: changed lines are entry points, but always check the
       logical context around them — the full method, callers of changed signatures,
       other uses of changed fields. A change can break surrounding code.
+
+      If `{{context.lint_subtraction}}` is "applied", the mechanically
+      decidable slice of the items below is already decided — its findings
+      are in the report. Do not re-derive by hand what the registry's rules
+      cover (provable null dereferences, dead null guards, swallowed
+      exceptions, unreachable code, self-comparisons, `=` in a condition).
+      Your job here is the part no linter can prove: whether the logic is
+      what the change INTENDED.
+
       - [ ] Logic errors: wrong conditions, off-by-one, inverted booleans, wrong operators
       - [ ] Dead guards: for EVERY guard/early-return/conditional check in changed code,
             trace all call sites and ask "can this condition ever be true/false here?"
@@ -192,11 +213,10 @@ states:
       Rules 5-6 are personal style preferences — apply them ONLY when
       `{{context.is_user_authored}}` is not "false" (treat empty as "true");
       for external/forked/vendored code check rules 1-4 only.
-      If `{{context.lint_subtraction}}` is "applied", rules the linter owns
-      (per the --list-rules subtraction already done in build_checklist) are
-      pre-verified — do not re-derive them by hand (e.g. the if/else-if
-      chain → switch rule); still walk EVERY loop for the rules the linter
-      does NOT own.
+      If `{{context.lint_subtraction}}` is "applied", skip every rule below
+      whose counterpart the report's rule registry lists — typically 2
+      (map-keys-lookup), 5 (loop-guard) and 6 (prefer-switch). Rules 1, 3
+      and 4 are pure judgment, owned by no linter — walk EVERY loop for those.
 
       1. **Range-over-sparse-container**: the loop iterates an index range (`0...n`,
          `i++`) but uses the index to look up a Map/Dict/HashMap, with a null check
@@ -261,10 +281,10 @@ states:
       If `{{context.lint_subtraction}}` is "applied", skip the parts of the
       items below the linter already verified (per the build_checklist
       subtraction) and hand-check only the residues its rule descriptions
-      do not cover — e.g. type annotations on LOCAL variables (explicit-type
-      covers fields/params/returns only), "function doing too many things"
-      beyond the cyclomatic threshold, semantics of names, commented-out
-      code, cross-file duplication, consistency judgments.
+      do not cover — e.g. "function doing too many things" beyond the
+      cyclomatic threshold, semantics of names (the `naming` rule checks the
+      convention, not whether the name says the right thing), commented-out
+      code, consistency judgments against this module's patterns.
 
       Language-agnostic checks (apply regardless of authorship):
       - [ ] Missing type annotations: if a variable/field/parameter has no explicit type

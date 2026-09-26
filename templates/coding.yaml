@@ -164,13 +164,28 @@ states:
   review:
     task: "Route review by scope"
     prompt: |
-      Route by SIZE of the change, not file count (`git diff HEAD --numstat`):
+      Diff baseline: `HEAD`, unless context `review_base` (now:
+      "{{context.review_base}}") was set for THIS task — by write_fix before a
+      fix round, or by code-review before handing its agreed changes over;
+      then size and review `git diff <review_base>`. Either way add untracked
+      files (`git ls-files --others --exclude-standard`): with a
+      `review_base`, those created or edited since it. A stale value only
+      over-reviews, never hides a change.
+
+      Route by SIZE of the change, not file count (`git diff <baseline> --numstat`):
       - `single` → TRIVIAL change: ≤2 files AND ≤~50 changed lines total —
         the linter IS the review (lint-review sub-workflow: engine-run lint
         + act on findings + one intent re-read); tests follow anyway.
       - `multi` → everything else, EVEN a single batch: an agent buys FRESH
         EYES on the author's own code and keeps review bulk out of this
         session's context; parallelism is a bonus, not the criterion.
+
+      EXCEPTION — you are a SUB-AGENT (the stack's root is `subagent`):
+      ALWAYS `single`, whatever the size. Your parent reviews your result
+      with its own fresh-eyes reviewer after your report; a reviewer you
+      spawn here is a second, paid-twice review of the same diff (measured:
+      a worker-spawned reviewer added ~40% to a slice's transcript). Do the
+      intent re-read yourself inside lint-review.
     transitions:
       single: review_single
       multi: review_delegate
@@ -206,8 +221,25 @@ states:
       3. Remaining files group by directory/module.
       4. Cap: at most 5 files AND roughly 500 changed lines per batch;
          oversized files solo. A batch of one is fine.
-      Structure/size queries for grouping (`git diff HEAD --numstat`,
+      5. Mass gate (overrides rule 4's file cap): batch by CHANGED-LINE
+         mass, not file count. A set of
+         mechanical one-line diffs (ratchet bumps, count assertions,
+         registrations) folds into the nearest logical batch even past the
+         5-file cap; and a would-be batch holding under ~40 changed lines
+         of purely mechanical/wiring diffs gets NO agent at all — the
+         orchestrator reviews those lines inline at cross_file. An agent's
+         fixed cost (skill load + fresh read) must be paid for by review
+         substance, not by file count.
+      Structure/size queries for grouping (`git diff <baseline> --numstat`,
       hxq graph queries) are fine here — reviewing content is the agents' job.
+
+      RE-ENTRY after a fix round (write_fix → review): review the FIX
+      DELTA only. Adversarial live-probing is owed ONLY to new or
+      reworked LOGIC in the delta; doc/comment/rename/test-tweak changes
+      get read-only review. Tell the reviewer agent what the previous
+      round already verified so it does not re-verify unchanged ground
+      (re-running the full suite once is fine; re-probing every gate is
+      not).
 
       For each batch, include in the agent prompt VERBATIM:
       ---
@@ -221,7 +253,8 @@ states:
       ---
       Also include:
       - The batch's file list (absolute paths) and why they are grouped
-      - How to get the diffs: `git diff HEAD -- <filepath>` per file
+      - How to get the diffs: `git diff <baseline> -- <filepath>` per file
+        (baseline per the review state: `review_base` or HEAD)
         (a new/untracked file: read it whole)
       - Review scope: `diff` — review only the changed lines
       - "Report one section per file + a batch-level cross-file section."
@@ -259,6 +292,9 @@ states:
       - [ ] Consistency: do the changes follow the same patterns across files?
       - [ ] Integration: do the changed components work together correctly?
       - [ ] Blast radius: are there callers/dependents that weren't updated?
+      - [ ] Agent-less batches: lines the mass gate (review_delegate rule 5)
+            kept without a reviewer agent get their ONLY review here — read
+            their diff now, it is not covered by any batch report.
 
       Choose transition:
       - `ok` → no issues, proceed to testing
@@ -272,6 +308,22 @@ states:
     prompt: |
       Fix the issues found — review findings or test failures reported by the
       testing workflow (read the failure report for what broke).
+
+      BEFORE the first edit: `context_set(key: "review_base", value: <sha>)` — <sha> = the output of
+      `git stash create` (a snapshot of the dirty tree; the tree itself is
+      untouched), or `git rev-parse HEAD` when it prints nothing (clean tree).
+      The re-entry review then sees the fix delta only.
+
+      Size the round BEFORE delegating. A NIT round — assertions, doc
+      lines, renames, comment rewording: ≤~30 changed lines and NO new or
+      reworked logic — is done INLINE by the orchestrator, top-tier
+      included (the >30-line unloading rule does not apply here: a
+      delegated nit round pays a full agent's fixed cost — or a resumed
+      agent's grown transcript — for trivial work, and has cost 10x the
+      inline price in practice). Delegate only when the fix set introduces
+      or reworks logic; then prefer resuming the ORIGINAL implementer
+      (SendMessage) over a fresh agent — its context is already paid for.
+
       After fixing → transition `done` (returns to review for re-verification).
     transitions:
       done: review

@@ -33,3 +33,14 @@ When a composite re-dispatches events from children, `event.target` already iden
 **DO:** Only add fields for data the child genuinely doesn't know (e.g. its index in the parent's collection)
 
 **Rule:** Every field in an event must have at least one consumer. "Might be useful later" fields are overengineering.
+
+## A Programmatic Write Is Invisible to a Consumer That Mirrors the Field by Delta, Not by Value
+
+A field with a live mirror (preview, counter, summary, undo stack, sync) can be followed two different ways: the mirror re-reads the field's value on a signal, or it consumes an incremental delta/event stream (the inserted text and its index) and applies that to its own copy. A one-time seed step commonly hands the delta-consumer its starting value, guarded by a one-shot flag, since after that it's expected to follow deltas only.
+
+**DON'T:** Add a programmatic "replace the whole field" write without checking how each mirror follows the field — a delta-consumer sees no delta, the write dispatches no usable change event, and the one-shot seed already fired, so it silently keeps the old content
+**DO:** Classify every mirror by its following mechanism before adding the write. Value-readers just need the normal change signal. Delta-consumers need a dedicated re-seed entry point — a wholesale "replace everything" method beside the incremental one — that bypasses the one-shot guard
+
+**Why:** Nothing errors and no test fails on the stale mirror. A sibling that re-reads its model on every update will refresh normally, which makes the stale mirror look like an unrelated rendering glitch rather than what it is: a consumer with an incremental contract that the write bypassed.
+
+**Symptom of violation:** a change handler that reads `addedText`/`caretIndex`/`removedCount`-style fields off the control, or a seed method guarded by a `firstTime`/`initialised` flag — combined with a new programmatic write path that sets the value directly without going through either.

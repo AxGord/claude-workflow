@@ -8,210 +8,37 @@ description: Debugging meta-patterns — what to do when fixes don't stick
 Not tooling (that's debug-bridge*) — patterns for the FIX process itself,
 each distilled from a real multi-round failure.
 
-## Repeated Same Symptom After 2+ Fixes = Wrong Subsystem Target
 
-When the user reports the same perceived symptom after two or more rounds of plausible fixes, stop patching that surface. A symptom that survives multiple reasonable fixes is almost always at the **seam between two decoupled subsystems** — a baked/precomputed path vs. a live event; a cached value vs. its source; a predicted value vs. an independently-computed actual.
 
-**DON'T:** Keep refining one side each iteration — shapes, easing, constants, thresholds — to match the user's latest wording.
+## Meta-patterns — index (full text: `references/patterns.md`)
 
-**DO:** By the 2nd repeat, trace BOTH subsystems end-to-end and ask: "why do these two representations exist, and must they?" The fix is to make them **coincide** — re-derive one from the other at the authoritative moment — not to tune one side.
+Each lesson below is a verified gotcha. Read `references/patterns.md` (or just the
+section whose title matches) when the situation in its line is the one in front of you.
 
-**Tell:** Every "fix" addresses the user's latest description verbatim, yet the user keeps saying "same thing / didn't help." You find yourself adjusting constants repeatedly with no lasting effect.
-
-**GOTCHA:** The seam is invisible when you look at only one subsystem. You must trace both from their shared input to their diverging output paths to see the gap. (Real case: four rounds of tuning a precomputed trajectory failed because the actual hit was computed by a SEPARATE live simulation — the fix was re-deriving one from the other at start time, which no amount of trajectory tuning could achieve.)
-
-## Regressing Feature? Find the Principled Algorithm the Codebase Already Has
-
-When a feature keeps regressing across many patch cycles — tuning constants, reshaping curves, adjusting thresholds — stop inventing ad-hoc logic. Ask: **"what does correct behavior fundamentally require, and does this codebase already compute that for some other case?"**
-
-**DON'T:** Keep hand-rolling case-specific heuristics to chase the latest symptom. Each variant is "more specific" than the last and never converges.
-
-**DO:** Grep for the concept (clearance, retry, normalization, lift…). If a general implementation exists, find why the failing case is excluded from it — an early `return`, a zone guard, a capability flag. That exclusion is the smoking gun: someone already solved it generally, then deliberately opted out the hard case. Mirror or apply that proven algorithm to the excluded case, using its same constants for parity. Ask the "do we already do it elsewhere?" question by the **2nd** regression, not the 6th.
-
-**Tell:** You're writing the Nth variant of the same code path and each fix is narrower than the last. A sibling module has a richer version of the same routine that the failing path doesn't call.
-
-**GOTCHA:** The exclusion guard often looks load-bearing. Verify it with the principled algorithm before assuming it's correct — it may just be an early simplification that was never revisited.
-
-## "Impossible in the Limit" ≠ "Cheap Lever Fails the Actual Case"
-
-When a global constant's effect scales with a per-case input, no single value can satisfy ALL inputs — that proof is correct. But it does NOT establish that the constant fails the specific case in front of you.
-
-**DON'T:** Write an elegant impossibility argument for the general case and propose a per-case solver/refactor without having run the simple fix once.
-**DO:** Try the cheapest knob empirically first — adjust the constant, widen the relevant tolerance, measure the real target. Reserve the heavy solution for when the simple lever is *measured* to fail, not when it's only *proven* imperfect in the limit.
-
-**Principle:** "Can't be perfect for all" ≠ "doesn't work for this." Empirical failure on the actual target is required evidence; theoretical failure on adversarial inputs is not.
-
-**Tell:** You're composing a sound argument for why a simple fix "structurally cannot work" and proposing architecture instead — without having run the simple fix once. That's the signal to stop, try the knob, and measure.
-
-## "How Did It Work Before?" = Revert Signal
-
-When the user asks "how did the old way work?", "why not keep it simple / slightly different?", or "did you even try the original approach?" — that is not a request to polish the new mechanism. It is evidence the new direction is wrong.
-
-**DON'T:** Defend the new design across multiple fix→verify cycles, trading one symptom for another, while the user keeps invoking prior behavior.
-**DO:** By the 2nd such pushback, diff against the pre-change baseline. Articulate honestly what the original did and why it was adequate. Offer to revert before sinking more cycles.
-
-**Tell:** You are on the 3rd+ iteration fixing your own new mechanism; each fix introduces a new symptom; the user's questions consistently reference what it used to do. The thrash itself is the signal — the baseline was right.
-
-**Principle:** Repeated pushback that references prior/simpler behavior is not polish feedback — it is a direction correction. Reverting to a known-good baseline is a first-class fix, not a failure.
-
-## A Regression YOU Introduced Is a REVERT, Never a Redesign
-
-Special case of the above with a sharper rule. When the user's complaint is
-about behavior that broke AFTER your own change (especially collateral from a
-fix aimed at a DIFFERENT symptom), the spec for "fixed" is the pre-change
-baseline — not your judgment of what the mechanism should be. Redesigning it
-means guessing the baseline from memory; every guess that misses costs a full
-user round-trip and erodes trust.
-
-**DON'T:** Iterate replacement designs for the thing you broke (observed
-cascade: synthesis → tune-to-measured-baseline → full-physics rewrite — each
-"fix" more ambitious than the last while the user kept saying "it worked
-before").
-**DO:** Identify the exact edit of yours that first changed the behavior,
-restore that code path verbatim, and prove the restoration with a mechanical
-oracle (frozen fixtures re-passing WITHOUT regeneration, byte-diff of
-generated outputs, golden files) — not with "looks right".
-
-**Tell:** Your successive fixes for one complaint GROW in scope. Scope growth
-while the user references the past is the strongest possible revert signal —
-by the time you're proposing an architecture, the answer was `git diff` to
-the baseline three rounds ago.
-
-**Corollary:** In a long-running UNCOMMITTED working tree, "revert" may mean
-hand-reconstruction. Commit checkpoints at every user-visible-good state so a
-revert is one command, not an archaeology project.
-
-## Model Emits What the Presenter Can't Deliver → Fix the Emitter, Check the Rejected-Fix Ledger First
-
-When a bug is a contract violation between a data/model layer and a
-presentation layer — the model emitted an outcome the presenter cannot
-honestly produce (an unreachable target, a state the UI can't render as one
-coherent motion) — the durable fix is in the EMITTER: stop emitting
-undeliverable pairings, constrained against the presenter's real capability.
-
-**DON'T:** Patch the presenter to fake the model's claimed outcome (splicing
-a canned glide/animation to "reach" a value the simulation never hit) —
-however small the visual gap, it reads as fake physics and gets rejected.
-**DO:** Measure the presenter's honest capability empirically — drive its
-real pipeline over a parameter grid, not a hand-derived geometric bound
-(chaotic outcomes have no clean closed-form threshold). Constrain the
-emitter to the measured-deliverable region. Before designing the fix, check
-the project's record of previously rejected fix families (memory/docs/commit
-lore) — a design in a rejected family costs a full user round-trip
-regardless of execution quality.
-
-**Tell:** Your fix adds presentation-side code animating toward a model
-value the simulation never reached; or you're about to ship a fix pattern
-the project's history already rejected under a different symptom.
-
-## Predicted-vs-Measured Mismatch = Falsified Hypothesis; Verify the Fix Against the ORIGINAL Metric
-
-Two disciplines for "my fix is principled but the bug persists".
-
-**Falsifier rule:** when a candidate mechanism lets you PREDICT an observable
-consequence — the time, place, or value at which something should happen —
-and the prediction MISSES what you measured (even slightly), the hypothesis
-is FALSIFIED, not "measurement noise / seeding uncertainty". A real but
-MASKED cause (a second effect hiding behind the one you're studying) produces
-exactly this trap: the fix is sound in isolation, measures zero effect, and
-the mismatch was the tell all along. Don't absorb the gap — find what your
-model didn't account for.
-
-**Post-fix gate:** after applying the fix, re-run the ORIGINAL failing metric,
-not a proxy. A byte-identical result means you changed the wrong thing →
-return to diagnosis; never start tuning the fix's parameters to chase the
-symptom (that's curve-fitting, not fixing).
-
-**"No effect" report ⇒ check the artifact before the logic:** when someone
-reports "I don't see the change" / "looks the same" after a change you
-believe you made, your FIRST move is not to re-explain or re-diagnose the
-logic — it's to confirm you and they are observing the SAME, freshly-built
-artifact. A stale build (a build/test script that rebuilds only one target)
-or a proxy (a simulation, a different binary, a reimplementation of the
-logic in another language) makes a correct fix look broken and a broken fix
-look correct — the two are indistinguishable from the symptom alone.
-
-**Tell:** you're about to defend a change with evidence from something OTHER
-than the exact artifact under observation — test output, a script that
-reimplements the logic, a binary built by a different command than the one
-that produced what the user is running.
-
-**Do:** before trusting what an artifact shows, verify it was built from
-current sources — compare its mtime against the changed sources, or confirm
-the build command actually rebuilds THAT target (many build/test scripts
-rebuild only a subset). Reproduce the effect through the exact artifact the
-user runs, not a proxy.
-
-Abstract example: a "no effect" report traced to a stale interactive
-binary — the test script rebuilt only the test target, so the tool under
-observation still ran old code while the suite passed. A simulation of the
-logic had "proved" the fix; the shipped artifact never had it.
-
-## A Never-Reset Latch Is Stale on Occurrence 2 — Test the Second Run, Not the First
-
-When a value is latched once per occurrence (per request, per run, per
-cycle) behind a "0/null = unset" sentinel, and the code only ASSIGNS that
-field and never RESETS it, the field is stale starting on the occurrence
-AFTER the one that set it. First-occurrence testing — fresh process, first
-request, clean start — always passes, because the sentinel is genuinely
-unset the first time; the bug is invisible to single-shot verification by
-construction. It surfaces on occurrence 2+ (the prior value persists) or on
-a variant path that's supposed to leave the field unset (the consumer reads
-the stale leftover and acts on it).
-
-**DON'T:** Verify a stateful feature with one clean-start run and call it
-done. A green first run proves nothing about lifecycle correctness.
-
-**DO:** Exercise occurrence 2+ of the same operation back to back, plus the
-variant path meant to leave the field unset — confirm the sentinel is
-actually cleared between occurrences, not just correctly read on the first
-one. The durable fix is a teardown that clears the latch at end-of-occurrence
-or start-of-next, not a consumer-side guess at the stale value.
-
-**Tell:** Your fix relies on "0/null means unset," but grep shows the field
-is assigned in exactly one place and reset nowhere — the previous
-occurrence's value survives into the next.
-
-## A Positional Join of Two Lists Silently Mispairs — Cross-Check Before Reporting
-
-Zipping two separately-produced sequences by position (not an explicit shared key) mispairs every row once their internal ordering diverges — yet the join succeeds and row counts match, so the result looks entirely plausible:
-
-```sh
-find . -exec md5 -q {} \; > sums.txt    # traversal order
-find . | sort              > names.txt  # different order
-paste sums.txt names.txt                # rows now mismatched
-```
-
-**DON'T:** Trust matching line counts as proof of correct pairing — derive both sides from ONE ordered list, or carry the key with the value per line, avoiding the join entirely.
-**DO:** Before reporting any derived list, count, or diff, cross-check it against a source built by a different mechanism — that's the reusable discipline; the ordering bug is just one way to trigger it.
-
-**Tell:** You're about to report a list/count/diff with no independent confirmation. Same risk for any index-zipped parallel sequences — log lines↔timestamps, ids↔results, rows↔headers.
-
-## An Untested Explanation Is a Guess — Manipulate the Cause Before Reasoning From It
-
-A component fails to surface something it plausibly should have. The observation is real, but the explanation you reach for — "the needed input was never in scope for that query" — is invented on the spot, sounds mechanical, and is never tested. Reasoning forward from it hands the user a confident, wrong verdict ("nothing can be done short of a much bigger change").
-
-**DON'T:** Treat a fluent, plausible-sounding mechanism as a finding. The symptom being real doesn't make your story about it real.
-**DO:** Test the claimed cause by changing it — supply the "missing" input and re-run, reorder if the claim is about ordering, clear the cache if the claim is staleness. One flip is usually cheap; a cause that survives the flip is worth reasoning from. Only fall back to reading the implementation when manipulation isn't practical — and when the two disagree, the manipulation wins.
-
-**Tell:** You're about to write "because" about behavior you haven't varied — especially right before the next sentence rules an option out.
-
-**Principle:** A conclusion inherits the confidence of its weakest premise. "It doesn't fire and I haven't established why" beats a fast, wrong "nothing can be done."
-
-## A Check Coarser Than the Symptom Can't Eliminate a Hypothesis — Re-Test the Reporter's Own Theory First, at Matching Resolution
-
-When the reporter names a mechanism up front (a boundary, seam, or junction in the affected content) and an early check "rules it out," distrust the check before the theory. A check whose granularity — window size, sampling interval — exceeds the symptom's own scale (e.g. analysis windows several times larger than the object that vanishes) structurally cannot detect an effect confined to that scale; it reports "no effect" whether or not one exists.
-
-**DON'T:** Accept "ruled out" from a coarse probe and spend the investigation inventing self-made mechanisms instead.
-**DO:** When investigation stalls, re-test the reporter's stated mechanism FIRST at a resolution finer than the symptom itself, before trying anything else. Log WHERE (screen location, index, coordinate) each occurrence is caught from the very first detection — a positional fingerprint (always the same edge/side) is itself evidence for the mechanism.
-
-**Tell:** You "ruled out" a hypothesis with a check whose granularity is coarser than the thing measured, and hours later you're still inventing new mechanisms instead of tightening that one check.
-
-## A Pixel/Threshold Detector Is Blind Without a Positive Control — Calibrate Against the Live Frame
-
-An automated visual detector built on a fixed color mask or threshold silently reports "cannot reproduce" the moment the live palette drifts from the one it was tuned on (a different lighting/theme/tint state) — the target contributes zero masked pixels, so the detector is blind, not the bug absent. Many clean runs are not evidence of absence if the mask was never checked against the CURRENT frame.
-
-**DON'T:** Trust a color/threshold detector's "found nothing" after N runs without proving it can find a known-present target under current conditions.
-**DO:** Before relying on such a detector, sample actual pixels from a live frame and derive thresholds from the sample; re-calibrate whenever the app's visual state changes. Run a positive control — a known target it must catch — before trusting any null result.
-
-**Tell:** A detector reports zero hits across many runs, but its mask/threshold was authored against a different visual state than the one under test.
+- **Same Defect in a THIRD Unit = Build a Roster Differential, Not a Third Point Fix** — When the same mistake turns up in a third member of a family — three checks, three handlers, three adapters — the fix that pays is a test over the **registry**, not…
+- **Repeated Same Symptom After 2+ Fixes = Wrong Subsystem Target** — When the user reports the same perceived symptom after two or more rounds of plausible fixes, stop patching that surface.
+- **Regressing Feature? Find the Principled Algorithm the Codebase Already Has** — When a feature keeps regressing across many patch cycles — tuning constants, reshaping curves, adjusting thresholds — stop inventing ad-hoc logic.
+- **"Impossible in the Limit" ≠ "Cheap Lever Fails the Actual Case"** — When a global constant's effect scales with a per-case input, no single value can satisfy ALL inputs — that proof is correct.
+- **"How Did It Work Before?" = Revert Signal** — When the user asks "how did the old way work?", "why not keep it simple / slightly different?", or "did you even try the original approach?" — that is not a request to…
+- **A Regression YOU Introduced Is a REVERT, Never a Redesign** — Special case of the above with a sharper rule.
+- **Model Emits What the Presenter Can't Deliver → Fix the Emitter, Check the Rejected-Fix Ledger First** — When a bug is a contract violation between a data/model layer and a presentation layer — the model emitted an outcome the presenter cannot honestly produce (an…
+- **Predicted-vs-Measured Mismatch = Falsified Hypothesis; Verify the Fix Against the ORIGINAL Metric** — Two disciplines for "my fix is principled but the bug persists".
+- **A Never-Reset Latch Is Stale on Occurrence 2 — Test the Second Run, Not the First** — When a value is latched once per occurrence (per request, per run, per cycle) behind a "0/null = unset" sentinel, and the code only ASSIGNS that field and never RESETS…
+- **A Positional Join of Two Lists Silently Mispairs — Cross-Check Before Reporting** — Zipping two separately-produced sequences by position (not an explicit shared key) mispairs every row once their internal ordering diverges — yet the join succeeds and…
+- **An Untested Explanation Is a Guess — Manipulate the Cause Before Reasoning From It** — A component fails to surface something it plausibly should have.
+- **A Check Coarser Than the Symptom Can't Eliminate a Hypothesis — Re-Test the Reporter's Own Theory First, at Matching Resolution** — When the reporter names a mechanism up front (a boundary, seam, or junction in the affected content) and an early check "rules it out," distrust the check before the…
+- **Verifying a SYMMETRIC Change: the Half You Can Already See Says Nothing About the Other** — A change with two mirrored halves (two edges, two directions, two endpoints) invites verifying one and inferring the other — especially when every capture happens to…
+- **A Pixel/Threshold Detector Is Blind Without a Positive Control — Calibrate Against the Live Frame** — An automated visual detector built on a fixed color mask or threshold silently reports "cannot reproduce" the moment the live palette drifts from the one it was tuned on…
+- **An A/B Diff Harness Proves Nothing Until It Has Been Shown to Detect a Difference** — Comparing two builds/engines/configs by diffing their outputs assumes the harness runs each arm correctly — but a malformed invocation (wrong flag order, wrong…
+- **Temporary Instrumentation: Verify Its REMOVAL by Searching for the Marker** — Adding print statements to measure a real system is the right move when reading cannot answer the question.
+- **Reproduced the Bug? Find the Commit That Introduced It BEFORE Designing the Fix** — A reproduction tells you WHICH invariant is violated now.
+- **A Few Runs of a RANDOMIZED System Are Not a Before/After Measurement** — When the observable is an end-of-run aggregate (a score, a survival time, a count of handled items) and the run is driven by randomness, the same build produces a wide…
+- **Before Demanding a BASELINE Run, Check the Baseline Can Produce the Signal** — The instinct on "did my change cause this?" is right, and the control run is the honest way to settle it.
+- **A Measurement on an EXCLUSIVE Resource Is Void Unless Exclusivity Was Re-Checked Right Before It** — When the thing under measurement can be held by only one client at a time (a hardware codec, a device node, a GPU context, a single-slot license, an exclusive lock), any…
+- **A Deadlock You Cannot Attach a Debugger To: Kernel State Names the Wait, Not the Waiter** — per-thread `wchan`/syscall look identical for every candidate cycle and the recorded `pc` is always libc; when no debugger can be installed, add flushed entry/exit tracing to a file instead of reasoning further.
+- **A Tag-to-Tag Diff Exonerates Only the Artifacts the Repo Actually Tracks** — gitignored binaries (native extensions, plugins, vendored blobs) ship in the release but appear in no diff; `git check-ignore` the dependency before reading a clean diff as evidence, and swap that artifact…
+- **A Tuning Knob Cannot Explain a Regression the Old Version Survived at the Same Value** — if the working version ran the same threshold/interval, changing it masks at best and falsifies nothing; check the setting's history before spending a run on it.
+- **A Drop-In Replacement Measured BESIDE the Host Has Not Been Measured** — standalone arms all omit the shared resource (one GPU/context/event loop/input queue), so a component that is strictly cheaper alone can still break the host's UI; run the real host before calling the swap good.
+- **New Failure Right After an Environment Change = Suspect the Change First** — When a failure appears right after you changed something in the test environment — a kernel module parameter, a driver setting, a fixture size, a mock's capacity — suspect that change before the product under test, even with a plausible product-side story in a different subsystem.
+- **Ignoring a Side-Effecting Query's Result Makes the Caller Retry It — Filter at the Source** — When a callee both selects a best match AND mutates state as part of matching, filtering its result on the caller side doesn't just discard a bad answer — it makes the callee repeat the mutation on every later call and can hide a valid candidate behind the invalid one it preferred.
+- **A Floating-Point Round-Trip Is Not Identity — Never Detect an Event by FP Equality** — `f(x) !== x` after a normalize/wrap/convert round-trip fires on in-range values that merely picked up 1 ULP, so an equality-gated callback ("did it wrap?", "did it change?") fires constantly; detect the event by the condition that causes it (range check, explicit flag), then normalize.

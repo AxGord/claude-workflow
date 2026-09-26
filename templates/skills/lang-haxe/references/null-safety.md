@@ -10,7 +10,7 @@
 Fix: pass narrowed value through a helper with non-null param, or use `.bind()` at call site for value types.
 
 ### Strict (`@:nullSafety(Strict)`)
-Fields DO narrow right after a null check, but the narrowing is fragile: ANY intervening statement that could mutate state (a call, a write to any field) resets it — the compiler assumes another thread/callback could modify the field. In practice a field is only usable as non-null on the line directly after its check. Local variables narrow normally and stay narrowed.
+Fields DO narrow right after a null check, but the narrowing is fragile: ANY intervening statement that could mutate state (a call, a write to any field) resets it — the compiler assumes another thread/callback could modify the field. In practice a field is only usable as non-null on the line directly after its check. Local variables narrow normally and stay narrowed — with two exceptions that look like compiler bugs and are easy to misdiagnose as something else in the same function (see "Two Places a LOCAL Refuses to Narrow" below).
 
 **Pattern: capture field into local immediately after null check:**
 ```haxe
@@ -57,6 +57,46 @@ final scrolling:Bool = (_axis != null && _axis.isScrolling());
 // RIGHT — safe navigation + explicit comparison
 final scrolling:Bool = (_axis?.isScrolling() == true);
 ```
+
+## Two Places a LOCAL Refuses to Narrow
+
+Locals otherwise narrow reliably, so these two read as compiler bugs. Both isolated to a
+single discriminator on Haxe 4.3.7 / `--interp`.
+
+**1. In an `||` chain, only a null test that is the FIRST operand narrows the rest.** An `&&`
+chain has no such restriction — the asymmetry is the tell that this is a defect, not a design:
+
+```haxe
+if (xs == null || xs.length == 0) …               // ✓
+if (xs == null || o == null || xs.length == 0) …  // ✓ narrowing survives an intervening operand
+if (o == null || xs == null || xs.length == 0) …  // ✗ Cannot access "length" of a nullable value
+if (flag    || xs == null || xs.length == 0) …    // ✗ a bare Bool ahead of it is enough
+if (flag && xs != null && xs.length > 0) …        // ✓ the && chain narrows from ANY position
+```
+
+Bites when several independent optional values are validated in one guard, which is the
+natural way to write it. Fix: lead the chain with the null test, or split into one
+early-return `if` per value.
+
+**2. A narrowed local NEVER reaches an anonymous-structure literal whose expected type is
+NON-nullable.** Position is irrelevant — return value, typed local initializer, call
+argument and array element all fail identically. What flips it is the expected type:
+
+```haxe
+if (t == null) return null;
+final p:Null<P> = { flag: t };   // ✓ expected Null<P> — accepted
+return ({ flag: t } : Null<P>);  // ✓
+```
+```haxe
+if (t == null) return mk();
+return { flag: t };              // ✗ expected P — Cannot unify { flag : Null<Bool> } with P
+out.push({ flag: t });           // ✗ same, as a call argument
+return [{ flag: t }];            // ✗ same, as an array element
+```
+
+Fix: re-bind before the literal — `final flag:Bool = t;` then `{ flag: flag }`. (The
+`Null<P>` arm passing is itself suspicious: it looks like the strict field check is simply
+skipped there, a hole in the other direction. Do not rely on it.)
 
 ## Null-Safe Access `?.` Does NOT Support `++`/`--`
 

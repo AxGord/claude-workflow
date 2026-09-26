@@ -53,7 +53,7 @@ export class Engine {
     "coding", "debugging", "bug-fix", "new-feature", "code-review",
     "explore", "web-research", "planning", "testing", "reflection",
     "investigate", "master", "file-code", "file-review", "lint-review", "subagent", "review-push",
-    "github-init",
+    "github-init", "docs", "batch",
   ]);
 
   private readonly _storage: Storage;
@@ -570,6 +570,21 @@ export class Engine {
     const vars = this._buildTemplateVars(session);
     const result = await this._executor.execute(state, vars);
 
+    // An exec can run for seconds, and other writers land meanwhile: a
+    // parent's abort cascade (writing the pre-exec copy back would resurrect
+    // an abandoned session) or a context_set for this session. Narrows the
+    // race to one write's latency; a storage-level compare-and-set would
+    // close it.
+    const current = this._storage.read(session.session_id);
+    if (!current || current.stack.length === 0) {
+      if (result.pid) {
+        try { process.kill(result.pid, "SIGTERM"); } catch { /* already dead */ }
+      }
+      throw new Error(
+        `Session "${session.session_id}" ended while its action state ran (${current?.outcome ?? "deleted"})`
+      );
+    }
+
     // Determine target state
     let targetStateName: string | undefined;
     let detail: string;
@@ -639,8 +654,9 @@ export class Engine {
       bgPids = { ...(bgPids ?? {}), [`${frame.current_state}:${Date.now()}`]: result.pid };
     }
 
-    // Auto context_set from action state definition (rendered with action result vars)
-    let ctx = session.context;
+    // Auto context_set from action state definition (rendered with action result vars).
+    // Based on the re-read copy: a context_set that landed during the exec survives.
+    let ctx = current.context;
     if (result.success && state.context_set) {
       const renderVars = { ...vars, ...result };
       const entries = Object.entries(state.context_set).map(

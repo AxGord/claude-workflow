@@ -19,6 +19,19 @@ Likely cause: with `preserveDrawingBuffer: false` (the default in most WebGL fra
 - Verify in a real browser tab (the user's running Chrome, not an automated instance).
 - For automated verification, prefer JS-side state assertions: a uniform buffer value advancing across samples is sufficient proof the upload pipeline is alive; visual verification needs human eyes or a non-headless captured video.
 
+**Per-sample unreliability is not the same as useless in aggregate.** In a FRONTMOST tab `drawImage` often does return live frames — just not every time, because the buffer may already have been presented. That failure is filterable rather than silent: an empty region encodes to a tiny constant-size dataURL, so `d.length > BLANK` separates real frames from dropped ones with no pixel inspection. When the question is the SHAPE of an animation over time rather than one exact moment, sampling in-page at 15-25 Hz and keeping the survivors beats both a screenshot loop (one round-trip per frame) and a screencast (§6) in setup cost:
+
+```js
+await new Promise(r => requestAnimationFrame(r));   // read while the buffer is still alive
+ctx.drawImage(canvas, x, y, w, h, 0, 0, w, h);      // crop to the region under test
+const d = out.toDataURL(); if (d.length > BLANK) shots.push({t, d});
+await new Promise(r => setTimeout(r, 40));
+```
+
+Three things make it pay off: crop before encoding (a full-page dataURL per frame is megabytes); drive input from the SAME loop with synthetic `new KeyboardEvent('keydown', {key, code, keyCode})` dispatched on `window`, so a timed run plays itself while being sampled; and montage the decoded survivors into one grid image, so a whole sequence reads as a single tool result instead of N. A `browser_evaluate` writing its result to a file is restricted to the MCP's allowed roots (its own temp dir, the project root) — anything else is refused.
+
+This answers "did it move, and through what shapes", NOT the questions above — it is still no proof that a GPU upload pipeline is alive, and two of its frames comparing equal means nothing.
+
 ### 2. Headed screenshots can ALSO be stale — a tab that was never frontmost composites its last presented frame
 
 The same failure occurs HEADED whenever the target tab/window is occluded or was created behind another tab: `page.screenshot()` returns the last frame the browser's compositor ever presented for that tab. Observed: the screenshot showed a boot preloader frozen at "96%" while JS-side numeric sampling in the SAME page proved the app was live (object positions advancing every 100 ms, game logs firing). DOM inspection confirmed the preloader element was long gone — the "96%" pixels existed only in the stale compositor frame.
@@ -111,6 +124,150 @@ which perfectly mimics an application bug in the new code).
 - A fresh `browser_close` + navigate does NOT help — the staleness is
   server-side, not browser-cache-side (compare gotcha 3, which this can
   compound with).
+
+### 10. A bare `import()` inside `page.evaluate` can resolve to a SECOND module instance — import the URL the page actually loaded
+
+Dev servers that append a cache-busting query on HMR (`/src/foo.ts?t=1712…`) serve the app's module under that exact URL. A probe that imports the BARE specifier (`import('/src/foo.ts')`) gets a fresh, separate instance of the same file: its module-level state was never initialised, so any accessor built on that state throws ("not initialised", "call setup() first") or silently returns defaults — while the app beside it works fine. Waiting longer never helps; it is not a boot-timing problem.
+
+- Wrong: `const m = await import('/src/world/terrain.ts'); m.sampleAt(x)` → throws, and the obvious reading ("the app hasn't finished booting") sends you down a dead end.
+- Right: take the URL from the resource timeline, which records what was really fetched:
+  ```js
+  const url = performance.getEntriesByType('resource').map((e) => e.name)
+    .find((n) => n.includes('/src/world/terrain.ts'));
+  const m = await import(/* @vite-ignore */ url);
+  ```
+- The `/@fs/<abs path>/…` form has the same second-instance property. That is fine for a STATELESS module (read exported constants, run pure functions) and wrong for anything holding initialised state.
+- Prefer a debug global the app itself installs (`window.__world`, a `getState()` hook) over any import when one exists — it is the app's instance by construction.
+
+### 11. When YOUR measurement contradicts the user, the stale side can be THEIRS — check the environment before re-diagnosing
+
+Gotcha 3 says suspect your own cache first, and that stays the default. The mirror case is real too: after editing a linked WORKSPACE PACKAGE, a tab the user already had open can keep running the pre-change module with a completely CLEAN console — no error, just the old behaviour. Nothing in their view says "stale", so an accurate report of theirs describes code that no longer exists.
+
+- Tell: your instrumented run and their eyes disagree about the SAME input, your tests and typecheck are green, and the last edit was in a package the app imports rather than in its own source.
+- Do, before claiming either side is wrong: re-measure the exact scenario yourself at DEFAULT settings (a numeric per-frame trace beats a screenshot), across every variant the app picks at random; then enumerate the serving layer — multiple dev servers routinely linger on adjacent ports, so list the listening processes and confirm which working directory each serves, and re-run against each one.
+- Then hand over the numbers plus one concrete action ("hard reload"), not a verdict about who is wrong. Cheap, and it ends the loop in one round-trip.
+- Also confirm you are comparing the same event: a URL parameter that pins a scenario often pins only the FIRST one, so a user's "I watched it again" can be a different, randomly drawn case.
+
+### 12. `keyboard.press()` sends down and up in ONE tick — it cannot reproduce (or refute) a hold-split bug
+
+A physical keypress lasts ~80-150 ms, i.e. several frames, and an app can hand control from one
+screen to another between the two halves. `page.keyboard.press(key)` collapses that window to
+zero, so a bug where the key-up lands in a screen that only armed itself after the key-down is
+**invisible to `press()` by construction** — the automated check passes, the human's press fails
+every time, and the report reads as "cannot reproduce".
+
+- Verify any keyboard-driven transition with `keyboard.down(key)` → `waitForTimeout(150)` →
+  `keyboard.up(key)`. Keep `press()` for input you only need delivered, not for handover paths.
+- Same shape for the pointer: `mouse.click()` vs `mouse.down()` / wait / `mouse.up()`.
+- The duration is the independent variable, so it is also the confirmation: if short passes and
+  held fails with nothing else changed, the split IS the mechanism — no code reading needed.
+
+### 13. A fixed wait for a randomized end-of-run state verifies the wrong frame
+
+When the state you need (a crash screen, a level end, a timeout banner) arrives at a
+content-dependent time, a `waitForTimeout(6000)` lands mid-run about as often as it lands on the
+target — and the follow-up input then goes to the RUNNING app, whose screenshot looks like the
+old bug still reproducing. Two verification runs of "the same" scenario silently test two
+different things.
+
+Poll for the state instead of timing it. For a frozen/paused screen, the cheap detector is a
+clipped screenshot of a region that MOVES during normal operation, sampled twice ~250 ms apart:
+`(await shot()).equals(await shot())` is true only once motion stopped.
+
+```js
+const clip = { x: 390, y: 175, width: 500, height: 330 };
+for (let i = 0; i < 60; i++) {
+  const a = await page.screenshot({ clip });
+  await page.waitForTimeout(250);
+  if (a.equals(await page.screenshot({ clip }))) break;
+}
+```
+
+Keep the clip off any element that deliberately keeps animating on the target screen (a blinking
+sprite, a spinner), or the loop never converges. Two ways this detector lies, both of which read
+as a clean "reproduced / not reproduced" verdict:
+
+- **No wait between the two samples.** Back-to-back captures can land inside one rendered frame, so
+  the pair matches on the first iteration and the loop exits while the app is still running. A
+  `found: 0` from a poll that was supposed to wait seconds is the tell.
+- **A reference pixel sampled from the state you are NOT detecting.** Grabbing "background here"
+  and waiting for a change fires on anything that drifts through — a passing cloud, a tooltip, a
+  cursor. Sample the reference from the TARGET state instead (reach it once by hand, capture the
+  pixel, then poll for an exact match); an exact-match detector cannot be tripped by a third state.
+
+### 14. A sub-second animation is shorter than one MCP round trip — SLOW IT DOWN and time it from LOGS, not from screenshots
+
+"Trigger it, then screenshot immediately" cannot catch a 300-500 ms transition: each tool call
+carries seconds of its own latency, so the first capture already shows the settled state. That
+reads exactly like "the animation never ran", and the natural next move — hunting for the reason
+it does not play — is a hunt for a bug that is not there.
+
+Two moves, in this order:
+
+- **Widen the target.** Multiply the duration by 20-50 in whatever declares it (config, a
+  constant) and rebuild. Now the transition outlasts the round trip and a single ordinary
+  screenshot lands inside it. Put the value back when done — and treat the restore as part of the
+  change, not as cleanup you will remember.
+- **Time it from timestamped LOGS.** Trace at the start and at the completion callback and read
+  the delta out of the console log. Do NOT infer duration by eyeballing how far along two
+  screenshots look: their wall-clock spacing is the harness's latency, not the app's, so the same
+  pair "proves" any speed you already suspect. An eyeballed pair produced a confident "this runs
+  ~7x faster than configured" against a logged measurement of 14.94 s for a configured 15 s.
+
+The same asymmetry decides where evidence must come from generally: screenshots answer WHAT it
+looks like, logs answer WHEN and HOW LONG. Never let a screenshot pair answer a timing question.
+
+### 15. Emulated mobile does not emulate the mobile INPUT STACK — a null result there is not evidence
+
+`isMobile` / `hasTouch` / `Input.dispatchTouchEvent` give a desktop engine a touch API, not a
+phone's gesture recognisers, its compatibility-mouse synthesis, or its rules about which node
+has to carry a listener for touches to keep flowing. A touch bug that lives in any of those
+reproduces perfectly on the device and never once in emulation — so the run comes back green
+and the report reads "cannot reproduce", which is the same output as "fixed".
+
+- Treat emulation as able to CONFIRM a touch path works, never to refute a reported one. The
+  moment a user's touch symptom fails to appear, move to a real device before forming any
+  hypothesis about it.
+- Getting there is cheap: serve the build on the LAN and open it from the phone. What the
+  device needs is an ON-SCREEN log — a fixed, `pointer-events: none` overlay printing each
+  event with a timestamp — because there is no console to read. Print the DURATION between a
+  press and its release in the line itself; that one number is usually the whole diagnosis.
+- Reproduce the wrapper too. A page loaded directly and the same page in an iframe are
+  different environments to a mobile browser, and a bug can live entirely in the second.
+
+### 16. Instrumentation that ATTACHES a listener can be the CURE — a bug that vanishes under the probe is a finding
+
+Adding a probe is assumed to be passive, and for a log line it is. But `addEventListener` is a
+side effect: browsers decide what to deliver, and to whom, partly from where listeners are
+attached. Widen a probe from one node to several and the symptom can disappear — at which
+point the natural reading, "could not reproduce this time", throws away the answer. The probe
+just named the root cause: the node it added a listener to is the node the code was missing one
+on.
+
+- **Tell:** the symptom is stable across several runs, you broaden the instrumentation, and the
+  run goes green with no other change. Suspect the probe before crediting flakiness.
+- Bisect the probe like any other change — one attachment point at a time — and the surviving
+  one is the fix.
+- Then put the log back to the exact shape that reproduced the bug before verifying the real
+  fix. A verification run carrying the curative probe tests the diagnostic, not the change.
+
+### 17. `window.focus()` + `document.hasFocus()` in the SAME evaluate can read STALE — trust the next EVENT, not the flag
+
+Inside a cross-origin iframe, calling `focus()` then immediately reading `document.hasFocus()` in one evaluate can return `false` even though focus already moved — the parent's `document.activeElement` already points at the iframe, and the very next synthesised keypress is delivered to a listener inside that frame, which is only possible if the frame does hold focus. The lag is INTERMITTENT: the same code on a simpler page in the same session returns `true` immediately, which is what makes it dangerous — it reads as "the focus call failed here" and invites debugging a fix that already landed.
+
+- Don't judge a focus change by the flag it sets. Confirm with an EVENT: dispatch a real key and assert a `keydown` listener in the target frame received it (and/or check the parent's `document.activeElement`).
+- Example: `frame.focus(); frame.contentDocument.hasFocus()` → `false`, yet dispatching a `keydown` right after is caught by the frame's own listener — the delivered event is the evidence, the flag was stale.
+
+### 18. An https-hosted build cannot reach a LOOPBACK server in Chrome by default — and the block is a grantable PERMISSION, not a wall
+
+Pointing a deployed (https) page at a local server (`http://127.0.0.1:<port>`) fails with `Access to fetch … blocked by CORS policy: Permission was denied for this request to access the 'loopback' address space`. Two traps, and the second is the expensive one:
+
+- The message says CORS, and it is **not** CORS — the server's headers are irrelevant, the preflight never reaches it. It is also **not** mixed content: loopback is a potentially-trustworthy origin, so the usual "serve it over https" reasoning does not explain this denial and does not fix it.
+- "Denied" reads as a policy wall, so the natural conclusion is "this configuration is impossible, require https end to end". That conclusion is wrong and, written into a doc or handed to a user, it removes an option that works. The word **Permission** in the message is the tell: a permission can be granted.
+
+Both routes past it work, in Chromium and in real Chrome: grant the site local-network access (Playwright: `context.grantPermissions(['local-network-access'], { origin })` — the name being accepted is itself proof the permission exists), or launch the browser with the check off (`--disable-features=LocalNetworkAccessChecks`), in a throwaway `--user-data-dir` so the flag applies to a fresh process. Serving the page from the same address space (a local dev server) needs neither.
+
+**Method, not just the fact:** when a browser refuses a cross-origin/permission-shaped request, settle it with a ONE-VARIABLE matrix before documenting any constraint — arms for default, permission-granted, flag-disabled, × the automation build and the real browser channel, asserting one observable (the status of the first request). Six cheap arms replace a guess, and they separate "the app's transport is wrong" from "the browser refused" — a distinction that inverts the fix.
 
 ### Framework-specific siblings
 
