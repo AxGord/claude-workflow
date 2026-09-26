@@ -133,7 +133,12 @@ states:
           `context_set(key: "lint_rules_ran", value: "<comma-separated ids>")`
           and `context_set(key: "lint_subtraction", value: "applied")`.
           `off` rules — config-disabled, `default-off` (opt-in, never
-          enabled), `needs-language-<v>` — did NOT run: never subtract them.
+          enabled), `needs-language-<v>`, `needs-config` / `config-excluded`
+          / `config-noop` (the rule's own options skip that file) — did NOT
+          run: never subtract them. A batch file carrying a
+          `// CHECKSTYLE:OFF` region had its findings there suppressed, so
+          nothing was verified for that code: subtract nothing for that file
+          (a `// noqa` line likewise leaves that line to you).
         - `=== hxq lint rules: registry only` (hxq too old to report the
           effective state), `=== hxq lint rules: unavailable`, a SKIP there,
           or no rule-state section at all → the linter's coverage is
