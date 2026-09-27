@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- scripts: `hxq-lint-file.sh` passes `--full` when hxq offers it — a newer hxq summarises a text report over `reportSummaryThreshold` (200) per rule, which would have dropped the per-finding lines a review reads on a large file or batch
 - scripts: `check-skill-sync.sh` ignores Finder's `.DS_Store` — a metadata file macOS drops into a live skill dir no longer reads as drift and blocks the pre-commit hook; the suggested rsync excludes it too
 - templates: file-review subtracts its manual checklist only by the lint rules hxq reports ON for the reviewed files (`hxq lint --list-rules <files>`: effective on/off per `apqlint.json` chain, default-off and `languageVersion` resolved) — decided once in `build_checklist` as `lint_rules_ran`, which `check_correctness` / `check_loops` / `check_style` now read instead of restating the registry criteria. `hxq-lint-file.sh` drops its hand-rolled nearest-only config walk; with an hxq too old for the scoped form it prints the bare registry marked as an upper bound and the review subtracts nothing. A rule its own options skip for a file (`needs-config` / `config-excluded` / `config-noop`) and a file with a `// CHECKSTYLE:OFF` region are never subtracted. lint-review output is unchanged
 - engine: `docs` and `batch` join `GLOBAL_WORKFLOWS` — `batch` shipped in 0.1.10 without it, so the route prompt listed it as a PROJECT workflow and Step 1 could route it via `project`. A new test loads the real `templates/` and fails on the next bundled workflow left out

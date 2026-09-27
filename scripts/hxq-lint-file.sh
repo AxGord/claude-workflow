@@ -68,8 +68,12 @@ fi
 
 # hxq exits 0 even with findings/drift; a non-zero exit means hxq itself
 # broke — surface that as a SKIP so an empty report is never read as clean.
+# A report over hxq's reportSummaryThreshold is printed as a per-rule summary;
+# a review needs every finding, so ask for the full list where hxq offers it.
+full=""
+hxq lint --help 2>/dev/null | grep -q -- '--full ' && full="--full"
 echo "=== hxq lint (all severities):$hx ==="
-HXQ_QUIET=1 hxq lint $hx --all 2>&1 || echo "SKIP: hxq lint failed (exit $?)"
+HXQ_QUIET=1 hxq lint $hx --all $full 2>&1 || echo "SKIP: hxq lint failed (exit $?)"
 echo "=== fmt drift (empty = writer-canonical):$hx ==="
 HXQ_QUIET=1 hxq fmt -l $hx 2>&1 || echo "SKIP: hxq fmt failed (exit $?)"
 exit 0
