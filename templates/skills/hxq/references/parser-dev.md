@@ -101,3 +101,7 @@ hxq gates --mechanism kw-lead                   # keyword-dispatched fields
 - **AFTER parser-additive slice, BEFORE sweep**: `hxq recon --probe <file> --writer-equals` to confirm byte-PASS upfront (avoids skip→fail surprise).
 - **BEFORE grammar edit on a skip-parse cluster**: `hxq recon --predict-strip --regex …` confirms the proposed change is the sole parse-blocker.
 - **Pre/post-slice sanity**: `hxq sweep --diff` after `node bin/test.js` (auto-rotated prev).
+
+## Changing the call graph (moved from SKILL.md)
+
+**Changing the graph? `lint --rule thread-safety` over a big real tree is the only WHOLE-TREE oracle** — there is no edge dump, and per-target `callers` runs cost ~1.4s each. That check consumes the same graph, so a before/after diff of its findings reflects the whole edge set. Two things to expect when reading that diff: findings gain or lose the `(also reachable from a background thread)` annotation as reachability changes (compare findings by `file:line` + sink, NOT by full message — the message embeds a chain that re-renders), and **ADDING edges can REMOVE findings**, because a node with no resolved callers is ASSUMED main; supply its real caller and a stale "main thread reaches" claim correctly disappears. A disappearing finding is still the direction to verify first — confirm the newly-revealed caller really is background before accepting it.

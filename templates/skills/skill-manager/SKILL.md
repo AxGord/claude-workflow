@@ -9,14 +9,23 @@ This skill is HEAVY. Always run via subagent (Task tool), never in main context.
 
 ### Model policy
 
-- Subagents that write or judge skill text: **Opus** or **Sonnet** — never Haiku (skill text is judgement, no mechanical net)
-- Haiku only for pure locate/extract helpers whose output you re-check
-- Skills are optimized for Opus/Sonnet reasoning capabilities
+Model AND effort per spawn by the `task-delegation` table. Skill text is
+judgement with no mechanical net → sonnet/medium for optimize and create,
+opus/high for a skill that decides process; haiku only for locate/extract
+helpers whose output you re-check.
 
-**Model selection by task:**
-- **OPTIMIZE skills** → Sonnet (filtering/editing, doesn't need deep reasoning)
-- **CREATE skill from research** → Sonnet (research + writing)
-- **Complex code generation** → Opus (when quality is critical)
+### Where a rule lives (JIT over global)
+
+- A rule needed at one process moment (spawning, commit, review) goes into
+  that moment's carrier — the workflow state prompt or the skill loaded
+  then — never into a global CLAUDE.md, which keeps only bootstrap,
+  every-reply rules and facts with no carrier (e.g. git identity).
+- Universal tool discipline goes into the distributed carriers (bundled
+  skills, workflow templates), never into `preferences-*` (personal taste).
+- A rule a linter can hold goes into the lint config, not into a skill:
+  check the project's `hxq lint --list-rules <files>` before writing it.
+- What only one route needs (writes, self-development, liveness forensics)
+  goes into a separate skill or `references/`, not the always-loaded SKILL.md.
 
 ### ⛔ PROTECTED skills — NEVER modify or overwrite
 
