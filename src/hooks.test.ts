@@ -152,4 +152,74 @@ describe("hooks", () => {
     expect(fresh).not.toContain("aaaa1111");
     expect(fresh).toContain("Call mcp__plugin_workflow_wf__start");
   });
+
+  /** A stand-in for build/session-cli.js: records its argv, prints `out` (for the matching command). */
+  function stubCli(env: ReturnType<typeof sandbox>, out: Record<string, string>): string {
+    const argsFile = path.join(env.STATE_DIR, "..", "cli-args");
+    fs.mkdirSync(path.join(env.CLAUDE_PLUGIN_ROOT, "build"), { recursive: true });
+    fs.writeFileSync(
+      path.join(env.CLAUDE_PLUGIN_ROOT, "build", "session-cli.js"),
+      `const a = process.argv.slice(2);
+require("fs").writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(a));
+const out = ${JSON.stringify(out)}[a[0]];
+if (out) console.log(out);`,
+    );
+    return argsFile;
+  }
+
+  it("workflow-start.sh on resume has the session CLI pick the conversation's sessions up for this process", () => {
+    const env = sandbox();
+    const argsFile = stubCli(env, {
+      pickup: "WORKFLOW SESSIONS PICKED UP\n  picked up: aaaa1111 @ w @ s",
+    });
+    writer(env.STATE_DIR)(
+      session("aaaa1111", {
+        suspended_at: "2026-10-28T00:00:00.000Z",
+        claude_session_id: "conv-9",
+      }),
+    );
+    const out = runHook("workflow-start.sh", env, { session_id: "conv-9", source: "resume" });
+    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toEqual([
+      "pickup",
+      env.STATE_DIR,
+      "conv-9",
+      String(process.pid),
+    ]);
+    expect(out).toContain("picked up: aaaa1111 @ w @ s");
+    expect(out).not.toContain("→ mcp__plugin_workflow_wf__resume");
+  });
+
+  it("workflow-start.sh on resume falls back to listing the suspended roots when the CLI picked nothing up", () => {
+    const env = sandbox();
+    stubCli(env, {});
+    writer(env.STATE_DIR)(
+      session("aaaa1111", {
+        suspended_at: "2026-10-28T00:00:00.000Z",
+        claude_session_id: "conv-9",
+      }),
+    );
+    const out = runHook("workflow-start.sh", env, { session_id: "conv-9", source: "resume" });
+    expect(out).toContain(
+      'aaaa1111: w @ s → mcp__plugin_workflow_wf__resume({ session_id: "aaaa1111" })',
+    );
+  });
+
+  it("workflow-start.sh on compact prints this process's active sessions after the context-cleared line", () => {
+    const env = sandbox();
+    const argsFile = stubCli(env, { active: "ACTIVE WORKFLOW SESSIONS\n  aaaa1111: w @ s" });
+    const out = runHook("workflow-start.sh", env, { session_id: "conv-9", source: "compact" });
+    expect(JSON.parse(fs.readFileSync(argsFile, "utf8"))).toEqual([
+      "active",
+      env.STATE_DIR,
+      String(process.pid),
+    ]);
+    expect(out).toContain("Context was cleared");
+    expect(out).toContain("ACTIVE WORKFLOW SESSIONS\n  aaaa1111: w @ s");
+
+    const none = sandbox();
+    stubCli(none, {});
+    expect(runHook("workflow-start.sh", none, { source: "compact" }).trim()).toBe(
+      "Context was cleared. Call status() to check for active session and restore context.",
+    );
+  });
 });

@@ -413,6 +413,7 @@ describe("per-session serialization queue", () => {
         resolveSessionId: (sid: string) => sid,
         assertNotSuspended: () => {},
         assertOwnership: () => undefined,
+        adoptOrphanedExec: () => Promise.resolve(null),
         transition: () =>
           ++calls === 1
             ? // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a non-Error reason is the point

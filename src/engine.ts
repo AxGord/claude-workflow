@@ -30,6 +30,7 @@ import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { render } from "./template.js";
+import { activeSubtree, takeOver } from "./takeover.js";
 
 function stripOptionalPrefix(s: string): string {
   return s.replace(/^\?/, "");
@@ -120,6 +121,9 @@ export class Engine {
   // Sessions whose processes the abort tool killed ahead of its queued abort:
   // their running action chain must stop, not route the killed exec's result.
   private readonly _aborting = new Set<string>();
+  // Sessions whose action state this server is running: their `running_exec`
+  // is this server's own, never one to take over.
+  private readonly _inFlight = new Set<string>();
   private readonly _options: EngineOptions;
 
   constructor(storage: Storage, loader: Loader, executor: Executor, options: EngineOptions = {}) {
@@ -594,13 +598,15 @@ export class Engine {
     for (const session of sessions) {
       if (session.suspended_at) {
         if (now - Date.parse(session.suspended_at) < ttlMs) continue;
+        // the resume hook may have picked it up since readAll
+        if (!this._storage.read(session.session_id)?.suspended_at) continue;
         await this.abort(session.session_id, "expire");
         expired.push(session.session_id);
         continue;
       }
       const pid = session.context.claude_code_pid;
       if (typeof pid !== "number" || Engine._isPidAlive(pid)) continue;
-      if (await this._suspendOne(session.session_id, new Date(now).toISOString()))
+      if (await this._suspendOne(session.session_id, new Date(now).toISOString(), pid))
         suspended.push(session.session_id);
     }
     return { suspended, expired };
@@ -614,13 +620,22 @@ export class Engine {
   public async suspend(sessionId: string): Promise<string[]> {
     const now = new Date().toISOString();
     const done: string[] = [];
-    for (const id of this._subtree(sessionId)) if (await this._suspendOne(id, now)) done.push(id);
+    for (const id of activeSubtree(this._storage, sessionId))
+      if (await this._suspendOne(id, now)) done.push(id);
     return done;
   }
 
-  private async _suspendOne(sessionId: string, at: string): Promise<boolean> {
+  /**
+   * `deadOwner`: suspend only while the session still belongs to that process —
+   * the SessionStart hook of a resumed conversation may have handed it to the
+   * new one since the caller read it.
+   */
+  private async _suspendOne(sessionId: string, at: string, deadOwner?: number): Promise<boolean> {
     const set = await this._storage.update(sessionId, cur =>
-      cur && cur.stack.length > 0 && !cur.suspended_at
+      cur &&
+      cur.stack.length > 0 &&
+      !cur.suspended_at &&
+      (deadOwner === undefined || cur.context.claude_code_pid === deadOwner)
         ? {
             ...cur,
             suspended_at: at,
@@ -630,14 +645,6 @@ export class Engine {
         : null,
     );
     return set !== null;
-  }
-
-  /** The session and its active descendants, parents first. */
-  private _subtree(sessionId: string): string[] {
-    const ids = [sessionId];
-    for (let i = 0; i < ids.length; i++)
-      ids.push(...this._getActiveChildren(ids[i]).map(c => c.session_id));
-    return ids;
   }
 
   /**
@@ -664,29 +671,17 @@ export class Engine {
       throw new Error(`Session "${sessionId}" is active in PID ${owner}, not suspended.`);
 
     const now = new Date().toISOString();
-    const claudeSessionId = this._claudeSessionId();
-    for (const id of this._subtree(sessionId)) {
-      await this._storage.update(id, cur => {
-        if (!cur || cur.stack.length === 0) return null;
-        const own = id === sessionId;
-        if (!own && cur.context.claude_code_pid === pid) return null;
-        return {
-          ...cur,
-          context: { ...cur.context, claude_code_pid: pid },
-          ...(own && claudeSessionId ? { claude_session_id: claudeSessionId } : {}),
-          ...(own ? { suspended_at: undefined } : {}),
-          updated_at: now,
-          history:
-            own && cur.suspended_at
-              ? [...cur.history, { frame: cur.active_frame, event: "resume", at: now }]
-              : cur.history,
-        };
-      });
-    }
+    await takeOver(
+      this._storage,
+      sessionId,
+      { pid, claudeSessionId: this._claudeSessionId() },
+      now,
+      "root",
+    );
     const resumed = this._storage.read(sessionId)!;
     // the old server's snapshot died with it: the session continues on the workflows loaded now
     if (!this._snapshots.has(sessionId)) this._snapshots.set(sessionId, this._loader.getAll());
-    const suspendedChildren = this._subtree(sessionId)
+    const suspendedChildren = activeSubtree(this._storage, sessionId)
       .slice(1)
       .map(id => this._storage.read(id))
       .filter((s): s is SessionState => !!s?.suspended_at);
@@ -698,6 +693,43 @@ export class Engine {
         ? await this._executeActionState(resumed, state!, [], 0, resumed.running_exec)
         : this._buildStatus(resumed, []);
     return { status, suspendedChildren };
+  }
+
+  /**
+   * The session is owned by this process and stopped in an action state whose
+   * foreground exec a previous server left running (`running_exec`) — the
+   * SessionStart hook of a resumed conversation hands sessions over without a
+   * server. Cheap: no lock, no exec.
+   */
+  public hasOrphanedExec(sessionId: string): boolean {
+    return this._orphanedExec(this._storage.read(sessionId)) !== undefined;
+  }
+
+  /**
+   * Finish the action state of a session `hasOrphanedExec` names: wait for
+   * its exec, take its recorded result, or run it again — as `resume` does.
+   * Null when there is nothing to take over (any more). Call it inside the
+   * session's queue.
+   */
+  public async adoptOrphanedExec(sessionId: string): Promise<StatusResult | null> {
+    const session = this._storage.read(sessionId);
+    const found = this._orphanedExec(session);
+    if (!found) return null;
+    if (!this._snapshots.has(sessionId)) this._snapshots.set(sessionId, this._loader.getAll());
+    return this._executeActionState(session!, found.state, [], 0, found.run);
+  }
+
+  private _orphanedExec(
+    session: SessionState | null,
+  ): { state: StateDefinition; run: RunningExec } | undefined {
+    const run = session?.running_exec;
+    if (!session || !run || session.stack.length === 0 || session.suspended_at) return undefined;
+    if (session.pending_pop || this._inFlight.has(session.session_id)) return undefined;
+    if (session.context.claude_code_pid !== process.ppid) return undefined;
+    const frame = session.stack[session.active_frame];
+    if (run.frame !== session.active_frame || run.state !== frame?.current_state) return undefined;
+    const state = this._resolveState(session, frame.workflow, frame.current_state);
+    return state && this._isActionState(state) ? { state, run } : undefined;
   }
 
   /** Record the Agent-tool id of the sub-agent that drives a session, for a parent's resume. */
@@ -938,6 +970,24 @@ export class Engine {
     taskOps: TaskOp[],
     depth: number = 0,
     adopt?: RunningExec,
+  ): Promise<StatusResult> {
+    const id = session.session_id;
+    // the outermost call of a chain owns the mark until its routed write is done
+    if (this._inFlight.has(id)) return this._runActionState(session, state, taskOps, depth, adopt);
+    this._inFlight.add(id);
+    try {
+      return await this._runActionState(session, state, taskOps, depth, adopt);
+    } finally {
+      this._inFlight.delete(id);
+    }
+  }
+
+  private async _runActionState(
+    session: SessionState,
+    state: StateDefinition,
+    taskOps: TaskOp[],
+    depth: number,
+    adopt: RunningExec | undefined,
   ): Promise<StatusResult> {
     if (depth >= MAX_ACTION_CHAIN) {
       throw new Error(`Action chain exceeded max depth (${MAX_ACTION_CHAIN})`);

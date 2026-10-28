@@ -8,6 +8,7 @@ import { Executor, bootTimeMs } from "./executor.js";
 import { isGroupAlive } from "./process.js";
 import { formatResume, registerTools } from "./tools.js";
 import { projectRoot } from "./pool.js";
+import { pickUpConversation } from "./takeover.js";
 import { InMemoryStorage, createTestLoader, cleanupDir, SIMPLE_WORKFLOW } from "./test-helpers.js";
 import type { DetachedRun, SessionState } from "./types.js";
 
@@ -100,6 +101,20 @@ describe("suspend / resume", () => {
     expect(storage.ledger.map(l => (l as { session_id: string }).session_id).sort()).toEqual(
       [root.sessionId, child.sessionId].sort(),
     );
+  });
+
+  it("the startup reaper leaves a session the resume hook handed to a live process after the reaper read it", async () => {
+    const { storage, engine } = mount({ simple: SIMPLE_WORKFLOW });
+    const { sessionId } = await engine.start("simple");
+    await orphan(storage, [sessionId]);
+    const update = storage.update.bind(storage);
+    storage.update = async (id, change) => {
+      const s = storage.read(id)!;
+      await storage.write(id, { ...s, context: { ...s.context, claude_code_pid: process.ppid } });
+      return update(id, change);
+    };
+    expect((await engine.reapOrphanedSessions()).suspended).toEqual([]);
+    expect(storage.read(sessionId)!.suspended_at).toBeUndefined();
   });
 
   it("start records the conversation id the SessionStart hook wrote for this process", async () => {
@@ -352,6 +367,116 @@ describe("suspend / resume", () => {
       expect(r.status.currentStateName).toBe("red");
       expect(r.status.prompt).toContain("RED 3");
       expect(m.storage.read(sessionId)!.last_action_result!.stdout).toContain("out");
+    });
+
+    function tools(
+      engine: Engine,
+      storage: InMemoryStorage,
+      loader: ReturnType<typeof mount>["loader"],
+    ) {
+      const handlers = new Map<
+        string,
+        (args: object) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>
+      >();
+      const server = {
+        registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h),
+      };
+      registerTools(server as never, engine, {} as never, loader, storage);
+      return (name: string, args: object) => handlers.get(name)!(args);
+    }
+
+    /** What the SessionStart hook of `claude --resume` does: pick the conversation's sessions up for this process. */
+    async function pickUp(m: ReturnType<typeof mount>, sessionId: string): Promise<void> {
+      const s = m.storage.read(sessionId)!;
+      await m.storage.write(sessionId, { ...s, claude_session_id: "conv-1" });
+      const roots = await pickUpConversation(
+        m.storage,
+        "conv-1",
+        process.ppid,
+        new Date().toISOString(),
+      );
+      expect(roots.map(r => r.session_id)).toEqual([sessionId]);
+    }
+
+    it("picked up by the hook: the first status() takes the exec over and routes it, once", async () => {
+      const m = mount({ w: gate("sleep 0.6; echo done") });
+      const { sessionId, first } = await startGate(m);
+      await pickUp(m, sessionId);
+      const next = m.restart();
+      expect(next.hasOrphanedExec(sessionId)).toBe(true);
+      const call = tools(next, m.storage, m.loader);
+      const r = await call("status", { session_id: sessionId });
+      expect(r.content[0].text).toContain("EXEC IN FLIGHT TAKEN OVER");
+      expect(r.content[0].text).toContain("GREEN done");
+      expect(m.storage.read(sessionId)!.running_exec).toBeUndefined();
+      expect(next.hasOrphanedExec(sessionId)).toBe(false);
+      const again = await call("status", { session_id: sessionId });
+      expect(again.content[0].text).not.toContain("TAKEN OVER");
+      expect((await first) as Error).toBeInstanceOf(Error);
+    });
+
+    it("picked up by the hook: a transition() first finishes the exec and is not taken", async () => {
+      const m = mount({ w: gate("echo out; exit 3") });
+      const { sessionId, first } = await startGate(m);
+      await first;
+      await pickUp(m, sessionId);
+      const call = tools(m.restart(), m.storage, m.loader);
+      const r = await call("transition", { session_id: sessionId, transition: "done" });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("RED 3");
+      expect(r.content[0].text).toContain('Transition "done" was NOT taken');
+      expect(m.storage.read(sessionId)!.stack[0].current_state).toBe("red");
+    });
+
+    it("no orphan: an exec another live process runs, or a suspended session's", async () => {
+      const m = mount({ w: gate("true") });
+      const { sessionId } = await m.engine.start("w");
+      const s = m.storage.read(sessionId)!;
+      const stuck = (pid: number, suspended_at?: string): SessionState => ({
+        ...s,
+        stack: [{ ...s.stack[0], current_state: "gate" }],
+        context: { ...s.context, claude_code_pid: pid },
+        running_exec: {
+          pgid: 999_999,
+          out: "/x/o",
+          err: "/x/e",
+          rc: "/x/rc",
+          started_at: "",
+          boot_ms: 0,
+          frame: 0,
+          state: "gate",
+        },
+        ...(suspended_at ? { suspended_at } : {}),
+      });
+      await m.storage.write(sessionId, stuck(process.pid));
+      expect(m.engine.hasOrphanedExec(sessionId)).toBe(false);
+      await m.storage.write(sessionId, stuck(process.ppid, new Date().toISOString()));
+      expect(m.engine.hasOrphanedExec(sessionId)).toBe(false);
+      await m.storage.write(sessionId, stuck(process.ppid));
+      expect(m.engine.hasOrphanedExec(sessionId)).toBe(true);
+    });
+
+    it("a chain that threw (suspended mid-exec) leaves no in-flight mark: picked up again, its exec is an orphan", async () => {
+      const m = mount({ w: gate("sleep 0.3") });
+      const { sessionId } = await m.engine.start("w");
+      const pending = m.engine.transition(sessionId, "next").catch((e: Error) => e);
+      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.running_exec; i++)
+        await new Promise(r => setTimeout(r, 10));
+      await m.engine.suspend(sessionId);
+      expect(((await pending) as Error).message).toMatch(/suspended while its action state ran/);
+      await pickUp(m, sessionId);
+      expect(m.engine.hasOrphanedExec(sessionId)).toBe(true);
+    });
+
+    it("this server's own exec is never taken for an orphan", async () => {
+      const m = mount({ w: gate("sleep 0.4") });
+      const { sessionId } = await m.engine.start("w");
+      const pending = m.engine.transition(sessionId, "next");
+      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.running_exec; i++)
+        await new Promise(r => setTimeout(r, 10));
+      expect(m.storage.read(sessionId)!.running_exec).toBeDefined();
+      expect(m.engine.hasOrphanedExec(sessionId)).toBe(false);
+      expect((await pending).currentStateName).toBe("green");
     });
 
     it("neither process nor result (the machine rebooted): resume runs the step again", async () => {

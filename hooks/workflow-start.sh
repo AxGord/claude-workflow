@@ -63,6 +63,13 @@ PLANS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plans"
 # Session IDs are 8 hex chars; the {7,} length filter skips shorter incidental hex words.
 SID_RE='[a-f0-9]{7,}'
 
+# --- Helper: the engine's session CLI (src/session-cli.ts) — writes under the
+# engine's own file locks; fails (and the caller falls back) without a build or node.
+SESSION_CLI="${CLAUDE_PLUGIN_ROOT}/build/session-cli.js"
+session_cli() {
+  [ -f "$SESSION_CLI" ] && command -v node >/dev/null 2>&1 && node "$SESSION_CLI" "$@" 2>/dev/null
+}
+
 # --- Helper: apply a jq filter to a file in place (atomic tmp+rename) ---
 # $$ makes the temp name unique per hook instance, so concurrent hooks
 # cannot clobber each other's half-written temp files.
@@ -135,14 +142,24 @@ if [ "$SOURCE" = "clear" ] || [ "$SOURCE" = "compact" ]; then
     fi
   fi
   bump_skill_epoch_by_pid
+  # The hook's output is part of the new context: name the sessions this
+  # process is in, so a compacted orchestrator knows where it is.
+  ACTIVE=$(session_cli active "$STATE_DIR" "$PPID")
   echo "Context was cleared. Call status() to check for active session and restore context.$ZED_SUFFIX"
+  [ -n "$ACTIVE" ] && printf '%s\n' "$ACTIVE"
   exit 0
 fi
 
 # --- 2. startup/resume → new process ---
-# A resumed conversation: the sessions its previous process left suspended
-# (hooks/workflow-cleanup.sh) — roots only; resume() of a root names its sub-agents.
+# A resumed conversation picks up its own sessions — suspended by the previous
+# process's SessionEnd (hooks/workflow-cleanup.sh) or left by a crash — with
+# their sub-trees: the same conversation id makes them this process's by right.
+# Without the CLI: list the suspended roots for an explicit resume().
 if [ "$SOURCE" = "resume" ] && [ -n "$CONVERSATION" ]; then
+  if PICKED=$(session_cli pickup "$STATE_DIR" "$CONVERSATION" "$PPID") && [ -n "$PICKED" ]; then
+    echo "$PICKED$ZED_SUFFIX"
+    exit 0
+  fi
   SUSPENDED=$(jq -r --arg conv "$CONVERSATION" '
     select(.claude_session_id == $conv and (.stack | length > 0) and .suspended_at != null)
     | [.session_id, (.parent_session_id // ""), (.stack[.active_frame] | "\(.workflow) @ \(.current_state)")] | join("|")

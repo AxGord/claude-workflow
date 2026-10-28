@@ -15,6 +15,7 @@ import {
   type SessionState,
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
+import { RESUME_TOOL, subAgentLines, where } from "./takeover.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -171,14 +172,6 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
   return parts.join("\n");
 }
 
-const RESUME_TOOL = "mcp__plugin_workflow_wf__resume";
-
-/** `workflow @ state` of an active session. */
-function where(s: SessionState): string {
-  const f = s.stack[s.active_frame];
-  return `${f.workflow} @ ${f.current_state}`;
-}
-
 /**
  * What `resume` prints: the session's status, then the suspended sub-agent
  * sessions below it — agent → session → state — and the message that wakes
@@ -194,19 +187,20 @@ export function formatResume(result: ResumeResult): string {
     parts.push(
       "",
       "SUSPENDED SUB-AGENT SESSIONS — wake each agent (agent → session → state), with the message below it:",
+      ...subAgentLines(children, RESUME_TOOL, "  "),
+      "",
+      "A session whose agent cannot be woken: abort({ session_id, force: true }).",
     );
-    for (const c of children) {
-      const agent =
-        c.agent_id ?? "(not linked — find the agent by its task; link_agent records it)";
-      const exec = c.running_exec ? ` [exec in flight: ${c.running_exec.state}]` : "";
-      parts.push(`  ${agent} → ${c.session_id} → ${where(c)}${exec}`);
-      parts.push(
-        `    SendMessage({ to: "${c.agent_id ?? "<agent>"}", message: "Continue: call ${RESUME_TOOL}({ session_id: '${c.session_id}' }) — your own session, NOT start() — then carry on from the state it returns." })`,
-      );
-    }
-    parts.push("", "A session whose agent cannot be woken: abort({ session_id, force: true }).");
   }
   return parts.join("\n");
+}
+
+/** A step a previous server left running, finished on this process's first call to its session. */
+function formatAdopted(status: StatusResult): string {
+  return [
+    "EXEC IN FLIGHT TAKEN OVER — the step a previous server left running is finished and routed:",
+    formatStatus(status, { showSessionId: true, forceFullPrompt: true }),
+  ].join("\n");
 }
 
 // Claude Code treats an MCP tool as read-only only via readOnlyHint; without
@@ -369,6 +363,11 @@ export function registerTools(
     async args => {
       try {
         const sid = engine.resolveSessionId(args.session_id);
+        // checked outside the queue first: status must not wait behind this server's own exec
+        if (args.key === undefined && engine.hasOrphanedExec(sid)) {
+          const adopted = await serialized(sid, () => engine.adoptOrphanedExec(sid));
+          if (adopted) return { content: [{ type: "text", text: formatAdopted(adopted) }] };
+        }
         const status = engine.getStatus(sid);
         if (args.key !== undefined)
           return {
@@ -437,6 +436,11 @@ export function registerTools(
           const sid = engine.resolveSessionId(args.session_id);
           engine.assertNotSuspended(sid);
           const warning = engine.assertOwnership(sid, args.force);
+          const adopted = await engine.adoptOrphanedExec(sid);
+          if (adopted) {
+            const text = `${warning ? warning + "\n\n" : ""}${formatAdopted(adopted)}\n\nTransition "${args.transition}" was NOT taken — the session moved on; choose from the state above.`;
+            return { content: [{ type: "text", text }], isError: true };
+          }
           const status = await engine.transition(sid, args.transition, args.actor);
           const text = (warning ? warning + "\n\n" : "") + formatStatus(status);
           return { content: [{ type: "text", text }] };
