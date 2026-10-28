@@ -416,7 +416,7 @@ describe("suspend / resume", () => {
     });
 
     it("picked up by the hook: a transition() first finishes the exec and is not taken", async () => {
-      const m = mount({ w: gate("echo out; exit 3") });
+      const m = mount({ w: gate("sleep 0.5; echo out; exit 3") });
       const { sessionId, first } = await startGate(m);
       await first;
       await pickUp(m, sessionId);
