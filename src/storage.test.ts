@@ -179,3 +179,27 @@ describe("Storage ledger", () => {
     }
   });
 });
+
+describe("Storage.update", () => {
+  it("changes the stored session under its lock; null writes nothing; an absent session leaves no file", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-update-"));
+    try {
+      const storage = new Storage(dir);
+      expect(await storage.update("ghost", cur => cur)).toBeNull();
+      expect(storage.list()).toEqual([]);
+      await storage.write("a", active("a", "t1"));
+      const seen: Array<SessionState | null> = [];
+      expect(await storage.update("a", cur => { seen.push(cur); return null; })).toBeNull();
+      expect(seen.map(s => s?.updated_at)).toEqual(["t1"]);
+      expect(storage.read("a")!.updated_at).toBe("t1");
+      await storage.update("a", cur => ({ ...cur!, updated_at: "t2" }));
+      expect(storage.read("a")!.updated_at).toBe("t2");
+      // concurrent writers of one session wait for the lock instead of failing
+      await Promise.all(Array.from({ length: 20 }, (_, i) =>
+        i % 2 ? storage.write("a", active("a", `w${i}`)) : storage.update("a", cur => ({ ...cur!, context: { n: i } }))));
+      expect(storage.read("a")!.session_id).toBe("a");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -10,8 +10,10 @@ import type {
   WorkflowOverrides,
   ActionResult,
   SessionOutcome,
+  PriorityLevel,
 } from "./types.js";
-import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS, KEEP_TERMINAL_SESSIONS } from "./types.js";
+import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS, KEEP_TERMINAL_SESSIONS, DEFAULT_PRIORITY_LEVEL, PriorityLevelSchema } from "./types.js";
+import { projectRoot } from "./pool.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { Executor, ExecContext } from "./executor.js";
@@ -138,8 +140,15 @@ export class Engine {
     }
   }
 
-  public async start(workflowName: string, actor?: string, parentSessionId?: string, cwd?: string): Promise<StatusResult> {
+  public async start(
+    workflowName: string,
+    actor?: string,
+    parentSessionId?: string,
+    cwd?: string,
+    priority?: PriorityLevel,
+  ): Promise<StatusResult> {
     if (cwd !== undefined) Engine._assertSessionCwd(cwd);
+    if (priority !== undefined) PriorityLevelSchema.parse(priority);
 
     // Guard: prevent duplicate top-level sessions from the same Claude Code process.
     // Sub-agent sessions (with parent_session_id) are exempt — they run alongside the parent.
@@ -184,13 +193,15 @@ export class Engine {
     };
 
     const globalKey = `${workflowName}:${wf.initial}`;
+    const parent = parentSessionId ? this._storage.read(parentSessionId) : null;
     const rootSessionId = parentSessionId
-      ? rootSessionIdOf(this._storage.read(parentSessionId) ?? { session_id: parentSessionId })
+      ? rootSessionIdOf(parent ?? { session_id: parentSessionId })
       : sessionId;
     const session: SessionState = {
       session_id: sessionId,
       ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
       root_session_id: rootSessionId,
+      priority: priority ?? parent?.priority ?? DEFAULT_PRIORITY_LEVEL,
       stack: [frame],
       active_frame: 0,
       started_at: now,
@@ -397,6 +408,31 @@ export class Engine {
 
     // If this was a child session, try to unblock the parent's pending completion
     if (session.parent_session_id) await this.retryPendingPop(session.parent_session_id);
+  }
+
+  /**
+   * Set the priority level of a session and of its active descendants (a
+   * child started later inherits it), then re-rank their waiting pool
+   * entries at once; running leases are not touched. Runs outside the
+   * session's queue: an exec of it may be waiting for the very lease this
+   * re-ranks — the action chain keeps the level it finds after the exec,
+   * and each session is changed under its file lock, so a session that ended
+   * meanwhile stays ended.
+   */
+  public async setPriority(sessionId: string, level: PriorityLevel): Promise<{ sessions: string[]; moved: number }> {
+    PriorityLevelSchema.parse(level);
+    const session = this._storage.read(sessionId);
+    if (!session) throw new Error(`Session "${sessionId}" not found`);
+    if (session.stack.length === 0) throw new Error(`Session "${sessionId}" has ended (${session.outcome ?? "completed"})`);
+    const tree = [session];
+    for (let i = 0; i < tree.length; i++) tree.push(...this._getActiveChildren(tree[i].session_id));
+    const ids: string[] = [];
+    for (const { session_id: id } of tree) {
+      const set = await this._storage.update(id, cur => (cur && cur.stack.length > 0 ? { ...cur, priority: level } : null));
+      if (set) ids.push(id);
+    }
+    const moved = await this._executor.pool.reprioritize(new Set(ids), level);
+    return { sessions: ids, moved };
   }
 
   public getStatus(sessionId: string): StatusResult {
@@ -643,7 +679,8 @@ export class Engine {
     }
 
     const vars = this._buildTemplateVars(session);
-    const result = await this._executor.execute(state, vars, this._execContext(session));
+    const execCtx = this._execContext(session);
+    const result = await this._executor.execute(state, vars, execCtx);
 
     // An exec can run for seconds, and other writers land meanwhile: a
     // parent's abort cascade (writing the pre-exec copy back would resurrect
@@ -714,6 +751,9 @@ export class Engine {
       ...(result.type === "exec" && result.exit_code !== undefined ? { exit_code: result.exit_code } : {}),
       ...(result.duration_ms !== undefined ? { duration_ms: result.duration_ms } : {}),
       ...(result.wait_ms !== undefined ? { wait_ms: result.wait_ms } : {}),
+      ...(result.threads_granted !== undefined ? { threads_granted: result.threads_granted } : {}),
+      // The time-model key of a leased step: project (the session cwd's git root) | workflow | state.
+      ...(state.resource ? { step_key: `${execCtx.project}|${frame.workflow}|${frame.current_state}` } : {}),
     };
 
     const globalKey = `${frame.workflow}:${targetStateName}`;
@@ -739,6 +779,8 @@ export class Engine {
     let updated: SessionState = {
       ...session,
       context: ctx,
+      // set_priority runs outside the session's queue: the level written during the exec wins.
+      ...(current.priority ? { priority: current.priority } : {}),
       stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
       updated_at: now,
       history: [...session.history, historyEntry],
@@ -1027,12 +1069,16 @@ export class Engine {
   }
 
   private _execContext(session: SessionState): ExecContext {
-    const cwd = session.context.cwd;
+    const cwd = typeof session.context.cwd === "string" ? session.context.cwd : undefined;
+    const frame = session.stack[session.active_frame];
     return {
       sessionId: session.session_id,
       parentSessionId: session.parent_session_id,
       rootSessionId: rootSessionIdOf(session),
-      cwd: typeof cwd === "string" ? cwd : undefined,
+      cwd,
+      level: session.priority ?? DEFAULT_PRIORITY_LEVEL,
+      project: projectRoot(cwd ?? process.cwd()),
+      step: `${frame.workflow}/${frame.current_state}`,
     };
   }
 

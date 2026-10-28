@@ -5,9 +5,10 @@ import type { SessionState } from "./types.js";
 import { LOCK_STALE_MS } from "./types.js";
 
 export const LEDGER_FILE = "ledger.jsonl";
-// Unlike a session file, the ledger is shared by every session and process:
-// a contended append waits its turn instead of failing.
-const LEDGER_LOCK_RETRIES = { retries: 100, minTimeout: 5, maxTimeout: 50, randomize: true };
+// A contended lock waits its turn instead of failing: a session file is
+// written by its own transitions and, outside their queue, by set_priority;
+// the ledger is shared by every session and process.
+const LOCK_RETRIES = { retries: 100, minTimeout: 5, maxTimeout: 50, randomize: true };
 
 export class Storage {
   private readonly _stateDir: string;
@@ -30,21 +31,41 @@ export class Storage {
   }
 
   public async write(sessionId: string, state: SessionState): Promise<void> {
-    const fp = this._filePath(sessionId);
-    const dir = path.dirname(fp);
-    fs.mkdirSync(dir, { recursive: true });
+    await this._locked(sessionId, () => state);
+  }
 
-    // Create file if it doesn't exist (lockfile needs it)
-    if (!fs.existsSync(fp)) {
-      fs.writeFileSync(fp, "{}");
-    }
+  /**
+   * Read-modify-write under the session file's lock: `change` gets the
+   * session as stored now (null when there is none) and returns the state to
+   * write, or null to leave it as it is; it must be pure (an absent session
+   * may see it called twice). For a writer outside the session's transition
+   * queue, whose earlier snapshot may be stale by the time it writes.
+   */
+  public async update(sessionId: string, change: (current: SessionState | null) => SessionState | null): Promise<SessionState | null> {
+    if (!fs.existsSync(this._filePath(sessionId)) && change(null) === null) return null;
+    return this._locked(sessionId, () => {
+      const current = this.read(sessionId);
+      // write()'s `{}` placeholder of a session being created is no session yet
+      return change(current?.session_id ? current : null);
+    });
+  }
+
+  private async _locked(sessionId: string, next: () => SessionState | null): Promise<SessionState | null> {
+    const fp = this._filePath(sessionId);
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    // proper-lockfile locks an existing file; update() reads this placeholder as no session.
+    if (!fs.existsSync(fp)) fs.writeFileSync(fp, "{}");
 
     let release: (() => Promise<void>) | undefined;
     try {
-      release = await lockfile.lock(fp, { stale: LOCK_STALE_MS });
-      const tmp = fp + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-      fs.renameSync(tmp, fp);
+      release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: LOCK_RETRIES });
+      const state = next();
+      if (state) {
+        const tmp = fp + ".tmp";
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+        fs.renameSync(tmp, fp);
+      }
+      return state;
     } finally {
       if (release) await release();
     }
@@ -62,7 +83,7 @@ export class Storage {
 
     let release: (() => Promise<void>) | undefined;
     try {
-      release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: LEDGER_LOCK_RETRIES });
+      release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: LOCK_RETRIES });
       fs.appendFileSync(fp, JSON.stringify(entry) + "\n");
     } finally {
       if (release) await release();

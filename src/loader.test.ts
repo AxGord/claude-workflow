@@ -257,6 +257,25 @@ describe("Loader strict schema", () => {
     expect(errors).toContain('state "f" resource is for exec states');
   });
 
+  it("resource: threads { min, max } with wait_full; wait_full only beside it", () => {
+    const exec = (resource: object) => ({
+      initial: "r",
+      states: { r: { type: "exec", command: "true", resource, on_success: "e", on_error: "e" }, e: { terminal: true } },
+    });
+    const { loader, errors } = loadWithErrors({
+      flex: exec({ threads: { min: 2, max: 8 }, wait_full: 30, priority: 1 }),
+      flexBudget: exec({ threads: { min: 4, max: "budget" } }),
+      inverted: exec({ threads: { min: 8, max: 2 } }),
+      noMin: exec({ threads: { max: 8 } }),
+      waitFixed: exec({ threads: 4, wait_full: 30 }),
+      extraKey: exec({ threads: { min: 1, max: 2, avg: 1 } }),
+    });
+    expect(loader.get("flex")!.states.r.resource).toEqual({ threads: { min: 2, max: 8 }, wait_full: 30, priority: 1 });
+    expect(loader.get("flexBudget")!.states.r.resource).toEqual({ threads: { min: 4, max: "budget" } });
+    for (const name of ["inverted", "noMin", "waitFixed", "extraKey"]) expect(loader.get(name)).toBeUndefined();
+    expect(errors).toMatch(/states\.r\.resource: wait_full needs threads: \{ min, max \}/);
+  });
+
   it("on_exhausted must name a known state and needs max_visits", () => {
     const wf = (b: object) => ({
       initial: "a",

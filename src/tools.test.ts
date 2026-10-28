@@ -184,9 +184,9 @@ describe("registerTools annotations", () => {
     };
     registerTools(server as never, {} as never, {} as never, {} as never, {} as never);
 
-    const readOnly = ["list", "start", "status", "transition", "context_set", "sessions"];
+    const readOnly = ["list", "start", "status", "transition", "context_set", "sessions", "pool_status"];
     // Mutating tools keep their confirmation prompt
-    const confirmed = ["modify", "create", "delete", "abort"];
+    const confirmed = ["modify", "create", "delete", "abort", "set_priority"];
     expect([...annotations.keys()].sort()).toEqual([...readOnly, ...confirmed].sort());
     for (const name of readOnly) expect(annotations.get(name)).toEqual({ readOnlyHint: true });
     for (const name of confirmed) expect(annotations.get(name)).toBeUndefined();

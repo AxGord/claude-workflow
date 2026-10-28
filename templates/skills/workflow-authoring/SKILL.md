@@ -146,14 +146,16 @@ Exec env always includes `WF_PLUGIN_ROOT` — the plugin root (dir holding
 Reference bundled scripts as `command: "sh \"$WF_PLUGIN_ROOT/scripts/foo.sh\""`
 — portable across install paths, no per-machine setup. A state's own `env:`
 key of the same name overrides it. It also carries `WF_SESSION_ID`,
-`WF_PARENT_SESSION_ID` (empty at the root) and `WF_ROOT_SESSION_ID`; a
+`WF_PARENT_SESSION_ID` (empty at the root), `WF_ROOT_SESSION_ID`,
+`WF_PRIORITY` / `WF_PRIORITY_LEVEL` (the session level, below); a
 `resource:` exec with threads also gets `WF_THREADS` (below).
 
 An exec without `cwd:` runs in the session's cwd — a sub-agent started with
 `start(cwd: <worktree>)` runs its execs in the worktree, not the server's tree;
 a relative `cwd:` resolves against it. Each exec's history entry carries
-`exit_code` and `duration_ms` (plus `wait_ms` for a `resource:` exec); every session end appends one line to
-`$STATE_DIR/ledger.jsonl`.
+`exit_code` and `duration_ms` (plus `wait_ms`, `threads_granted` and
+`step_key` = `<project git root>|<workflow>|<state>` for a `resource:` exec);
+every session end appends one line to `$STATE_DIR/ledger.jsonl` with them.
 
 Unknown keys are a LOAD ERROR (strict schema): a typo like `comand:` drops
 the whole workflow, and stderr names the file, state, key and nearest known key.
@@ -197,13 +199,16 @@ run_suite:
 
 - Admission: `held + N <= budget` and, beside a live lease, `held + N + external <= budget` — external load never blocks an EMPTY pool. `budget` defaults to performance cores − 2; `external = max(0, load − held − load_threshold)` is load not taken through the pool, `load` = busy cpus measured from cpu ticks over the window since the pool's previous pass (loadavg1 only before a window exists — it lags a minute), `load_threshold` (default 2) is the noise floor. Both settings live in `<pool dir>/config.json`
 - Strict queue order: priority descending, then arrival — a smaller task never overtakes the head, so big tasks do not starve. `threads` above the budget counts as the budget: it waits for an empty machine and runs alone
+- **Priority = session level + step `priority`**: levels `low` −100, `normal` 0, `high` 100, `urgent` 200 — `start({ priority })`, inherited by child sessions, default `normal`; keep a step's own `priority` under ±100 so it only fine-tunes within the level. `set_priority({ session_id, level })` changes a session and its descendants on the fly and re-ranks their WAITING entries at once (running leases keep theirs — no preemption). Every exec gets `WF_PRIORITY` (the sum) and `WF_PRIORITY_LEVEL`; `wf-run` without `--priority` takes them, so a nested `wf-run` queues at its session's level. Old level kept in two windows: an exec between building its context and joining the queue (waits at the old level until granted), and a `wf-run` inside an exec started before the change (its `WF_PRIORITY` is from the spawn). Call `set_priority` only on the user's request — never raise your own session or change another project's
+- **Flexible threads**: `threads: { min: A, max: B|budget }` (+ `wait_full: SEC`, default 0) / `wf-run --threads A-B [--wait-full SEC]` — gets B when B fits; otherwise, once `wait_full` has passed, everything free if it is ≥ A. While it waits (for B inside the window, for A after it) it closes the threads to those behind it like any waiter. `WF_THREADS` = what was granted — read it, never assume B. For work that scales with cores (test suites, parallel builds) where an earlier start beats a wider one
+- `wf-run --status` / the `pool_status` tool: one line per lease and waiter — pid, held/wanted threads and locks, priority + level, since when, project (git root), session, step, label
 - `threads: budget` (the only non-number value, strict) asks for the whole budget as `config.json` sets it when the request is made (a later raise does not grow a waiting or held lease) — no hardcoded core count; `wf-run --threads budget` is the same
 - **The lease counts threads, it does not enforce them**: compilers, test runners and optimizers take every core by default. The command gets `WF_THREADS` = the threads granted (after `budget`/the clamp) — pass it on: `make -j"$WF_THREADS"`, `vitest --maxWorkers="$WF_THREADS"`, `HXCPP_COMPILE_THREADS="$WF_THREADS"`, `APQ_ORACLE_PARALLEL="$WF_THREADS"`. Env only (no template var); absent for a light exec, a lock-only lease and `--efficiency`
 - `locks: [NAME, …]` (one word each: `port:3000`) — machine-wide mutual exclusion by name, for dev servers / bridges / devices on fixed ports. `threads` is optional beside `locks` (at least one of the two; lock-only takes no threads and is never blocked by load). Threads and locks are granted ATOMICALLY (all or nothing, nothing held while waiting → no deadlock); a lock goes to its waiters in queue order, and a waiter blocked by a held lock claims no threads, so a long-held lock does not stall the queue
 - `wait_timeout` (seconds) expired → exit **75** (busy), routed through `cases`/`on_error` like any exit; without it the exec waits until granted or aborted (abort withdraws the wait)
 - `timeout` counts the run, not the wait; the history entry and the ledger record `wait_ms` beside `duration_ms`; `{{wait_ms}}` is a template var
 - Foreground exec only: `resource:` with `background: true` (or on a fetch) is a load error
-- A shell step inside a larger command, or an agent's own Bash call, uses the CLI instead: `"$WF_PLUGIN_ROOT/scripts/wf-run" --threads 6|budget [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] -- <cmd> [args…]` — same pool and admission, the child runs in its own process group, SIGINT/SIGTERM/SIGHUP are forwarded, the exit code is the child's (75 = busy), the child gets `WF_THREADS`; `--lock` without `--threads` is lock-only. `wf-run --status` prints leases, held locks and the queue; a SIGKILLed `wf-run` keeps its lease while its child's process group runs; `--efficiency` (macOS) runs the command on efficiency cores via `taskpolicy -b`, outside the budget
+- A shell step inside a larger command, or an agent's own Bash call, uses the CLI instead: `"$WF_PLUGIN_ROOT/scripts/wf-run" --threads 6|budget [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] -- <cmd> [args…]` — same pool and admission, the child runs in its own process group, SIGINT/SIGTERM/SIGHUP are forwarded, the exit code is the child's (75 = busy), the child gets `WF_THREADS`; `--lock` without `--threads` is lock-only; a SIGKILLed `wf-run` keeps its lease while its child's process group runs; `--efficiency` (macOS) runs the command on efficiency cores via `taskpolicy -b`, outside the budget
 
 ### Terminal States & Outcomes
 

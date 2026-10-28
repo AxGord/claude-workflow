@@ -20,6 +20,12 @@ export class InMemoryStorage implements Storage {
     this._data.set(sessionId, state);
   }
 
+  async update(sessionId: string, change: (current: SessionState | null) => SessionState | null): Promise<SessionState | null> {
+    const next = change(this.read(sessionId));
+    if (next) this._data.set(sessionId, next);
+    return next;
+  }
+
   list(): string[] {
     return Array.from(this._data.keys());
   }

@@ -19,6 +19,10 @@ export interface LedgerExec {
   readonly exit_code?: number;
   /** Wait for a pool lease before the run (`resource:` execs). */
   readonly wait_ms?: number;
+  /** Threads the lease granted (`resource:` execs that got one). */
+  readonly threads_granted?: number;
+  /** `<project>|<workflow>|<state>` of a `resource:` exec: what a time model keys its runs by. */
+  readonly step_key?: string;
 }
 
 /** One line of `$STATE_DIR/ledger.jsonl`: a finished session's accounting. */
@@ -48,6 +52,8 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
       duration_ms: h.duration_ms!,
       ...(h.exit_code !== undefined ? { exit_code: h.exit_code } : {}),
       ...(h.wait_ms !== undefined ? { wait_ms: h.wait_ms } : {}),
+      ...(h.threads_granted !== undefined ? { threads_granted: h.threads_granted } : {}),
+      ...(h.step_key !== undefined ? { step_key: h.step_key } : {}),
     }));
   return {
     session_id: session.session_id,

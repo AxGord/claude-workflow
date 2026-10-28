@@ -8,9 +8,29 @@ export const RESOURCE_THREADS_BUDGET = "budget";
 /** A named lock: one word, no whitespace (`port:3000`, `ios-simulator`). */
 export const LOCK_NAME_PATTERN = /^\S+$/;
 
+/**
+ * A session's priority level and the pool priority it stands for. A lease's
+ * priority is its session's level plus the step's own `priority`, so a step
+ * fine-tunes within its level as long as it stays under the level spacing.
+ */
+export const PRIORITY_LEVELS = { low: -100, normal: 0, high: 100, urgent: 200 } as const;
+export type PriorityLevel = keyof typeof PRIORITY_LEVELS;
+export const DEFAULT_PRIORITY_LEVEL: PriorityLevel = "normal";
+export const PriorityLevelSchema = z.enum(["low", "normal", "high", "urgent"]);
+
+const ThreadCountSchema = z.union([z.number().int().positive(), z.literal(RESOURCE_THREADS_BUDGET)]);
+
+/** `threads: { min, max }`: take what is free, at least `min`, at most `max`. */
+export const FlexibleThreadsSchema = z.object({
+  min: z.number().int().positive(),
+  max: ThreadCountSchema,
+}).strict().refine(t => t.max === RESOURCE_THREADS_BUDGET || t.min <= t.max, { message: "threads.min must not exceed threads.max" });
+
 /** The keys of `resource:` (the loader names the nearest one for a typo). */
 export const ResourceObjectSchema = z.object({
-  threads: z.union([z.number().int().positive(), z.literal(RESOURCE_THREADS_BUDGET)]).optional(),
+  threads: z.union([ThreadCountSchema, FlexibleThreadsSchema]).optional(),
+  // flexible threads only: wait this long for the full max before taking what is free
+  wait_full: z.number().nonnegative().optional(),
   // machine-wide mutual exclusion by name, granted atomically with the threads
   locks: z.array(z.string().regex(LOCK_NAME_PATTERN, "a lock name is one word without whitespace")).nonempty().optional(),
   priority: z.number().int().optional(),
@@ -20,6 +40,9 @@ export const ResourceObjectSchema = z.object({
 export const ResourceSchema = ResourceObjectSchema.refine(
   r => r.threads !== undefined || r.locks !== undefined,
   { message: "resource needs threads, locks, or both" },
+).refine(
+  r => r.wait_full === undefined || typeof r.threads === "object",
+  { message: "wait_full needs threads: { min, max }" },
 );
 
 // Single source of truth for state fields. Tool schemas derive from this.
@@ -106,6 +129,8 @@ export interface ActionResult {
   readonly duration_ms?: number;
   /** Time spent waiting for a pool lease (`resource:` execs); not part of duration_ms. */
   readonly wait_ms?: number;
+  /** Threads the pool granted a `resource:` exec (absent when it got no lease). */
+  readonly threads_granted?: number;
 }
 
 // --- Session State (persisted as JSON) ---
@@ -130,6 +155,9 @@ export interface HistoryEntry {
   readonly exit_code?: number;
   readonly duration_ms?: number;
   readonly wait_ms?: number;
+  readonly threads_granted?: number;
+  /** A leased exec's step: `<project>|<workflow>|<state>` (project = the session cwd's git root). */
+  readonly step_key?: string;
 }
 
 export type SessionOutcome = "completed" | "failed" | "abandoned";
@@ -138,6 +166,8 @@ export interface SessionState {
   readonly session_id: string;
   readonly parent_session_id?: string;
   readonly root_session_id?: string;
+  /** Inherited from the parent at start; `set_priority` changes it for the session and its descendants. Absent = normal. */
+  readonly priority?: PriorityLevel;
   readonly stack: StackFrame[];
   readonly active_frame: number;
   readonly started_at: string;
@@ -168,11 +198,15 @@ export const START_CWD_DESCRIPTION =
   "Absolute path of an existing directory the session works in (e.g. a sub-agent's git worktree); "
   + "exec states without their own cwd run there. Default: the server's cwd";
 
+export const START_PRIORITY_DESCRIPTION =
+  "Priority level of the session's pool leases: low | normal | high | urgent. Default: the parent session's level, else normal";
+
 export const WorkflowStartInputSchema = z.object({
   workflow: z.string().optional().describe("Name of the workflow to start. Defaults to \"master\""),
   actor: z.string().optional().describe("Identity of the agent performing this action"),
   parent_session_id: z.string().optional().describe("Parent session ID for sub-agent tracking"),
   cwd: z.string().optional().describe(START_CWD_DESCRIPTION),
+  priority: PriorityLevelSchema.optional().describe(START_PRIORITY_DESCRIPTION),
 });
 
 export const WorkflowTransitionInputSchema = z.object({

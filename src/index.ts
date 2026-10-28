@@ -60,7 +60,7 @@ const server = new McpServer({
 });
 
 // Register all tools
-registerTools(server, engine, modifier, loader, storage);
+registerTools(server, engine, modifier, loader, storage, executor.pool);
 // Written by hooks/workflow-start.sh on /clear and /compact (keyed by the
 // Claude Code pid, which is this server's parent).
 setContextEpochFile(path.join(STATE_DIR, `context-epoch-${process.ppid}`));

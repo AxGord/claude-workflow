@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StateDefinition, ActionResult } from "./types.js";
-import { RESOURCE_THREADS_BUDGET } from "./types.js";
+import { DEFAULT_PRIORITY_LEVEL, RESOURCE_THREADS_BUDGET, type PriorityLevel } from "./types.js";
 import { render } from "./template.js";
 import { killProcessGroup } from "./process.js";
-import { EX_TEMPFAIL, Pool, describeRequest, resolvePoolDir } from "./pool.js";
+import { EX_TEMPFAIL, Pool, describeRequest, levelPriority, resolvePoolDir } from "./pool.js";
 import type { AcquireResult } from "./pool.js";
 
 // Plugin root (the dir holding templates/ and scripts/) — injected into every
@@ -36,6 +36,12 @@ export interface ExecContext {
   readonly parentSessionId?: string;
   readonly rootSessionId: string;
   readonly cwd?: string;
+  /** The session's priority level: a lease's priority is its value plus the step's `priority`. */
+  readonly level?: PriorityLevel;
+  /** The git root of the session cwd (the `project` of a lease and of its step key). */
+  readonly project?: string;
+  /** The running step, `workflow/state`. */
+  readonly step?: string;
 }
 
 export { killProcessGroup };
@@ -50,11 +56,11 @@ export class Executor {
   private readonly _running = new Map<string, Set<number>>();
   // Execs still queued for a pool lease, per session — abort withdraws them.
   private readonly _waiting = new Map<string, Set<AbortController>>();
-  private readonly _pool: Pool;
+  /** The machine-wide thread pool `resource:` execs lease from. */
+  readonly pool: Pool;
 
-  /** `pool`: the machine-wide thread pool `resource:` execs lease from. */
   constructor(pool: Pool = new Pool(resolvePoolDir())) {
-    this._pool = pool;
+    this.pool = pool;
   }
 
   async execute(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
@@ -86,11 +92,17 @@ export class Executor {
   /**
    * An exec with `resource:` waits for a pool lease (the same admission as
    * `wf-run`), runs with `WF_THREADS` = the threads granted, and releases it.
-   * No lease within `wait_timeout` exits 75.
+   * No lease within `wait_timeout` exits 75. The lease's priority is the
+   * session level's plus the step's own.
    */
   private async _execLeased(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
     const resource = state.resource!;
-    const threads = resource.threads === RESOURCE_THREADS_BUDGET ? this._pool.config().budget : (resource.threads ?? 0);
+    const budget = (n: number | typeof RESOURCE_THREADS_BUDGET): number => (n === RESOURCE_THREADS_BUDGET ? this.pool.config().budget : n);
+    const asked = resource.threads;
+    const flexible = typeof asked === "object" ? asked : undefined;
+    const threads = typeof asked === "object" ? budget(asked.max) : asked === undefined ? 0 : budget(asked);
+    // A max the budget clamps below the min still runs: the min clamps with it.
+    const minThreads = flexible ? Math.min(flexible.min, threads) : undefined;
     const command = render(state.command!, vars);
     const ac = new AbortController();
     const sessionId = ctx?.sessionId ?? "";
@@ -99,13 +111,18 @@ export class Executor {
     waits.add(ac);
     let got: AcquireResult;
     try {
-      got = await this._pool.acquire(
+      got = await this.pool.acquire(
         {
           threads,
+          minThreads,
+          waitFullMs: flexible && resource.wait_full !== undefined ? resource.wait_full * 1000 : undefined,
           locks: resource.locks,
-          priority: resource.priority,
+          priority: Executor._priority(state, ctx),
+          level: ctx?.level,
           label: command.slice(0, LEASE_LABEL_MAX),
           cwd: this._cwd(state, vars, ctx) ?? process.cwd(),
+          project: ctx?.project,
+          step: ctx?.step,
           sessionId,
         },
         {
@@ -125,7 +142,7 @@ export class Executor {
     }
     if (got.status !== "granted") {
       const busy = got.status === "timeout"
-        ? `busy: ${describeRequest({ threads, locks: resource.locks }, got.view.budget)} not free within ${resource.wait_timeout}s `
+        ? `busy: ${describeRequest({ threads, min_threads: minThreads, locks: resource.locks }, got.view.budget)} not free within ${resource.wait_timeout}s `
           + `(held ${got.view.held}/${got.view.budget}, external ${got.view.external.toFixed(1)})`
         : ABORTED_WAIT;
       return {
@@ -140,10 +157,15 @@ export class Executor {
     }
     try {
       const leased = got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : undefined;
-      return { ...(await this._exec(state, vars, ctx, leased, (pgid) => got.lease.attach(pgid))), wait_ms };
+      return { ...(await this._exec(state, vars, ctx, leased, (pgid) => got.lease.attach(pgid))), wait_ms, threads_granted: got.lease.threads };
     } finally {
       await got.lease.release();
     }
+  }
+
+  /** A session exec's pool priority (`WF_PRIORITY`): its level's value plus the step's `resource.priority`. */
+  private static _priority(state: StateDefinition, ctx?: ExecContext): number {
+    return levelPriority(ctx?.level ?? DEFAULT_PRIORITY_LEVEL, state.resource?.priority ?? 0);
   }
 
   private _track(sessionId: string | undefined, pid: number | undefined, add: boolean): void {
@@ -168,9 +190,11 @@ export class Executor {
   /**
    * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT, the
    * session ids (WF_SESSION_ID, WF_PARENT_SESSION_ID — empty at the root,
-   * WF_ROOT_SESSION_ID) and, under a lease with threads, WF_THREADS —
-   * overridable by the state's own rendered env: entries. An inherited
-   * WF_THREADS is dropped: it is set only for this exec's own lease.
+   * WF_ROOT_SESSION_ID, WF_PRIORITY = the session level's priority plus the
+   * step's, WF_PRIORITY_LEVEL = that level) and, under a lease with threads,
+   * WF_THREADS — overridable by the state's own rendered env: entries. An
+   * inherited WF_THREADS / WF_PRIORITY / WF_PRIORITY_LEVEL is dropped: they
+   * describe this exec's own session and lease only.
    * Single source for both foreground and background spawns so the injection
    * contract can't drift.
    */
@@ -188,9 +212,11 @@ export class Executor {
           WF_SESSION_ID: ctx.sessionId,
           WF_PARENT_SESSION_ID: ctx.parentSessionId ?? "",
           WF_ROOT_SESSION_ID: ctx.rootSessionId,
+          WF_PRIORITY: String(Executor._priority(state, ctx)),
+          WF_PRIORITY_LEVEL: ctx.level ?? DEFAULT_PRIORITY_LEVEL,
         }
       : undefined;
-    const { WF_THREADS: _inherited, ...base } = process.env;
+    const { WF_THREADS: _threads, WF_PRIORITY: _priority, WF_PRIORITY_LEVEL: _level, ...base } = process.env;
     return { ...base, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...leased, ...envVars };
   }
 

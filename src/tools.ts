@@ -5,7 +5,16 @@ import type { Engine, StatusResult } from "./engine.js";
 import type { Modifier } from "./modifier.js";
 import type { Loader } from "./loader.js";
 import type { Storage } from "./storage.js";
-import { StateDefinitionSchema, START_CWD_DESCRIPTION, STATUS_KEY_DESCRIPTION, type SessionState } from "./types.js";
+import {
+  PriorityLevelSchema,
+  PRIORITY_LEVELS,
+  StateDefinitionSchema,
+  START_CWD_DESCRIPTION,
+  START_PRIORITY_DESCRIPTION,
+  STATUS_KEY_DESCRIPTION,
+  type SessionState,
+} from "./types.js";
+import { Pool, formatStatus as formatPoolStatus, resolvePoolDir } from "./pool.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -161,7 +170,8 @@ export function registerTools(
   engine: Engine,
   modifier: Modifier,
   loader: Loader,
-  storage: Storage
+  storage: Storage,
+  pool: Pool = new Pool(resolvePoolDir()),
 ): void {
   // ENGINE_STATE_ONLY also makes Claude Code treat these tools as
   // concurrency-safe, so a context_set + transition from one message may
@@ -226,10 +236,11 @@ export function registerTools(
       actor: z.string().optional().describe("Identity of the agent performing this action"),
       parent_session_id: z.string().optional().describe("Parent session ID for sub-agent tracking"),
       cwd: z.string().optional().describe(START_CWD_DESCRIPTION),
+      priority: PriorityLevelSchema.optional().describe(START_PRIORITY_DESCRIPTION),
     }).strict(),
   }, (args) => serialized(args.parent_session_id ? null : "start", async () => {
     try {
-      const status = await engine.start(args.workflow ?? "master", args.actor, args.parent_session_id, args.cwd);
+      const status = await engine.start(args.workflow ?? "master", args.actor, args.parent_session_id, args.cwd, args.priority);
       // No forceFullPrompt here: a digest_on_repeat initial state (master
       // route) digests on repeat start() calls in the same process — the
       // main ceremony saving. status() still always returns the full text.
@@ -506,5 +517,47 @@ export function registerTools(
     return {
       content: [{ type: "text", text: parts.join("\n") }],
     };
+  });
+
+  // 11. set_priority
+  // Outside the session queue: the session may be inside an exec that waits
+  // for the very lease this re-ranks.
+  const levels = Object.entries(PRIORITY_LEVELS).map(([l, v]) => `${l} ${v}`).join(", ");
+  server.registerTool("set_priority", {
+    description: "Call only on the user's request; never raise your own session or change another project's. "
+      + "Set the priority level of a session and its active descendants (later children inherit it). "
+      + `Their WAITING pool entries are re-ranked at once; running leases keep theirs (no preemption). Levels: ${levels}; `
+      + "a lease's priority = its session level + the step's own priority.",
+    inputSchema: z.object({
+      session_id: z.string().describe("Session identifier (any session, also another process's)"),
+      level: PriorityLevelSchema.describe("low | normal | high | urgent"),
+    }).strict(),
+  }, async (args) => {
+    try {
+      const { sessions, moved } = await engine.setPriority(args.session_id, args.level);
+      return {
+        content: [{
+          type: "text",
+          text: `Priority ${args.level} (${PRIORITY_LEVELS[args.level]}) set on ${sessions.join(", ")}; ${moved} waiting pool entr${moved === 1 ? "y" : "ies"} re-ranked.`,
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
+    }
+  });
+
+  // 12. pool_status
+  server.registerTool("pool_status", {
+    description: "The machine-wide thread pool, as `wf-run --status` shows it: budget and load, then one line per lease "
+      + "and per waiter (in admission order) — pid, threads/locks held or wanted, priority and level, since when, project, session, step, label. "
+      + "Runs one admission pass (reaps dead entries, may grant a waiting lease).",
+    annotations: ENGINE_STATE_ONLY,
+    inputSchema: z.object({}).strict(),
+  }, async () => {
+    try {
+      return { content: [{ type: "text", text: formatPoolStatus(await pool.measuredStatus(), pool.dir) }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
+    }
   });
 }

@@ -5,11 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { Pool, schedule, describeWait, type CpuTicks, type PoolEntry, type PoolProbes, type PoolState } from "./pool.js";
+import { Pool, schedule, describeWait, formatEntry, projectRoot, type CpuTicks, type PoolEntry, type PoolProbes, type PoolState } from "./pool.js";
+import { registerTools } from "./tools.js";
 import { isGroupAlive, isPidAlive } from "./process.js";
 import { Executor } from "./executor.js";
 import { Engine } from "./engine.js";
 import { InMemoryStorage, createTestLoader, cleanupDir } from "./test-helpers.js";
+import { Storage } from "./storage.js";
 import type { StateDefinition } from "./types.js";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -148,6 +150,78 @@ describe("schedule (one admission pass)", () => {
     const dead = entry(0, { pid: 666, locks: ["L"] });
     const w = entry(0, { locks: ["L"] });
     expect(ids(schedule({ leases: [dead], waiting: [w] }, cfg, 0, e => e.pid !== 666, 1).leases)).toEqual([w.id]);
+  });
+});
+
+describe("schedule: flexible threads", () => {
+  it("takes the threads that fit, at least its min, at once; below its min it waits and closes the threads", () => {
+    const held = entry(6);
+    const flex = entry(8, { min_threads: 2, full_until: 0 });
+    const v = schedule({ leases: [held], waiting: [flex] }, cfg, 0, alive, 1);
+    expect(v.leases.map(e => [e.id, e.threads, e.asked_threads])).toEqual([[held.id, 6, undefined], [flex.id, 4, 8]]);
+    expect(v.held).toBe(10);
+    const full = entry(9);
+    const small = entry(1);
+    const w = schedule({ leases: [full], waiting: [flex, small] }, cfg, 0, alive, 1);
+    expect(ids(w.leases)).toEqual([full.id]);
+    expect(ids(w.waiting)).toEqual([flex.id, small.id]);
+  });
+
+  it("inside its wait_full window it waits for its max and closes the threads behind it; after it, takes what fits", () => {
+    const held = entry(6);
+    const flex = entry(8, { min_threads: 2, full_until: 100 });
+    const small = entry(1);
+    const inWindow = schedule({ leases: [held], waiting: [flex, small] }, cfg, 0, alive, 50);
+    expect(ids(inWindow.leases)).toEqual([held.id]);
+    expect(ids(inWindow.waiting)).toEqual([flex.id, small.id]);
+    const freed = schedule({ leases: [], waiting: [flex] }, cfg, 0, alive, 50);
+    expect(freed.leases.map(e => [e.threads, e.full_until])).toEqual([[8, undefined]]);
+    const after = schedule({ leases: [held], waiting: [flex, small] }, cfg, 0, alive, 100);
+    expect(after.leases.map(e => [e.id, e.threads])).toEqual([[held.id, 6], [flex.id, 4]]);
+    expect(ids(after.waiting)).toEqual([small.id]);
+  });
+
+  it("external load and the budget bound a flexible grant; min = max is the fixed form", () => {
+    const held = entry(2);
+    const flex = entry(20, { min_threads: 3, full_until: 0 });
+    // budget 10, 2 leased, external 5 − 2 = 3: room for 5
+    expect(schedule({ leases: [held], waiting: [flex] }, cfg, 5, alive, 1).leases.map(e => e.threads)).toEqual([2, 5]);
+    // an empty pool ignores external load; the max clamps to the budget
+    expect(schedule({ leases: [], waiting: [flex] }, cfg, 50, alive, 1).leases.map(e => [e.threads, e.asked_threads])).toEqual([[10, 20]]);
+    const fixedLike = entry(4, { min_threads: 4, full_until: 0 });
+    expect(ids(schedule({ leases: [entry(8)], waiting: [fixedLike] }, cfg, 0, alive, 1).waiting)).toEqual([fixedLike.id]);
+  });
+});
+
+describe("pool rows and projects", () => {
+  it("a row names what is held or wanted, priority and level, since when, project, session and step", () => {
+    const home = "/Users/me";
+    const now = new Date(2026, 0, 1, 10, 0, 12).getTime();
+    const lease: PoolEntry = {
+      ...entry(4, { min_threads: 2, asked_threads: 8, locks: ["L"], priority: 101, level: "high", session_id: "abcd" }),
+      project: "/Users/me/dev/x", step: "coding/run_tests", label: "npm test", started: now - 12_000,
+    };
+    expect(formatEntry(lease, 10, now, home)).toBe(
+      "  pid 100  holds 4 threads (asked 2-8) + lock L  prio 101 high  since 10:00:00 (12s)  ~/dev/x  session abcd  step coding/run_tests  npm test",
+    );
+    const waiter: PoolEntry = { ...entry(8, { min_threads: 2, priority: -100, level: "low" }), arrived: now - 3_000, cwd: "/srv/y" };
+    expect(formatEntry(waiter, 10, now, home)).toBe("  pid 100  wants 2-8 threads  prio -100 low  since 10:00:09 (3s)  /srv/y  -");
+  });
+
+  it("projectRoot: the nearest .git; a linked worktree maps to its main worktree; no repo = the cwd", () => {
+    const main = tmp("wf-proj-");
+    fs.mkdirSync(path.join(main, ".git", "worktrees", "wt"), { recursive: true });
+    fs.mkdirSync(path.join(main, "src", "deep"), { recursive: true });
+    expect(projectRoot(path.join(main, "src", "deep"))).toBe(main);
+    const wt = tmp("wf-wt-");
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${path.join(main, ".git", "worktrees", "wt")}\n`);
+    fs.mkdirSync(path.join(wt, "sub"));
+    expect(projectRoot(path.join(wt, "sub"))).toBe(main);
+    const sub = tmp("wf-submodule-");
+    fs.writeFileSync(path.join(sub, ".git"), "gitdir: ../.git/modules/x\n");
+    expect(projectRoot(sub)).toBe(sub);
+    const bare = tmp("wf-norepo-");
+    expect(projectRoot(bare)).toBe(bare);
   });
 });
 
@@ -447,6 +521,234 @@ describe("Executor resource:", () => {
   }, 10_000);
 });
 
+describe("Pool: flexible leases and re-ranking", () => {
+  it("a flexible lease reports the threads granted; wait_full waits for the max, then takes what is free", async () => {
+    const pool = new Pool(poolDir(), fakeProbes());
+    const holder = await pool.acquire({ threads: 6 });
+    const now = await pool.acquire({ threads: 8, minThreads: 2 });
+    expect(now.status === "granted" && now.lease.threads).toBe(4);
+    if (now.status === "granted") await now.lease.release();
+    // the window ends with no release: what is free, woken by the window's end, not by the next poll
+    const late = await pool.acquire({ threads: 8, minThreads: 2, waitFullMs: 300 }, { pollMs: 5_000 });
+    expect(late.status === "granted" && late.lease.threads).toBe(4);
+    expect(late.waitMs).toBeGreaterThanOrEqual(290);
+    expect(late.waitMs).toBeLessThan(2_000);
+    if (late.status === "granted") await late.lease.release();
+    // freed inside the window: the full max
+    setTimeout(() => { if (holder.status === "granted") void holder.lease.release(); }, 100);
+    const full = await pool.acquire({ threads: 8, minThreads: 2, waitFullMs: 5_000 }, { pollMs: 20 });
+    expect(full.status === "granted" && full.lease.threads).toBe(8);
+    expect(full.waitMs).toBeLessThan(2_000);
+    if (full.status === "granted") await full.lease.release();
+    await expect(pool.acquire({ threads: 2, minThreads: 3 })).rejects.toThrow(/min threads must be an integer in 1\.\.2/);
+    await expect(pool.acquire({ threads: 2, waitFullMs: 10 })).rejects.toThrow(/needs a min/);
+  }, 10_000);
+
+  it("reprioritize moves only the waiters of the sessions that carry a level; leases keep theirs", async () => {
+    const dir = poolDir();
+    const pool = new Pool(dir, fakeProbes());
+    const pid = process.pid;
+    const lease: PoolEntry = { ...entry(10, { pid, session_id: "s1", level: "normal" }), started: 1 };
+    const a = entry(1, { pid, session_id: "s1", level: "normal", priority: 1, arrived: 2 });
+    const b = entry(1, { pid, priority: 50, arrived: 1 });
+    const c = entry(1, { pid, session_id: "s2", level: "normal", arrived: 3 });
+    const d = entry(1, { pid, session_id: "s1", priority: 7, arrived: 4 });
+    fs.writeFileSync(path.join(dir, "pool.json"), JSON.stringify({ leases: [lease], waiting: [a, b, c, d] }));
+    expect(await pool.reprioritize(new Set(["s1"]), "high")).toBe(1);
+    const after = readPool(dir);
+    // stored in admission order: priority desc, then arrival
+    expect(after.waiting.map(e => [e.id, e.priority, e.level])).toEqual([
+      [a.id, 101, "high"], [b.id, 50, undefined], [d.id, 7, undefined], [c.id, 0, "normal"],
+    ]);
+    expect(after.leases.map(e => [e.priority, e.level])).toEqual([[0, "normal"]]);
+    expect(await pool.reprioritize(new Set(["s1"]), "low")).toBe(1);
+    expect(readPool(dir).waiting.map(e => [e.id, e.priority])).toEqual([[b.id, 50], [d.id, 7], [c.id, 0], [a.id, -99]]);
+  });
+});
+
+describe("session priority levels", () => {
+  const until = async (cond: () => boolean): Promise<void> => {
+    for (let i = 0; i < 300 && !cond(); i++) await new Promise(r => setTimeout(r, 20));
+    expect(cond()).toBe(true);
+  };
+
+  it("a lease's priority = the session level + the step's; children inherit the level; execs get WF_PRIORITY and WF_PRIORITY_LEVEL", async () => {
+    const dir = poolDir();
+    const seen = tmp("wf-seen-");
+    const { loader, dir: wfDir } = createTestLoader({
+      p: {
+        initial: "run",
+        states: {
+          run: {
+            type: "exec",
+            command: 'cp "$POOL" "$SEEN/{{session_id}}"; printf "%s %s" "$WF_PRIORITY" "$WF_PRIORITY_LEVEL"',
+            env: { POOL: path.join(dir, "pool.json"), SEEN: seen },
+            resource: { threads: 1, priority: 3 },
+            on_success: "light",
+            on_error: "light",
+            context_set: { leased: "{{stdout}}" },
+          },
+          light: { type: "exec", command: 'printf "%s %s" "$WF_PRIORITY" "$WF_PRIORITY_LEVEL"', on_success: "show", on_error: "show" },
+          show: { prompt: "{{context.leased}} / {{stdout}}", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    tmpDirs.push(wfDir);
+    const storage = new InMemoryStorage();
+    const engine = new Engine(storage, loader, new Executor(new Pool(dir, fakeProbes())));
+    const outer = { p: process.env.WF_PRIORITY, l: process.env.WF_PRIORITY_LEVEL };
+    process.env.WF_PRIORITY = "999";
+    process.env.WF_PRIORITY_LEVEL = "urgent";
+    try {
+      const root = await engine.start("p", undefined, undefined, undefined, "high");
+      expect(root.prompt).toBe("103 high / 100 high");
+      const lease = (JSON.parse(fs.readFileSync(path.join(seen, root.sessionId), "utf8")) as PoolState).leases[0];
+      expect([lease.priority, lease.level, lease.step, lease.session_id]).toEqual([103, "high", "p/run", root.sessionId]);
+      const child = await engine.start("p", undefined, root.sessionId);
+      expect(child.prompt).toBe("103 high / 100 high");
+      expect(storage.read(child.sessionId)!.priority).toBe("high");
+      const own = await engine.start("p", undefined, root.sessionId, undefined, "low");
+      expect(own.prompt).toBe("-97 low / -100 low");
+      await engine.abort(root.sessionId);
+      const plain = await engine.start("p");
+      expect(plain.prompt).toBe("3 normal / 0 normal");
+      await expect(engine.start("p", undefined, undefined, undefined, "max" as never)).rejects.toThrow();
+    } finally {
+      for (const [k, v] of [["WF_PRIORITY", outer.p], ["WF_PRIORITY_LEVEL", outer.l]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  }, 10_000);
+
+  it("set_priority re-ranks a session's waiting exec at once, survives the exec, reaches descendants; a running lease keeps its priority", async () => {
+    const dir = poolDir();
+    const pool = new Pool(dir, fakeProbes());
+    const holder = await pool.acquire({ threads: 10, label: "holder" });
+    const early = pool.acquire({ threads: 10, priority: 50, label: "early" }, { pollMs: 20 });
+    const seen = path.join(dir, "seen");
+    const { loader, dir: wfDir } = createTestLoader({
+      w: {
+        initial: "run",
+        states: {
+          run: { type: "exec", command: `cp "${path.join(dir, "pool.json")}" "${seen}"`, resource: { threads: 10 }, on_success: "idle", on_error: "idle" },
+          idle: { prompt: "idle", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+      idle: { initial: "idle", states: { idle: { prompt: "idle", transitions: { done: "end" } }, end: { terminal: true, outcome: "complete" } } },
+    });
+    tmpDirs.push(wfDir);
+    const storage = new InMemoryStorage();
+    const engine = new Engine(storage, loader, new Executor(pool));
+    const run = engine.start("w");
+    await until(() => readPool(dir).waiting.length === 2);
+    const rootId = storage.readAll()[0].session_id;
+    expect(readPool(dir).waiting.map(e => e.session_id)).toEqual(["", rootId]);
+    const child = await engine.start("idle", undefined, rootId);
+    const running = await pool.acquire({ threads: 0, locks: ["x"], sessionId: child.sessionId, level: "normal" });
+    expect(await engine.setPriority(rootId, "urgent")).toEqual({ sessions: [rootId, child.sessionId], moved: 1 });
+    const ranked = readPool(dir).waiting;
+    expect(ranked.map(e => [e.session_id, e.priority, e.level])).toEqual([[rootId, 200, "urgent"], ["", 50, undefined]]);
+    expect(readPool(dir).leases.find(e => e.session_id === child.sessionId)!.priority).toBe(0);
+    if (holder.status === "granted") await holder.lease.release();
+    await run;
+    // the re-ranked exec ran first: the earlier waiter was still queued while it held the lease
+    const during = JSON.parse(fs.readFileSync(seen, "utf8")) as PoolState;
+    expect(during.leases.find(e => e.session_id === rootId)!.level).toBe("urgent");
+    expect(during.waiting.map(e => e.label)).toEqual(["early"]);
+    expect(storage.read(rootId)!.priority).toBe("urgent");
+    expect(storage.read(child.sessionId)!.priority).toBe("urgent");
+    const later = await engine.start("idle", undefined, child.sessionId);
+    expect(storage.read(later.sessionId)!.priority).toBe("urgent");
+    if (running.status === "granted") await running.lease.release();
+    const got = await early;
+    if (got.status === "granted") await got.lease.release();
+    await engine.abort(rootId);
+    await expect(engine.setPriority(rootId, "high")).rejects.toThrow(/has ended/);
+  }, 15_000);
+
+  it("a flexible resource: WF_THREADS = the threads granted; history and ledger record threads_granted, wait_ms, duration_ms, step_key", async () => {
+    const dir = poolDir();
+    const pool = new Pool(dir, fakeProbes());
+    const holder = await pool.acquire({ threads: 6 });
+    const repo = tmp("wf-repo-");
+    fs.mkdirSync(path.join(repo, ".git"));
+    fs.mkdirSync(path.join(repo, "pkg"));
+    const { loader, dir: wfDir } = createTestLoader({
+      f: {
+        initial: "run",
+        states: {
+          run: { type: "exec", command: 'printf "%s" "$WF_THREADS"', resource: { threads: { min: 2, max: 8 } }, on_success: "show", on_error: "show" },
+          show: { prompt: "{{stdout}}", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    tmpDirs.push(wfDir);
+    const storage = new InMemoryStorage();
+    const engine = new Engine(storage, loader, new Executor(pool));
+    const { sessionId, prompt } = await engine.start("f", undefined, undefined, path.join(repo, "pkg"));
+    expect(prompt).toBe("4");
+    await engine.transition(sessionId, "done");
+    const action = storage.read(sessionId)!.history.find(h => h.event === "action")!;
+    expect(action.threads_granted).toBe(4);
+    expect(action.step_key).toBe(`${repo}|f|run`);
+    const line = storage.ledger[0] as { execs: Array<Record<string, unknown>> };
+    expect(line.execs[0]).toMatchObject({ state: "run", threads_granted: 4, step_key: `${repo}|f|run`, exit_code: 0 });
+    expect(typeof line.execs[0].wait_ms).toBe("number");
+    expect(typeof line.execs[0].duration_ms).toBe("number");
+    if (holder.status === "granted") await holder.lease.release();
+  }, 10_000);
+
+  it("set_priority racing a child's last transition on the real Storage never resurrects the ended child", async () => {
+    const pool = new Pool(poolDir(), fakeProbes());
+    const { loader, dir: wfDir } = createTestLoader({
+      idle: { initial: "idle", states: { idle: { prompt: "idle", transitions: { done: "end" } }, end: { terminal: true, outcome: "complete" } } },
+    });
+    tmpDirs.push(wfDir);
+    const storage = new Storage(tmp("wf-state-"));
+    const engine = new Engine(storage, loader, new Executor(pool));
+    const { sessionId: rootId } = await engine.start("idle");
+    const resurrected: string[] = [];
+    const failed: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      const { sessionId: childId } = await engine.start("idle", undefined, rootId);
+      const settled = await Promise.allSettled([engine.setPriority(rootId, i % 2 ? "high" : "low"), engine.transition(childId, "done")]);
+      for (const r of settled) if (r.status === "rejected") failed.push(String(r.reason));
+      const child = storage.read(childId)!;
+      if (child.stack.length !== 0 || child.outcome !== "completed") resurrected.push(childId);
+    }
+    expect({ resurrected: resurrected.length, failed }).toEqual({ resurrected: 0, failed: [] });
+    expect(storage.read(rootId)!.priority).toBe("high");
+  }, 30_000);
+
+  it("the set_priority and pool_status tools", async () => {
+    const dir = poolDir();
+    const pool = new Pool(dir, fakeProbes());
+    const { loader, dir: wfDir } = createTestLoader({
+      idle: { initial: "idle", states: { idle: { prompt: "idle", transitions: { done: "end" } }, end: { terminal: true, outcome: "complete" } } },
+    });
+    tmpDirs.push(wfDir);
+    const storage = new InMemoryStorage();
+    const engine = new Engine(storage, loader, new Executor(pool));
+    const handlers = new Map<string, (args: object) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>>();
+    const server = { registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h) };
+    registerTools(server as never, engine, {} as never, loader, storage, pool);
+    const { sessionId } = await engine.start("idle", undefined, undefined, undefined, "low");
+    const set = await handlers.get("set_priority")!({ session_id: sessionId, level: "high" });
+    expect(set.content[0].text).toBe(`Priority high (100) set on ${sessionId}; 0 waiting pool entries re-ranked.`);
+    expect(storage.read(sessionId)!.priority).toBe("high");
+    expect((await handlers.get("set_priority")!({ session_id: "nope", level: "high" })).isError).toBe(true);
+    const holder = await pool.acquire({ threads: 3, label: "holder", sessionId, level: "high", priority: 100, step: "idle/idle" });
+    const status = await handlers.get("pool_status")!({});
+    expect(status.content[0].text).toMatch(new RegExp(`^pool ${dir}: budget 10, held 3`));
+    expect(status.content[0].text).toMatch(new RegExp(`holds 3 threads {2}prio 100 high {2}since .* {2}session ${sessionId} {2}step idle/idle {2}holder`));
+    if (holder.status === "granted") await holder.lease.release();
+  }, 10_000);
+});
+
 describe("wf-run CLI (real processes)", () => {
   let cli = "";
   const children: ChildProcess[] = [];
@@ -465,8 +767,11 @@ describe("wf-run CLI (real processes)", () => {
   });
 
   interface Run { code: number | null; stderr: string; stdout: string }
-  function wfRun(dir: string, args: string[]): { child: ChildProcess; done: Promise<Run> } {
-    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, WF_THREADS: "99", WF_POOL_DIR: dir }, stdio: ["ignore", "pipe", "pipe"] });
+  function wfRun(dir: string, args: string[], extra: Record<string, string> = {}): { child: ChildProcess; done: Promise<Run> } {
+    // A test run from inside a session exec must not hand its own session's priority to these runs.
+    const { WF_PRIORITY: _p, WF_PRIORITY_LEVEL: _l, WF_SESSION_ID: _s, ...base } = process.env;
+    const env = { ...base, WF_THREADS: "99", WF_POOL_DIR: dir, ...extra };
+    const child = spawn(process.execPath, [cli, ...args], { env, stdio: ["ignore", "pipe", "pipe"] });
     children.push(child);
     let stdout = "";
     let stderr = "";
@@ -508,7 +813,7 @@ describe("wf-run CLI (real processes)", () => {
     const status = await wfRun(dir, ["--status"]).done;
     expect(status.code).toBe(0);
     expect(status.stdout).toMatch(/budget 10, held 8/);
-    expect(status.stdout).toMatch(/threads 8 {2}prio 0 .* holder/);
+    expect(status.stdout).toMatch(/holds 8 threads {2}prio 0 .* holder/);
     const r = await wfRun(dir, ["--threads", "6", "--wait-timeout", "0.5", "--", "true"]).done;
     expect(r.code).toBe(75);
     expect(r.stderr).toMatch(/waiting for 6 threads — held 8\/10 by holder \(8\)/);
@@ -544,7 +849,7 @@ describe("wf-run CLI (real processes)", () => {
     const holder = await pool.acquire({ threads: 1, locks: ["sim"], label: "holder" });
     const status = await wfRun(dir, ["--status"]).done;
     expect(status.stdout).toMatch(/locks held: sim/);
-    expect(status.stdout).toMatch(/threads 1 {2}locks sim {2}prio 0 .* holder/);
+    expect(status.stdout).toMatch(/holds 1 threads \+ lock sim {2}prio 0 .* holder/);
     const busy = await wfRun(dir, ["--lock", "sim", "--wait-timeout", "0.3", "--", "true"]).done;
     expect(busy.code).toBe(75);
     expect(busy.stderr).toMatch(/waiting for lock sim — .*lock sim held by holder/);
@@ -615,6 +920,46 @@ describe("wf-run CLI (real processes)", () => {
     for (let i = 0; i < 100 && isGroupAlive(grandchild); i++) await new Promise(r => setTimeout(r, 20));
     expect((await pool.status()).leases).toEqual([]);
   }, 15_000);
+
+  it("--threads MIN-MAX takes the free threads at once; --wait-full waits for the max until its window ends", async () => {
+    const dir = poolDir(quiet);
+    const holder = await new Pool(dir, fakeProbes()).acquire({ threads: 6, label: "holder" });
+    const threads = ["--", "sh", "-c", 'printf "%s" "$WF_THREADS"'];
+    const now = await wfRun(dir, ["--threads", "2-8", ...threads]).done;
+    expect([now.code, now.stdout]).toEqual([0, "4"]);
+    const t0 = Date.now();
+    const late = await wfRun(dir, ["--threads", "2-8", "--wait-full", "0.5", ...threads]).done;
+    expect([late.code, late.stdout]).toEqual([0, "4"]);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(500);
+    // the holder ends inside the window: the full max (here the whole budget)
+    setTimeout(() => { if (holder.status === "granted") void holder.lease.release(); }, 300);
+    const full = await wfRun(dir, ["--threads", "2-budget", "--wait-full", "10", ...threads]).done;
+    expect([full.code, full.stdout]).toEqual([0, "10"]);
+    // a min above the budget clamps with the max: it runs on an empty pool instead of waiting forever
+    const clamped = await wfRun(dir, ["--threads", "11-20", "--wait-timeout", "2", ...threads]).done;
+    expect([clamped.code, clamped.stdout]).toEqual([0, "10"]);
+    for (const bad of [["--wait-full", "1"], ["--threads", "5-2"], ["--threads", "0-2"], ["--threads", "2-x"]])
+      expect((await wfRun(dir, [...bad, "--", "true"]).done).code).toBe(64);
+    expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
+  }, 20_000);
+
+  it("without --priority a run takes WF_PRIORITY and its level from the environment; --status shows level, project, session and step", async () => {
+    const dir = poolDir(quiet);
+    const pool = new Pool(dir, fakeProbes());
+    const holder = await pool.acquire({ threads: 10, label: "holder", sessionId: "sess1", level: "high", priority: 100, step: "wf/run", project: "/p/x" });
+    const show = ["--", "sh", "-c", 'printf "%s %s" "$WF_PRIORITY" "${WF_PRIORITY_LEVEL-unset}"'];
+    const waiter = wfRun(dir, ["--threads", "1", "--label", "waiter", ...show], { WF_PRIORITY: "103", WF_PRIORITY_LEVEL: "high", WF_SESSION_ID: "sess2" });
+    for (let i = 0; i < 200 && readPool(dir).waiting.length === 0; i++) await new Promise(r => setTimeout(r, 25));
+    expect(readPool(dir).waiting.map(e => [e.priority, e.level, e.session_id])).toEqual([[103, "high", "sess2"]]);
+    const status = await wfRun(dir, ["--status"]).done;
+    expect(status.stdout).toMatch(/holds 10 threads {2}prio 100 high {2}since \d\d:\d\d:\d\d \(\d+s\) {2}\/p\/x {2}session sess1 {2}step wf\/run {2}holder/);
+    expect(status.stdout).toMatch(/wants 1 threads {2}prio 103 high {2}since .* {2}session sess2 {2}waiter/);
+    if (holder.status === "granted") await holder.lease.release();
+    expect((await waiter.done).stdout).toBe("103 high");
+    const explicit = await wfRun(dir, ["--priority", "5", ...show], { WF_PRIORITY: "103", WF_PRIORITY_LEVEL: "high" }).done;
+    expect(explicit.stdout).toBe("5 unset");
+    expect((await wfRun(dir, show).done).stdout).toBe("0 unset");
+  }, 20_000);
 
   it.runIf(process.platform === "darwin")("--efficiency runs under taskpolicy outside the budget", async () => {
     const dir = poolDir({ budget: 1, load_threshold: 0 });

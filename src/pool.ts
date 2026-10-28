@@ -9,7 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import lockfile from "proper-lockfile";
-import { LOCK_NAME_PATTERN, LOCK_STALE_MS } from "./types.js";
+import { LOCK_NAME_PATTERN, LOCK_STALE_MS, PRIORITY_LEVELS, type PriorityLevel } from "./types.js";
 import { isGroupAlive, isPidAlive } from "./process.js";
 
 /** EX_TEMPFAIL: no lease within the wait timeout ("busy"). */
@@ -22,6 +22,8 @@ const CONFIG_FILE = "config.json";
 const RESERVED_CORES = 2;
 const DEFAULT_POLL_MS = 1000;
 const DEFAULT_PROGRESS_MS = 30_000;
+// `wf-run --status` / `pool_status`: the cpu tick window a status measures over.
+const STATUS_WINDOW_MS = 600;
 // CPU load is measured over the ticks between two passes: a window shorter
 // than the minimum keeps the last measurement, one longer than the maximum
 // is stale (an idle server's last pass) and restarts the measurement.
@@ -97,8 +99,21 @@ export interface PoolConfig {
 export interface PoolEntry {
   readonly id: string;
   readonly pid: number;
+  /** A waiter: the threads it asks for (a flexible one: its max). A lease: the threads granted. */
   readonly threads: number;
+  /** A flexible request: the fewest threads it accepts (`threads` is its max). */
+  readonly min_threads?: number;
+  /** A flexible waiter takes fewer than its max only from this time on (ms since epoch). */
+  readonly full_until?: number;
+  /** A lease from a flexible request, or one the budget clamped: the threads it asked for (a flexible one: its max). */
+  readonly asked_threads?: number;
   readonly priority: number;
+  /** The session level `priority` includes; `set_priority` moves a waiter that has one. */
+  readonly level?: PriorityLevel;
+  /** The git root (main worktree) of the requester's cwd, else the cwd. */
+  readonly project?: string;
+  /** The workflow step a session exec leases for: `workflow/state`. */
+  readonly step?: string;
   readonly label: string;
   readonly cwd: string;
   readonly session_id: string;
@@ -134,10 +149,42 @@ export function byQueueOrder(a: PoolEntry, b: PoolEntry): number {
   return b.priority - a.priority || a.arrived - b.arrived || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
-/** What an entry asks for: `6 threads`, `lock port:3000`, `6 threads + lock a + lock b`. */
-export function describeRequest(entry: Pick<PoolEntry, "threads" | "locks">, budget: number): string {
+/** The fewest threads a waiter accepts: `min_threads` of a flexible request, else all it asks for. */
+function minThreads(entry: Pick<PoolEntry, "threads" | "min_threads">, budget: number): number {
+  return Math.min(entry.min_threads ?? entry.threads, effectiveThreads(entry, budget));
+}
+
+/** What an entry asks for: `6 threads`, `2-8 threads`, `lock port:3000`, `6 threads + lock a + lock b`. */
+export function describeRequest(entry: Pick<PoolEntry, "threads" | "min_threads" | "locks">, budget: number): string {
   const n = effectiveThreads(entry, budget);
-  return [...(n > 0 ? [`${n} threads`] : []), ...(entry.locks ?? []).map(l => `lock ${l}`)].join(" + ");
+  const min = minThreads(entry, budget);
+  const threads = min < n ? `${min}-${n} threads` : `${n} threads`;
+  return [...(n > 0 ? [threads] : []), ...(entry.locks ?? []).map(l => `lock ${l}`)].join(" + ");
+}
+
+/**
+ * The project a cwd belongs to: the nearest directory holding `.git`; a linked
+ * worktree (`.git` file pointing into `<main>/.git/worktrees/`) maps to its
+ * main worktree, so every worktree of a repo is one project. No repo: the cwd.
+ */
+export function projectRoot(cwd: string): string {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    const dotGit = path.join(dir, ".git");
+    let stat: fs.Stats | undefined;
+    try { stat = fs.statSync(dotGit); } catch { /* not here */ }
+    if (stat?.isDirectory()) return dir;
+    if (stat?.isFile()) {
+      const gitdir = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, "utf8"))?.[1].trim();
+      const main = gitdir && /^(.*)\/\.git\/worktrees\/[^/]+$/.exec(path.resolve(dir, gitdir))?.[1];
+      return main || dir;
+    }
+    if (path.dirname(dir) === dir) return path.resolve(cwd);
+  }
+}
+
+/** The pool priority of a request at `level` with the step's own `priority` added. */
+export function levelPriority(level: PriorityLevel, stepPriority = 0): number {
+  return PRIORITY_LEVELS[level] + stepPriority;
 }
 
 /**
@@ -151,6 +198,13 @@ export function describeRequest(entry: Pick<PoolEntry, "threads" | "locks">, bud
  * no later waiter takes threads; a lock is handed out in queue order. A waiter
  * blocked only by a held lock claims no threads, so a long-held lock does not
  * stall the rest of the queue; holding nothing while waiting, nobody deadlocks.
+ *
+ * A flexible waiter (`min_threads` below its max) gets its max when that fits;
+ * otherwise, once `full_until` has passed, all the threads that fit if they
+ * are at least its min. While it waits — for its max inside the `full_until`
+ * window, or for its min after it — it closes the threads to everyone behind
+ * it like any waiter: what the window waits for is the threads being freed,
+ * and a later task taking them would defeat it.
  */
 export function schedule(
   state: PoolState,
@@ -169,12 +223,18 @@ export function schedule(
   let threadsClosed = false;
   for (const w of waiting) {
     const locks = w.locks ?? [];
-    const n = effectiveThreads(w, config.budget);
+    const max = effectiveThreads(w, config.budget);
     const locksFree = !locks.some(l => locked.has(l) || claimed.has(l));
-    const fits = n === 0
-      || (!threadsClosed && held + n <= config.budget && (held === 0 || held + n + external <= config.budget));
-    if (locksFree && fits) {
-      leases.push({ ...w, started: now });
+    // The most threads that fit now: external load counts only beside a live lease.
+    const room = held === 0 ? config.budget : Math.floor(config.budget - held - external);
+    let n: number | undefined;
+    if (max === 0) n = 0;
+    else if (!threadsClosed && room >= max) n = max;
+    else if (!threadsClosed && now >= (w.full_until ?? 0) && room >= minThreads(w, config.budget)) n = room;
+    if (locksFree && n !== undefined) {
+      const { full_until: _window, ...granted } = w;
+      const asked = w.min_threads !== undefined || n !== w.threads ? { asked_threads: w.threads } : {};
+      leases.push({ ...granted, threads: n, started: now, ...asked });
       held += n;
       for (const l of locks) locked.add(l);
       continue;
@@ -187,10 +247,20 @@ export function schedule(
 }
 
 export interface LeaseRequest {
-  /** 0 only beside `locks`: a lock-only lease takes no threads and is never blocked by load. */
+  /** 0 only beside `locks`: a lock-only lease takes no threads and is never blocked by load. A flexible request: its max. */
   readonly threads: number;
+  /** A flexible request: the fewest threads it accepts (1..threads). */
+  readonly minThreads?: number;
+  /** A flexible request: wait this long for `threads` before taking fewer. Default 0. */
+  readonly waitFullMs?: number;
   readonly locks?: readonly string[];
+  /** The whole pool priority (a session request: its level's value plus the step's). */
   readonly priority?: number;
+  /** The session level `priority` includes: `set_priority` re-ranks the waiter. */
+  readonly level?: PriorityLevel;
+  /** Default: the git root of `cwd`. */
+  readonly project?: string;
+  readonly step?: string;
   readonly label?: string;
   readonly cwd?: string;
   readonly sessionId?: string;
@@ -288,17 +358,26 @@ export class Pool {
     for (const l of locks) if (!LOCK_NAME_PATTERN.test(l)) throw new Error(`a lock name is one word without whitespace, got "${l}"`);
     if (!Number.isInteger(req.threads) || req.threads < (locks.length > 0 ? 0 : 1))
       throw new Error(`threads must be a positive integer${locks.length > 0 ? " or 0" : ""}, got ${req.threads}`);
+    const flexible = req.minThreads !== undefined;
+    if (flexible && !(Number.isInteger(req.minThreads) && req.minThreads! >= 1 && req.minThreads! <= req.threads))
+      throw new Error(`min threads must be an integer in 1..${req.threads}, got ${req.minThreads}`);
+    if (req.waitFullMs !== undefined && !flexible) throw new Error("waiting for the full threads needs a min");
     const priority = req.priority ?? 0;
     if (!Number.isInteger(priority)) throw new Error(`priority must be an integer, got ${priority}`);
     const pid = req.pid ?? process.pid;
     const arrived = Date.now();
+    const cwd = req.cwd ?? process.cwd();
     const self: PoolEntry = {
       id: `${pid}-${randomUUID().slice(0, 8)}`,
       pid,
       threads: req.threads,
+      ...(flexible ? { min_threads: req.minThreads, full_until: arrived + (req.waitFullMs ?? 0) } : {}),
       priority,
+      ...(req.level ? { level: req.level } : {}),
       label: req.label ?? "",
-      cwd: req.cwd ?? process.cwd(),
+      cwd,
+      project: req.project ?? projectRoot(cwd),
+      ...(req.step ? { step: req.step } : {}),
       session_id: req.sessionId ?? "",
       arrived,
       ...(locks.length > 0 ? { locks } : {}),
@@ -312,7 +391,7 @@ export class Pool {
       for (;;) {
         if (opts.signal?.aborted) return await this._giveUp(self, "aborted", arrived);
         const view = await this._pass(self);
-        if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived, view.budget);
+        if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived, view);
         const now = Date.now();
         if (lastProgress === undefined || now - lastProgress >= progressMs) {
           opts.onProgress?.(self, view);
@@ -321,7 +400,9 @@ export class Pool {
         const left = opts.waitTimeoutMs === undefined ? Infinity : arrived + opts.waitTimeoutMs - now;
         if (left <= 0) return await this._giveUp(self, "timeout", arrived);
         watcher ??= this._watch(() => wake?.());
-        await sleep(Math.min(opts.pollMs ?? DEFAULT_POLL_MS, left), opts.signal, w => { wake = w; });
+        // A flexible waiter's window ending changes what it accepts: pass again right then.
+        const window = self.full_until !== undefined && self.full_until > now ? self.full_until - now : Infinity;
+        await sleep(Math.min(opts.pollMs ?? DEFAULT_POLL_MS, left, window), opts.signal, w => { wake = w; });
       }
     } finally {
       watcher?.close();
@@ -337,11 +418,12 @@ export class Pool {
     }
   }
 
-  private _granted(self: PoolEntry, arrived: number, budget: number): AcquireResult {
+  private _granted(self: PoolEntry, arrived: number, view: PoolView): AcquireResult {
     let released = false;
+    const entry = view.leases.find(e => e.id === self.id)!;
     const lease: Lease = {
-      entry: self,
-      threads: effectiveThreads(self, budget),
+      entry,
+      threads: effectiveThreads(entry, view.budget),
       attach: async pgid => {
         await this._update(state => ({
           leases: state.leases.map(e => (e.id === self.id ? { ...e, pgid } : e)),
@@ -367,8 +449,33 @@ export class Pool {
         waiting: state.waiting.filter(e => e.id !== self.id),
       };
     });
-    if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived, view.budget);
+    if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived, view);
     return { status: why, waitMs: Date.now() - arrived, view };
+  }
+
+  /**
+   * Move the waiters of `sessionIds` that carry a level to `level`: their
+   * priority shifts by the difference, and this same pass re-ranks the queue.
+   * Leases keep theirs (nothing is preempted). Resolves the number moved.
+   */
+  async reprioritize(sessionIds: ReadonlySet<string>, level: PriorityLevel): Promise<number> {
+    let moved = 0;
+    await this._update(state => ({
+      leases: state.leases,
+      waiting: state.waiting.map(e => {
+        if (!e.level || e.level === level || !sessionIds.has(e.session_id)) return e;
+        moved++;
+        return { ...e, priority: e.priority - PRIORITY_LEVELS[e.level] + PRIORITY_LEVELS[level], level };
+      }),
+    }));
+    return moved;
+  }
+
+  /** A status pass over a fresh cpu-tick window (the first pass only opens it). */
+  async measuredStatus(windowMs = STATUS_WINDOW_MS): Promise<PoolView> {
+    await this._pass();
+    await new Promise(r => setTimeout(r, windowMs));
+    return this._pass();
   }
 
   private _remove(id: string): Promise<PoolView> {
@@ -446,20 +553,32 @@ export function describeWait(self: PoolEntry, view: PoolView): string {
     + `external ${view.external.toFixed(1)}${lockHolders.join("")}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}`;
 }
 
-/** `wf-run --status`. */
+/** One row per lease or waiter: who (project, session, step), what (threads, locks, priority), since when. */
+export function formatEntry(e: PoolEntry, budget: number, now: number = Date.now(), home: string = os.homedir()): string {
+  const since = e.started ?? e.arrived;
+  let what: string;
+  if (e.started === undefined) {
+    what = `wants ${describeRequest(e, budget)}`;
+  } else {
+    const asked = e.asked_threads === undefined ? "" : ` (asked ${e.min_threads !== undefined ? `${e.min_threads}-` : ""}${e.asked_threads})`;
+    what = `holds ${[...(e.threads > 0 ? [`${e.threads} threads${asked}`] : []), ...(e.locks ?? []).map(l => `lock ${l}`)].join(" + ")}`;
+  }
+  const project = e.project ?? e.cwd;
+  const shown = project === home || project.startsWith(`${home}/`) ? `~${project.slice(home.length)}` : project;
+  const clock = new Date(since).toTimeString().slice(0, 8);
+  return `  pid ${e.pid}  ${what}  prio ${e.priority}${e.level ? ` ${e.level}` : ""}  since ${clock} (${Math.round((now - since) / 1000)}s)`
+    + `  ${shown}${e.session_id ? `  session ${e.session_id}` : ""}${e.step ? `  step ${e.step}` : ""}  ${e.label || "-"}`;
+}
+
+/** `wf-run --status` and the `pool_status` tool. */
 export function formatStatus(view: PoolView, dir: string, now: number = Date.now()): string {
-  const age = (t: number | undefined): string => `${Math.round((now - (t ?? now)) / 1000)}s`;
-  const row = (e: PoolEntry, since: number | undefined): string =>
-    `  pid ${e.pid}  threads ${effectiveThreads(e, view.budget)}${e.threads > view.budget ? ` (asked ${e.threads})` : ""}`
-    + `${e.locks ? `  locks ${e.locks.join(",")}` : ""}  prio ${e.priority}  ${age(since)}  ${e.label || "-"}  ${e.cwd}`
-    + `${e.session_id ? `  session ${e.session_id}` : ""}`;
   return [
     `pool ${dir}: budget ${view.budget}, held ${view.held}, load ${view.load.toFixed(2)} `
       + `(external ${view.external.toFixed(1)}, threshold ${view.load_threshold})`,
     `locks held: ${view.leases.flatMap(e => e.locks ?? []).join(", ") || "none"}`,
     `leases (${view.leases.length}):`,
-    ...view.leases.map(e => row(e, e.started)),
+    ...view.leases.map(e => formatEntry(e, view.budget, now)),
     `waiting (${view.waiting.length}, in admission order):`,
-    ...view.waiting.map(e => row(e, e.arrived)),
+    ...view.waiting.map(e => formatEntry(e, view.budget, now)),
   ].join("\n");
 }
