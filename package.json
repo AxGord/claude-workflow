@@ -22,7 +22,7 @@
     "lint": "node scripts/lint-new.mjs",
     "lint:baseline": "node scripts/lint-new.mjs --update-baseline",
     "format:check": "biome format",
-    "check": "tsc --noEmit && npm run lint && vitest run"
+    "check": "tsc --noEmit && npm run format:check && npm run lint && vitest run"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
