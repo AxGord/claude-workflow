@@ -280,6 +280,34 @@ Workflows load from three sources in ascending priority — later tiers override
 
 A project workflow named `coding` overrides the bundled `coding` template. Same-name global workflows sit in between.
 
+### When a project should have its own workflow
+
+The bundled workflows fit simple projects and one-off tasks: the agent itself runs whatever build and
+tests the project has. A complex project should drive its development through its own workflow in
+`.claude/workflows/`. Signs that a project is complex:
+
+- builds, test suites, linters or simulations that take minutes or saturate the CPU;
+- a gate a change must pass before it merges (several checks, one verdict);
+- several agents working at once, or one long queue of tasks;
+- its own merge or release procedure.
+
+Why it pays:
+
+- **Deterministic steps become `exec` states.** Build, tests, gate and merge run inside the engine; the
+  agent transitions and gets back only the verdict (keep it short — a table, the first error — and
+  write full logs to files). No tokens spent re-reading build output, and no "forgot to run the tests".
+- **Heavy steps go through the machine-wide pool** (`resource:`): sessions of every project share one
+  CPU budget instead of racing each other, and a waiting exec costs the agent nothing — it sleeps inside
+  the `transition` call until its lease is granted.
+- **Short prompts.** A state's prompt says what to do NOW and links the project's docs instead of
+  restating them; a worker's brief from the parent shrinks to a few lines.
+- **Loops are explicit.** A fix-and-recheck cycle is `max_visits` + `on_exhausted`, not a rule the
+  agent must remember.
+
+How: copy the closest bundled workflow under the same name (to replace it) or a new name (to run it via
+the master's project route), turn every command the agent used to run by hand into an `exec` state
+with `resource:` where it is heavy, and keep judgement (design, code, review) in prompt states.
+
 ## Bundled Workflows
 
 | Workflow | Description |
