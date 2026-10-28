@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTestLoader, cleanupDir } from "./test-helpers.js";
+import { createTestLoader, createFixtureDir, cleanupDir } from "./test-helpers.js";
 import { Loader } from "./loader.js";
 
 describe("Loader", () => {
@@ -303,5 +303,184 @@ describe("Loader strict schema", () => {
     const yamls = fs.readdirSync(templates).filter(f => /\.ya?ml$/.test(f));
     expect(errors).toEqual([]);
     expect(loader.names().length).toBe(yamls.length);
+  });
+});
+
+describe("Loader: extends", () => {
+  const dirs: string[] = [];
+  let errors: string[] = [];
+  afterEach(() => {
+    for (const d of dirs) cleanupDir(d);
+    dirs.length = 0;
+    vi.restoreAllMocks();
+  });
+  /** One loader over up to three tiers (bundled, global, project), console errors captured. */
+  const load = (bundled: Record<string, object>, global: Record<string, object> = {}, project?: Record<string, object>) => {
+    errors = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
+    const tier = (wfs: Record<string, object>) => { const d = createFixtureDir(wfs); dirs.push(d); return d; };
+    return new Loader(tier(bundled), tier(global), project ? tier(project) : null);
+  };
+  const BASE = {
+    description: "base flow",
+    initial: "a",
+    max_transitions: 20,
+    states: {
+      a: { prompt: "A", transitions: { go: "b" } },
+      b: { prompt: "B", max_visits: 3, transitions: { done: "end" } },
+      end: { terminal: true },
+    },
+  };
+
+  it("a project heir of its own name inherits the lower tier's definition: states merge, a same-named state is replaced whole", () => {
+    const loader = load({ flow: BASE }, {}, {
+      flow: {
+        extends: "flow",
+        max_transitions: 40,
+        states: {
+          b: { type: "exec", command: "true", on_success: "end", on_error: "x" },
+          x: { prompt: "X", transitions: { back: "a" } },
+        },
+      },
+    });
+    const wf = loader.get("flow")!;
+    expect(errors).toEqual([]);
+    expect(wf.initial).toBe("a");
+    expect(wf.description).toBe("base flow");
+    expect(wf.max_transitions).toBe(40);
+    expect(Object.keys(wf.states).sort()).toEqual(["a", "b", "end", "x"]);
+    // replaced whole: nothing of the base's b (prompt, max_visits, transitions) survives
+    expect(wf.states.b).toEqual({ type: "exec", command: "true", on_success: "end", on_error: "x" });
+    expect(wf.states.a).toEqual(BASE.states.a);
+    expect("extends" in wf).toBe(false);
+  });
+
+  it("initial, description and max_transitions come from the heir when it sets them, else from the base (default 50 at the end)", () => {
+    const { max_transitions: _m, ...noMax } = BASE;
+    const loader = load({ base: noMax, flow: BASE }, {
+      heir: { extends: "base", initial: "b", description: "mine" },
+      plain: { extends: "base" },
+    });
+    expect(loader.get("heir")).toMatchObject({ name: "heir", initial: "b", description: "mine", max_transitions: 50 });
+    expect(loader.get("plain")).toMatchObject({ name: "plain", initial: "a", description: "base flow" });
+  });
+
+  it("chains resolve through every tier; another name resolves from the top tier", () => {
+    const loader = load({ base: BASE }, {
+      mid: { extends: "base", states: { m: { prompt: "M", transitions: { done: "end" } } } },
+    }, {
+      // the project's own `base` is what `top → mid → base` sees
+      base: { extends: "base", states: { p: { prompt: "P", transitions: { done: "end" } } } },
+      top: { extends: "mid", states: { t: { prompt: "T", transitions: { done: "end" } } } },
+    });
+    expect(errors).toEqual([]);
+    expect(Object.keys(loader.get("top")!.states).sort()).toEqual(["a", "b", "end", "m", "p", "t"]);
+    expect(Object.keys(loader.get("mid")!.states).sort()).toEqual(["a", "b", "end", "m", "p"]);
+  });
+
+  it("a cycle, a missing base and a self-extends with nothing below fail the load", () => {
+    const loader = load({
+      one: { extends: "two" },
+      two: { extends: "one" },
+      orphan: { extends: "nope" },
+      self: { extends: "self" },
+      ok: BASE,
+    });
+    expect(loader.get("one")).toBeUndefined();
+    expect(loader.get("two")).toBeUndefined();
+    expect(loader.get("orphan")).toBeUndefined();
+    expect(loader.get("self")).toBeUndefined();
+    expect(loader.get("ok")).toBeDefined();
+    const text = errors.join("\n");
+    expect(text).toMatch(/extends cycle: one → two → one/);
+    expect(text).toMatch(/extends "nope": no such workflow \(extended by orphan\)/);
+    expect(text).toMatch(/extends "self": no such workflow below this tier/);
+  });
+
+  it("references are validated on the merged result", () => {
+    const loader = load({ base: BASE }, {
+      // `b` and `end` exist only in the base: fine
+      good: { extends: "base", states: { a: { prompt: "A2", transitions: { go: "b", stop: "end" } } } },
+      bad: { extends: "base", states: { a: { prompt: "A2", transitions: { go: "missing" } } } },
+      badInitial: { extends: "base", initial: "nowhere" },
+    });
+    expect(loader.get("good")!.states.a.transitions).toEqual({ go: "b", stop: "end" });
+    expect(loader.get("bad")).toBeUndefined();
+    expect(loader.get("badInitial")).toBeUndefined();
+    const text = errors.join("\n");
+    expect(text).toMatch(/state "a" transition "go" → unknown state "missing"/);
+    expect(text).toMatch(/initial state "nowhere" does not exist/);
+  });
+
+  it("a file that fails validation or resolution falls back to the same name one tier down", () => {
+    const loader = load({ flow: BASE, other: BASE }, {
+      // valid, then shadowed by the broken project file
+      other: { extends: "other", states: { g: { prompt: "G", transitions: { done: "end" } } } },
+    }, {
+      flow: { extends: "flow", states: { a: { prompt: "A2", transitions: { go: "missing" } } } },
+      other: { extends: "nope" },
+    });
+    expect(loader.get("flow")!.states.a).toEqual(BASE.states.a);
+    expect(Object.keys(loader.get("other")!.states).sort()).toEqual(["a", "b", "end", "g"]);
+    const text = errors.join("\n");
+    expect(text).toMatch(/flow\.yaml: state "a" transition "go" → unknown state "missing"/);
+    expect(text).toMatch(/extends "nope": no such workflow/);
+  });
+
+  it("strict schema: no extends needs initial and states; a typo of extends names it", () => {
+    const loader = load({
+      bare: { states: BASE.states },
+      typo: { extend: "x", initial: "a", states: BASE.states },
+    });
+    expect(loader.get("bare")).toBeUndefined();
+    expect(loader.get("typo")).toBeUndefined();
+    const text = errors.join("\n");
+    expect(text).toMatch(/a workflow without extends needs initial and states/);
+    expect(text).toMatch(/workflow: unknown key "extend" — did you mean "extends"\?/);
+  });
+});
+
+describe("Loader: fanout and on_timeout", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs) cleanupDir(d);
+    dirs.length = 0;
+    vi.restoreAllMocks();
+  });
+  const exec = (extra: object) => ({
+    initial: "r",
+    states: { r: { type: "exec", command: "true", on_success: "e", on_error: "e", ...extra }, e: { terminal: true }, slow: { terminal: true } },
+  });
+
+  it("validates fanout and on_timeout", () => {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
+    const { loader, dir } = createTestLoader({
+      count: exec({ fanout: { count: 4, threads_each: 2, max_parallel: 2 }, on_timeout: "slow" }),
+      items: exec({ fanout: { items_command: "ls", threads_each: 1 } }),
+      both: exec({ fanout: { count: 2, items_command: "ls", threads_each: 1 } }),
+      neither: exec({ fanout: { threads_each: 1 } }),
+      typo: exec({ fanout: { count: 2, threads_eahc: 1 } }),
+      bg: exec({ fanout: { count: 2, threads_each: 1 }, background: true }),
+      leased: exec({ fanout: { count: 2, threads_each: 1 }, resource: { threads: 2 } }),
+      unknownTimeout: exec({ on_timeout: "nope" }),
+      caseTimeout: exec({ on_timeout: "slow", cases: { "124": "e" }, default: "e" }),
+      bgTimeout: exec({ on_timeout: "slow", background: true }),
+      promptTimeout: { initial: "p", states: { p: { prompt: "P", on_timeout: "e", transitions: { go: "e" } }, e: { terminal: true } } },
+    });
+    dirs.push(dir);
+    expect(loader.get("count")!.states.r).toMatchObject({ fanout: { count: 4, threads_each: 2, max_parallel: 2 }, on_timeout: "slow" });
+    expect(loader.get("items")!.states.r.fanout).toEqual({ items_command: "ls", threads_each: 1 });
+    for (const name of ["both", "neither", "typo", "bg", "leased", "unknownTimeout", "caseTimeout", "bgTimeout", "promptTimeout"])
+      expect(loader.get(name), name).toBeUndefined();
+    const text = errors.join("\n");
+    expect(text).toMatch(/fanout needs exactly one of count, items_command/);
+    expect(text).toContain('state "r" (fanout): unknown key "threads_eahc" — did you mean "threads_each"?');
+    expect(text).toContain('state "r" fanout cannot run as a background exec');
+    expect(text).toContain('state "r" fanout leases threads_each per shard; drop resource');
+    expect(text).toContain('state "r" on_timeout → unknown state "nope"');
+    expect(text).toContain('state "r" on_timeout and cases "124" both route a timeout');
+    expect(text).toContain('state "r" on_timeout is for foreground exec states');
+    expect(text).toContain('state "p" resource, fanout and on_timeout are for exec states');
   });
 });

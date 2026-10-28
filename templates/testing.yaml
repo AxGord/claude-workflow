@@ -26,7 +26,7 @@ states:
     transitions:
       has_unit: load_skills
       skip_to_integration: check_integration
-      skip_all: done
+      skip_all: project_gate
 
   load_skills:
     skills:
@@ -38,16 +38,36 @@ states:
   unit_tests:
     max_visits: 5
     prompt: |
-      Write and run unit tests for the changed behavior.
+      Write unit tests for the changed behavior. Running them is the next
+      state, `project_test` (a project workflow may run its suite there itself).
 
       **If bug fix — Red-Green workflow (mandatory):**
-      1. Write test targeting buggy behavior → run → confirm FAILS (red)
-      2. Apply fix → run → confirm PASSES (green)
+      1. Write a test targeting the buggy behavior → run THAT test alone on
+         the unfixed code → confirm it FAILS (red); skip the run when the
+         red was already shown (bug-fix reproduction)
+      2. Apply the fix; the green run is `project_test`
 
       **Otherwise:**
       1. Find existing test files for patterns
       2. Write tests covering new/changed behavior
       3. Register the new test file/suite if the runner requires it
+
+      A run here (the red check) goes through a flat `general-purpose`
+      subagent with `model: "haiku"`, `effort: "low"`, foreground,
+      `run_in_background: false` — never inherit the session model.
+
+      Budget: 5 visits to this state (engine-enforced); when nearly exhausted, choose `give_up` in fix_unit instead of retrying.
+
+      Transition `run` → the tests run in `project_test`.
+    transitions:
+      run: project_test
+
+  # Extension point (contract name): RUN the unit tests and decide. A project
+  # heir (`extends: testing`) replaces it with an exec — on_success
+  # check_integration, on_error fix_unit, on_timeout a state of its own.
+  project_test:
+    prompt: |
+      Run the unit tests for the changed behavior (and the suite they belong to).
 
       Run via a flat `general-purpose` subagent (build/run/report — no
       workflow, no skills) to keep build output out of main context.
@@ -64,8 +84,6 @@ states:
       background ONLY for never-exiting processes (servers, watchers)
       or runs over the 10-min foreground ceiling."
       Spawn with `run_in_background: false` — you need the result before transitioning.
-
-      Budget: 5 visits to this state (engine-enforced); when nearly exhausted, choose `give_up` in fix_unit instead of retrying.
 
       Choose transition:
       - `pass` → all unit tests pass
@@ -105,23 +123,18 @@ states:
       - `manual_verify` → UI-affecting change, no automated integration tooling
       - `skip` → unit tests are sufficient
     transitions:
-      need_integration: integration
+      need_integration: project_build
       manual_verify: manual_verify
       skip: check_test_changes
 
-  integration:
-    max_visits: 5
+  # Extension point (contract name): BUILD what integration launches. A
+  # project heir replaces it with an exec — on_success integration, on_error
+  # fix_integration.
+  project_build:
     prompt: |
-      Run integration verification.
-
-      1. Build and launch via a flat `general-purpose` subagent — the
-         subagent ONLY builds and launches, nothing else; pass
-         `model: "haiku"`, `effort: "low"` explicitly (runner, not judge)
-      2. Drive the debug bridge YOURSELF (the parent): simulate the
-         actual user workflow end-to-end
-      3. Verify state changes propagated correctly YOURSELF via the
-         bridge (screenshots, state inspection)
-
+      Build the app for integration verification via a flat `general-purpose`
+      subagent — it ONLY builds (integration launches); pass
+      `model: "haiku"`, `effort: "low"` explicitly (runner, not judge).
       A flat subagent inherits none of this project's skills or env
       rules — it only knows what YOU put in its spawn prompt. So include
       VERBATIM in that prompt: (a) any tooling/hook constraints that
@@ -133,6 +146,28 @@ states:
       background ONLY for never-exiting processes (servers, watchers)
       or runs over the 10-min foreground ceiling."
       Spawn with `run_in_background: false` — you need the result before transitioning.
+
+      Choose transition:
+      - `built` → build succeeded, verify it in integration
+      - `failed` → build broken, fix it
+    transitions:
+      built: integration
+      failed: fix_integration
+
+  integration:
+    max_visits: 5
+    prompt: |
+      Run integration verification on the build `project_build` produced.
+
+      1. Launch via a flat `general-purpose` subagent — the subagent ONLY
+         launches, nothing else; pass `model: "haiku"`, `effort: "low"`
+         explicitly (runner, not judge); same spawn-prompt rules as the
+         build runner (project constraints, verbatim quoting, foreground
+         with a timeout — a never-exiting app runs in background)
+      2. Drive the debug bridge YOURSELF (the parent): simulate the
+         actual user workflow end-to-end
+      3. Verify state changes propagated correctly YOURSELF via the
+         bridge (screenshots, state inspection)
 
       **Bug fixes**: reproduce the EXACT user scenario that triggered the bug.
       Check for regressions in related workflows.
@@ -147,6 +182,9 @@ states:
       fail: fix_integration
 
   fix_integration:
+    # build failures loop here without passing integration's budget
+    max_visits: 5
+    on_exhausted: failed
     prompt: |
       Integration test failed. Analyze what broke and fix it.
 
@@ -154,13 +192,13 @@ states:
       a background SendMessage-resume and idle-wait — that path is
       background-only and can't gate synchronously (see task-delegation
       Lifecycle). Delegate only a large/coupled fix.
-      After fixing, transition back to re-run integration.
+      After fixing, transition back to rebuild and re-run integration.
 
       Choose transition:
-      - `retry` → fixed, re-run integration tests
+      - `retry` → fixed, rebuild and re-run integration tests
       - `give_up` → unable to fix after multiple attempts
     transitions:
-      retry: integration
+      retry: project_build
       give_up: failed
 
   manual_verify:
@@ -246,14 +284,25 @@ states:
     env:
       FIX_VISITS: "{{visits.fix_unit}}{{visits.fix_integration}}{{visits.fix_user_issue}}"
     cases:
-      "0": done
+      "0": project_gate
       "10": review_test_changes
     default: review_test_changes
 
   review_test_changes:
     sub_workflow: code-review
-    on_complete: done
-    on_fail: done
+    on_complete: project_gate
+    on_fail: project_gate
+
+  # Extension point (contract name): the project's end-of-change gate, after
+  # every edit of this run. Bundled: none — passes straight to done. A project
+  # heir replaces it with an exec — on_success done, on_error failed (the
+  # caller's fix round), on_timeout a state of its own (a slow machine is not
+  # a code defect).
+  project_gate:
+    type: exec
+    command: "true"
+    on_success: done
+    on_error: done
 
   done:
     prompt: "Verification complete: required tests pass (manual steps, if any, reported)."

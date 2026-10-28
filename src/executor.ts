@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { StateDefinition, ActionResult } from "./types.js";
+import type { StateDefinition, ActionResult, ShardResult } from "./types.js";
 import { DEFAULT_PRIORITY_LEVEL, RESOURCE_THREADS_BUDGET, type PriorityLevel } from "./types.js";
 import { render } from "./template.js";
 import { killProcessGroup } from "./process.js";
@@ -20,12 +20,24 @@ const DEFAULT_MAX_OUTPUT = 10 * 1024; // 10KB truncation limit
 const DEFAULT_EXEC_TIMEOUT = 30_000;
 const DEFAULT_FETCH_TIMEOUT = 5_000;
 const SIGKILL_GRACE_MS = 5_000;
-const EXIT_CODE_TIMEOUT = 124;
+/** The exit code of an exec killed by its `timeout` (`on_timeout` routes it). */
+export const EXIT_CODE_TIMEOUT = 124;
 const TRIM_TRIGGER_FACTOR = 4;
 const TRIM_TARGET_FACTOR = 2;
 const EXIT_CODE_ABORTED = 130;
 const LEASE_LABEL_MAX = 80;
 const ABORTED_WAIT = "aborted while waiting for a pool lease";
+// items_command output is the shard list: never cut it to the usual tail
+const ITEMS_MAX_OUTPUT = 1024 * 1024;
+const TRUNCATED_MARK = "...[truncated]\n";
+// the output tail a failed shard contributes to a fanout's summary
+const SHARD_TAIL = 2_000;
+
+/** One instance of a `fanout:` exec: its id and the env that tells it which one it is. */
+interface Shard {
+  readonly id: string;
+  readonly env: Record<string, string>;
+}
 
 /**
  * Who an exec runs for: the engine-injected identity env and the session's
@@ -48,7 +60,7 @@ export { killProcessGroup };
 
 function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
   if (s.length <= limit) return s;
-  return "...[truncated]\n" + s.slice(-limit);
+  return TRUNCATED_MARK + s.slice(-limit);
 }
 
 export class Executor {
@@ -56,6 +68,8 @@ export class Executor {
   private readonly _running = new Map<string, Set<number>>();
   // Execs still queued for a pool lease, per session — abort withdraws them.
   private readonly _waiting = new Map<string, Set<AbortController>>();
+  // Fanouts still starting shards, per session — abort stops the rest from starting.
+  private readonly _fanouts = new Map<string, Set<AbortController>>();
   /** The machine-wide thread pool `resource:` execs lease from. */
   readonly pool: Pool;
 
@@ -67,7 +81,8 @@ export class Executor {
     const started = performance.now();
     let result: ActionResult;
     if (state.type === "exec") {
-      if (state.background) result = await this._execBackground(state, vars, ctx);
+      if (state.fanout) result = await this._execFanout(state, vars, ctx);
+      else if (state.background) result = await this._execBackground(state, vars, ctx);
       else if (state.resource) result = await this._execLeased(state, vars, ctx);
       else result = await this._exec(state, vars, ctx);
     } else if (state.type === "fetch") {
@@ -81,6 +96,8 @@ export class Executor {
 
   /** Kill every foreground exec group still running for the session and withdraw its lease waits. */
   killSession(sessionId: string): void {
+    for (const ac of this._fanouts.get(sessionId) ?? []) ac.abort();
+    this._fanouts.delete(sessionId);
     for (const ac of this._waiting.get(sessionId) ?? []) ac.abort();
     this._waiting.delete(sessionId);
     const pids = this._running.get(sessionId);
@@ -95,7 +112,7 @@ export class Executor {
    * No lease within `wait_timeout` exits 75. The lease's priority is the
    * session level's plus the step's own.
    */
-  private async _execLeased(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+  private async _execLeased(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext, shard?: Shard): Promise<ActionResult> {
     const resource = state.resource!;
     const budget = (n: number | typeof RESOURCE_THREADS_BUDGET): number => (n === RESOURCE_THREADS_BUDGET ? this.pool.config().budget : n);
     const asked = resource.threads;
@@ -119,7 +136,7 @@ export class Executor {
           locks: resource.locks,
           priority: Executor._priority(state, ctx),
           level: ctx?.level,
-          label: command.slice(0, LEASE_LABEL_MAX),
+          label: (shard ? `[${shard.id}] ${command}` : command).slice(0, LEASE_LABEL_MAX),
           cwd: this._cwd(state, vars, ctx) ?? process.cwd(),
           project: ctx?.project,
           step: ctx?.step,
@@ -156,11 +173,102 @@ export class Executor {
       };
     }
     try {
-      const leased = got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : undefined;
+      const leased = { ...(got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : {}), ...shard?.env };
       return { ...(await this._exec(state, vars, ctx, leased, (pgid) => got.lease.attach(pgid))), wait_ms, threads_granted: got.lease.threads };
     } finally {
       await got.lease.release();
     }
+  }
+
+  /**
+   * A `fanout:` exec: one instance per shard (`count`) or per line of
+   * `items_command`, each under its own lease of `threads_each` threads —
+   * the pool hands them out as threads free up, at most `max_parallel` at
+   * once (default: as many as the budget runs side by side). Exit 0 only
+   * if every shard exits 0; otherwise the failing shards' shared exit code
+   * (all timed out → 124), or 1 when they differ. `timeout` bounds each
+   * shard's run. Abort withdraws the waiting shards, kills the
+   * running ones and starts no more.
+   */
+  private async _execFanout(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+    const fanout = state.fanout!;
+    const run: StateDefinition = { ...state, fanout: undefined, resource: { threads: fanout.threads_each } };
+    let shards: Shard[];
+    if (fanout.items_command !== undefined) {
+      const listed = await this._exec({ ...run, command: fanout.items_command, max_output: ITEMS_MAX_OUTPUT }, vars, ctx);
+      if (!listed.success || listed.stdout!.startsWith(TRUNCATED_MARK)) {
+        const why = listed.success ? `items_command printed over ${ITEMS_MAX_OUTPUT} bytes` : `items_command failed: ${listed.error}`;
+        const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
+        return {
+          ...listed,
+          success: false,
+          exit_code: listed.success ? 1 : listed.exit_code,
+          stdout: truncate(listed.stdout ?? "", maxOutput),
+          stderr: truncate(`${why}\n${listed.stderr ?? ""}`, maxOutput),
+          error: why,
+        };
+      }
+      shards = listed.stdout!.split("\n").map(line => line.replace(/\r$/, "")).filter(line => line.trim() !== "")
+        .map(line => ({ id: line, env: { WF_ITEM: line } }));
+    } else {
+      const n = fanout.count!;
+      shards = Array.from({ length: n }, (_, i) => ({ id: `${i + 1}/${n}`, env: { WF_SHARD: `${i + 1}/${n}` } }));
+    }
+
+    const sessionId = ctx?.sessionId ?? "";
+    const ac = new AbortController();
+    let mine = this._fanouts.get(sessionId);
+    if (!mine) this._fanouts.set(sessionId, mine = new Set());
+    mine.add(ac);
+    const results: ShardResult[] = [];
+    const tails: string[] = [];
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      while (next < shards.length && !ac.signal.aborted) {
+        const i = next++;
+        const started = performance.now();
+        const r = await this._execLeased(run, vars, ctx, shards[i]);
+        const wait_ms = r.wait_ms ?? 0;
+        results[i] = {
+          shard: shards[i].id,
+          exit_code: r.exit_code ?? 1,
+          duration_ms: Math.round(performance.now() - started) - wait_ms,
+          wait_ms,
+          ...(r.threads_granted !== undefined ? { threads_granted: r.threads_granted } : {}),
+        };
+        if (r.exit_code !== 0)
+          tails[i] = `--- shard ${shards[i].id}: exit ${r.exit_code}${r.exit_code === EXIT_CODE_TIMEOUT ? " (timed out)" : ""} ---\n`
+            + `${r.stdout ?? ""}${r.stderr ?? ""}`.slice(-SHARD_TAIL);
+      }
+    };
+    try {
+      // Unbounded, every shard would queue in the pool at once and stand ahead
+      // of other sessions; by default only as many as the budget can run.
+      const budget = this.pool.config().budget;
+      const parallel = fanout.max_parallel ?? Math.max(1, Math.floor(budget / Math.min(fanout.threads_each, budget)));
+      await Promise.all(Array.from({ length: Math.min(parallel, shards.length) }, worker));
+    } finally {
+      mine.delete(ac);
+      if (mine.size === 0 && this._fanouts.get(sessionId) === mine) this._fanouts.delete(sessionId);
+    }
+    // shards an abort kept from starting
+    for (let i = 0; i < shards.length; i++)
+      if (!results[i]) results[i] = { shard: shards[i].id, exit_code: EXIT_CODE_ABORTED, duration_ms: 0, wait_ms: 0 };
+
+    const failed = results.filter(r => r.exit_code !== 0);
+    const codes = new Set(failed.map(r => r.exit_code));
+    const exit_code = failed.length === 0 ? 0 : codes.size === 1 ? failed[0].exit_code : 1;
+    const summary = `fanout: ${results.length - failed.length}/${results.length} ok`
+      + (failed.length > 0 ? `, ${failed.length} failed (exit ${[...codes].join(", ")})` : "");
+    return {
+      type: "exec",
+      success: exit_code === 0,
+      stdout: truncate([summary, ...tails.filter(t => t !== undefined)].join("\n"), state.max_output ?? DEFAULT_MAX_OUTPUT),
+      stderr: "",
+      exit_code,
+      error: failed.length > 0 ? summary : undefined,
+      shards: results,
+    };
   }
 
   /** A session exec's pool priority (`WF_PRIORITY`): its level's value plus the step's `resource.priority`. */
@@ -192,9 +300,10 @@ export class Executor {
    * session ids (WF_SESSION_ID, WF_PARENT_SESSION_ID — empty at the root,
    * WF_ROOT_SESSION_ID, WF_PRIORITY = the session level's priority plus the
    * step's, WF_PRIORITY_LEVEL = that level) and, under a lease with threads,
-   * WF_THREADS — overridable by the state's own rendered env: entries. An
-   * inherited WF_THREADS / WF_PRIORITY / WF_PRIORITY_LEVEL is dropped: they
-   * describe this exec's own session and lease only.
+   * WF_THREADS (and a fanout shard's WF_SHARD or WF_ITEM) — overridable by
+   * the state's own rendered env: entries. An inherited WF_THREADS /
+   * WF_PRIORITY / WF_PRIORITY_LEVEL / WF_SHARD / WF_ITEM is dropped: they
+   * describe this exec's own session, lease and shard only.
    * Single source for both foreground and background spawns so the injection
    * contract can't drift.
    */
@@ -216,7 +325,7 @@ export class Executor {
           WF_PRIORITY_LEVEL: ctx.level ?? DEFAULT_PRIORITY_LEVEL,
         }
       : undefined;
-    const { WF_THREADS: _threads, WF_PRIORITY: _priority, WF_PRIORITY_LEVEL: _level, ...base } = process.env;
+    const { WF_THREADS: _threads, WF_PRIORITY: _priority, WF_PRIORITY_LEVEL: _level, WF_SHARD: _shard, WF_ITEM: _item, ...base } = process.env;
     return { ...base, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...leased, ...envVars };
   }
 

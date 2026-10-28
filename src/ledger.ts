@@ -1,4 +1,4 @@
-import type { SessionState } from "./types.js";
+import type { SessionState, ShardResult } from "./types.js";
 
 /**
  * The root of a session's parent chain. Sessions record `root_session_id` at
@@ -23,6 +23,8 @@ export interface LedgerExec {
   readonly threads_granted?: number;
   /** `<project>|<workflow>|<state>` of a `resource:` exec: what a time model keys its runs by. */
   readonly step_key?: string;
+  /** A `fanout:` exec's instances: exit code, run and wait per shard. */
+  readonly shards?: readonly ShardResult[];
 }
 
 /** One line of `$STATE_DIR/ledger.jsonl`: a finished session's accounting. */
@@ -54,6 +56,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
       ...(h.wait_ms !== undefined ? { wait_ms: h.wait_ms } : {}),
       ...(h.threads_granted !== undefined ? { threads_granted: h.threads_granted } : {}),
       ...(h.step_key !== undefined ? { step_key: h.step_key } : {}),
+      ...(h.shards !== undefined ? { shards: h.shards } : {}),
     }));
   return {
     session_id: session.session_id,

@@ -497,7 +497,26 @@ states:
       - ?debug-bridge
       - ?project-skill-selector
     transitions:
-      continue: verify_visual
+      continue: project_build
+
+  # Extension point (contract name): BUILD the fixed app before the visual
+  # check. A project heir (`extends: bug-fix`) replaces it with an exec —
+  # on_success verify_visual, on_error write_fix.
+  project_build:
+    task: "Build the fixed app"
+    prompt: |
+      Build the app with the fix (if applicable — native targets must be
+      built before launch) via a flat `general-purpose` subagent — it ONLY
+      builds; pass `model: "haiku"`, `effort: "low"` explicitly (runner, not
+      judge), foreground with a timeout sized to the build,
+      `run_in_background: false`, and tell it to quote every error VERBATIM.
+      Nothing to build (interpreted / web dev server) → `built`.
+
+      - `built` → build succeeded (or nothing to build)
+      - `failed` → build broken by the fix
+    transitions:
+      built: verify_visual
+      failed: write_fix
 
   verify_visual:
     task: "Verify the fix visually"
@@ -509,12 +528,11 @@ states:
       as reproduce_visual: check available MCP tools, pick the one matching the
       platform.)
 
-      MANDATORY STEPS:
-      1. Build (if applicable — native targets must be built before launch; rebuild after the fix)
-      2. Launch the app using the tool above
-      3. Follow the SAME path used during reproduction
-      4. Take a screenshot and VERIFY the bug is gone
-      5. Compare before/after — describe the visual difference
+      MANDATORY STEPS (the app was built in `project_build`):
+      1. Launch the app using the tool above
+      2. Follow the SAME path used during reproduction
+      3. Take a screenshot and VERIFY the bug is gone
+      4. Compare before/after — describe the visual difference
 
       DO NOT transition to `confirmed` without a screenshot proving the fix works.
 

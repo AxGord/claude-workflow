@@ -13,6 +13,34 @@ description: Reference for authoring workflow YAML — state types, skill gates,
 - Active sessions keep their definition snapshot; only NEW `start()` sessions see reloaded workflows.
 - A NEW bundled workflow must also be added to `Engine.GLOBAL_WORKFLOWS` (`src/engine.ts`, a hardcoded name set) — otherwise the route prompt lists it under "Available workflows" as if it were a PROJECT workflow and Step 1 routes it via `project`. That is a code change: `npm run build` + server restart (templates hot-reload, code does not). Before deploying anything, check WHICH tree the running server loads: `ps -axo command | grep build/index.js` — a local-marketplace install can be a symlink straight to the repo, and a copy made into the plugin cache then changes nothing.
 
+### Inheritance: `extends:`
+
+A project workflow for a complex project should INHERIT the base process, not copy it:
+
+```yaml
+# .claude/workflows/testing.yaml
+name: testing
+extends: testing            # same name → the global/bundled testing below this file
+states:
+  project_test:             # replaces the base state WHOLE (no key-by-key merge)
+    type: exec
+    command: "npm test -- --maxWorkers=$WF_THREADS"
+    timeout: 600000
+    resource: { threads: 6 }
+    on_success: check_integration
+    on_error: fix_unit
+    on_timeout: suite_slow
+  suite_slow:               # new states are added
+    prompt: "Suite timed out. `retry` or report."
+    transitions: { retry: project_test }
+```
+
+- Merge: base states + heir states by name; `initial` / `max_transitions` / `description` from the heir when set. Validation (initial, transitions, routes) runs on the MERGED result, so a heir may route to base-only states
+- `extends` of its OWN name resolves from the tiers below the file (project → global → bundled); another name resolves from the top tier. Chains work; cycle / missing base / self-extends with nothing below = load error (stderr names it), and a file that fails resolution or validation falls back to the same name one tier down
+- Without `extends`, `initial` and `states` are required (strict schema)
+- **Extension points** (contract names in the bundled workflows; bundled = the old agent-run prompt or a no-op): `testing.project_test` (run the unit tests: keep `check_integration` / `fix_unit`), `testing.project_build` (build before integration: `integration` / `fix_integration`), `testing.project_gate` (end-of-change gate, bundled `exec true`: `done` / `failed`), `bug-fix.project_build` (build before the visual check: `verify_visual` / `write_fix`). `coding` and `bug-fix` verify through `testing` — one `testing` heir serves both
+- Override an extension point with an exec; copy a whole workflow only when the process itself differs
+
 ### State Types
 
 **prompt** (default) — Agent reads the prompt and acts. Standard behavior.
@@ -208,6 +236,7 @@ run_suite:
 - `wait_timeout` (seconds) expired → exit **75** (busy), routed through `cases`/`on_error` like any exit; without it the exec waits until granted or aborted (abort withdraws the wait)
 - `timeout` counts the run, not the wait; the history entry and the ledger record `wait_ms` beside `duration_ms`; `{{wait_ms}}` is a template var
 - Foreground exec only: `resource:` with `background: true` (or on a fetch) is a load error
+- **Shards: `fanout:`** — `fanout: { count: N | items_command: "<prints one item per line>", threads_each: k, max_parallel?: M }` on an exec runs the command N times (`WF_SHARD=i/N`, 1-based — the `vitest`/`jest --shard` form) or once per non-empty line (`WF_ITEM=<line>`), each instance under its OWN lease of k threads (`WF_THREADS`), started as threads free up, at most M in flight (default: budget / k — what runs side by side). Leases take no `wait_timeout` / `locks` / step `priority`. `timeout` is PER SHARD (default 30s — set it). Exit 0 only if every shard exits 0; else the failing shards' common code (all timed out → 124 → `on_timeout`), or 1 when they differ. `{{stdout}}` = summary (`fanout: 3/4 ok, 1 failed (exit 1)`) + each failed shard's output tail. Abort kills running shards, withdraws waiting ones, starts no more. History/ledger: one `shards` entry per instance. Load error beside `background` or `resource`; a failing `items_command` fails the step without running a shard
 - A shell step inside a larger command, or an agent's own Bash call, uses the CLI instead: `"$WF_PLUGIN_ROOT/scripts/wf-run" --threads 6|budget [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] -- <cmd> [args…]` — same pool and admission, the child runs in its own process group, SIGINT/SIGTERM/SIGHUP are forwarded, the exit code is the child's (75 = busy), the child gets `WF_THREADS`; `--lock` without `--threads` is lock-only; a SIGKILLed `wf-run` keeps its lease while its child's process group runs; `--efficiency` (macOS) runs the command on efficiency cores via `taskpolicy -b`, outside the budget
 
 ### Terminal States & Outcomes
@@ -270,7 +299,7 @@ state X requires auditing ALL transitions INTO X for bypasses.
 
 - stdout/stderr truncated to `max_output` bytes (default 10KB, configurable per state). Truncation keeps the **tail** (last N bytes), not the head — errors at the end of output are preserved. Use higher values for verbose builds (e.g. `max_output: 51200`)
 - Default timeout: 30s (exec), 5s (fetch)
-- Exec timeout → SIGTERM to the process group (SIGKILL after 5s grace) and **exit code 124** — route `"124"` in `cases` to detect timeouts; `{{error}}` is "Process timed out"
+- Exec timeout → SIGTERM to the process group (SIGKILL after 5s grace) and **exit code 124**; `{{error}}` is "Process timed out". Route it with `on_timeout: <state>` (foreground exec; wins over `on_error`/`cases`; beside `cases: {"124": …}` = load error) — a heavy gate that timed out must NOT fall into the code-fix loop
 - Action states CANNOT have `transitions` or `sub_workflow`
 - Action states route via on_success/on_error or cases/default only
 - `success_prompt`/`error_prompt` are templates, rendered with action result vars

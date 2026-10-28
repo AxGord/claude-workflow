@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { Executor } from "./executor.js";
 import { Pool } from "./pool.js";
+import { Loader } from "./loader.js";
+import { Engine } from "./engine.js";
+import { InMemoryStorage } from "./test-helpers.js";
 import type { StateDefinition } from "./types.js";
 
 // Runs the bundled templates' routing exec states as the engine would and
@@ -162,8 +165,8 @@ describe("bug-fix verify_route", () => {
 describe("testing check_test_changes", () => {
   const state = templateState("testing", "check_test_changes");
 
-  it("no fix_* visits → done", async () => {
-    expect(await route(state, { context: {}, visits: { assess: 1, unit_tests: 1 } })).toBe("done");
+  it("no fix_* visits → project_gate", async () => {
+    expect(await route(state, { context: {}, visits: { assess: 1, unit_tests: 1 } })).toBe("project_gate");
   });
 
   it("any fix_* visit → review_test_changes", async () => {
@@ -226,4 +229,88 @@ describe("review lint pass: probe without a lease, the pass under one", () => {
       });
     });
   }
+});
+
+describe("extension points (project_build / project_test / project_gate)", () => {
+  const states = (workflow: string) => YAML.parse(fs.readFileSync(path.join(TEMPLATES, `${workflow}.yaml`), "utf8")).states as Record<string, StateDefinition>;
+
+  it("testing: writing hands over to project_test, which routes as unit_tests did", () => {
+    const t = states("testing");
+    expect(t.unit_tests.transitions).toEqual({ run: "project_test" });
+    expect(t.project_test.transitions).toEqual({ pass: "check_integration", fail: "fix_unit" });
+    expect(t.project_test.prompt).toMatch(/flat `general-purpose` subagent/);
+  });
+
+  it("testing: integration builds through project_build, a fix round rebuilds", () => {
+    const t = states("testing");
+    expect(t.check_integration.transitions!.need_integration).toBe("project_build");
+    expect(t.project_build.transitions).toEqual({ built: "integration", failed: "fix_integration" });
+    expect(t.fix_integration.transitions!.retry).toBe("project_build");
+    // a build that keeps failing loops project_build ⇄ fix_integration without integration's budget
+    expect([t.fix_integration.max_visits, t.fix_integration.on_exhausted]).toEqual([5, "failed"]);
+  });
+
+  it("testing: every way to done passes project_gate, which the bundled template makes a no-op", async () => {
+    const t = states("testing");
+    expect(t.check_test_changes.cases!["0"]).toBe("project_gate");
+    expect(t.assess.transitions!.skip_all).toBe("project_gate");
+    expect([t.review_test_changes.on_complete, t.review_test_changes.on_fail]).toEqual(["project_gate", "project_gate"]);
+    expect([t.project_gate.on_success, t.project_gate.on_error]).toEqual(["done", "done"]);
+    expect((await new Executor().execute(t.project_gate, {})).exit_code).toBe(0);
+  });
+
+  it("bug-fix: the visual check builds through project_build", () => {
+    const b = states("bug-fix");
+    expect(b.load_skills_verify.transitions).toEqual({ continue: "project_build" });
+    expect(b.project_build.transitions).toEqual({ built: "verify_visual", failed: "write_fix" });
+  });
+
+  describe("a project heir of testing", () => {
+    let dirs: string[] = [];
+    afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); dirs = []; });
+    const engineWithHeir = () => {
+      const mk = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "wf-heir-")); dirs.push(d); return d; };
+      const project = mk();
+      fs.writeFileSync(path.join(project, "testing.yaml"), YAML.stringify({
+        name: "testing",
+        extends: "testing",
+        states: {
+          project_test: { type: "exec", command: "exit {{context.suite}}", on_success: "check_integration", on_error: "fix_unit" },
+          project_gate: { type: "exec", command: "{{context.gate}}", timeout: 200, on_success: "done", on_error: "failed", on_timeout: "gate_slow" },
+          gate_slow: { prompt: "The gate timed out", transitions: { done: "done" } },
+        },
+      }));
+      const loader = new Loader(TEMPLATES, mk(), project);
+      return new Engine(new InMemoryStorage(), loader, new Executor());
+    };
+    const toUnitTests = async (engine: Engine, context: Record<string, string>) => {
+      const s = await engine.start("testing");
+      for (const [k, v] of Object.entries(context)) await engine.setContext(s.sessionId, k, v);
+      await engine.transition(s.sessionId, "has_unit");
+      await engine.transition(s.sessionId, "continue");
+      return s.sessionId;
+    };
+
+    it("runs the suite as an exec: pass → check_integration, fail → fix_unit", async () => {
+      let engine = engineWithHeir();
+      let id = await toUnitTests(engine, { suite: "0" });
+      expect((await engine.transition(id, "run")).currentStateName).toBe("check_integration");
+      engine = engineWithHeir();
+      id = await toUnitTests(engine, { suite: "1" });
+      expect((await engine.transition(id, "run")).currentStateName).toBe("fix_unit");
+    });
+
+    it("its gate: pass → done, fail → failed, timeout → its own state", async () => {
+      const end = async (gate: string) => {
+        const engine = engineWithHeir();
+        const id = await toUnitTests(engine, { suite: "0", gate });
+        await engine.transition(id, "run");
+        return engine.transition(id, "skip");
+      };
+      const timedOut = await end("sleep 5");
+      expect(timedOut.currentStateName).toBe("gate_slow");
+      expect((await end("true")).prompt).toMatch(/Verification complete/);
+      expect((await end("false")).prompt).toMatch(/Testing failed/);
+    });
+  });
 });

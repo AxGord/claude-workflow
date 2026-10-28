@@ -17,6 +17,7 @@ import { projectRoot } from "./pool.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { Executor, ExecContext } from "./executor.js";
+import { EXIT_CODE_TIMEOUT } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { render } from "./template.js";
@@ -699,7 +700,11 @@ export class Engine {
     let routedName: string | undefined;
     let detail: string;
 
-    if (state.cases) {
+    if (state.on_timeout !== undefined && result.type === "exec" && result.exit_code === EXIT_CODE_TIMEOUT) {
+      // a run cut by its timeout is not a failure of the work: its own route
+      routedName = state.on_timeout;
+      detail = `exit ${EXIT_CODE_TIMEOUT} (timeout)`;
+    } else if (state.cases) {
       const key = result.type === "exec" ? String(result.exit_code ?? 1) : String(result.status ?? 0);
       routedName = state.cases[key] ?? state.default;
       detail = result.type === "exec" ? `exit ${result.exit_code}` : `HTTP ${result.status ?? "err"}`;
@@ -753,7 +758,8 @@ export class Engine {
       ...(result.wait_ms !== undefined ? { wait_ms: result.wait_ms } : {}),
       ...(result.threads_granted !== undefined ? { threads_granted: result.threads_granted } : {}),
       // The time-model key of a leased step: project (the session cwd's git root) | workflow | state.
-      ...(state.resource ? { step_key: `${execCtx.project}|${frame.workflow}|${frame.current_state}` } : {}),
+      ...(state.resource || state.fanout ? { step_key: `${execCtx.project}|${frame.workflow}|${frame.current_state}` } : {}),
+      ...(result.shards ? { shards: result.shards } : {}),
     };
 
     const globalKey = `${frame.workflow}:${targetStateName}`;

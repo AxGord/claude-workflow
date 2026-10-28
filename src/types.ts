@@ -45,6 +45,24 @@ export const ResourceSchema = ResourceObjectSchema.refine(
   { message: "wait_full needs threads: { min, max }" },
 );
 
+/**
+ * The keys of `fanout:` (the loader names the nearest one for a typo): run the
+ * exec's command `count` times (`WF_SHARD=i/N`, 1-based) or once per line
+ * `items_command` prints (`WF_ITEM=<line>`), each instance under its own
+ * pool lease of `threads_each` threads, at most `max_parallel` at once.
+ */
+export const FanoutObjectSchema = z.object({
+  count: z.number().int().positive().optional(),
+  items_command: z.string().min(1).optional(),
+  threads_each: z.number().int().positive(),
+  max_parallel: z.number().int().positive().optional(),
+}).strict();
+
+export const FanoutSchema = FanoutObjectSchema.refine(
+  f => (f.count === undefined) !== (f.items_command === undefined),
+  { message: "fanout needs exactly one of count, items_command" },
+);
+
 // Single source of truth for state fields. Tool schemas derive from this.
 // To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
 export const StateDefinitionSchema = z.object({
@@ -84,6 +102,10 @@ export const StateDefinitionSchema = z.object({
   // heavy work: lease `threads` and/or named `locks` from the machine-wide
   // pool before running (wait_timeout seconds, then exit 75); foreground exec only
   resource: ResourceSchema.optional(),
+  // run the command as N shards, each under its own pool lease; exit 0 only if every shard exits 0
+  fanout: FanoutSchema.optional(),
+  // exec killed by its `timeout` (exit 124) routes here instead of on_error/cases
+  on_timeout: z.string().optional(),
 
   // fetch
   url: z.string().optional(),
@@ -114,6 +136,28 @@ export const WorkflowDefinitionSchema = z.object({
 
 export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 
+/**
+ * A workflow YAML file as written. With `extends: <workflow>` it is a heir:
+ * the base's states plus its own (a state of the same name replaces the
+ * base's whole), and `initial` / `max_transitions` / `description` from the
+ * heir where it sets them. Without `extends`, `initial` and `states` are required.
+ */
+export const WorkflowFileObjectSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  extends: z.string().min(1).optional(),
+  initial: z.string().min(1).optional(),
+  max_transitions: z.number().int().positive().optional(),
+  states: z.record(StateDefinitionSchema).optional(),
+}).strict();
+
+export const WorkflowFileSchema = WorkflowFileObjectSchema.refine(
+  f => f.extends !== undefined || (f.initial !== undefined && f.states !== undefined),
+  { message: "a workflow without extends needs initial and states" },
+);
+
+export type WorkflowFile = z.infer<typeof WorkflowFileSchema>;
+
 // --- Action Result (from exec/fetch states) ---
 
 export interface ActionResult {
@@ -130,6 +174,18 @@ export interface ActionResult {
   /** Time spent waiting for a pool lease (`resource:` execs); not part of duration_ms. */
   readonly wait_ms?: number;
   /** Threads the pool granted a `resource:` exec (absent when it got no lease). */
+  readonly threads_granted?: number;
+  /** A `fanout:` exec's instances, in shard order. */
+  readonly shards?: readonly ShardResult[];
+}
+
+/** One instance of a `fanout:` exec. */
+export interface ShardResult {
+  /** `i/N` (1-based) for `count`, the item line for `items_command`. */
+  readonly shard: string;
+  readonly exit_code: number;
+  readonly duration_ms: number;
+  readonly wait_ms: number;
   readonly threads_granted?: number;
 }
 
@@ -158,6 +214,7 @@ export interface HistoryEntry {
   readonly threads_granted?: number;
   /** A leased exec's step: `<project>|<workflow>|<state>` (project = the session cwd's git root). */
   readonly step_key?: string;
+  readonly shards?: readonly ShardResult[];
 }
 
 export type SessionOutcome = "completed" | "failed" | "abandoned";

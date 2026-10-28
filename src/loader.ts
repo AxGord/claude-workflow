@@ -4,8 +4,19 @@ import path from "node:path";
 import YAML from "yaml";
 import { ZodError } from "zod";
 import { resetDeliveredPrompts } from "./tools.js";
-import type { WorkflowDefinition } from "./types.js";
-import { WorkflowDefinitionSchema, StateDefinitionSchema, ResourceObjectSchema } from "./types.js";
+import type { WorkflowDefinition, WorkflowFile } from "./types.js";
+import {
+  WorkflowDefinitionSchema, WorkflowFileSchema, WorkflowFileObjectSchema, StateDefinitionSchema,
+  ResourceObjectSchema, FanoutObjectSchema,
+} from "./types.js";
+
+/** A parsed workflow file of one load tier (bundled, global, project). */
+interface TierEntry {
+  readonly def: WorkflowFile;
+  readonly file: string;
+}
+
+type Tier = Map<string, TierEntry>;
 
 function editDistance(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -26,9 +37,10 @@ function nearest(key: string, known: readonly string[]): string {
 
 /** The keys a schema object at `issuePath` accepts (workflow, state, or a state's retry). */
 function knownKeysAt(issuePath: readonly (string | number)[]): readonly string[] {
-  if (issuePath.length === 0) return Object.keys(WorkflowDefinitionSchema.shape);
+  if (issuePath.length === 0) return Object.keys(WorkflowFileObjectSchema.shape);
   if (issuePath[2] === "retry") return ["max", "interval"];
   if (issuePath[2] === "resource") return Object.keys(ResourceObjectSchema.shape);
+  if (issuePath[2] === "fanout") return Object.keys(FanoutObjectSchema.shape);
   return Object.keys(StateDefinitionSchema.shape);
 }
 
@@ -151,22 +163,74 @@ export class Loader {
     // their (possibly new) full prompt once more before digesting again.
     resetDeliveredPrompts();
 
+    // Bundled (read-only defaults) → global → project: a later tier overrides by name.
+    const tiers: Tier[] = [];
+    if (this._bundledDir) tiers.push(this._loadDir(this._bundledDir));
+    tiers.push(this._loadDir(this._globalDir));
+    if (this._projectDir) tiers.push(this._loadDir(this._projectDir));
+
     const next = new Map<string, WorkflowDefinition>();
-
-    // Load bundled first (read-only defaults)
-    if (this._bundledDir) this._loadDir(this._bundledDir, next);
-
-    // Global overrides bundled
-    this._loadDir(this._globalDir, next);
-
-    // Project overrides global
-    if (this._projectDir) this._loadDir(this._projectDir, next);
-
+    const names = new Set(tiers.flatMap(t => [...t.keys()]));
+    for (const name of names) {
+      // A file that fails falls back to the same name one tier down, like a
+      // file that fails the schema: a half-saved project `testing` must not
+      // take `sub_workflow: testing` away from every new session.
+      for (let found = Loader._find(tiers, name, tiers.length - 1); found; found = Loader._find(tiers, name, found.tier - 1)) {
+        try {
+          const merged = WorkflowDefinitionSchema.parse(Loader._resolve(tiers, name, found.tier, []));
+          const errors = this._validate(merged);
+          if (errors.length === 0) {
+            next.set(name, merged);
+            break;
+          }
+          console.error(`Validation errors in ${found.entry.file}: ${errors.join("; ")}`);
+        } catch (err) {
+          console.error(`Failed to load workflow ${found.entry.file}: ${(err as Error).message}`);
+        }
+      }
+    }
     this._workflows = next;
   }
 
-  private _loadDir(dir: string, target: Map<string, WorkflowDefinition>): void {
-    if (!fs.existsSync(dir)) return;
+  /** The highest tier at or below `maxTier` that defines `name`. */
+  private static _find(tiers: readonly Tier[], name: string, maxTier: number): { entry: TierEntry; tier: number } | undefined {
+    for (let tier = maxTier; tier >= 0; tier--) {
+      const entry = tiers[tier].get(name);
+      if (entry) return { entry, tier };
+    }
+    return undefined;
+  }
+
+  /**
+   * `name` as seen from `maxTier` down, its `extends` chain merged in. A heir
+   * extending its own name inherits that name from the tiers below it (a
+   * project `coding` over the global/bundled one); another name resolves from
+   * the top tier. `chain` holds the `name@tier` links walked so far: a repeat is a cycle.
+   */
+  private static _resolve(tiers: readonly Tier[], name: string, maxTier: number, chain: readonly string[]): object {
+    const found = Loader._find(tiers, name, maxTier);
+    if (!found) {
+      const from = chain.length > 0 ? ` (extended by ${chain[chain.length - 1].split("@")[0]})` : "";
+      throw new Error(`extends "${name}": no such workflow${maxTier < tiers.length - 1 ? " below this tier" : ""}${from}`);
+    }
+    const link = `${name}@${found.tier}`;
+    if (chain.includes(link))
+      throw new Error(`extends cycle: ${[...chain, link].map(l => l.split("@")[0]).join(" → ")}`);
+    const { extends: baseName, ...own } = found.entry.def;
+    if (baseName === undefined) return own;
+    const base = Loader._resolve(tiers, baseName, baseName === name ? found.tier - 1 : tiers.length - 1, [...chain, link]) as WorkflowFile;
+    return {
+      name: own.name,
+      description: own.description ?? base.description,
+      initial: own.initial ?? base.initial,
+      max_transitions: own.max_transitions ?? base.max_transitions,
+      states: { ...base.states, ...own.states },
+    };
+  }
+
+  private _loadDir(dir: string): Tier {
+    const tier: Tier = new Map();
+    if (!fs.existsSync(dir)) return tier;
 
     const files = fs.readdirSync(dir)
       .filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
@@ -176,22 +240,17 @@ export class Loader {
       try {
         const raw = fs.readFileSync(fp, "utf-8");
         const parsed = YAML.parse(raw);
-        const checked = WorkflowDefinitionSchema.safeParse(parsed);
+        const checked = WorkflowFileSchema.safeParse(parsed);
         if (!checked.success) {
           console.error(`Failed to load workflow:\n${describeSchemaError(fp, checked.error)}`);
           continue;
         }
-        const validated = checked.data;
-        const errors = this._validate(validated);
-        if (errors.length > 0) {
-          console.error(`Validation errors in ${fp}: ${errors.join("; ")}`);
-          continue;
-        }
-        target.set(validated.name, validated);
+        tier.set(checked.data.name, { def: checked.data, file: fp });
       } catch (err) {
         console.error(`Failed to load workflow ${fp}:`, err);
       }
     }
+    return tier;
   }
 
   private _validate(wf: WorkflowDefinition): string[] {
@@ -251,6 +310,20 @@ export class Loader {
           errors.push(`state "${name}" resource is for exec states`);
         if (state.resource && state.background)
           errors.push(`state "${name}" resource cannot hold a lease for a background exec`);
+        if (state.fanout && state.type !== "exec")
+          errors.push(`state "${name}" fanout is for exec states`);
+        if (state.fanout && state.background)
+          errors.push(`state "${name}" fanout cannot run as a background exec`);
+        if (state.fanout && state.resource)
+          errors.push(`state "${name}" fanout leases threads_each per shard; drop resource`);
+        if (state.on_timeout !== undefined) {
+          if (state.type !== "exec" || state.background)
+            errors.push(`state "${name}" on_timeout is for foreground exec states`);
+          if (!stateNames.has(state.on_timeout))
+            errors.push(`state "${name}" on_timeout → unknown state "${state.on_timeout}"`);
+          if (state.cases?.["124"] !== undefined)
+            errors.push(`state "${name}" on_timeout and cases "124" both route a timeout`);
+        }
         if (state.sub_workflow)
           errors.push(`state "${name}" action state cannot have sub_workflow`);
         if (state.transitions && Object.keys(state.transitions).length > 0)
@@ -263,8 +336,8 @@ export class Loader {
         if (state.sub_workflow && !state.on_complete)
           errors.push(`state "${name}" has sub_workflow but no on_complete`);
 
-        if (state.resource)
-          errors.push(`state "${name}" resource is for exec states`);
+        if (state.resource || state.fanout || state.on_timeout !== undefined)
+          errors.push(`state "${name}" resource, fanout and on_timeout are for exec states`);
       }
 
       // terminal + transitions is allowed: "soft terminal" — considered complete

@@ -253,6 +253,41 @@ run_tests:
   default: unknown_error
 ```
 
+An exec killed by its `timeout` exits 124. `on_timeout: <state>` routes that apart from every other
+outcome (it wins over `on_error` and `cases`) — a gate that timed out on a loaded machine is not a
+code defect and should not enter the fix loop. Foreground exec only; beside `cases: { "124": … }` it
+is a load error (two routes for one outcome).
+
+### Fan-out — one command, many shards
+
+```yaml
+suite:
+  type: exec
+  command: "npx vitest run --shard=$WF_SHARD"
+  timeout: 600000                      # per shard
+  fanout: { count: 4, threads_each: 3, max_parallel: 4 }
+  on_success: green
+  on_error: red
+  on_timeout: slow_machine
+```
+
+The engine runs the command `count` times with `WF_SHARD=i/N` (1-based, `vitest`/`jest` `--shard`
+form), or once per non-empty line `items_command` prints with `WF_ITEM=<line>`
+(`fanout: { items_command: "ls test/suites", threads_each: 2 }`). Each instance takes its own lease of
+`threads_each` threads from the pool (`WF_THREADS`), so shards start as threads free up and the
+machine-wide budget holds; `max_parallel` caps the instances in flight (default: as many as the
+budget runs side by side, `budget / threads_each` — the rest wait outside the pool queue, so other
+sessions are not stuck behind the whole fan-out). Lines of `items_command` lose a trailing `\r`. `timeout` bounds
+each shard. The step exits 0 only if every shard does; otherwise with the failing shards' common exit
+code (all of them timed out → 124, which `on_timeout` routes), or 1 when they differ. `{{stdout}}` is
+the summary — `fanout: 3/4 ok, 1 failed (exit 1)` and each failed shard's output tail. Abort kills
+the running shards, withdraws the waiting ones and starts no more. History and ledger keep one
+`shards` entry per instance (`shard`, `exit_code`, `duration_ms`, `wait_ms`, `threads_granted`).
+`fanout` is a load error beside `background` or `resource`; a failing `items_command` fails the
+step without running a shard.
+Known limitation: a fan-out's leases take no `resource:` options — no `wait_timeout` (so no exit 75
+route), no `locks`, no step `priority` (the session level only).
+
 ### Template variables
 
 All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited), `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`), `{{session_id}}` and `{{parent_session_id}}` (empty at the root). After action execution, result variables are also available:
@@ -282,11 +317,11 @@ The route applies to every move into the state — an agent `transition`, an act
 
 ### Strict schema
 
-An unknown key in a workflow, a state, a `retry:` or a `resource:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.
+An unknown key in a workflow, a state, a `retry:`, `resource:` or `fanout:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.
 
 ### Ledger
 
-Every session end (complete, fail, abort, cascade or hook abandon) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease) and `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
+Every session end (complete, fail, abort, cascade or hook abandon) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
 
 ## Three-Tier Loading
 
@@ -299,6 +334,47 @@ Workflows load from three sources in ascending priority — later tiers override
 | Project | `.claude/workflows/` | Project-specific workflows |
 
 A project workflow named `coding` overrides the bundled `coding` template. Same-name global workflows sit in between.
+
+### `extends:` — inherit a workflow
+
+```yaml
+# .claude/workflows/testing.yaml
+name: testing
+extends: testing          # the global / bundled testing, never this file
+states:
+  project_test:           # replaces the base state of that name WHOLE
+    type: exec
+    command: "npm test -- --maxWorkers=$WF_THREADS"
+    timeout: 600000
+    resource: { threads: 6 }
+    on_success: check_integration
+    on_error: fix_unit
+    on_timeout: suite_slow
+  suite_slow:             # a new state joins the base's
+    prompt: "The suite timed out — machine loaded? Re-run (`retry`) or report."
+    transitions: { retry: project_test }
+```
+
+The definition is the base's, with the heir's states laid over it by name (a same-named state is
+replaced whole, not merged key by key; new states are added). `initial`, `max_transitions` and
+`description` come from the heir where it sets them. A heir extending its OWN name inherits that
+name from the tiers below its file (project `coding` → global, else bundled `coding`); another name
+resolves like any workflow name (the top tier). Chains work; a cycle, a missing base, or `extends`
+of its own name with nothing below fail the load. Reference checks (initial, transitions, routes)
+run on the merged result. Without `extends`, `initial` and `states` are required.
+
+**Extension points.** The bundled workflows expose the steps a project usually wants to own as
+states with contract names; bundled, each keeps the old behaviour (the agent does it, or nothing):
+
+| State | In | Bundled default | Routes a heir's exec should keep |
+|---|---|---|---|
+| `project_test` | `testing` | prompt: the agent runs the tests via a runner subagent | `on_success: check_integration`, `on_error: fix_unit` |
+| `project_build` | `testing` | prompt: build before integration | `on_success: integration`, `on_error: fix_integration` |
+| `project_gate` | `testing` | exec `true` — no gate | `on_success: done`, `on_error: failed` (the caller's fix round) |
+| `project_build` | `bug-fix` | prompt: build the fixed app before the visual check | `on_success: verify_visual`, `on_error: write_fix` |
+
+`coding` and `bug-fix` verify through `testing`, so one heir of `testing` serves both. Give every
+heavy step `on_timeout:` and a state of its own for it.
 
 ### When a project should have its own workflow
 
@@ -316,17 +392,20 @@ Why it pays:
 - **Deterministic steps become `exec` states.** Build, tests, gate and merge run inside the engine; the
   agent transitions and gets back only the verdict (keep it short — a table, the first error — and
   write full logs to files). No tokens spent re-reading build output, and no "forgot to run the tests".
-- **Heavy steps go through the machine-wide pool** (`resource:`): sessions of every project share one
-  CPU budget instead of racing each other, and a waiting exec costs the agent nothing — it sleeps inside
-  the `transition` call until its lease is granted.
+- **Heavy steps go through the machine-wide pool** (`resource:`, `fanout:` for shards): sessions of
+  every project share one CPU budget instead of racing each other, and a waiting exec costs the agent
+  nothing — it sleeps inside the `transition` call until its lease is granted.
 - **Short prompts.** A state's prompt says what to do NOW and links the project's docs instead of
   restating them; a worker's brief from the parent shrinks to a few lines.
 - **Loops are explicit.** A fix-and-recheck cycle is `max_visits` + `on_exhausted`, not a rule the
-  agent must remember.
+  agent must remember; a timeout is `on_timeout`, not a fix round.
 
-How: copy the closest bundled workflow under the same name (to replace it) or a new name (to run it via
-the master's project route), turn every command the agent used to run by hand into an `exec` state
-with `resource:` where it is heavy, and keep judgement (design, code, review) in prompt states.
+How: start with `extends:` — a heir of the bundled workflow under its own name that overrides only
+the extension points (`project_test`, `project_build`, `project_gate`) with `exec` states
+(`resource:` / `fanout:` where heavy, `on_timeout:` everywhere), so the base process keeps improving
+underneath it. Add or replace further states only where the project's process really differs, and
+keep judgement (design, code, review) in prompt states. Copy a whole workflow only when the process
+itself is different.
 
 ## Bundled Workflows
 
