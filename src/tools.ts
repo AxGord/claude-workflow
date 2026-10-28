@@ -5,7 +5,7 @@ import type { Engine, StatusResult } from "./engine.js";
 import type { Modifier } from "./modifier.js";
 import type { Loader } from "./loader.js";
 import type { Storage } from "./storage.js";
-import { StateDefinitionSchema, type SessionState } from "./types.js";
+import { StateDefinitionSchema, START_CWD_DESCRIPTION, type SessionState } from "./types.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -13,8 +13,7 @@ interface FormatOptions {
 }
 
 function formatStateHeader(status: StatusResult): string {
-  if (status.stack.length === 0)
-    return status.currentStateName === "(abandoned)" ? "(abandoned)" : "(completed)";
+  if (status.stack.length === 0) return status.currentStateName;
 
   const frame = status.stack[status.activeFrame];
   const visits = frame.state_visits[frame.current_state] ?? 0;
@@ -33,6 +32,31 @@ function formatStateHeader(status: StatusResult): string {
       return `  [${i}] ${f.workflow} @ ${f.current_state}${vs}${waiting}${active}`;
     })
     .join("\n");
+}
+
+const CONTEXT_VALUE_LIMIT = 200;
+const CONTEXT_KEY_LIMIT = 40;
+
+/**
+ * The session context as status() shows it, so a parent can read a child's
+ * results: one line per key, each value cut to a fixed length; past the key
+ * limit the remaining keys are listed by name only.
+ */
+export function formatContext(context: Record<string, unknown>): string[] {
+  const keys = Object.keys(context);
+  if (keys.length === 0) return [];
+  const lines = ["CONTEXT:"];
+  for (const key of keys.slice(0, CONTEXT_KEY_LIMIT)) {
+    const raw = context[key];
+    const text = (typeof raw === "string" ? raw : JSON.stringify(raw) ?? String(raw)).replace(/\n/g, "\\n");
+    const cut = text.length > CONTEXT_VALUE_LIMIT
+      ? `${text.slice(0, CONTEXT_VALUE_LIMIT)}… [${text.length} chars]`
+      : text;
+    lines.push(`  ${key}: ${cut}`);
+  }
+  const rest = keys.slice(CONTEXT_KEY_LIMIT);
+  if (rest.length > 0) lines.push(`  … ${rest.length} more: ${rest.join(", ")}`);
+  return lines;
 }
 
 // Memory of digest_on_repeat states whose FULL prompt already went out once
@@ -190,10 +214,11 @@ export function registerTools(
       workflow: z.string().optional().describe("Name of the workflow to start. Defaults to \"master\""),
       actor: z.string().optional().describe("Identity of the agent performing this action"),
       parent_session_id: z.string().optional().describe("Parent session ID for sub-agent tracking"),
+      cwd: z.string().optional().describe(START_CWD_DESCRIPTION),
     }).strict(),
   }, (args) => serialized(args.parent_session_id ? null : "start", async () => {
     try {
-      const status = await engine.start(args.workflow ?? "master", args.actor, args.parent_session_id);
+      const status = await engine.start(args.workflow ?? "master", args.actor, args.parent_session_id, args.cwd);
       // No forceFullPrompt here: a digest_on_repeat initial state (master
       // route) digests on repeat start() calls in the same process — the
       // main ceremony saving. status() still always returns the full text.
@@ -230,8 +255,10 @@ export function registerTools(
         return `  [${h.frame}] ${h.from} --${h.via}--> ${h.to}${actorStr} at ${h.at}`;
       });
 
+      const contextLines = formatContext(status.context);
       const text = [
         formatStatus(status, { showSessionId: true, forceFullPrompt: true }),
+        ...(contextLines.length > 0 ? ["", ...contextLines] : []),
         "",
         "RECENT HISTORY:",
         ...historyLines,
@@ -376,17 +403,27 @@ export function registerTools(
       session_id: z.string().optional().describe("Session identifier"),
       force: z.boolean().optional().describe("Skip PID ownership check (for cross-process operations, e.g. aborting stale sessions from dead processes)"),
     }).strict(),
-  }, (args) => serialized(sessionKey(args.session_id), async () => {
+  }, (args) => {
+    // Kill first, outside the queue: the session's own running transition
+    // holds the queue for as long as its foreground exec runs. An unresolved
+    // id or a refused ownership kills nothing; the queued run reports it.
     try {
       const sid = engine.resolveSessionId(args.session_id);
-      const warning = engine.assertOwnership(sid, args.force);
-      await engine.abort(sid);
-      const text = (warning ? warning + "\n" : "") + `Session "${sid}" aborted.`;
-      return { content: [{ type: "text", text }] };
-    } catch (err) {
-      return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
-    }
-  }));
+      engine.assertOwnership(sid, args.force);
+      engine.killSessionTree(sid);
+    } catch { /* reported below */ }
+    return serialized(sessionKey(args.session_id), async () => {
+      try {
+        const sid = engine.resolveSessionId(args.session_id);
+        const warning = engine.assertOwnership(sid, args.force);
+        await engine.abort(sid);
+        const text = (warning ? warning + "\n" : "") + `Session "${sid}" aborted.`;
+        return { content: [{ type: "text", text }] };
+      } catch (err) {
+        return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
+      }
+    });
+  });
 
   // 10. sessions
   server.registerTool("sessions", {
@@ -409,7 +446,7 @@ export function registerTools(
       const frame = isActive ? s.stack[s.active_frame] : null;
       const stateInfo = frame
         ? `${frame.workflow} @ ${frame.current_state}`
-        : s.outcome === "abandoned" ? "(abandoned)" : "(completed)";
+        : `(${s.outcome ?? "completed"})`;
       const depth = s.stack.length > 1 ? ` [depth: ${s.stack.length}]` : "";
       const parent = s.parent_session_id ? ` [child of ${s.parent_session_id}]` : "";
       const pidInfo = args.all && s.context.claude_code_pid !== undefined

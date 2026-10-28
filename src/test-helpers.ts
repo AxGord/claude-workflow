@@ -35,6 +35,13 @@ export class InMemoryStorage implements Storage {
   pruneTerminal(keep: number): void {
     prunePolicy(this.readAll(), keep, id => this.delete(id));
   }
+
+  /** Ledger lines appended so far, in order. */
+  readonly ledger: object[] = [];
+
+  async appendLedger(entry: object): Promise<void> {
+    this.ledger.push(entry);
+  }
 }
 
 export function createFixtureDir(workflows: Record<string, object>): string {

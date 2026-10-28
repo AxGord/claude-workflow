@@ -20,38 +20,103 @@ const EXIT_CODE_TIMEOUT = 124;
 const TRIM_TRIGGER_FACTOR = 4;
 const TRIM_TARGET_FACTOR = 2;
 
+/**
+ * Who an exec runs for: the engine-injected identity env and the session's
+ * working directory (a sub-agent's worktree, not the server's cwd).
+ */
+export interface ExecContext {
+  readonly sessionId: string;
+  readonly parentSessionId?: string;
+  readonly rootSessionId: string;
+  readonly cwd?: string;
+}
+
+/**
+ * Signal a whole process group: every exec spawns detached (its own group),
+ * so `sh -c` and everything it started die together. Falls back to the bare
+ * pid for a process that is not a group leader.
+ */
+export function killProcessGroup(pid: number, signal: NodeJS.Signals = "SIGTERM"): void {
+  // pids come from session JSON: kill(-1) would signal every process of the
+  // user, kill(0) / kill(-0) the server's own group.
+  if (!Number.isInteger(pid) || pid <= 1) return;
+  try { process.kill(-pid, signal); return; } catch { /* not a group leader, or gone */ }
+  try { process.kill(pid, signal); } catch { /* already dead */ }
+}
+
 function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
   if (s.length <= limit) return s;
   return "...[truncated]\n" + s.slice(-limit);
 }
 
 export class Executor {
-  async execute(state: StateDefinition, vars: Record<string, unknown>): Promise<ActionResult> {
+  // Foreground exec groups still running, per session — abort kills them.
+  private readonly _running = new Map<string, Set<number>>();
+
+  async execute(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+    const started = performance.now();
+    let result: ActionResult;
     if (state.type === "exec") {
-      if (state.background) return this._execBackground(state, vars);
-      return this._exec(state, vars);
+      result = state.background ? await this._execBackground(state, vars, ctx) : await this._exec(state, vars, ctx);
+    } else if (state.type === "fetch") {
+      result = await this._fetch(state, vars);
+    } else {
+      throw new Error(`Unknown action type: ${state.type}`);
     }
-    if (state.type === "fetch") {
-      return this._fetch(state, vars);
+    return { ...result, duration_ms: Math.round(performance.now() - started) };
+  }
+
+  /** Kill every foreground exec group still running for the session. */
+  killSession(sessionId: string): void {
+    const pids = this._running.get(sessionId);
+    if (!pids) return;
+    for (const pid of pids) killProcessGroup(pid);
+    this._running.delete(sessionId);
+  }
+
+  private _track(sessionId: string | undefined, pid: number | undefined, add: boolean): void {
+    if (!sessionId || !pid) return;
+    let pids = this._running.get(sessionId);
+    if (add) {
+      if (!pids) this._running.set(sessionId, pids = new Set());
+      pids.add(pid);
+    } else if (pids) {
+      pids.delete(pid);
+      if (pids.size === 0) this._running.delete(sessionId);
     }
-    throw new Error(`Unknown action type: ${state.type}`);
+  }
+
+  /** A state's cwd resolves against the session's; no state cwd runs in the session's. */
+  private _cwd(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): string | undefined {
+    if (!state.cwd) return ctx?.cwd;
+    const own = render(state.cwd, vars);
+    return ctx?.cwd ? path.resolve(ctx.cwd, own) : own;
   }
 
   /**
-   * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT,
-   * overridable by the state's own rendered env: entries. Single source for
-   * both foreground and background spawns so the injection contract can't drift.
+   * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT and the
+   * session ids (WF_SESSION_ID, WF_PARENT_SESSION_ID — empty at the root,
+   * WF_ROOT_SESSION_ID), overridable by the state's own rendered env: entries.
+   * Single source for both foreground and background spawns so the injection
+   * contract can't drift.
    */
-  private _buildEnv(state: StateDefinition, vars: Record<string, unknown>): NodeJS.ProcessEnv {
+  private _buildEnv(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): NodeJS.ProcessEnv {
     const envVars = state.env
       ? Object.fromEntries(Object.entries(state.env).map(([k, v]) => [k, render(v, vars)]))
       : undefined;
-    return { ...process.env, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...envVars };
+    const ids = ctx
+      ? {
+          WF_SESSION_ID: ctx.sessionId,
+          WF_PARENT_SESSION_ID: ctx.parentSessionId ?? "",
+          WF_ROOT_SESSION_ID: ctx.rootSessionId,
+        }
+      : undefined;
+    return { ...process.env, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...envVars };
   }
 
-  private _exec(state: StateDefinition, vars: Record<string, unknown>): Promise<ActionResult> {
+  private _exec(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
     const command = render(state.command!, vars);
-    const cwd = state.cwd ? render(state.cwd, vars) : undefined;
+    const cwd = this._cwd(state, vars, ctx);
     const timeout = state.timeout ?? DEFAULT_EXEC_TIMEOUT;
     const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
 
@@ -62,14 +127,14 @@ export class Executor {
 
       const child = spawn("sh", ["-c", command], {
         cwd,
-        env: this._buildEnv(state, vars),
+        env: this._buildEnv(state, vars, ctx),
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
       });
+      this._track(ctx?.sessionId, child.pid, true);
 
       const killGroup = (signal: NodeJS.Signals) => {
-        if (!child.pid) return;
-        try { process.kill(-child.pid, signal); } catch {}
+        if (child.pid) killProcessGroup(child.pid, signal);
       };
 
       let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
@@ -88,6 +153,7 @@ export class Executor {
       child.stderr!.on("data", (chunk: Buffer) => { stderr = accumulate(stderr, chunk); });
 
       child.on("close", (code: number | null) => {
+        this._track(ctx?.sessionId, child.pid, false);
         clearTimeout(timer);
         clearTimeout(sigkillTimer);
         const exit_code = killed ? EXIT_CODE_TIMEOUT : (code ?? 1);
@@ -102,6 +168,7 @@ export class Executor {
       });
 
       child.on("error", (err) => {
+        this._track(ctx?.sessionId, child.pid, false);
         clearTimeout(timer);
         clearTimeout(sigkillTimer);
         resolve({
@@ -116,9 +183,9 @@ export class Executor {
     });
   }
 
-  private _execBackground(state: StateDefinition, vars: Record<string, unknown>): Promise<ActionResult> {
+  private _execBackground(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
     const command = render(state.command!, vars);
-    const cwd = state.cwd ? render(state.cwd, vars) : undefined;
+    const cwd = this._cwd(state, vars, ctx);
 
     const logFile = path.join(os.tmpdir(), `wf-bg-${Date.now()}.log`);
     const out = fs.openSync(logFile, "a");
@@ -127,7 +194,7 @@ export class Executor {
     try {
       child = spawn("sh", ["-c", command], {
         cwd,
-        env: this._buildEnv(state, vars),
+        env: this._buildEnv(state, vars, ctx),
         detached: true,
         stdio: ["ignore", out, out],
       });

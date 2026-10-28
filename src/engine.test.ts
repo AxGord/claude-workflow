@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import path from "node:path";
+import fs from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
@@ -641,5 +643,332 @@ describe("Engine", () => {
       expect(status.currentWorkflow).toBe("multi");
       expect(status.visitCount).toBe(1);
     });
+  });
+});
+
+describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
+  let storage: InMemoryStorage;
+  let engine: Engine;
+  let dir: string;
+  const tmpDirs: string[] = [];
+
+  function setup(workflows: Record<string, object>) {
+    storage = new InMemoryStorage();
+    const result = createTestLoader(workflows);
+    dir = result.dir;
+    engine = new Engine(storage, result.loader, new Executor());
+  }
+  function tmpDir(): string {
+    const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wf-eng1a-")));
+    tmpDirs.push(d);
+    return d;
+  }
+
+  afterEach(() => {
+    if (dir) cleanupDir(dir);
+    for (const d of tmpDirs.splice(0)) cleanupDir(d);
+  });
+
+  const PWD_WORKFLOW = {
+    initial: "start",
+    states: {
+      start: { prompt: "go", transitions: { next: "pwd" } },
+      pwd: {
+        type: "exec",
+        command: 'pwd -P; echo "$WF_SESSION_ID|$WF_PARENT_SESSION_ID|$WF_ROOT_SESSION_ID"',
+        on_success: "show",
+        on_error: "show",
+        success_prompt: "{{stdout}}",
+      },
+      show: { prompt: "sid={{session_id}} parent={{parent_session_id}}", transitions: { done: "end" } },
+      end: { terminal: true, outcome: "complete" },
+    },
+  };
+
+  it("start cwd: an exec without its own cwd runs in the session's cwd", async () => {
+    setup({ pwd: PWD_WORKFLOW });
+    const worktree = tmpDir();
+    const { sessionId } = await engine.start("pwd", undefined, undefined, worktree);
+    expect(storage.read(sessionId)!.context.cwd).toBe(worktree);
+    const r = await engine.transition(sessionId, "next");
+    expect(r.prompt.split("\n")[0]).toBe(worktree);
+  });
+
+  it("start cwd: a relative state cwd resolves against the session's cwd", async () => {
+    setup({
+      rel: {
+        initial: "run",
+        states: {
+          run: { type: "exec", command: "pwd -P", cwd: "sub", on_success: "show", on_error: "show", success_prompt: "{{stdout}}" },
+          show: { prompt: "x", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const worktree = tmpDir();
+    fs.mkdirSync(path.join(worktree, "sub"));
+    const r = await engine.start("rel", undefined, undefined, worktree);
+    expect(r.prompt.trim()).toBe(path.join(worktree, "sub"));
+  });
+
+  it("start cwd: without the parameter the session keeps the server cwd", async () => {
+    setup({ simple: SIMPLE_WORKFLOW });
+    const { sessionId } = await engine.start("simple");
+    expect(storage.read(sessionId)!.context.cwd).toBe(process.cwd());
+  });
+
+  it("start cwd: a relative or missing directory is an error", async () => {
+    setup({ simple: SIMPLE_WORKFLOW });
+    await expect(engine.start("simple", undefined, undefined, "rel/dir")).rejects.toThrow("absolute");
+    await expect(engine.start("simple", undefined, undefined, path.join(tmpDir(), "nope")))
+      .rejects.toThrow("not an existing directory");
+    expect(storage.readAll()).toHaveLength(0);
+  });
+
+  it("ids: exec env and prompt templates carry session / parent / root ids", async () => {
+    setup({ pwd: PWD_WORKFLOW, simple: SIMPLE_WORKFLOW });
+    const root = await engine.start("simple");
+    const mid = await engine.start("simple", undefined, root.sessionId);
+    const child = await engine.start("pwd", undefined, mid.sessionId);
+    const r = await engine.transition(child.sessionId, "next");
+    expect(r.prompt.split("\n")[1]).toBe(`${child.sessionId}|${mid.sessionId}|${root.sessionId}`);
+    expect(engine.getStatus(child.sessionId).prompt).toBe(`sid=${child.sessionId} parent=${mid.sessionId}`);
+
+    const solo = await engine.start("pwd", undefined, "unknownparent");
+    const s = await engine.transition(solo.sessionId, "next");
+    expect(s.prompt.split("\n")[1]).toBe(`${solo.sessionId}|unknownparent|unknownparent`);
+  });
+
+  it("ids: at the root WF_PARENT_SESSION_ID is empty and root id is the session's own", async () => {
+    setup({ pwd: PWD_WORKFLOW });
+    const { sessionId } = await engine.start("pwd");
+    const r = await engine.transition(sessionId, "next");
+    expect(r.prompt.split("\n")[1]).toBe(`${sessionId}||${sessionId}`);
+  });
+
+  it("outcome: a root session ending on a fail terminal stays failed", async () => {
+    setup({
+      f: {
+        initial: "start",
+        states: {
+          start: { prompt: "go", transitions: { give_up: "failed_end" } },
+          failed_end: { terminal: true, outcome: "fail" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("f");
+    const r = await engine.transition(sessionId, "give_up");
+    expect(r.currentStateName).toBe("(failed)");
+    const s = storage.read(sessionId)!;
+    expect(s.outcome).toBe("failed");
+    expect(s.history.at(-1)!.event).toBe("fail");
+    expect(engine.getStatus(sessionId).prompt).toBe("Workflow failed.");
+  });
+
+  it("outcome: a fail terminal popped through a sub_workflow keeps the root's own outcome", async () => {
+    setup({
+      parent: {
+        initial: "call",
+        states: {
+          call: { sub_workflow: "child", on_complete: "ok", on_fail: "bad" },
+          ok: { terminal: true, outcome: "complete" },
+          bad: { terminal: true, outcome: "fail" },
+        },
+      },
+      child: {
+        initial: "start",
+        states: {
+          start: { prompt: "c", transitions: { fail: "x" } },
+          x: { terminal: true, outcome: "fail" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("parent");
+    await engine.transition(sessionId, "fail");
+    expect(storage.read(sessionId)!.outcome).toBe("failed");
+  });
+
+  it("accounting: an exec history entry carries duration_ms and exit_code", async () => {
+    setup({
+      e: {
+        initial: "run",
+        states: {
+          run: { type: "exec", command: "sleep 0.05; exit 3", on_success: "end", on_error: "end" },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("e");
+    const entry = storage.read(sessionId)!.history.find(h => h.event === "action")!;
+    expect(entry.exit_code).toBe(3);
+    expect(entry.duration_ms).toBeGreaterThanOrEqual(40);
+  });
+
+  it("accounting: every session end appends one ledger line (complete, fail, abort, cascade)", async () => {
+    setup({
+      e: {
+        initial: "run",
+        states: {
+          run: { type: "exec", command: "true", on_success: "wait", on_error: "wait" },
+          wait: { prompt: "w", transitions: { ok: "end", bad: "failed_end" } },
+          end: { terminal: true, outcome: "complete" },
+          failed_end: { terminal: true, outcome: "fail" },
+        },
+      },
+    });
+    const a = await engine.start("e");
+    await engine.transition(a.sessionId, "ok");
+    const b = await engine.start("e");
+    await engine.transition(b.sessionId, "bad");
+    const c = await engine.start("e");
+    const cChild = await engine.start("e", undefined, c.sessionId);
+    await engine.abort(c.sessionId);
+
+    const ledger = storage.ledger as Array<Record<string, unknown>>;
+    expect(ledger.map(l => [l.session_id, l.outcome])).toEqual([
+      [a.sessionId, "completed"],
+      [b.sessionId, "failed"],
+      [c.sessionId, "abandoned"],
+      [cChild.sessionId, "abandoned"],
+    ]);
+    const first = ledger[0];
+    expect(first.workflow).toBe("e");
+    expect(first.parent_session_id).toBeNull();
+    expect(first.root_session_id).toBe(a.sessionId);
+    expect(first.transitions).toBe(2);
+    expect((first.execs as Array<{ state: string }>).map(x => x.state)).toEqual(["run"]);
+    expect(first.exec_ms_total).toBe((first.execs as Array<{ duration_ms: number }>)[0].duration_ms);
+    expect(typeof first.started_at).toBe("string");
+    expect(typeof first.ended_at).toBe("string");
+    expect(ledger[3].parent_session_id).toBe(c.sessionId);
+    expect(ledger[3].root_session_id).toBe(c.sessionId);
+  });
+
+  function pidAlive(pid: number): boolean {
+    try { process.kill(pid, 0); return true; } catch { return false; }
+  }
+  async function waitDead(pid: number): Promise<boolean> {
+    for (let i = 0; i < 50 && pidAlive(pid); i++) await new Promise(r => setTimeout(r, 20));
+    return !pidAlive(pid);
+  }
+
+  it("abort kills a background exec's whole process group, not just its sh", async () => {
+    const work = tmpDir();
+    const pidFile = path.join(work, "grandchild.pid");
+    setup({
+      bg: {
+        initial: "run",
+        states: {
+          run: {
+            type: "exec",
+            background: true,
+            command: `sleep 30 & echo $! > "${pidFile}"; wait`,
+            on_success: "wait",
+            on_error: "wait",
+          },
+          wait: { prompt: "w", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("bg");
+    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++) await new Promise(r => setTimeout(r, 20));
+    const grandchild = Number(fs.readFileSync(pidFile, "utf8").trim());
+    expect(pidAlive(grandchild)).toBe(true);
+    await engine.abort(sessionId);
+    expect(await waitDead(grandchild)).toBe(true);
+  });
+
+  it("a parent's abort kills a child's in-flight foreground exec group", async () => {
+    const work = tmpDir();
+    const pidFile = path.join(work, "fg.pid");
+    setup({
+      simple: SIMPLE_WORKFLOW,
+      fg: {
+        initial: "start",
+        states: {
+          start: { prompt: "go", transitions: { next: "run" } },
+          run: {
+            type: "exec",
+            timeout: 60_000,
+            command: `sleep 30 & echo $! > "${pidFile}"; wait`,
+            on_success: "end",
+            on_error: "end",
+          },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const parent = await engine.start("simple");
+    const child = await engine.start("fg", undefined, parent.sessionId);
+    const running = engine.transition(child.sessionId, "next").catch(e => e as Error);
+    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++) await new Promise(r => setTimeout(r, 20));
+    const grandchild = Number(fs.readFileSync(pidFile, "utf8").trim());
+    await engine.abort(parent.sessionId);
+    expect(await waitDead(grandchild)).toBe(true);
+    const outcome = await running;
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain("ended while its action state ran");
+  }, 10_000);
+});
+
+describe("Engine — ENG-1a review fixes", () => {
+  let storage: InMemoryStorage;
+  let engine: Engine;
+  let dir: string;
+  afterEach(() => { if (dir) cleanupDir(dir); vi.restoreAllMocks(); });
+
+  function setup(workflows: Record<string, object>) {
+    storage = new InMemoryStorage();
+    const result = createTestLoader(workflows);
+    dir = result.dir;
+    engine = new Engine(storage, result.loader, new Executor());
+  }
+
+  it("abort of an already-ended session is a no-op: no second ledger line, no outcome rewrite, no kill", async () => {
+    setup({
+      f: {
+        initial: "start",
+        states: {
+          start: { prompt: "go", transitions: { give_up: "bad" } },
+          bad: { terminal: true, outcome: "fail" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("f");
+    await engine.transition(sessionId, "give_up");
+    const ended = storage.read(sessionId)!;
+    await storage.write(sessionId, { ...ended, background_pids: { "old:1": 424242 } });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    await engine.abort(sessionId);
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(storage.read(sessionId)!.outcome).toBe("failed");
+    expect(storage.ledger).toHaveLength(1);
+  });
+
+  it("a legacy child without root_session_id gets ONE root everywhere: its parent", async () => {
+    setup({
+      simple: SIMPLE_WORKFLOW,
+      env: {
+        initial: "start",
+        states: {
+          start: { prompt: "go", transitions: { next: "run" } },
+          run: { type: "exec", command: 'echo "$WF_ROOT_SESSION_ID"', on_success: "show", on_error: "show", success_prompt: "{{stdout}}" },
+          show: { prompt: "x", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const parent = await engine.start("simple");
+    const child = await engine.start("env", undefined, parent.sessionId);
+    const { root_session_id: _drop, ...legacy } = storage.read(child.sessionId)!;
+    await storage.write(child.sessionId, legacy);
+
+    const r = await engine.transition(child.sessionId, "next");
+    expect(r.prompt.trim()).toBe(parent.sessionId);
+    await engine.transition(child.sessionId, "done");
+    expect((storage.ledger.at(-1) as { root_session_id: string }).root_session_id).toBe(parent.sessionId);
   });
 });

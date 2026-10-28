@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type {
   SessionState,
   StackFrame,
@@ -7,11 +9,14 @@ import type {
   StateDefinition,
   WorkflowOverrides,
   ActionResult,
+  SessionOutcome,
 } from "./types.js";
 import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS, KEEP_TERMINAL_SESSIONS } from "./types.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
-import type { Executor } from "./executor.js";
+import type { Executor, ExecContext } from "./executor.js";
+import { killProcessGroup } from "./executor.js";
+import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { render } from "./template.js";
 
 function stripOptionalPrefix(s: string): string {
@@ -61,6 +66,9 @@ export class Engine {
   private readonly _executor: Executor;
   // Snapshot: sessions keep the workflow version they started with
   private readonly _snapshots: Map<string, Map<string, WorkflowDefinition>> = new Map();
+  // Sessions whose processes the abort tool killed ahead of its queued abort:
+  // their running action chain must stop, not route the killed exec's result.
+  private readonly _aborting = new Set<string>();
 
   constructor(storage: Storage, loader: Loader, executor: Executor) {
     this._storage = storage;
@@ -121,7 +129,9 @@ export class Engine {
     }
   }
 
-  public async start(workflowName: string, actor?: string, parentSessionId?: string): Promise<StatusResult> {
+  public async start(workflowName: string, actor?: string, parentSessionId?: string, cwd?: string): Promise<StatusResult> {
+    if (cwd !== undefined) Engine._assertSessionCwd(cwd);
+
     // Guard: prevent duplicate top-level sessions from the same Claude Code process.
     // Sub-agent sessions (with parent_session_id) are exempt — they run alongside the parent.
     if (!parentSessionId) {
@@ -165,16 +175,20 @@ export class Engine {
     };
 
     const globalKey = `${workflowName}:${wf.initial}`;
+    const rootSessionId = parentSessionId
+      ? rootSessionIdOf(this._storage.read(parentSessionId) ?? { session_id: parentSessionId })
+      : sessionId;
     const session: SessionState = {
       session_id: sessionId,
       ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
+      root_session_id: rootSessionId,
       stack: [frame],
       active_frame: 0,
       started_at: now,
       updated_at: now,
       history: [{ frame: 0, event: "start", workflow: workflowName, at: now, actor }],
       overrides: {},
-      context: { claude_code_pid: process.ppid, cwd: process.cwd() },
+      context: { claude_code_pid: process.ppid, cwd: cwd ?? process.cwd() },
       global_state_visits: { [globalKey]: 1 },
     };
 
@@ -324,16 +338,45 @@ export class Engine {
     return this._buildStatus(updated, taskOps);
   }
 
+  /** A session cwd must be an absolute path of an existing directory. */
+  private static _assertSessionCwd(cwd: string): void {
+    if (!path.isAbsolute(cwd)) throw new Error(`cwd must be an absolute path, got "${cwd}"`);
+    let isDir = false;
+    try { isDir = fs.statSync(cwd).isDirectory(); } catch { /* missing */ }
+    if (!isDir) throw new Error(`cwd "${cwd}" is not an existing directory`);
+  }
+
+  /** Kill a session's background exec groups and its in-flight foreground execs. */
+  private _killSessionProcesses(session: SessionState): void {
+    for (const pid of Object.values(session.background_pids ?? {})) killProcessGroup(pid);
+    this._executor.killSession(session.session_id);
+  }
+
+  /**
+   * Kill the processes of an active session and of its active descendants
+   * without touching session state. The abort tool calls this BEFORE queueing
+   * behind the session's own running transition, whose foreground exec would
+   * otherwise hold the abort until it exits. A finished session is left alone:
+   * its recorded pids may have been reused.
+   */
+  public killSessionTree(sessionId: string): void {
+    const session = this._storage.read(sessionId);
+    if (!session || session.stack.length === 0) return;
+    this._aborting.add(sessionId);
+    this._killSessionProcesses(session);
+    for (const child of this._getActiveChildren(sessionId)) this.killSessionTree(child.session_id);
+  }
+
   public async abort(sessionId: string): Promise<void> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
-
-    // Kill background processes
-    if (session.background_pids) {
-      for (const [, pid] of Object.entries(session.background_pids)) {
-        try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
-      }
+    // Already ended: no second ledger line, no outcome rewrite, no kill of stale pids.
+    if (session.stack.length === 0) {
+      this._aborting.delete(sessionId);
+      return;
     }
+
+    this._killSessionProcesses(session);
 
     const now = new Date().toISOString();
     const updated: SessionState = {
@@ -346,7 +389,7 @@ export class Engine {
     };
 
     await this._storage.write(sessionId, updated);
-    this._finalize(sessionId);
+    await this._finalize(updated);
     await this._cascadeAbandonChildren(sessionId);
     this._pruneTerminal();
 
@@ -546,6 +589,8 @@ export class Engine {
     // visits/root_workflow let action states route on engine-known facts
     // (fix loops taken, running as a spawned sub-agent) with no agent turn.
     const vars: Record<string, unknown> = {
+      session_id: session.session_id,
+      parent_session_id: session.parent_session_id ?? "",
       context: session.context,
       visits: session.stack[session.active_frame].state_visits,
       root_workflow: session.stack[0].workflow,
@@ -574,7 +619,7 @@ export class Engine {
     }
 
     const vars = this._buildTemplateVars(session);
-    const result = await this._executor.execute(state, vars);
+    const result = await this._executor.execute(state, vars, this._execContext(session));
 
     // An exec can run for seconds, and other writers land meanwhile: a
     // parent's abort cascade (writing the pre-exec copy back would resurrect
@@ -582,13 +627,11 @@ export class Engine {
     // race to one write's latency; a storage-level compare-and-set would
     // close it.
     const current = this._storage.read(session.session_id);
-    if (!current || current.stack.length === 0) {
-      if (result.pid) {
-        try { process.kill(result.pid, "SIGTERM"); } catch { /* already dead */ }
-      }
-      throw new Error(
-        `Session "${session.session_id}" ended while its action state ran (${current?.outcome ?? "deleted"})`
-      );
+    const aborting = this._aborting.has(session.session_id);
+    if (!current || current.stack.length === 0 || aborting) {
+      if (result.pid) killProcessGroup(result.pid);
+      const why = !current ? "deleted" : current.stack.length === 0 ? current.outcome : "aborting";
+      throw new Error(`Session "${session.session_id}" ended while its action state ran (${why})`);
     }
 
     // Determine target state
@@ -649,6 +692,8 @@ export class Engine {
       event: "action",
       detail,
       at: now,
+      ...(result.type === "exec" && result.exit_code !== undefined ? { exit_code: result.exit_code } : {}),
+      ...(result.duration_ms !== undefined ? { duration_ms: result.duration_ms } : {}),
     };
 
     const globalKey = `${frame.workflow}:${targetStateName}`;
@@ -804,17 +849,17 @@ export class Engine {
         throw new Error(this._formatChildrenBlockError(session.session_id, activeChildren));
       }
 
-      // Top-level workflow completed
+      // Top-level workflow ended: a failure terminal keeps its outcome
       const updated: SessionState = {
         ...session,
         stack: [],
         active_frame: -1,
         updated_at: now,
-        history: [...session.history, { frame: 0, event: "complete", at: now }],
-        outcome: "completed",
+        history: [...session.history, { frame: 0, event: outcome, at: now }],
+        outcome: outcome === "fail" ? "failed" : "completed",
       };
       await this._storage.write(session.session_id, updated);
-      this._finalize(session.session_id);
+      await this._finalize(updated);
       await this._cascadeAbandonChildren(session.session_id);
       this._pruneTerminal();
       return this._buildStatus(updated, taskOps);
@@ -932,6 +977,7 @@ export class Engine {
     const now = new Date().toISOString();
     const children = this._getActiveChildren(parentSessionId);
     for (const child of children) {
+      this._killSessionProcesses(child);
       const updated: SessionState = {
         ...child,
         stack: [],
@@ -941,14 +987,33 @@ export class Engine {
         outcome: "abandoned",
       };
       await this._storage.write(child.session_id, updated);
-      this._finalize(child.session_id);
+      await this._finalize(updated);
       await this._cascadeAbandonChildren(child.session_id);
     }
   }
 
-  /** Drop a finished session's cached snapshot. */
-  private _finalize(sessionId: string): void {
-    this._snapshots.delete(sessionId);
+  /**
+   * A session just ended (its final state is written): drop its cached
+   * snapshot and append its ledger line. A ledger failure never fails the end.
+   */
+  private async _finalize(session: SessionState): Promise<void> {
+    this._snapshots.delete(session.session_id);
+    this._aborting.delete(session.session_id);
+    try {
+      await this._storage.appendLedger(ledgerEntry(session));
+    } catch (err) {
+      console.error(`Ledger append failed for ${session.session_id}:`, err);
+    }
+  }
+
+  private _execContext(session: SessionState): ExecContext {
+    const cwd = session.context.cwd;
+    return {
+      sessionId: session.session_id,
+      parentSessionId: session.parent_session_id,
+      rootSessionId: rootSessionIdOf(session),
+      cwd: typeof cwd === "string" ? cwd : undefined,
+    };
   }
 
   /**
@@ -1034,9 +1099,9 @@ export class Engine {
 
   private _buildStatus(session: SessionState, taskOps?: TaskOp[], actionPrompt?: string): StatusResult {
     if (session.stack.length === 0) {
-      const isAbandoned = session.outcome === "abandoned";
-      const msg = isAbandoned ? "Workflow abandoned." : "Workflow completed.";
-      const stateName = isAbandoned ? "(abandoned)" : "(completed)";
+      const outcome: SessionOutcome = session.outcome ?? "completed";
+      const msg = `Workflow ${outcome}.`;
+      const stateName = `(${outcome})`;
       return {
         sessionId: session.session_id,
         stack: [],

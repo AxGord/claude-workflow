@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
+import { ledgerEntry } from "./ledger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -68,6 +69,8 @@ function buildApp(storage: Storage, loader: Loader): express.Express {
       };
 
       await storage.write(session.session_id, updated);
+      await storage.appendLedger(ledgerEntry(updated))
+        .catch(err => console.error(`Ledger append failed for ${session.session_id}:`, err));
       res.json({ session_id: session.session_id, outcome: "abandoned" });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });

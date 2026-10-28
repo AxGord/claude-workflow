@@ -50,9 +50,9 @@ export const StateDefinitionSchema = z.object({
   default: z.string().optional(),
   success_prompt: z.string().optional(),
   error_prompt: z.string().optional(),
-  retry: z.object({ max: z.number().int().positive(), interval: z.number().int().positive() }).optional(),
+  retry: z.object({ max: z.number().int().positive(), interval: z.number().int().positive() }).strict().optional(),
   context_set: z.record(z.string()).optional(), // auto-set context keys after action succeeds; values are templates (e.g. "{{stdout}}")
-});
+}).strict(); // an unknown key is a typo, never a silently ignored field
 
 export type StateDefinition = z.infer<typeof StateDefinitionSchema>;
 
@@ -62,7 +62,7 @@ export const WorkflowDefinitionSchema = z.object({
   initial: z.string().min(1),
   max_transitions: z.number().int().positive().optional().default(50),
   states: z.record(StateDefinitionSchema),
-});
+}).strict();
 
 export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 
@@ -78,6 +78,7 @@ export interface ActionResult {
   readonly body?: string;
   readonly error?: string;
   readonly pid?: number;
+  readonly duration_ms?: number;
 }
 
 // --- Session State (persisted as JSON) ---
@@ -99,11 +100,16 @@ export interface HistoryEntry {
   readonly workflow?: string;
   readonly actor?: string;
   readonly detail?: string;
+  readonly exit_code?: number;
+  readonly duration_ms?: number;
 }
+
+export type SessionOutcome = "completed" | "failed" | "abandoned";
 
 export interface SessionState {
   readonly session_id: string;
   readonly parent_session_id?: string;
+  readonly root_session_id?: string;
   readonly stack: StackFrame[];
   readonly active_frame: number;
   readonly started_at: string;
@@ -111,7 +117,7 @@ export interface SessionState {
   readonly history: HistoryEntry[];
   readonly overrides: Record<string, WorkflowOverrides>;
   readonly context: Record<string, unknown>;
-  readonly outcome?: "completed" | "abandoned";
+  readonly outcome?: SessionOutcome;
   readonly soft_terminal?: boolean;
   readonly last_action_result?: ActionResult;
   readonly background_pids?: Record<string, number>;
@@ -130,10 +136,15 @@ export interface WorkflowOverrides {
 
 // --- Tool input schemas ---
 
+export const START_CWD_DESCRIPTION =
+  "Absolute path of an existing directory the session works in (e.g. a sub-agent's git worktree); "
+  + "exec states without their own cwd run there. Default: the server's cwd";
+
 export const WorkflowStartInputSchema = z.object({
   workflow: z.string().optional().describe("Name of the workflow to start. Defaults to \"master\""),
   actor: z.string().optional().describe("Identity of the agent performing this action"),
   parent_session_id: z.string().optional().describe("Parent session ID for sub-agent tracking"),
+  cwd: z.string().optional().describe(START_CWD_DESCRIPTION),
 });
 
 export const WorkflowTransitionInputSchema = z.object({

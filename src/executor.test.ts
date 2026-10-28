@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Executor } from "./executor.js";
 import type { StateDefinition } from "./types.js";
 
@@ -201,5 +204,49 @@ describe("Executor", () => {
         expect.any(Object),
       );
     });
+  });
+});
+
+describe("Executor — ENG-1a", () => {
+  const executor = new Executor();
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+  it("reports duration_ms for every action", async () => {
+    const r = await executor.execute({ type: "exec", command: "sleep 0.05" }, {});
+    expect(r.duration_ms).toBeGreaterThanOrEqual(40);
+  });
+
+  it("injects session ids and runs in the context cwd", async () => {
+    const r = await executor.execute(
+      { type: "exec", command: 'pwd -P; echo "$WF_SESSION_ID/$WF_PARENT_SESSION_ID/$WF_ROOT_SESSION_ID"' },
+      {},
+      { sessionId: "s", rootSessionId: "s", cwd: fs.realpathSync(os.tmpdir()) },
+    );
+    expect(r.stdout!.trim().split("\n")).toEqual([fs.realpathSync(os.tmpdir()), "s//s"]);
+  });
+
+  it("a timeout kills the whole group, including the shell's children", async () => {
+    const pidFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "wf-to-")), "pid");
+    const r = await executor.execute(
+      { type: "exec", command: `sleep 30 & echo $! > "${pidFile}"; wait`, timeout: 300 },
+      {},
+    );
+    expect(r.exit_code).toBe(124);
+    const pid = Number(fs.readFileSync(pidFile, "utf8"));
+    for (let i = 0; i < 50 && alive(pid); i++) await new Promise(res => setTimeout(res, 20));
+    expect(alive(pid)).toBe(false);
+  }, 5000);
+});
+
+describe("killProcessGroup", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("never signals pid <= 1 or a non-integer pid (kill(-1) = every user process)", async () => {
+    const { killProcessGroup } = await import("./executor.js");
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    for (const pid of [1, 0, -1, -42, 1.5, NaN]) killProcessGroup(pid);
+    expect(kill).not.toHaveBeenCalled();
+    killProcessGroup(4242);
+    expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
   });
 });

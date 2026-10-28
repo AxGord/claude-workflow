@@ -1,5 +1,10 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createTestLoader, cleanupDir } from "./test-helpers.js";
+import { Loader } from "./loader.js";
 
 describe("Loader", () => {
   const dirs: string[] = [];
@@ -162,5 +167,65 @@ describe("Loader", () => {
       },
     });
     expect(loader.names().sort()).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("Loader strict schema", () => {
+  const dirs: string[] = [];
+  afterEach(() => { for (const d of dirs.splice(0)) cleanupDir(d); vi.restoreAllMocks(); });
+
+  function loadWithErrors(workflows: Record<string, object>) {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
+    const { loader, dir } = createTestLoader(workflows);
+    dirs.push(dir);
+    return { loader, errors: errors.join("\n"), dir };
+  }
+
+  it("an unknown state key fails the load and names file, state, key and the nearest known key", () => {
+    const { loader, errors, dir } = loadWithErrors({
+      typo: {
+        initial: "run",
+        states: {
+          run: { type: "exec", comand: "true", command: "true", on_success: "end", on_error: "end" },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    expect(loader.get("typo")).toBeUndefined();
+    expect(errors).toContain(`${dir}/typo.yaml: state "run": unknown key "comand" — did you mean "command"?`);
+  });
+
+  it("an unknown workflow key and an unknown retry key are errors too", () => {
+    const { loader, errors } = loadWithErrors({
+      top: {
+        intial: "x",
+        initial: "x",
+        states: { x: { terminal: true } },
+      },
+      retry: {
+        initial: "f",
+        states: {
+          f: { type: "fetch", url: "http://x", retry: { max: 2, intervall: 5 }, on_success: "e", on_error: "e" },
+          e: { terminal: true },
+        },
+      },
+    });
+    expect(loader.get("top")).toBeUndefined();
+    expect(loader.get("retry")).toBeUndefined();
+    expect(errors).toContain('workflow: unknown key "intial" — did you mean "initial"?');
+    expect(errors).toContain('state "f" (retry): unknown key "intervall" — did you mean "interval"?');
+  });
+
+  it("every bundled template loads under the strict schema", () => {
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
+    const templates = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "wf-empty-"));
+    dirs.push(empty);
+    const loader = new Loader(templates, empty, null);
+    const yamls = fs.readdirSync(templates).filter(f => /\.ya?ml$/.test(f));
+    expect(errors).toEqual([]);
+    expect(loader.names().length).toBe(yamls.length);
   });
 });

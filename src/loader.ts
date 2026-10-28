@@ -2,9 +2,53 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
+import { ZodError } from "zod";
 import { resetDeliveredPrompts } from "./tools.js";
 import type { WorkflowDefinition } from "./types.js";
-import { WorkflowDefinitionSchema } from "./types.js";
+import { WorkflowDefinitionSchema, StateDefinitionSchema } from "./types.js";
+
+function editDistance(a: string, b: string): number {
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++)
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+
+function nearest(key: string, known: readonly string[]): string {
+  let best = known[0];
+  for (const k of known) if (editDistance(key, k) < editDistance(key, best)) best = k;
+  return best;
+}
+
+/** The keys a schema object at `issuePath` accepts (workflow, state, or a state's retry). */
+function knownKeysAt(issuePath: readonly (string | number)[]): readonly string[] {
+  if (issuePath.length === 0) return Object.keys(WorkflowDefinitionSchema.shape);
+  if (issuePath[2] === "retry") return ["max", "interval"];
+  return Object.keys(StateDefinitionSchema.shape);
+}
+
+/**
+ * Turn a schema failure into one line per problem; an unknown key names the
+ * file, the state, the key and the nearest known key (a typo is the usual cause).
+ */
+export function describeSchemaError(file: string, err: ZodError): string {
+  return err.issues.map(issue => {
+    if (issue.code !== "unrecognized_keys") {
+      return `${file}: ${issue.path.join(".") || "(root)"}: ${issue.message}`;
+    }
+    const where = issue.path[0] === "states" && issue.path[1] !== undefined
+      ? `state "${issue.path[1]}"${issue.path.length > 2 ? ` (${issue.path.slice(2).join(".")})` : ""}`
+      : "workflow";
+    const known = knownKeysAt(issue.path);
+    return issue.keys
+      .map(k => `${file}: ${where}: unknown key "${k}" — did you mean "${nearest(k, known)}"?`)
+      .join("\n");
+  }).join("\n");
+}
 
 export class Loader {
   private readonly _bundledDir: string | null;
@@ -131,7 +175,12 @@ export class Loader {
       try {
         const raw = fs.readFileSync(fp, "utf-8");
         const parsed = YAML.parse(raw);
-        const validated = WorkflowDefinitionSchema.parse(parsed);
+        const checked = WorkflowDefinitionSchema.safeParse(parsed);
+        if (!checked.success) {
+          console.error(`Failed to load workflow:\n${describeSchemaError(fp, checked.error)}`);
+          continue;
+        }
+        const validated = checked.data;
         const errors = this._validate(validated);
         if (errors.length > 0) {
           console.error(`Validation errors in ${fp}: ${errors.join("; ")}`);

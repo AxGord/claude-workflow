@@ -34,6 +34,16 @@ STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
 # delivered (src/tools.ts). At startup it only clears an empty set.
 mkdir -p "$STATE_DIR" && echo "$(date +%s).$$" > "$STATE_DIR/context-epoch-$PPID"
 
+# A crashed Claude Code never runs SessionEnd, so its marker stays behind:
+# drop every marker whose pid is no longer alive (never this instance's own).
+for marker in "$STATE_DIR"/context-epoch-*; do
+  [ -f "$marker" ] || continue
+  marker_pid=${marker##*/context-epoch-}
+  [ "$marker_pid" = "$PPID" ] && continue
+  case "$marker_pid" in ''|*[!0-9]*) continue ;; esac
+  kill -0 "$marker_pid" 2>/dev/null || rm -f "$marker"
+done
+
 # Everything below requires jq — without it, still emit the fresh-start prompt.
 command -v jq >/dev/null 2>&1 || { echo "STOP. Call mcp__plugin_workflow_wf__start (no args) first.$ZED_SUFFIX"; exit 0; }
 

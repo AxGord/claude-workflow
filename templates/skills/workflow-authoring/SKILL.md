@@ -119,7 +119,8 @@ Cases overrides on_success/on_error when both are present.
 ### Template Variables
 
 Available in ALL prompts (not just action states):
-- `{{context.cwd}}` — working directory
+- `{{context.cwd}}` — the session's working directory (`start`'s `cwd`, else the server's)
+- `{{session_id}}`, `{{parent_session_id}}` (empty at the root)
 - `{{context.<key>}}` — any context value set via context_set
 - `{{visits.<state>}}` — visit count of `<state>` in the ACTIVE stack frame (empty if never visited) — route on "did the fix loop run?" without an agent turn
 - `{{root_workflow}}` — workflow at the stack root (`subagent` = running as a spawned sub-agent)
@@ -136,7 +137,17 @@ Exec env always includes `WF_PLUGIN_ROOT` — the plugin root (dir holding
 `templates/` and `scripts/`), resolved from the engine's own module location.
 Reference bundled scripts as `command: "sh \"$WF_PLUGIN_ROOT/scripts/foo.sh\""`
 — portable across install paths, no per-machine setup. A state's own `env:`
-key of the same name overrides it.
+key of the same name overrides it. It also carries `WF_SESSION_ID`,
+`WF_PARENT_SESSION_ID` (empty at the root) and `WF_ROOT_SESSION_ID`.
+
+An exec without `cwd:` runs in the session's cwd — a sub-agent started with
+`start(cwd: <worktree>)` runs its execs in the worktree, not the server's tree;
+a relative `cwd:` resolves against it. Each exec's history entry carries
+`exit_code` and `duration_ms`; every session end appends one line to
+`$STATE_DIR/ledger.jsonl`.
+
+Unknown keys are a LOAD ERROR (strict schema): a typo like `comand:` drops
+the whole workflow, and stderr names the file, state, key and nearest known key.
 
 ### Background Exec
 
@@ -153,7 +164,8 @@ start_build:
 - stdout/stderr go to a temp log file
 - `on_success` fires immediately (process started OK)
 - `timeout` is **ignored** on background exec — the process runs until it exits or the session is aborted
-- Abort kills all background PIDs
+- Abort (and a parent's abort cascade) kills each background exec's whole process group — `sh -c` and its children; a timeout on a foreground exec does the same
+- Abort also kills a FOREGROUND exec still running in that session (or a descendant) at once — it does not wait for the exec to finish; the interrupted transition returns an error instead of routing the killed result
 
 ### Terminal States & Outcomes
 
@@ -173,6 +185,7 @@ finish:
 - `task:` on a hard terminal is **ignored** (the state is popped before a task op could be emitted). When you need a task op at the end, use the soft-terminal pattern above: a prompt state carrying the `prompt`/`task` with a `done` transition into a bare `finish` terminal
 - **Soft terminal** = `terminal: true` WITH transitions: the session is marked finishable but stays in the state; the agent may re-enter/continue via its transitions
 - **Outcome collapse on pop**: `outcome: fail` routes the parent to its `on_fail`; anything else (including omitted `outcome`) routes to `on_complete`. If the parent state lacks the needed route, the pop parks as pending (a `modify` adding the route resumes it)
+- A ROOT frame ending on `outcome: fail` leaves the session `failed` (shown by `status` / `sessions`); a parent reads a finished child's results via `status(child_session_id)`, which lists its context
 
 ### Common Patterns
 

@@ -15,8 +15,8 @@ Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 | `.claude-plugin/plugin.json` | Plugin manifest |
 | `.mcp.json` | MCP server registration (server name: `wf`) |
 | `hooks/hooks.json` | Hook declarations (SessionStart, SessionEnd) |
-| `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start; on every start rewrites `$STATE_DIR/context-epoch-<pid>` so the server re-delivers `digest_on_repeat` prompts |
-| `hooks/workflow-cleanup.sh` | Abandons this instance's active sessions on session end, caps retained terminal sessions |
+| `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start; on every start rewrites `$STATE_DIR/context-epoch-<pid>` so the server re-delivers `digest_on_repeat` prompts, and deletes the markers of dead pids |
+| `hooks/workflow-cleanup.sh` | Abandons this instance's active sessions on session end, appends their ledger lines via `build/ledger-cli.js`, caps retained terminal sessions |
 | `scripts/` | Shell scripts exec states run via the engine-injected `$WF_PLUGIN_ROOT`, plus `check-skill-sync.sh` (bundled-vs-live skill drift check; `.skillsyncignore` lists intentional divergence) |
 
 **Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__start`).
@@ -56,8 +56,9 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 | `index.ts` | Entry point — resolves dirs, wires components, starts stdio transport |
 | `types.ts` | Zod schemas, TypeScript types, constants (`MAX_STACK_DEPTH=10`, `DEFAULT_MAX_TRANSITIONS=50`, `LOCK_STALE_MS=5000`) |
 | `engine.ts` | FSM core — `start()`, `transition()`, `abort()`, `setContext()`. Manages snapshot isolation and stack push/pop |
-| `loader.ts` | YAML loading + Zod validation + `fs.watch` hot-reload. Two-tier: global dir, then project dir (project wins) |
-| `storage.ts` | JSON session persistence with atomic writes (temp+rename) and `proper-lockfile` mutex |
+| `loader.ts` | YAML loading + Zod validation (strict: an unknown key fails the load, nearest known key named) + `fs.watch` hot-reload. Two-tier: global dir, then project dir (project wins) |
+| `storage.ts` | JSON session persistence with atomic writes (temp+rename) and `proper-lockfile` mutex; `appendLedger` → `ledger.jsonl` (same lock discipline, its own lock file) |
+| `ledger.ts` / `ledger-cli.ts` | The ledger line of an ended session; the CLI the cleanup hook runs for sessions it ends outside the server |
 | `modifier.ts` | Runtime overlays via `modify` (stored in session JSON, never touches YAML). Also `create` (writes new YAML) |
 | `tools.ts` | 10 MCP tool registrations + text formatting for status output |
 | `dashboard.ts` | Express REST API (`/api/sessions`, `/api/session/:id`, `/api/workflows`) + static file serving |
@@ -71,6 +72,8 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 **Overlay modifications**: `modify` stores changes in `session.overrides` (persisted JSON), never modifies source YAML. Overlays are applied at state resolution time in `_resolveState()`.
 
 **Atomic writes**: Storage uses temp file + `fs.renameSync` + `proper-lockfile` for safe concurrent access.
+
+**Session cwd and ids**: `start(cwd)` sets `context.cwd`; execs without their own `cwd:` run there. Execs get `WF_SESSION_ID` / `WF_PARENT_SESSION_ID` / `WF_ROOT_SESSION_ID`, prompts `{{session_id}}` / `{{parent_session_id}}`. A root ending on a `fail` terminal is `outcome: "failed"`.
 
 **Task hints**: States can declare a `task:` string. The engine emits `create`/`complete` TaskOp signals in responses, letting the agent manage external task lists.
 

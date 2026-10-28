@@ -173,6 +173,8 @@ run_tests:
   error_prompt: "Tests failed (exit {{exit_code}}):\n{{stderr}}"
 ```
 
+An exec without `cwd:` runs in the session's cwd (`start`'s `cwd`, else the server's); a relative `cwd:` resolves against it. Its env carries `WF_PLUGIN_ROOT`, `WF_SESSION_ID`, `WF_PARENT_SESSION_ID` (empty at the root) and `WF_ROOT_SESSION_ID`. Every exec runs in its own process group: a timeout, `abort`, or a parent's abort cascade kills `sh -c` together with everything it started. The history entry records `exit_code` and `duration_ms`.
+
 ### `fetch` — make an HTTP request
 
 ```yaml
@@ -207,7 +209,7 @@ run_tests:
 
 ### Template variables
 
-All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited) and `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`). After action execution, result variables are also available:
+All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited), `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`), `{{session_id}}` and `{{parent_session_id}}` (empty at the root). After action execution, result variables are also available:
 
 | Source | Variables |
 |--------|-----------|
@@ -215,6 +217,14 @@ All prompts support `{{mustache}}` templates. Context values are available every
 | `fetch` | `{{status}}`, `{{body}}`, `{{error}}` |
 
 Action states can be chained — `exec` → `exec` → `fetch` → `prompt` — up to 20 steps without agent involvement.
+
+### Strict schema
+
+An unknown key in a workflow, a state or a `retry:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.
+
+### Ledger
+
+Every session end (complete, fail, abort, cascade or hook abandon) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count and the exec durations by state. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
 
 ## Three-Tier Loading
 
@@ -319,8 +329,8 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list` | List all available workflow definitions | — |
-| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id` |
-| `status` | Get current state, stack, transitions, history | `session_id` |
+| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree) |
+| `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child | `session_id` |
 | `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
 | `modify` | Runtime overlay — add/change/remove states and transitions | `session_id`, `add_state`, `add_transition` |

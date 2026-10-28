@@ -4,6 +4,11 @@ import lockfile from "proper-lockfile";
 import type { SessionState } from "./types.js";
 import { LOCK_STALE_MS } from "./types.js";
 
+export const LEDGER_FILE = "ledger.jsonl";
+// Unlike a session file, the ledger is shared by every session and process:
+// a contended append waits its turn instead of failing.
+const LEDGER_LOCK_RETRIES = { retries: 100, minTimeout: 5, maxTimeout: 50, randomize: true };
+
 export class Storage {
   private readonly _stateDir: string;
 
@@ -40,6 +45,25 @@ export class Storage {
       const tmp = fp + ".tmp";
       fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
       fs.renameSync(tmp, fp);
+    } finally {
+      if (release) await release();
+    }
+  }
+
+  /**
+   * Append one JSON line to `$STATE_DIR/ledger.jsonl` under the same lock
+   * discipline as session writes. The ledger is never pruned: it outlives the
+   * terminal-session cap.
+   */
+  public async appendLedger(entry: object): Promise<void> {
+    const fp = path.join(this._stateDir, LEDGER_FILE);
+    fs.mkdirSync(this._stateDir, { recursive: true });
+    if (!fs.existsSync(fp)) fs.writeFileSync(fp, "", { flag: "a" });
+
+    let release: (() => Promise<void>) | undefined;
+    try {
+      release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: LEDGER_LOCK_RETRIES });
+      fs.appendFileSync(fp, JSON.stringify(entry) + "\n");
     } finally {
       if (release) await release();
     }

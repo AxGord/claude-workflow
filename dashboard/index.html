@@ -153,7 +153,7 @@ function renderSessionItem(s, depth = 0) {
   const isActive = s.stack.length > 0;
   const isAbandoned = !isActive && s.outcome === 'abandoned';
   const frame = isActive ? s.stack[s.active_frame] : null;
-  const stateInfo = frame ? `${frame.workflow} @ ${frame.current_state}` : isAbandoned ? 'abandoned' : 'completed';
+  const stateInfo = frame ? `${frame.workflow} @ ${frame.current_state}` : (s.outcome || 'completed');
   const statusBadge = isActive
     ? `<span class="badge badge-active">active</span>`
     : isAbandoned
@@ -279,7 +279,7 @@ function renderDetail(session) {
   // Stack
   html += '<h2 style="margin-top:0">Stack</h2>';
   if (!isActive) {
-    const label = session.outcome === 'abandoned' ? 'Workflow abandoned' : 'Workflow completed';
+    const label = `Workflow ${session.outcome || 'completed'}`;
     html += `<div class="stack-frame">${label}</div>`;
   } else {
     html += session.stack.map((frame, i) => {

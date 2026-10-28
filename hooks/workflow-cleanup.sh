@@ -14,6 +14,8 @@ KEEP_TERMINAL=3
 # This instance's context-epoch marker (hooks/workflow-start.sh) dies with it.
 rm -f "$STATE_DIR/context-epoch-$PPID"
 ABANDONED_SIDS=()
+# Every session this hook ends (incl. cascaded children) — each gets a ledger line.
+ENDED_SIDS=()
 
 is_planned() {
   [ -d "$PLANS_DIR" ] && [ -n "$1" ] && grep -rqlF "$1" "$PLANS_DIR"/ 2>/dev/null
@@ -37,6 +39,7 @@ for f in "$STATE_DIR"/*.json; do
   is_planned "$SID" && continue
   abandon "$f"
   ABANDONED_SIDS+=("$SID")
+  ENDED_SIDS+=("$SID")
 done
 
 # Cascade: abandon children of abandoned sessions
@@ -49,6 +52,7 @@ cascade_abandon() {
     [ -n "$child_sid" ] || continue
     is_planned "$child_sid" && continue
     abandon "$f" cascade_abandon
+    ENDED_SIDS+=("$child_sid")
     cascade_abandon "$child_sid"
   done
 }
@@ -56,6 +60,13 @@ cascade_abandon() {
 for sid in "${ABANDONED_SIDS[@]}"; do
   cascade_abandon "$sid"
 done
+
+# Ledger lines for the sessions ended above, through the engine's own code
+# (same entry shape, same lock) — before the cap below can delete them.
+LEDGER_CLI="${CLAUDE_PLUGIN_ROOT}/build/ledger-cli.js"
+if [ "${#ENDED_SIDS[@]}" -gt 0 ] && [ -f "$LEDGER_CLI" ] && command -v node >/dev/null 2>&1; then
+  node "$LEDGER_CLI" "$STATE_DIR" "${ENDED_SIDS[@]}" 2>/dev/null
+fi
 
 # Cap retained terminal sessions: keep the KEEP_TERMINAL with the newest
 # .updated_at, delete older ones. Full parity with Storage.pruneTerminal in
