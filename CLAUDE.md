@@ -15,7 +15,7 @@ Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 | `.claude-plugin/plugin.json` | Plugin manifest |
 | `.mcp.json` | MCP server registration (server name: `wf`) |
 | `hooks/hooks.json` | Hook declarations (SessionStart, SessionEnd) |
-| `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start |
+| `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start; on every start rewrites `$STATE_DIR/context-epoch-<pid>` so the server re-delivers `digest_on_repeat` prompts |
 | `hooks/workflow-cleanup.sh` | Abandons this instance's active sessions on session end, caps retained terminal sessions |
 | `scripts/` | Shell scripts exec states run via the engine-injected `$WF_PLUGIN_ROOT`, plus `check-skill-sync.sh` (bundled-vs-live skill drift check; `.skillsyncignore` lists intentional divergence) |
 

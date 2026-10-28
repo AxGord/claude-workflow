@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Engine, StatusResult } from "./engine.js";
@@ -34,13 +35,39 @@ function formatStateHeader(status: StatusResult): string {
     .join("\n");
 }
 
-// Process-level memory of digest_on_repeat states whose FULL prompt already
-// went out once. Keyed per workflow+state; a hot-reload of templates does not
-// clear it (status() always returns the full, current text).
+// Memory of digest_on_repeat states whose FULL prompt already went out once
+// in the agent's CURRENT context. Keyed per workflow+state. The server outlives
+// /clear, /compact and an in-REPL /resume, so the SessionStart hook rewrites a
+// per-process context-epoch marker on every start; a changed marker forgets
+// every delivery.
 const deliveredFullPrompts = new Set<string>();
+let contextEpochFile: string | null = null;
+let seenContextEpoch = "";
 
 /** Test seam: forget which digest_on_repeat prompts were already delivered. */
 export function resetDeliveredPrompts(): void {
+  deliveredFullPrompts.clear();
+}
+
+/** The context-epoch marker the SessionStart hook rewrites on /clear and /compact; null = none. */
+export function setContextEpochFile(file: string | null): void {
+  contextEpochFile = file;
+  seenContextEpoch = "";
+}
+
+function syncContextEpoch(): void {
+  if (contextEpochFile === null) return;
+  let epoch = "";
+  try {
+    epoch = fs.readFileSync(contextEpochFile, "utf8");
+  } catch (err) {
+    // ENOENT = no SessionStart has written one yet. Anything else still falls
+    // back to "" (an extra clear at worst) — a throw would fail every tool call.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT")
+      console.error(`context-epoch marker unreadable (${contextEpochFile}):`, err);
+  }
+  if (epoch === seenContextEpoch) return;
+  seenContextEpoch = epoch;
   deliveredFullPrompts.clear();
 }
 
@@ -54,13 +81,14 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
   parts.push(formatStateHeader(status));
   parts.push("");
 
+  syncContextEpoch();
   const digestKey = `${status.currentWorkflow}:${status.currentStateName}`;
   const digestable = status.currentState.digest_on_repeat === true;
   if (!forceFullPrompt && !status.forcePrompt && status.visitCount > 1) {
     parts.push(`Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`);
     parts.push(`If you don't remember them, call status() to re-read.`);
   } else if (!forceFullPrompt && !status.forcePrompt && digestable && deliveredFullPrompts.has(digestKey)) {
-    parts.push(`This state's full prompt was already delivered earlier in this process — follow those instructions.`);
+    parts.push(`This state's full prompt was already delivered earlier in this context — follow those instructions.`);
     parts.push(`If THIS context has not seen them (or templates may have changed), call status() for the current full text.`);
   } else {
     parts.push(status.prompt);
@@ -217,7 +245,7 @@ export function registerTools(
 
   // 4. transition
   server.registerTool("transition", {
-    description: "Transition to the next state in the active workflow. If the new state has a sub_workflow, it auto-pushes. If terminal, it auto-pops to parent.",
+    description: "Transition to the next state in the active workflow. If the new state has a sub_workflow, it auto-pushes. If terminal, it auto-pops to parent. A context_set this transition (or the state it leads to) depends on must have RETURNED first: never send them in the same parallel tool batch, which has no ordering guarantee.",
     annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
@@ -239,7 +267,7 @@ export function registerTools(
 
   // 5. context_set
   server.registerTool("context_set", {
-    description: "Save key-value data in the session context for later use.",
+    description: "Save key-value data in the session context for later use. When a following transition reads the key, wait for this call to return before calling transition (separate message, not the same parallel batch).",
     annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),

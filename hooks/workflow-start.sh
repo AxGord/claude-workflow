@@ -26,6 +26,14 @@ if [[ -n "$ZED_ENVIRONMENT" ]]; then
   ZED_SUFFIX=" Then load skill ide-zed (Skill tool)."
 fi
 
+STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
+
+# Every SessionStart is a fresh context, and the server outlives all but
+# `startup` (clear, compact and an in-REPL resume/fork keep the process): a new
+# marker value makes it forget which digest_on_repeat prompts it already
+# delivered (src/tools.ts). At startup it only clears an empty set.
+mkdir -p "$STATE_DIR" && echo "$(date +%s).$$" > "$STATE_DIR/context-epoch-$PPID"
+
 # Everything below requires jq — without it, still emit the fresh-start prompt.
 command -v jq >/dev/null 2>&1 || { echo "STOP. Call mcp__plugin_workflow_wf__start (no args) first.$ZED_SUFFIX"; exit 0; }
 
@@ -36,7 +44,6 @@ HOOK_CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 # Physical path (pwd -P) so a symlinked cwd (e.g. /tmp → /private/tmp)
 # compares equal to the engine's getcwd()-resolved context.cwd.
 HOOK_CWD=$(cd "${HOOK_CWD:-$PWD}" 2>/dev/null && pwd -P || echo "$PWD")
-STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
 PLANS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plans"
 
 # Session IDs are 8 hex chars; the {7,} length filter skips shorter incidental hex words.

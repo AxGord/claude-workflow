@@ -10,6 +10,9 @@ PLANS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plans"
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 # Mirror of KEEP_TERMINAL_SESSIONS in src/types.ts
 KEEP_TERMINAL=3
+
+# This instance's context-epoch marker (hooks/workflow-start.sh) dies with it.
+rm -f "$STATE_DIR/context-epoch-$PPID"
 ABANDONED_SIDS=()
 
 is_planned() {

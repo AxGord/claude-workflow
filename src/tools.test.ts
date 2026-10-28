@@ -1,5 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { formatStatus, registerTools, resetDeliveredPrompts } from "./tools.js";
+import { formatStatus, registerTools, resetDeliveredPrompts, setContextEpochFile } from "./tools.js";
 import { Engine, type StatusResult } from "./engine.js";
 import { Executor } from "./executor.js";
 import { InMemoryStorage, createTestLoader, cleanupDir, SIMPLE_WORKFLOW } from "./test-helpers.js";
@@ -35,7 +38,7 @@ describe("formatStatus digest_on_repeat", () => {
     formatStatus(makeStatus());
     const out = formatStatus(makeStatus({ sessionId: "s2" }));
     expect(out).not.toContain("FULL ROUTING RULES");
-    expect(out).toContain("already delivered earlier in this process");
+    expect(out).toContain("already delivered earlier in this context");
     expect(out).toContain("TRANSITIONS: chat");
   });
 
@@ -72,6 +75,39 @@ describe("formatStatus digest_on_repeat", () => {
     });
     const out = formatStatus(other);
     expect(out).toContain("DOC SYNC RULES");
+  });
+});
+
+describe("formatStatus digest_on_repeat across a context reset", () => {
+  let dir: string;
+  let marker: string;
+  beforeEach(() => {
+    resetDeliveredPrompts();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-epoch-"));
+    marker = path.join(dir, "context-epoch-1");
+    setContextEpochFile(marker);
+  });
+  afterEach(() => {
+    setContextEpochFile(null);
+    cleanupDir(dir);
+  });
+
+  it("a rewritten marker (/clear, /compact) re-delivers the full prompt once", () => {
+    expect(formatStatus(makeStatus())).toContain("FULL ROUTING RULES");
+    expect(formatStatus(makeStatus())).not.toContain("FULL ROUTING RULES");
+
+    fs.writeFileSync(marker, "1000.1\n");
+    expect(formatStatus(makeStatus())).toContain("FULL ROUTING RULES");
+    expect(formatStatus(makeStatus())).not.toContain("FULL ROUTING RULES");
+
+    fs.writeFileSync(marker, "1001.2\n");
+    expect(formatStatus(makeStatus())).toContain("FULL ROUTING RULES");
+  });
+
+  it("an existing marker at boot does not re-deliver after the first digest", () => {
+    fs.writeFileSync(marker, "999.1\n");
+    expect(formatStatus(makeStatus())).toContain("FULL ROUTING RULES");
+    expect(formatStatus(makeStatus())).not.toContain("FULL ROUTING RULES");
   });
 });
 

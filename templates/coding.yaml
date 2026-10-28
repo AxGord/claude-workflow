@@ -355,5 +355,8 @@ states:
     on_fail: write_fix
 
   done:
-    prompt: "Code written, reviewed, and verified. Implementation complete."
+    prompt: |
+      Code written, reviewed, and verified. Implementation complete.
+      If an approved plan existed, name every place the implementation departed from it (and why)
+      in your report to the user - a silent deviation is found by the user, not by you.
     terminal: true

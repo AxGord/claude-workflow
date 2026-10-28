@@ -8,7 +8,7 @@ import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { Modifier } from "./modifier.js";
-import { registerTools } from "./tools.js";
+import { registerTools, setContextEpochFile } from "./tools.js";
 import { createDashboard } from "./dashboard.js";
 
 // Resolve dir: env override → absolute default under ~/.claude/
@@ -61,6 +61,9 @@ const server = new McpServer({
 
 // Register all tools
 registerTools(server, engine, modifier, loader, storage);
+// Written by hooks/workflow-start.sh on /clear and /compact (keyed by the
+// Claude Code pid, which is this server's parent).
+setContextEpochFile(path.join(STATE_DIR, `context-epoch-${process.ppid}`));
 
 // Start dashboard
 createDashboard(storage, loader, DASHBOARD_PORT);
