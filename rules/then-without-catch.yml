@@ -1,0 +1,15 @@
+id: then-without-catch
+language: typescript
+severity: warning
+message: ".then(onFulfilled) with no rejection handler and no .catch() - a rejection is unhandled"
+note: Add .catch(...), pass a rejection handler as the 2nd .then argument, or use await in try/catch. Matters most in pool/lock/MCP-handler code.
+files:
+  - src/**/*.ts
+ignores:
+  - src/**/*.test.ts
+rule:
+  pattern: $P.then($F)
+  not:
+    inside:
+      kind: member_expression
+      stopBy: neighbor

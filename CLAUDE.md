@@ -32,9 +32,10 @@ npm run build    # tsc → compiles src/ to build/
 npm run dev      # tsc --watch
 npm start        # node build/index.js
 npm test         # vitest run (src/*.test.ts)
+npm run check    # tsc --noEmit && lint (eslint vs eslint-baseline.json: only NEW findings fail) && vitest; `ast-grep scan` runs rules/*.yml; `npm run format:check` = biome (not enforced)
 ```
 
-No linter or formatter is configured.
+Lint = typescript-eslint (`eslint.config.js`, type-checked via `tsconfig.eslint.json`) with a baseline: `npm run lint` fails only on findings absent from `eslint-baseline.json`; fixing old ones → `npm run lint:baseline`. Formatter (biome) is check-only, no mass reformat.
 
 ## Environment Variables
 

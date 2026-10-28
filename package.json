@@ -18,7 +18,11 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node build/index.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "node scripts/lint-new.mjs",
+    "lint:baseline": "node scripts/lint-new.mjs --update-baseline",
+    "format:check": "biome format",
+    "check": "tsc --noEmit && npm run lint && vitest run"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
@@ -41,10 +45,14 @@
     "node": ">=18.0.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.6.3",
+    "@eslint/js": "^9.39.5",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/proper-lockfile": "^4.1.4",
+    "eslint": "^9.39.5",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.72.1",
     "vitest": "4.0.18"
   }
 }

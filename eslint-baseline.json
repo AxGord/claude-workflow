@@ -1,0 +1,350 @@
+[
+  {
+    "file": "src/deterministic-routing.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-assignment",
+    "message": "Unsafe assignment of an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/deterministic-routing.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .states on an `any` value.",
+    "count": 2
+  },
+  {
+    "file": "src/deterministic-routing.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-return",
+    "message": "Unsafe return of a value of type `any`.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.test.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_drop' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.test.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'ActionResult' is defined but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.test.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'beforeEach' is defined but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "@typescript-eslint/no-base-to-string",
+    "message": "'ownerPid' may use Object's default stringification format ('[object Object]') when stringified.",
+    "count": 2
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "@typescript-eslint/no-explicit-any",
+    "message": "Unexpected any. Specify a different type.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .code on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'ActionResult' is defined but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'parentWf' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "@typescript-eslint/restrict-template-expressions",
+    "message": "Invalid type \"{} | null\" of template literal expression.",
+    "count": 2
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "@typescript-eslint/restrict-template-expressions",
+    "message": "Invalid type \"unknown\" of template literal expression.",
+    "count": 1
+  },
+  {
+    "file": "src/engine.ts",
+    "rule": "prefer-const",
+    "message": "'transitions' is never reassigned. Use 'const' instead.",
+    "count": 1
+  },
+  {
+    "file": "src/executor.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_item' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/executor.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_level' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/executor.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_priority' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/executor.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_shard' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/executor.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_threads' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/fanout.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-return",
+    "message": "Unsafe return of a value of type `any`.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-assignment",
+    "message": "Unsafe assignment of an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-call",
+    "message": "Unsafe call of an `any` typed value.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .claude_session_id on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .event on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .history on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .outcome on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .stack on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .suspended_at on an `any` value.",
+    "count": 2
+  },
+  {
+    "file": "src/hooks.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-return",
+    "message": "Unsafe return of a value of type `any`.",
+    "count": 1
+  },
+  {
+    "file": "src/loader.test.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_m' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/loader.ts",
+    "rule": "@typescript-eslint/no-unsafe-assignment",
+    "message": "Unsafe assignment of an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/modifier.ts",
+    "rule": "@typescript-eslint/no-unnecessary-type-assertion",
+    "message": "This assertion is unnecessary since it does not change the type of the expression.",
+    "count": 1
+  },
+  {
+    "file": "src/modifier.ts",
+    "rule": "@typescript-eslint/require-await",
+    "message": "Async method 'create' has no 'await' expression.",
+    "count": 1
+  },
+  {
+    "file": "src/pool.test.ts",
+    "rule": "@typescript-eslint/no-unnecessary-type-assertion",
+    "message": "This assertion is unnecessary since it does not change the type of the expression.",
+    "count": 2
+  },
+  {
+    "file": "src/pool.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-return",
+    "message": "Unsafe return of a value of type `any`.",
+    "count": 1
+  },
+  {
+    "file": "src/pool.test.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_l' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/pool.test.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_p' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/pool.test.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_s' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/pool.test.ts",
+    "rule": "prefer-const",
+    "message": "'executor' is never reassigned. Use 'const' instead.",
+    "count": 1
+  },
+  {
+    "file": "src/pool.ts",
+    "rule": "@typescript-eslint/no-unnecessary-type-assertion",
+    "message": "This assertion is unnecessary since it does not change the type of the expression.",
+    "count": 3
+  },
+  {
+    "file": "src/pool.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_window' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/skill-gate.test.ts",
+    "rule": "prefer-const",
+    "message": "'session' is never reassigned. Use 'const' instead.",
+    "count": 13
+  },
+  {
+    "file": "src/storage.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .i on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/storage.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-member-access",
+    "message": "Unsafe member access .session_id on an `any` value.",
+    "count": 1
+  },
+  {
+    "file": "src/storage.test.ts",
+    "rule": "@typescript-eslint/no-unsafe-return",
+    "message": "Unsafe return of a value of type `any`.",
+    "count": 3
+  },
+  {
+    "file": "src/suspend.test.ts",
+    "rule": "@typescript-eslint/require-await",
+    "message": "Async method 'onDetached' has no 'await' expression.",
+    "count": 3
+  },
+  {
+    "file": "src/template.ts",
+    "rule": "@typescript-eslint/no-base-to-string",
+    "message": "'val' will use Object's default stringification format ('[object Object]') when stringified.",
+    "count": 1
+  },
+  {
+    "file": "src/test-helpers.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'WorkflowDefinition' is defined but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/test-helpers.ts",
+    "rule": "@typescript-eslint/require-await",
+    "message": "Async method 'appendLedger' has no 'await' expression.",
+    "count": 1
+  },
+  {
+    "file": "src/test-helpers.ts",
+    "rule": "@typescript-eslint/require-await",
+    "message": "Async method 'update' has no 'await' expression.",
+    "count": 1
+  },
+  {
+    "file": "src/test-helpers.ts",
+    "rule": "@typescript-eslint/require-await",
+    "message": "Async method 'write' has no 'await' expression.",
+    "count": 1
+  },
+  {
+    "file": "src/tools.test.ts",
+    "rule": "@typescript-eslint/no-unnecessary-type-assertion",
+    "message": "This assertion is unnecessary since it does not change the type of the expression.",
+    "count": 1
+  },
+  {
+    "file": "src/tools.ts",
+    "rule": "@typescript-eslint/no-base-to-string",
+    "message": "'s.context.claude_code_pid' may use Object's default stringification format ('[object Object]') when stringified.",
+    "count": 1
+  },
+  {
+    "file": "src/tools.ts",
+    "rule": "@typescript-eslint/require-await",
+    "message": "Async arrow function has no 'await' expression.",
+    "count": 5
+  },
+  {
+    "file": "src/tools.ts",
+    "rule": "@typescript-eslint/restrict-template-expressions",
+    "message": "Invalid type \"{} | null\" of template literal expression.",
+    "count": 1
+  },
+  {
+    "file": "src/wf-run.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_level' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/wf-run.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_priority' is assigned a value but never used.",
+    "count": 1
+  },
+  {
+    "file": "src/wf-run.ts",
+    "rule": "@typescript-eslint/no-unused-vars",
+    "message": "'_threads' is assigned a value but never used.",
+    "count": 1
+  }
+]

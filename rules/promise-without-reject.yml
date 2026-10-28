@@ -1,0 +1,18 @@
+id: promise-without-reject
+language: typescript
+severity: warning
+message: "new Promise executor takes only `resolve` - a failure inside it cannot reject the promise"
+note: Accept (resolve, reject) and reject on every failure path, or drop the wrapper for async/await. Plain sleeps (setTimeout) are excluded.
+files:
+  - src/**/*.ts
+ignores:
+  - src/**/*.test.ts
+rule:
+  any:
+    - pattern: new Promise($R => $$$BODY)
+    - pattern: new Promise(($R) => $$$BODY)
+    - pattern: new Promise(function ($R) { $$$BODY })
+  not:
+    has:
+      pattern: setTimeout($$$)
+      stopBy: end
