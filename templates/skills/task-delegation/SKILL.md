@@ -41,8 +41,9 @@ linter does not mechanically guard against races or codegen bugs.
 
 - **haiku** only where its output is quoted, located or extracted — never
   where it must decide, design or judge correctness.
-- **fable** (the most capable, most expensive tier) only when the user asks
-  for it; never chosen on your own.
+- **Hard task → raise opus effort first** (`xhigh`, then `max`), not the model:
+  opus at `max` still costs less than fable. **fable** (the most capable, most
+  expensive tier) only when the user asks for it; never chosen on your own.
 - **effort**: `low` for runners/locators, `medium` for recon and routine
   review, `high` for writing code and real judgement; `xhigh`/`max` only when
   the user asks or a `high` attempt already failed on the same task.
