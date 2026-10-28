@@ -74,7 +74,7 @@ states:
 
       **Steps in plan mode:**
       1. Explore codebase (directly or via Plan/Explore subagents — explicit
-         `model`: `sonnet` to locate, `opus` for design-critical analysis)
+         `model` + `effort`: `haiku`/low to locate, `opus`/high for design-critical analysis)
       2. Design approach — the PLAN itself is built HERE, inline, never in a
          plan sub-agent: it condenses the user dialog no brief can carry,
          and the planner must be the dispatcher (recon delegates, the plan

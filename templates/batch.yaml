@@ -28,7 +28,7 @@ states:
          batch_size: 3
          base: <repo-abs-path>=<sha>
          ## Tasks
-         - [ ] T1 | model: opus | <self-contained task prompt> | <files/dirs if known>
+         - [ ] T1 | model: opus | effort: high | <self-contained task prompt> | <files/dirs if known>
          ```
          One `base:` line per repo the tasks touch; <sha> = `git -C <repo>
          stash create` (snapshots a dirty tree without touching it — the
@@ -53,8 +53,9 @@ states:
            SESSION's repo — for work in another repo the worker must
            create the worktree itself as above.
          - Each task line is self-contained: a worker sees ONLY its line.
-         - Assign `model` per task-delegation's table: opus for non-trivial
-           code/judgement, sonnet for mechanical edits / runners / locate.
+         - Assign `model` and `effort` per task-delegation's table: opus/high for
+           non-trivial code/judgement, sonnet/high for code from a detailed plan,
+           sonnet/medium for routine review, haiku/low for runners / locate.
          - `batch_size` = max parallel workers (default 3; raise for cheap
            independent tasks, lower for heavy builds sharing resources).
            The user may edit the queue file mid-run — batch_size and task
@@ -89,8 +90,9 @@ states:
         `run_in_background: true` — that is the rolling-window case:
         completions are consumed one-by-one in collect while the rest
         keep running.
-      - `subagent_type="general-purpose"`; explicit `model` from the
-        task line — never silent session-model inheritance.
+      - `subagent_type="general-purpose"`; explicit `model` and `effort`
+        from the task line (effort unset → task-delegation table) — never
+        silent session-model inheritance.
       - Worker prompt = the task line's full text, PLUS
         verify-then-complete ("check the on-disk state first; if the
         work is already applied, reconcile instead of double-applying"),
@@ -164,8 +166,8 @@ states:
          agent, review those lines yourself in step 3. Each batch agent
          gets its file list, `git -C <repo> diff <sha> -- <file>` per file
          (a new file: read it whole), scope `diff`, "report one section per
-         file + a batch-level cross-file section", explicit `model`
-         (sonnet for linter-covered/routine code, opus for
+         file + a batch-level cross-file section", explicit `model` and `effort`
+         (sonnet/medium for linter-covered/routine code, opus/high for
          engine-critical / concurrency / no-linter), and this preamble
          VERBATIM:
       ---
