@@ -111,8 +111,8 @@ states:
       (see task-delegation's model table): `sonnet` when the plan is
       detailed and a mechanical net (linter/tests) exists, `opus` for
       in-implementation freedom (algorithms, macros, concurrency,
-      engine-critical) or no net. Never haiku, never silent
-      session-model inheritance.
+      engine-critical) or no net. Never silent session-model inheritance;
+      pass `effort` too (task-delegation table); fable only on user request.
 
       For each file, include in the agent prompt VERBATIM:
       ---
@@ -279,8 +279,8 @@ states:
       ALWAYS pass an explicit `model` to the Agent tool: `sonnet` for
       linter-covered (.hx with hxq) / routine batches, `opus` for
       macro-heavy / concurrency / engine-critical / no-linter batches
-      (opus wins on overlap). Never haiku, never silent inheritance of
-      the session model.
+      (opus wins on overlap). Never silent session-model inheritance;
+      pass `effort` too (task-delegation table); fable only on user request.
 
       Launch up to 8 batch agents in ONE message, each with
       `run_in_background: false` — reports gate the merge; a single batch

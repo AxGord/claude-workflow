@@ -10,8 +10,8 @@ They ALWAYS take priority over base skills.
 
 ### Model usage
 
-- Use Opus or Sonnet for subagents
-- Never use Haiku — quality too low for real work
+- Subagent model and effort by task: Haiku for runners/locators/extractors whose output is quoted or re-checked, Sonnet for recon, routine review and code from a detailed plan, Opus for design freedom and judgement (table: `task-delegation` skill)
+- Fable (the top, most expensive tier) only when the user asks for it
 
 ### Linter-owned defaults
 

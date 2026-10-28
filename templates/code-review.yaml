@@ -144,7 +144,7 @@ states:
       ALWAYS pass an explicit `model` to the Agent tool — never let a spawn
       silently inherit the session model: `sonnet` for batches whose
       mechanics the linter covers (.hx with hxq) and routine code; `opus`
-      for macro-heavy / engine-critical / no-linter batches. Never haiku.
+      for macro-heavy / engine-critical / no-linter batches. Never silent session-model inheritance; pass `effort` too (task-delegation table); fable only on user request.
 
       Launch up to 8 batch agents in ONE message, each with
       `run_in_background: false` — reports gate the merge; a single batch
@@ -204,8 +204,8 @@ states:
          Do NOT include style rules or coding preferences — agents load their own skills.
 
          ALWAYS pass an explicit `model`: `sonnet` for linter-covered/routine
-         batches, `opus` for complex/no-linter ones. Never haiku, never
-         silent inheritance of the session model.
+         batches, `opus` for complex/no-linter ones. Never silent session-model inheritance;
+         pass `effort` too (task-delegation table); fable only on user request.
 
          Launch up to 8 batch agents in ONE message, each with
          `run_in_background: false` — reports gate the package report; a

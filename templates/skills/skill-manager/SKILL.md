@@ -9,8 +9,8 @@ This skill is HEAVY. Always run via subagent (Task tool), never in main context.
 
 ### Model policy
 
-- Use **Opus** or **Sonnet** for subagents
-- **NEVER use Haiku** — insufficient for quality work
+- Subagents that write or judge skill text: **Opus** or **Sonnet** — never Haiku (skill text is judgement, no mechanical net)
+- Haiku only for pure locate/extract helpers whose output you re-check
 - Skills are optimized for Opus/Sonnet reasoning capabilities
 
 **Model selection by task:**

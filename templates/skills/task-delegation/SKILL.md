@@ -16,28 +16,38 @@ description: When and how to delegate to subagents
 
 ## Model Selection (mandatory)
 
-ALWAYS pass an explicit `model` to the Agent tool — never let a spawn
-silently inherit the session model (the session tier is the orchestrator's;
-paying it per worker doubles cost for no gain). Never haiku. Pick by
-**cost-of-error × mechanical safety net**: where a linter/test-suite/compiler
-catches mistakes, sonnet suffices; where nothing mechanical guards the
-output, opus.
+ALWAYS pass an explicit `model` AND `effort` to the Agent tool — never let a
+spawn silently inherit the session model (the session tier is the
+orchestrator's; paying it per worker multiplies cost for no gain). Pick by
+**cost-of-error × mechanical safety net**: the more a linter / test suite /
+compiler / the parent's own check catches mistakes, the cheaper the model.
 
-| Spawn | Model |
-|---|---|
-| Review batches with a lint report (.hx+hxq), instruction/config files, routine code | sonnet |
-| Review of macro-heavy / concurrency / engine-critical / no-linter code | opus |
-| Finding verification (one skeptic over aggregated findings) | opus |
-| Code-writing agents: non-trivial logic | opus |
-| Code-writing agents: mechanical edits from a detailed plan | sonnet |
-| Explore / locate fan-out (returns locations, not judgements) | sonnet |
-| Build/test/repro runners (verbatim-quote reporting) | sonnet |
-| Web-research fetch/extract fan-out (synthesis stays in the parent) | sonnet |
-| Analytical judgement subagents (blast-radius verdicts, design recon) | opus |
+| Spawn | Model | Effort |
+|---|---|---|
+| Run a command and quote its output verbatim (build/test/repro runners) | haiku | low |
+| Locate fan-out (returns places, not judgements); fetch/extract from pages | haiku | low |
+| Mechanical checks the parent re-verifies (marks, counts, lists) | haiku | low |
+| Read-only recon that returns a report (structure, commands, risks) | sonnet | medium |
+| Review of a lint/test-covered batch, instruction/config files, routine code | sonnet | medium |
+| Code-writing from a detailed plan with a net (tests/linter/compiler) | sonnet | high |
+| Code-writing with design freedom: non-trivial logic, macros, engine, concurrency | opus | high |
+| Review of macro-heavy / concurrency / engine-critical / no-net code | opus | high |
+| Finding verification (one skeptic over aggregated findings) | opus | high |
+| Analytical judgement (blast-radius verdicts, design decisions) | opus | high |
 
-On overlap, opus wins: a lint-covered batch that is ALSO macro-heavy /
-concurrency / engine-critical goes to opus — a style/structure linter does
-not mechanically guard against races or codegen-correctness bugs.
+On overlap, the stronger row wins: a lint-covered batch that is ALSO
+macro-heavy / concurrency / engine-critical goes to opus — a style/structure
+linter does not mechanically guard against races or codegen bugs.
+
+- **haiku** only where its output is quoted, located or extracted — never
+  where it must decide, design or judge correctness.
+- **fable** (the most capable, most expensive tier) only when the user asks
+  for it; never chosen on your own.
+- **effort**: `low` for runners/locators, `medium` for recon and routine
+  review, `high` for writing code and real judgement; `xhigh`/`max` only when
+  the user asks or a `high` attempt already failed on the same task.
+- A model rule is a hypothesis about quality: when a cheaper tier returns
+  something the parent cannot use, rerun that task one tier up and note it.
 
 ## Top-Tier Orchestrator Unloading
 

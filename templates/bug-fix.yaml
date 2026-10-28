@@ -249,8 +249,8 @@ states:
       then spawn one Agent per file for parallel implementation.
       Use `subagent_type="general-purpose"`. ALWAYS pass an explicit `model`
       (task-delegation's model table): `opus` for non-trivial fix logic,
-      `sonnet` for mechanical edits from the plan. Never haiku, never silent
-      session-model inheritance.
+      `sonnet` for mechanical edits from the plan. Never silent session-model inheritance;
+      pass `effort` too (task-delegation table); fable only on user request.
 
       For each file, include in the agent prompt VERBATIM:
       ---
@@ -399,8 +399,8 @@ states:
 
       ALWAYS pass an explicit `model`: `sonnet` for linter-covered/routine
       batches, `opus` for macro-heavy / concurrency / engine-critical /
-      no-linter ones (opus wins on overlap). Never haiku, never silent
-      inheritance of the session model.
+      no-linter ones (opus wins on overlap). Never silent session-model inheritance;
+      pass `effort` too (task-delegation table); fable only on user request.
 
       Launch up to 8 batch agents in ONE message, each with
       `run_in_background: false` — reports gate the merge; a single batch

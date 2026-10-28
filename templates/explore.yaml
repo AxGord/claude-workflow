@@ -38,8 +38,9 @@ states:
         may use flat `Explore`-type agents; any agent that returns judgement,
         analysis, or a recommendation is ANALYTICAL — never spawn it flat,
         use the VERBATIM preamble below. ALWAYS pass an explicit `model`:
-        `sonnet` for locate fan-out, `opus` for analytical judgement;
-        never haiku, never silent session-model inheritance. Their
+        `haiku` (effort low) for locate fan-out that returns places only,
+        `opus` (effort high) for analytical judgement; fable only on user
+        request, never silent session-model inheritance. Their
         findings gate your next transition → ALL calls in ONE message,
         each with `run_in_background: false` (a single spawn especially —
         never background one gating agent).
