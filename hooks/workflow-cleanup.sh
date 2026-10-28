@@ -1,81 +1,66 @@
 #!/bin/bash
-# SessionEnd hook: abandon this Claude Code instance's active workflow sessions
-# (and their descendants), then cap retained terminal sessions so the state
-# dir keeps only the most recent few for history — never grows unbounded.
-# Skips sessions referenced in plan files (they should survive context clears).
+# SessionEnd hook: SUSPEND this Claude Code instance's active workflow sessions
+# and their active descendants — stack, context and children stay, no ledger
+# line (the session has not ended): `claude --resume` (or another process)
+# continues them with the `resume` tool. Each is stamped with the id of the
+# conversation that is ending, which the SessionStart hook of a resume lists
+# by. The server abandons a session left suspended past its TTL. Then cap
+# retained terminal sessions so the state dir never grows unbounded.
 # Modifies JSON files directly — does NOT depend on MCP server being alive.
 read -t 1 -r INPUT
 STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
-PLANS_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plans"
 NOW=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 # Mirror of KEEP_TERMINAL_SESSIONS in src/types.ts
 KEEP_TERMINAL=3
 
-# This instance's context-epoch marker (hooks/workflow-start.sh) dies with it.
-rm -f "$STATE_DIR/context-epoch-$PPID"
-ABANDONED_SIDS=()
-# Every session this hook ends (incl. cascaded children) — each gets a ledger line.
-ENDED_SIDS=()
+# This instance's markers (hooks/workflow-start.sh) die with it.
+rm -f "$STATE_DIR/context-epoch-$PPID" "$STATE_DIR/claude-session-$PPID"
+CONVERSATION=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 
-is_planned() {
-  [ -d "$PLANS_DIR" ] && [ -n "$1" ] && grep -rqlF "$1" "$PLANS_DIR"/ 2>/dev/null
-}
-
-abandon() {
-  local f="$1" event="${2:-abandon}" TMP="${f}.tmp"
-  jq --arg now "$NOW" --arg event "$event" '
-    .history += [{ frame: .active_frame, event: $event, at: $now }] |
-    .stack = [] |
-    .active_frame = -1 |
-    .outcome = "abandoned" |
+suspend() {
+  local f="$1" TMP="${1}.tmp.$$"
+  jq --arg now "$NOW" --arg conv "$CONVERSATION" '
+    .history += [{ frame: .active_frame, event: "suspend", at: $now }] |
+    .suspended_at = $now |
+    (if $conv != "" then .claude_session_id = $conv else . end) |
     .updated_at = $now
   ' "$f" > "$TMP" 2>/dev/null && mv "$TMP" "$f" || rm -f "$TMP"
 }
 
+SUSPENDED_SIDS=()
 for f in "$STATE_DIR"/*.json; do
   [ -f "$f" ] || continue
-  SID=$(jq -r "select(.stack | length > 0) | select(.context.claude_code_pid == $PPID) | .session_id" "$f" 2>/dev/null)
+  SID=$(jq -r "select(.stack | length > 0) | select(.suspended_at == null) | select(.context.claude_code_pid == $PPID) | .session_id" "$f" 2>/dev/null)
   [ -n "$SID" ] || continue
-  is_planned "$SID" && continue
-  abandon "$f"
-  ABANDONED_SIDS+=("$SID")
-  ENDED_SIDS+=("$SID")
+  suspend "$f"
+  SUSPENDED_SIDS+=("$SID")
 done
 
-# Cascade: abandon children of abandoned sessions
-cascade_abandon() {
+# Cascade: active children of suspended sessions (whatever process owns them)
+cascade_suspend() {
   local parent_sid="$1"
   for f in "$STATE_DIR"/*.json; do
     [ -f "$f" ] || continue
     local child_sid
-    child_sid=$(jq -r --arg pid "$parent_sid" 'select(.parent_session_id == $pid) | select(.stack | length > 0) | .session_id' "$f" 2>/dev/null)
+    child_sid=$(jq -r --arg pid "$parent_sid" 'select(.parent_session_id == $pid) | select(.stack | length > 0) | select(.suspended_at == null) | .session_id' "$f" 2>/dev/null)
     [ -n "$child_sid" ] || continue
-    is_planned "$child_sid" && continue
-    abandon "$f" cascade_abandon
-    ENDED_SIDS+=("$child_sid")
-    cascade_abandon "$child_sid"
+    suspend "$f"
+    cascade_suspend "$child_sid"
   done
 }
 
-for sid in "${ABANDONED_SIDS[@]}"; do
-  cascade_abandon "$sid"
+for sid in "${SUSPENDED_SIDS[@]}"; do
+  cascade_suspend "$sid"
 done
-
-# Ledger lines for the sessions ended above, through the engine's own code
-# (same entry shape, same lock) — before the cap below can delete them.
-LEDGER_CLI="${CLAUDE_PLUGIN_ROOT}/build/ledger-cli.js"
-if [ "${#ENDED_SIDS[@]}" -gt 0 ] && [ -f "$LEDGER_CLI" ] && command -v node >/dev/null 2>&1; then
-  node "$LEDGER_CLI" "$STATE_DIR" "${ENDED_SIDS[@]}" 2>/dev/null
-fi
 
 # Cap retained terminal sessions: keep the KEEP_TERMINAL with the newest
 # .updated_at, delete older ones. Full parity with Storage.pruneTerminal in
 # src/storage.ts:
-#   - sort by the JSON .updated_at field (not file mtime) — abandon() bumps
+#   - sort by the JSON .updated_at field (not file mtime) — a rewrite bumps
 #     mtime via mv, so mtime order would diverge from the engine's retention;
-#   - secondary sort by .session_id — cascade abandon stamps every child with
-#     one identical .updated_at, so a stable tiebreak keeps the retained set
-#     deterministic and identical to the engine;
+#   - secondary sort by .session_id — the engine's cascade abandon stamps every
+#     child with one identical .updated_at, so a stable tiebreak keeps the
+#     retained set deterministic and identical to the engine;
 #   - no is_planned guard here — terminal (empty-stack) sessions can never be
 #     plan-referenced (plan resume requires an active stack), same invariant
 #     the engine's pruneTerminal documents and relies on.

@@ -11,13 +11,22 @@ import type {
   ActionResult,
   SessionOutcome,
   PriorityLevel,
+  DetachedRun,
+  RunningExec,
 } from "./types.js";
-import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS, KEEP_TERMINAL_SESSIONS, DEFAULT_PRIORITY_LEVEL, PriorityLevelSchema } from "./types.js";
+import {
+  MAX_STACK_DEPTH,
+  DEFAULT_MAX_TRANSITIONS,
+  KEEP_TERMINAL_SESSIONS,
+  DEFAULT_PRIORITY_LEVEL,
+  DEFAULT_SUSPENDED_TTL_DAYS,
+  PriorityLevelSchema,
+} from "./types.js";
 import { projectRoot } from "./pool.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
-import type { Executor, ExecContext } from "./executor.js";
-import { EXIT_CODE_TIMEOUT } from "./executor.js";
+import type { ExecContext } from "./executor.js";
+import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { render } from "./template.js";
@@ -64,6 +73,20 @@ interface EnteredTarget {
 
 const MAX_ACTION_CHAIN = 20;
 const TERMINAL_PROMPT_DIVIDER = "\n\n---\n\n";
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface EngineOptions {
+  /** `$STATE_DIR`: where the SessionStart hook writes `claude-session-<claude pid>` (the conversation id). */
+  readonly stateDir?: string;
+  /** A suspended session nobody resumed for this many days is abandoned. */
+  readonly suspendedTtlDays?: number;
+}
+
+/** What `resume` hands back: the session's status and its suspended descendants, whose agents must resume them. */
+export interface ResumeResult {
+  readonly status: StatusResult;
+  readonly suspendedChildren: SessionState[];
+}
 
 export class Engine {
   private static readonly GLOBAL_WORKFLOWS = new Set([
@@ -81,11 +104,24 @@ export class Engine {
   // Sessions whose processes the abort tool killed ahead of its queued abort:
   // their running action chain must stop, not route the killed exec's result.
   private readonly _aborting = new Set<string>();
+  private readonly _options: EngineOptions;
 
-  constructor(storage: Storage, loader: Loader, executor: Executor) {
+  constructor(storage: Storage, loader: Loader, executor: Executor, options: EngineOptions = {}) {
     this._storage = storage;
     this._loader = loader;
     this._executor = executor;
+    this._options = options;
+  }
+
+  /** The id of the Claude Code conversation this server's process runs, as the SessionStart hook recorded it. */
+  private _claudeSessionId(): string | undefined {
+    if (!this._options.stateDir) return undefined;
+    try {
+      const id = fs.readFileSync(path.join(this._options.stateDir, `claude-session-${process.ppid}`), "utf8").trim();
+      return id || undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -126,6 +162,13 @@ export class Engine {
    * When force=true, skip the check but warn if the owner process is still alive.
    * Returns a warning string if force was used, undefined otherwise.
    */
+  /** A suspended session takes no step until `resume` hands it to a live process. */
+  public assertNotSuspended(sessionId: string): void {
+    const session = this._storage.read(sessionId);
+    if (session?.suspended_at)
+      throw new Error(`Session "${sessionId}" is suspended (since ${session.suspended_at}). Call resume({ session_id: "${sessionId}" }) first.`);
+  }
+
   public assertOwnership(sessionId: string, force?: boolean): string | undefined {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
@@ -198,6 +241,7 @@ export class Engine {
     const rootSessionId = parentSessionId
       ? rootSessionIdOf(parent ?? { session_id: parentSessionId })
       : sessionId;
+    const claudeSessionId = this._claudeSessionId();
     const session: SessionState = {
       session_id: sessionId,
       ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
@@ -211,6 +255,7 @@ export class Engine {
       overrides: {},
       context: { claude_code_pid: process.ppid, cwd: cwd ?? process.cwd() },
       global_state_visits: { [globalKey]: 1 },
+      ...(claudeSessionId ? { claude_session_id: claudeSessionId } : {}),
     };
 
     await this._storage.write(sessionId, session);
@@ -360,10 +405,20 @@ export class Engine {
     if (!isDir) throw new Error(`cwd "${cwd}" is not an existing directory`);
   }
 
-  /** Kill a session's background exec groups and its in-flight foreground execs. */
+  /**
+   * Kill a session's background exec groups and its in-flight foreground
+   * execs — also one a dead server left running (`running_exec`, under this
+   * boot only: after a reboot its pgid names some other process).
+   */
   private _killSessionProcesses(session: SessionState): void {
     for (const pid of Object.values(session.background_pids ?? {})) killProcessGroup(pid);
     this._executor.killSession(session.session_id);
+    const run = session.running_exec;
+    if (run) {
+      // a written exit code means the run is over and its pgid may be anyone's by now
+      if (Executor.sameBoot(run) && !fs.existsSync(run.rc)) killProcessGroup(run.pgid);
+      Executor.discardRun(run);
+    }
   }
 
   /**
@@ -381,7 +436,7 @@ export class Engine {
     for (const child of this._getActiveChildren(sessionId)) this.killSessionTree(child.session_id);
   }
 
-  public async abort(sessionId: string): Promise<void> {
+  public async abort(sessionId: string, event: string = "abort"): Promise<void> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
     // Already ended: no second ledger line, no outcome rewrite, no kill of stale pids.
@@ -398,7 +453,7 @@ export class Engine {
       stack: [],
       active_frame: -1,
       updated_at: now,
-      history: [...session.history, { frame: session.active_frame, event: "abort", at: now }],
+      history: [...session.history, { frame: session.active_frame, event, at: now }],
       outcome: "abandoned",
     };
 
@@ -469,19 +524,121 @@ export class Engine {
     }
   }
 
-  /** Abandon active sessions whose owner PID is no longer alive. */
-  public async reapOrphanedSessions(): Promise<string[]> {
-    const reaped: string[] = [];
-    const active = this._storage.readAll().filter(s => s.stack.length > 0);
-    for (const session of active) {
-      const pid = session.context.claude_code_pid;
-      if (pid === undefined || typeof pid !== "number") continue;
-      if (!Engine._isPidAlive(pid)) {
-        await this.abort(session.session_id);
-        reaped.push(session.session_id);
+  /**
+   * On server start: suspend the active sessions whose owner process is gone
+   * (a Claude Code that crashed past its SessionEnd hook), abandon — with
+   * a ledger line — every session left suspended longer than the TTL, and
+   * remove exec run files older than a day that no session references.
+   */
+  public async reapOrphanedSessions(now: number = Date.now()): Promise<{ suspended: string[]; expired: string[] }> {
+    const suspended: string[] = [];
+    const expired: string[] = [];
+    const ttlMs = (this._options.suspendedTtlDays ?? DEFAULT_SUSPENDED_TTL_DAYS) * DAY_MS;
+    const sessions = this._storage.readAll().filter(s => s.stack?.length > 0);
+    const referenced = new Set(sessions.flatMap(s => (s.running_exec ? [s.running_exec.out, s.running_exec.err, s.running_exec.rc] : [])));
+    this._executor.sweepRuns(referenced, DAY_MS, now);
+    for (const session of sessions) {
+      if (session.suspended_at) {
+        if (now - Date.parse(session.suspended_at) < ttlMs) continue;
+        await this.abort(session.session_id, "expire");
+        expired.push(session.session_id);
+        continue;
       }
+      const pid = session.context.claude_code_pid;
+      if (typeof pid !== "number" || Engine._isPidAlive(pid)) continue;
+      if (await this._suspendOne(session.session_id, new Date(now).toISOString())) suspended.push(session.session_id);
     }
-    return reaped;
+    return { suspended, expired };
+  }
+
+  /**
+   * Suspend a session and its active descendants: the stack, context and
+   * children stay as they are and no ledger line is written — the session has
+   * not ended. Running execs are left running (`resume` takes them over).
+   */
+  public async suspend(sessionId: string): Promise<string[]> {
+    const now = new Date().toISOString();
+    const done: string[] = [];
+    for (const id of this._subtree(sessionId)) if (await this._suspendOne(id, now)) done.push(id);
+    return done;
+  }
+
+  private async _suspendOne(sessionId: string, at: string): Promise<boolean> {
+    const set = await this._storage.update(sessionId, cur => cur && cur.stack.length > 0 && !cur.suspended_at
+      ? { ...cur, suspended_at: at, updated_at: at, history: [...cur.history, { frame: cur.active_frame, event: "suspend", at }] }
+      : null);
+    return set !== null;
+  }
+
+  /** The session and its active descendants, parents first. */
+  private _subtree(sessionId: string): string[] {
+    const ids = [sessionId];
+    for (let i = 0; i < ids.length; i++) ids.push(...this._getActiveChildren(ids[i]).map(c => c.session_id));
+    return ids;
+  }
+
+  /**
+   * Hand a suspended session — or one whose owner process is gone — to this
+   * process: it and its active descendants become owned by it, the session
+   * itself is no longer suspended (each descendant stays suspended until its
+   * own agent resumes it). A session stopped inside an action state finishes
+   * it now: a foreground exec still running is waited for, one that finished
+   * meanwhile gives its recorded result, one that left neither runs again.
+   */
+  public async resume(sessionId: string): Promise<ResumeResult> {
+    const session = this._storage.read(sessionId);
+    if (!session) throw new Error(`Session "${sessionId}" not found`);
+    if (session.stack.length === 0) throw new Error(`Session "${sessionId}" has ended (${session.outcome ?? "completed"})`);
+    const pid = process.ppid;
+    const owner = session.context.claude_code_pid;
+    if (!session.suspended_at && owner !== pid && typeof owner === "number" && Engine._isPidAlive(owner))
+      throw new Error(`Session "${sessionId}" is active in PID ${owner}, not suspended.`);
+
+    const now = new Date().toISOString();
+    const claudeSessionId = this._claudeSessionId();
+    for (const id of this._subtree(sessionId)) {
+      await this._storage.update(id, cur => {
+        if (!cur || cur.stack.length === 0) return null;
+        const own = id === sessionId;
+        if (!own && cur.context.claude_code_pid === pid) return null;
+        return {
+          ...cur,
+          context: { ...cur.context, claude_code_pid: pid },
+          ...(own && claudeSessionId ? { claude_session_id: claudeSessionId } : {}),
+          ...(own ? { suspended_at: undefined } : {}),
+          updated_at: now,
+          history: own && cur.suspended_at ? [...cur.history, { frame: cur.active_frame, event: "resume", at: now }] : cur.history,
+        };
+      });
+    }
+    const resumed = this._storage.read(sessionId)!;
+    // the old server's snapshot died with it: the session continues on the workflows loaded now
+    if (!this._snapshots.has(sessionId)) this._snapshots.set(sessionId, this._loader.getAll());
+    const suspendedChildren = this._subtree(sessionId).slice(1)
+      .map(id => this._storage.read(id))
+      .filter((s): s is SessionState => !!s?.suspended_at);
+
+    const frame = resumed.stack[resumed.active_frame];
+    const state = this._resolveState(resumed, frame.workflow, frame.current_state);
+    const status = this._isActionState(state) && !resumed.pending_pop
+      ? await this._executeActionState(resumed, state!, [], 0, resumed.running_exec)
+      : this._buildStatus(resumed, []);
+    return { status, suspendedChildren };
+  }
+
+  /** Record the Agent-tool id of the sub-agent that drives a session, for a parent's resume. */
+  public async linkAgent(sessionId: string, agentId: string): Promise<void> {
+    const set = await this._storage.update(sessionId, cur => (cur ? { ...cur, agent_id: agentId } : null));
+    if (!set) throw new Error(`Session "${sessionId}" not found`);
+  }
+
+  /** Suspended sessions, oldest first: those whose cwd lies in `projectRootPath` (its git root), or all. */
+  public listSuspended(projectRootPath?: string): SessionState[] {
+    return this._storage.readAll()
+      .filter(s => s.stack?.length > 0 && !!s.suspended_at)
+      .filter(s => projectRootPath === undefined
+        || projectRoot(typeof s.context.cwd === "string" ? s.context.cwd : process.cwd()) === projectRootPath)
+      .sort((a, b) => a.suspended_at!.localeCompare(b.suspended_at!));
   }
 
   public async setContext(sessionId: string, key: string, value: unknown, actor?: string): Promise<void> {
@@ -669,19 +826,44 @@ export class Engine {
     return vars;
   }
 
+  /**
+   * Run an action state and route its result. `adopt` = the foreground exec
+   * a previous server left running in this state (`resume`): its result is
+   * taken over, and the state runs again only when it left none.
+   */
   private async _executeActionState(
     session: SessionState,
     state: StateDefinition,
     taskOps: TaskOp[],
-    depth: number = 0
+    depth: number = 0,
+    adopt?: RunningExec,
   ): Promise<StatusResult> {
     if (depth >= MAX_ACTION_CHAIN) {
       throw new Error(`Action chain exceeded max depth (${MAX_ACTION_CHAIN})`);
     }
 
     const vars = this._buildTemplateVars(session);
-    const execCtx = this._execContext(session);
-    const result = await this._executor.execute(state, vars, execCtx);
+    const frameIndex = session.active_frame;
+    const stateName = session.stack[frameIndex].current_state;
+    // Recorded in the session while it runs, so a server that exits mid-exec
+    // leaves a resume what it needs to take the run over.
+    let run: DetachedRun | undefined;
+    const execCtx: ExecContext = {
+      ...this._execContext(session),
+      onDetached: async (detached) => {
+        run = detached;
+        const record: RunningExec = { ...detached, frame: frameIndex, state: stateName };
+        await this._storage.update(session.session_id, cur => (cur && cur.stack.length > 0 ? { ...cur, running_exec: record } : null));
+      },
+    };
+    const own = adopt && adopt.frame === frameIndex && adopt.state === stateName ? adopt : undefined;
+    let result = own ? await this._executor.adopt(own, state, execCtx) : null;
+    if (own) run = own;
+    if (!result) {
+      if (own) Executor.discardRun(own);
+      if (this._aborting.has(session.session_id)) throw new Error(`Session "${session.session_id}" ended while its action state ran (aborting)`);
+      result = await this._executor.execute(state, vars, execCtx);
+    }
 
     // An exec can run for seconds, and other writers land meanwhile: a
     // parent's abort cascade (writing the pre-exec copy back would resurrect
@@ -692,8 +874,15 @@ export class Engine {
     const aborting = this._aborting.has(session.session_id);
     if (!current || current.stack.length === 0 || aborting) {
       if (result.pid) killProcessGroup(result.pid);
+      if (run) Executor.discardRun(run);
       const why = !current ? "deleted" : current.stack.length === 0 ? current.outcome : "aborting";
       throw new Error(`Session "${session.session_id}" ended while its action state ran (${why})`);
+    }
+    // Suspended, or resumed by another process meanwhile: the run's files stay
+    // for whoever resumes it — routing here would race that process.
+    if (current.suspended_at || current.context.claude_code_pid !== session.context.claude_code_pid) {
+      const why = current.suspended_at ? "suspended" : `taken over by PID ${current.context.claude_code_pid}`;
+      throw new Error(`Session "${session.session_id}" was ${why} while its action state ran; resume() takes its result over`);
     }
 
     // Determine target state
@@ -715,11 +904,18 @@ export class Engine {
         : result.success ? `HTTP ${result.status}` : (result.error ?? "error");
     }
 
+    // A result that cannot be routed is reported, not kept for a resume to retake.
+    const unroutable = async (err: Error): Promise<never> => {
+      if (run) Executor.discardRun(run);
+      await this._storage.update(session.session_id, cur => (cur?.running_exec ? { ...cur, running_exec: undefined } : null));
+      throw err;
+    };
+
     if (!routedName) {
-      throw new Error(
+      return unroutable(new Error(
         `Action state has no target for result: ${detail}. ` +
         `Configure cases/default or on_success/on_error.`
-      );
+      ));
     }
 
     const frame = session.stack[session.active_frame];
@@ -729,10 +925,16 @@ export class Engine {
     const wf = this._getWorkflow(session.session_id, frame.workflow);
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
     if (frame.total_transitions >= maxTransitions) {
-      throw new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`);
+      return unroutable(new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`));
     }
 
-    const { name: targetStateName, visits: targetVisits, exhausted } = this._enterTarget(session, frame, routedName);
+    let entered: EnteredTarget;
+    try {
+      entered = this._enterTarget(session, frame, routedName);
+    } catch (err) {
+      return unroutable(err as Error);
+    }
+    const { name: targetStateName, visits: targetVisits, exhausted } = entered;
 
     // A rerouted move shows the exhausted-route state's own prompt: the action's
     // prompt was written for the state it routes to by default.
@@ -787,15 +989,20 @@ export class Engine {
       context: ctx,
       // set_priority runs outside the session's queue: the level written during the exec wins.
       ...(current.priority ? { priority: current.priority } : {}),
+      // so do link_agent and the conversation id a resume stamps
+      agent_id: current.agent_id,
+      claude_session_id: current.claude_session_id,
       stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
       updated_at: now,
       history: [...session.history, historyEntry],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
       last_action_result: result,
       background_pids: bgPids,
+      running_exec: undefined,
     };
 
     await this._storage.write(session.session_id, updated);
+    if (run) Executor.discardRun(run);
 
     // Check target state
     const targetState = this._resolveState(updated, frame.workflow, targetStateName);

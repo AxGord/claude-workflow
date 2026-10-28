@@ -34,11 +34,11 @@ STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
 # delivered (src/tools.ts). At startup it only clears an empty set.
 mkdir -p "$STATE_DIR" && echo "$(date +%s).$$" > "$STATE_DIR/context-epoch-$PPID"
 
-# A crashed Claude Code never runs SessionEnd, so its marker stays behind:
+# A crashed Claude Code never runs SessionEnd, so its markers stay behind:
 # drop every marker whose pid is no longer alive (never this instance's own).
-for marker in "$STATE_DIR"/context-epoch-*; do
+for marker in "$STATE_DIR"/context-epoch-* "$STATE_DIR"/claude-session-*; do
   [ -f "$marker" ] || continue
-  marker_pid=${marker##*/context-epoch-}
+  marker_pid=${marker##*-}
   [ "$marker_pid" = "$PPID" ] && continue
   case "$marker_pid" in ''|*[!0-9]*) continue ;; esac
   kill -0 "$marker_pid" 2>/dev/null || rm -f "$marker"
@@ -49,6 +49,10 @@ command -v jq >/dev/null 2>&1 || { echo "STOP. Call mcp__plugin_workflow_wf__sta
 
 read -t 1 -r INPUT
 SOURCE=$(echo "$INPUT" | jq -r '.source // empty')
+CONVERSATION=$(echo "$INPUT" | jq -r '.session_id // empty')
+# The conversation this process runs: the server stamps it on every session it
+# starts (src/engine.ts), so a later `claude --resume` finds them.
+[ -n "$CONVERSATION" ] && printf '%s\n' "$CONVERSATION" > "$STATE_DIR/claude-session-$PPID"
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 HOOK_CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
 # Physical path (pwd -P) so a symlinked cwd (e.g. /tmp → /private/tmp)
@@ -136,11 +140,33 @@ if [ "$SOURCE" = "clear" ] || [ "$SOURCE" = "compact" ]; then
 fi
 
 # --- 2. startup/resume → new process ---
+# A resumed conversation: the sessions its previous process left suspended
+# (hooks/workflow-cleanup.sh) — roots only; resume() of a root names its sub-agents.
+if [ "$SOURCE" = "resume" ] && [ -n "$CONVERSATION" ]; then
+  SUSPENDED=$(jq -r --arg conv "$CONVERSATION" '
+    select(.claude_session_id == $conv and (.stack | length > 0) and .suspended_at != null)
+    | [.session_id, (.parent_session_id // ""), (.stack[.active_frame] | "\(.workflow) @ \(.current_state)")] | join("|")
+  ' "$STATE_DIR"/*.json 2>/dev/null)
+  if [ -n "$SUSPENDED" ]; then
+    SUSPENDED_IDS=" $(printf '%s\n' "$SUSPENDED" | cut -d'|' -f1 | tr '\n' ' ')"
+    LINES=""
+    # `|`, not a tab: whitespace IFS would fold an empty parent field away
+    while IFS='|' read -r sid parent where; do
+      [ -n "$parent" ] && [[ "$SUSPENDED_IDS" == *" $parent "* ]] && continue
+      LINES="$LINES
+  $sid: $where → mcp__plugin_workflow_wf__resume({ session_id: \"$sid\" })"
+    done <<< "$SUSPENDED"
+    echo "WORKFLOW SESSIONS SUSPENDED when this conversation's previous process exited — do NOT call start(). Resume each:$LINES
+resume() returns the session's current state (an exec that was running is taken over) and names the sub-agents to wake.$ZED_SUFFIX"
+    exit 0
+  fi
+fi
+
 # Check plans/ for live planning sessions (cross-process plan resume)
 PLAN_SID=$(find_plan_session)
 if [ -n "$PLAN_SID" ]; then
   bump_skill_epoch_by_id "$PLAN_SID"
-  echo "PLAN RESUME (new process): active planning session $PLAN_SID found. Call transition(\"$PLAN_SID\", \"planned\") to resume.$ZED_SUFFIX"
+  echo "PLAN RESUME (new process): active planning session $PLAN_SID found. Call mcp__plugin_workflow_wf__resume({ session_id: \"$PLAN_SID\" }), then transition(\"$PLAN_SID\", \"planned\") to resume.$ZED_SUFFIX"
   exit 0
 fi
 

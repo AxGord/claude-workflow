@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { StateDefinition, ActionResult, ShardResult } from "./types.js";
+import type { StateDefinition, ActionResult, ShardResult, DetachedRun } from "./types.js";
 import { DEFAULT_PRIORITY_LEVEL, RESOURCE_THREADS_BUDGET, type PriorityLevel } from "./types.js";
 import { render } from "./template.js";
-import { killProcessGroup } from "./process.js";
+import { isGroupAlive, killProcessGroup } from "./process.js";
 import { EX_TEMPFAIL, Pool, describeRequest, levelPriority, resolvePoolDir } from "./pool.js";
 import type { AcquireResult } from "./pool.js";
 
@@ -22,8 +23,6 @@ const DEFAULT_FETCH_TIMEOUT = 5_000;
 const SIGKILL_GRACE_MS = 5_000;
 /** The exit code of an exec killed by its `timeout` (`on_timeout` routes it). */
 export const EXIT_CODE_TIMEOUT = 124;
-const TRIM_TRIGGER_FACTOR = 4;
-const TRIM_TARGET_FACTOR = 2;
 const EXIT_CODE_ABORTED = 130;
 const LEASE_LABEL_MAX = 80;
 const ABORTED_WAIT = "aborted while waiting for a pool lease";
@@ -32,6 +31,16 @@ const ITEMS_MAX_OUTPUT = 1024 * 1024;
 const TRUNCATED_MARK = "...[truncated]\n";
 // the output tail a failed shard contributes to a fanout's summary
 const SHARD_TAIL = 2_000;
+// how often a taken-over exec is checked for its exit
+const ADOPT_POLL_MS = 200;
+// how often a timed-out group is checked for its death
+const REAP_POLL_MS = 50;
+// two boot-time readings closer than this are the same boot (clock adjustments)
+const SAME_BOOT_TOLERANCE_MS = 60_000;
+const NO_EXIT_CODE = "Process ended without writing its exit code (killed)";
+// Runs the command ($1) in a child shell and writes its exit code to $2 when
+// it ends, so a run whose server died still leaves its result behind.
+const EXEC_WRAPPER = 'sh -c "$1"; rc=$?; printf "%s\\n" "$rc" > "$2.tmp" && mv "$2.tmp" "$2"; exit $rc';
 
 /** One instance of a `fanout:` exec: its id and the env that tells it which one it is. */
 interface Shard {
@@ -54,6 +63,16 @@ export interface ExecContext {
   readonly project?: string;
   /** The running step, `workflow/state`. */
   readonly step?: string;
+  /**
+   * A plain or leased foreground exec reports its detached run here once it
+   * started; the run's files then belong to the caller (`discardRun`).
+   */
+  readonly onDetached?: (run: DetachedRun) => Promise<void>;
+}
+
+/** This machine's boot time; a pgid recorded under another boot names some other process. */
+export function bootTimeMs(): number {
+  return Math.round(Date.now() - os.uptime() * 1000);
 }
 
 export { killProcessGroup };
@@ -73,8 +92,12 @@ export class Executor {
   /** The machine-wide thread pool `resource:` execs lease from. */
   readonly pool: Pool;
 
-  constructor(pool: Pool = new Pool(resolvePoolDir())) {
+  /** Where foreground execs write their output and exit code. */
+  readonly runDir: string;
+
+  constructor(pool: Pool = new Pool(resolvePoolDir()), runDir: string = path.join(os.tmpdir(), "wf-exec")) {
     this.pool = pool;
+    this.runDir = runDir;
   }
 
   async execute(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
@@ -84,7 +107,7 @@ export class Executor {
       if (state.fanout) result = await this._execFanout(state, vars, ctx);
       else if (state.background) result = await this._execBackground(state, vars, ctx);
       else if (state.resource) result = await this._execLeased(state, vars, ctx);
-      else result = await this._exec(state, vars, ctx);
+      else result = await this._exec(state, vars, ctx, undefined, undefined, ctx?.onDetached);
     } else if (state.type === "fetch") {
       result = await this._fetch(state, vars);
     } else {
@@ -174,7 +197,9 @@ export class Executor {
     }
     try {
       const leased = { ...(got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : {}), ...shard?.env };
-      return { ...(await this._exec(state, vars, ctx, leased, (pgid) => got.lease.attach(pgid))), wait_ms, threads_granted: got.lease.threads };
+      // a fanout shard is not taken over on its own: a resumed fanout runs again
+      const detached = shard ? undefined : ctx?.onDetached;
+      return { ...(await this._exec(state, vars, ctx, leased, (pgid) => got.lease.attach(pgid), detached)), wait_ms, threads_granted: got.lease.threads };
     } finally {
       await got.lease.release();
     }
@@ -329,81 +354,215 @@ export class Executor {
     return { ...base, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...leased, ...envVars };
   }
 
+  /**
+   * A foreground exec: `sh -c` in its own process group, detached from the
+   * server — output to files, exit code to a file — so it survives the
+   * server's exit and `adopt` can take its result over. With `detached` the
+   * run's files are left to the caller; otherwise they are removed here.
+   */
   private _exec(
     state: StateDefinition,
     vars: Record<string, unknown>,
     ctx?: ExecContext,
     leased?: Record<string, string>,
     onSpawn?: (pgid: number) => Promise<void>,
+    detached?: (run: DetachedRun) => Promise<void>,
   ): Promise<ActionResult> {
     const command = render(state.command!, vars);
     const cwd = this._cwd(state, vars, ctx);
     const timeout = state.timeout ?? DEFAULT_EXEC_TIMEOUT;
     const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
+    // run output may hold anything a command prints: owner-only
+    fs.mkdirSync(this.runDir, { recursive: true, mode: 0o700 });
+    const base = path.join(this.runDir, `${ctx?.sessionId || "exec"}-${randomBytes(6).toString("hex")}`);
+    const files = { out: `${base}.out`, err: `${base}.err`, rc: `${base}.rc` };
+    const startedAt = new Date().toISOString();
 
     return new Promise((resolve) => {
-      let stdout = "";
-      let stderr = "";
       let killed = false;
-
-      const child = spawn("sh", ["-c", command], {
-        cwd,
-        env: this._buildEnv(state, vars, ctx, leased),
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-      });
+      const outFd = fs.openSync(files.out, "w");
+      const errFd = fs.openSync(files.err, "w");
+      let child;
+      try {
+        child = spawn("sh", ["-c", EXEC_WRAPPER, "wf-exec", command, files.rc], {
+          cwd,
+          env: this._buildEnv(state, vars, ctx, leased),
+          stdio: ["ignore", outFd, errFd],
+          detached: true,
+        });
+      } finally {
+        fs.closeSync(outFd);
+        fs.closeSync(errFd);
+      }
       this._track(ctx?.sessionId, child.pid, true);
       // The lease names the child's group too, so a server that dies mid-exec does not free it.
       if (child.pid && onSpawn) onSpawn(child.pid).catch(() => {});
+      // The result waits for the record: written after it, the record would outlive the run.
+      const recorded = child.pid && detached
+        ? detached({ pgid: child.pid, ...files, started_at: startedAt, boot_ms: bootTimeMs() }).catch(() => {})
+        : Promise.resolve();
 
       const killGroup = (signal: NodeJS.Signals) => {
         if (child.pid) killProcessGroup(child.pid, signal);
       };
 
-      let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
+      let killedAt: number | undefined;
       const timer = setTimeout(() => {
         killed = true;
+        killedAt = Date.now();
         killGroup("SIGTERM");
-        sigkillTimer = setTimeout(() => killGroup("SIGKILL"), SIGKILL_GRACE_MS);
       }, timeout);
 
-      // Keep only the tail — no memory explosion on large output
-      const accumulate = (buf: string, chunk: Buffer): string => {
-        buf += chunk.toString();
-        return buf.length > maxOutput * TRIM_TRIGGER_FACTOR ? buf.slice(-maxOutput * TRIM_TARGET_FACTOR) : buf;
-      };
-      child.stdout!.on("data", (chunk: Buffer) => { stdout = accumulate(stdout, chunk); });
-      child.stderr!.on("data", (chunk: Buffer) => { stderr = accumulate(stderr, chunk); });
-
-      child.on("close", (code: number | null) => {
+      const finish = (result: ActionResult) => {
         this._track(ctx?.sessionId, child.pid, false);
         clearTimeout(timer);
-        clearTimeout(sigkillTimer);
-        const exit_code = killed ? EXIT_CODE_TIMEOUT : (code ?? 1);
-        resolve({
-          type: "exec",
-          success: exit_code === 0,
-          stdout: truncate(stdout, maxOutput),
-          stderr: truncate(stderr, maxOutput),
-          exit_code,
-          error: killed ? "Process timed out" : (exit_code !== 0 ? `Exit code ${exit_code}` : undefined),
-        });
+        // a run that failed to spawn has no process to take over: its files go too
+        if (!detached || !child.pid) Executor.discardRun(files);
+        void recorded.then(() => resolve(result));
+      };
+
+      child.on("close", (code: number | null) => {
+        if (!killed) {
+          const exit_code = Executor._readExitCode(files.rc) ?? code ?? 1;
+          finish(Executor._runResult(files, maxOutput, exit_code));
+          return;
+        }
+        // The wrapper dies of the SIGTERM even when the command ignores it:
+        // the run is over only once the whole group is gone (SIGKILL after the grace).
+        void Executor._reapGroup(child.pid!, killedAt!).then(() =>
+          finish(Executor._runResult(files, maxOutput, EXIT_CODE_TIMEOUT, "Process timed out")));
       });
 
       child.on("error", (err) => {
-        this._track(ctx?.sessionId, child.pid, false);
-        clearTimeout(timer);
-        clearTimeout(sigkillTimer);
-        resolve({
-          type: "exec",
-          success: false,
-          stdout: truncate(stdout, maxOutput),
-          stderr: truncate(stderr, maxOutput),
-          exit_code: 1,
-          error: err.message,
-        });
+        finish({ ...Executor._runResult(files, maxOutput, 1), error: err.message });
       });
     });
+  }
+
+  /**
+   * Take over a foreground exec another server started (`ExecContext.onDetached`):
+   * its exit code already written → that result; its group still running →
+   * wait for it (abort kills it; past the state's `timeout`, counted from its
+   * start, it is killed and exits 124); neither — it never finished, e.g. the
+   * machine rebooted → null, the caller runs the step again.
+   */
+  async adopt(run: DetachedRun, state: StateDefinition, ctx?: ExecContext): Promise<ActionResult | null> {
+    const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
+    const started = Date.parse(run.started_at);
+    const done = (exit_code: number, error?: string): ActionResult =>
+      ({ ...Executor._runResult(run, maxOutput, exit_code, error), duration_ms: Math.max(0, Date.now() - started) });
+    const alive = () => Executor.sameBoot(run) && isGroupAlive(run.pgid);
+
+    const first = Executor._readExitCode(run.rc);
+    if (first !== undefined) return done(first);
+    if (!alive()) {
+      // it may have written its code between the two reads
+      const late = Executor._readExitCode(run.rc);
+      return late === undefined ? null : done(late);
+    }
+
+    const deadline = started + (state.timeout ?? DEFAULT_EXEC_TIMEOUT);
+    this._track(ctx?.sessionId, run.pgid, true);
+    try {
+      let killedAt: number | undefined;
+      for (;;) {
+        const code = Executor._readExitCode(run.rc);
+        const ended = code !== undefined || !isGroupAlive(run.pgid);
+        if (ended && killedAt !== undefined) return done(EXIT_CODE_TIMEOUT, "Process timed out");
+        if (code !== undefined) return done(code);
+        if (ended) return done(1, NO_EXIT_CODE);
+        const now = Date.now();
+        if (killedAt === undefined && now >= deadline) {
+          killedAt = now;
+          killProcessGroup(run.pgid, "SIGTERM");
+        } else if (killedAt !== undefined && now - killedAt >= SIGKILL_GRACE_MS) {
+          killProcessGroup(run.pgid, "SIGKILL");
+        }
+        await new Promise(r => setTimeout(r, ADOPT_POLL_MS));
+      }
+    } finally {
+      this._track(ctx?.sessionId, run.pgid, false);
+    }
+  }
+
+  /** Wait for a group sent SIGTERM at `termAt` to die; SIGKILL it once the grace has passed. */
+  private static async _reapGroup(pgid: number, termAt: number): Promise<void> {
+    let killSent = false;
+    for (;;) {
+      if (!isGroupAlive(pgid)) return;
+      const since = Date.now() - termAt;
+      if (!killSent && since >= SIGKILL_GRACE_MS) {
+        killProcessGroup(pgid, "SIGKILL");
+        killSent = true;
+      } else if (killSent && since >= SIGKILL_GRACE_MS + SIGKILL_GRACE_MS) {
+        return; // unkillable (uninterruptible sleep): stop waiting, the group is not ours to hold the step for
+      }
+      await new Promise(r => setTimeout(r, REAP_POLL_MS));
+    }
+  }
+
+  /**
+   * Remove run files under `runDir` older than `maxAgeMs` that no session
+   * references any more (left by a server killed between a run's end and its
+   * routing). Returns the files removed.
+   */
+  sweepRuns(referenced: ReadonlySet<string>, maxAgeMs: number, now: number = Date.now()): string[] {
+    let names: string[];
+    try { names = fs.readdirSync(this.runDir); } catch { return []; }
+    const removed: string[] = [];
+    for (const name of names) {
+      const file = path.join(this.runDir, name);
+      if (referenced.has(file)) continue;
+      try {
+        if (now - fs.statSync(file).mtimeMs < maxAgeMs) continue;
+        fs.rmSync(file, { force: true });
+        removed.push(file);
+      } catch { /* gone meanwhile */ }
+    }
+    return removed;
+  }
+
+  /** Remove a run's files (a missing one is fine). */
+  static discardRun(run: Pick<DetachedRun, "out" | "err" | "rc">): void {
+    for (const f of [run.out, run.err, run.rc, `${run.rc}.tmp`]) fs.rmSync(f, { force: true });
+  }
+
+  /** The run started under this boot of the machine, so its pgid still names it. */
+  static sameBoot(run: Pick<DetachedRun, "boot_ms">): boolean {
+    return Math.abs(bootTimeMs() - run.boot_ms) < SAME_BOOT_TOLERANCE_MS;
+  }
+
+  private static _readExitCode(file: string): number | undefined {
+    let text: string;
+    try { text = fs.readFileSync(file, "utf8").trim(); } catch { return undefined; }
+    const code = Number.parseInt(text, 10);
+    return Number.isInteger(code) ? code : undefined;
+  }
+
+  /** The last `limit` bytes of a file, marked when cut; a missing file reads empty. */
+  private static _readTail(file: string, limit: number): string {
+    let fd: number;
+    try { fd = fs.openSync(file, "r"); } catch { return ""; }
+    try {
+      const size = fs.fstatSync(fd).size;
+      const length = Math.min(size, limit);
+      const buf = Buffer.alloc(length);
+      fs.readSync(fd, buf, 0, length, size - length);
+      return (size > limit ? TRUNCATED_MARK : "") + buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  private static _runResult(run: Pick<DetachedRun, "out" | "err">, maxOutput: number, exit_code: number, error?: string): ActionResult {
+    return {
+      type: "exec",
+      success: exit_code === 0,
+      stdout: Executor._readTail(run.out, maxOutput),
+      stderr: Executor._readTail(run.err, maxOutput),
+      exit_code,
+      error: error ?? (exit_code !== 0 ? `Exit code ${exit_code}` : undefined),
+    };
   }
 
   private _execBackground(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {

@@ -219,6 +219,27 @@ export interface HistoryEntry {
 
 export type SessionOutcome = "completed" | "failed" | "abandoned";
 
+/**
+ * The files of a foreground exec started detached in its own process group:
+ * its output goes to `out` / `err` and its exit code to `rc`, so the run
+ * outlives the server and a later one can take its result over.
+ */
+export interface DetachedRun {
+  readonly pgid: number;
+  readonly out: string;
+  readonly err: string;
+  readonly rc: string;
+  readonly started_at: string;
+  /** Machine boot time when it started: a different boot means the process is gone whatever its pgid shows. */
+  readonly boot_ms: number;
+}
+
+/** A session's foreground exec in flight, recorded so a resume can take it over. */
+export interface RunningExec extends DetachedRun {
+  readonly frame: number;
+  readonly state: string;
+}
+
 export interface SessionState {
   readonly session_id: string;
   readonly parent_session_id?: string;
@@ -240,6 +261,13 @@ export interface SessionState {
   readonly global_state_visits?: Record<string, number>;
   readonly skill_epoch?: number;
   readonly loaded_skills?: Record<string, number>;
+  /** Set while the Claude Code process that owned the session is gone; `resume` clears it. */
+  readonly suspended_at?: string;
+  /** The Claude Code conversation the session belongs to (`claude --resume` keeps it). */
+  readonly claude_session_id?: string;
+  /** The Agent-tool id of the sub-agent driving this session (`link_agent`). */
+  readonly agent_id?: string;
+  readonly running_exec?: RunningExec;
 }
 
 export interface WorkflowOverrides {
@@ -325,3 +353,5 @@ export const MAX_STACK_DEPTH = 10;
 export const DEFAULT_MAX_TRANSITIONS = 50;
 export const LOCK_STALE_MS = 5000;
 export const KEEP_TERMINAL_SESSIONS = 3;
+/** A suspended session nobody resumed for this many days is abandoned (`WF_SUSPENDED_TTL_DAYS`). */
+export const DEFAULT_SUSPENDED_TTL_DAYS = 7;

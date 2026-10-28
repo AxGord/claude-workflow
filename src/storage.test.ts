@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { prunePolicy, Storage, LEDGER_FILE } from "./storage.js";
 import { ledgerEntry } from "./ledger.js";
-import { appendLedgerFor } from "./ledger-cli.js";
 import type { SessionState } from "./types.js";
 
 /** Build a minimal terminal (empty-stack) session. */
@@ -159,21 +158,6 @@ describe("Storage ledger", () => {
       await Promise.all(Array.from({ length: 30 }, (_, i) => writers[i % 3].appendLedger({ i })));
       const lines = fs.readFileSync(path.join(dir, LEDGER_FILE), "utf8").trim().split("\n");
       expect(lines.map(l => JSON.parse(l).i).sort((a, b) => a - b)).toEqual(Array.from({ length: 30 }, (_, i) => i));
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("ledger-cli appends lines for sessions ended outside the server, skipping active ones", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-ledger-"));
-    try {
-      const storage = new Storage(dir);
-      const ended = { ...terminal("gone", "2026-01-01T00:00:00.000Z"), outcome: "abandoned" as const };
-      await storage.write("gone", ended);
-      await storage.write("live", active("live", "2026-01-01T00:00:00.000Z"));
-      expect(await appendLedgerFor(dir, ["gone", "live", "missing"])).toBe(1);
-      const lines = fs.readFileSync(path.join(dir, LEDGER_FILE), "utf8").trim().split("\n").map(l => JSON.parse(l));
-      expect(lines).toEqual([expect.objectContaining({ session_id: "gone", outcome: "abandoned" })]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

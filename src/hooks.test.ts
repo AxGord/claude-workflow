@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 const HOOKS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "hooks");
 
 /** Run a hook script with a sandboxed HOME / STATE_DIR / plugin root; its $PPID is this process. */
-function runHook(script: string, env: Record<string, string>): string {
-  const r = spawnSync("bash", [path.join(HOOKS, script)], { input: "{}\n", env: { ...process.env, ...env }, encoding: "utf8" });
+function runHook(script: string, env: Record<string, string>, payload: object = {}): string {
+  const r = spawnSync("bash", [path.join(HOOKS, script)], { input: JSON.stringify(payload) + "\n", env: { ...process.env, ...env }, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`${script} exited ${r.status}: ${r.stderr}`);
   return r.stdout;
 }
@@ -50,34 +50,70 @@ describe("hooks", () => {
     expect(left).toEqual([`context-epoch-${live}`, `context-epoch-${process.pid}`, "context-epoch-notapid"].sort());
   });
 
-  it("workflow-cleanup.sh hands every session it abandons (incl. cascaded children) to ledger-cli", () => {
+  const session = (id: string, extra: object) => ({
+    session_id: id,
+    stack: [{ workflow: "w", current_state: "s", state_visits: {}, total_transitions: 0 }],
+    active_frame: 0,
+    started_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    history: [],
+    overrides: {},
+    context: {},
+    ...extra,
+  });
+  const writer = (stateDir: string) => (s: { session_id: string }) =>
+    fs.writeFileSync(path.join(stateDir, `${s.session_id}.json`), JSON.stringify(s));
+  const read = (stateDir: string, id: string) => JSON.parse(fs.readFileSync(path.join(stateDir, `${id}.json`), "utf8"));
+
+  it("workflow-cleanup.sh suspends this process's sessions and their children (stamped with the ending conversation), ends none", () => {
     const env = sandbox();
+    // a ledger-cli stub: nothing may be handed to it any more — no session ends here
     const argsFile = path.join(env.STATE_DIR, "..", "ledger-args");
     fs.mkdirSync(path.join(env.CLAUDE_PLUGIN_ROOT, "build"));
     fs.writeFileSync(
       path.join(env.CLAUDE_PLUGIN_ROOT, "build", "ledger-cli.js"),
       `require("fs").writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));`,
     );
-    const session = (id: string, extra: object) => ({
-      session_id: id,
-      stack: [{ workflow: "w", current_state: "s", state_visits: {}, total_transitions: 0 }],
-      active_frame: 0,
-      started_at: "2026-01-01T00:00:00.000Z",
-      updated_at: "2026-01-01T00:00:00.000Z",
-      history: [],
-      overrides: {},
-      context: {},
-      ...extra,
-    });
-    const write = (s: { session_id: string }) =>
-      fs.writeFileSync(path.join(env.STATE_DIR, `${s.session_id}.json`), JSON.stringify(s));
-    write(session("aaaa1111", { context: { claude_code_pid: process.pid } }));
+    const write = writer(env.STATE_DIR);
+    write(session("aaaa1111", { context: { claude_code_pid: process.pid }, claude_session_id: "old-conv" }));
     write(session("bbbb2222", { parent_session_id: "aaaa1111", context: { claude_code_pid: 1 } }));
     write(session("cccc3333", { context: { claude_code_pid: 1 } }));
+    fs.writeFileSync(path.join(env.STATE_DIR, `claude-session-${process.pid}`), "conv-9\n");
 
-    runHook("workflow-cleanup.sh", env);
+    runHook("workflow-cleanup.sh", env, { session_id: "conv-9", reason: "prompt_input_exit" });
 
-    const args = JSON.parse(fs.readFileSync(argsFile, "utf8")) as string[];
-    expect(args).toEqual([env.STATE_DIR, "aaaa1111", "bbbb2222"]);
+    for (const id of ["aaaa1111", "bbbb2222"]) {
+      const s = read(env.STATE_DIR, id);
+      expect(s.suspended_at).toBeTruthy();
+      expect(s.outcome).toBeUndefined();
+      expect(s.stack).toHaveLength(1);
+      expect(s.claude_session_id).toBe("conv-9");
+      expect(s.history.at(-1).event).toBe("suspend");
+    }
+    expect(read(env.STATE_DIR, "cccc3333").suspended_at).toBeUndefined();
+    expect(fs.existsSync(argsFile)).toBe(false);
+    expect(fs.existsSync(path.join(env.STATE_DIR, `claude-session-${process.pid}`))).toBe(false);
+  });
+
+  it("workflow-start.sh records the conversation id and, on resume, lists that conversation's suspended root sessions", () => {
+    const env = sandbox();
+    const write = writer(env.STATE_DIR);
+    const at = { suspended_at: "2026-10-28T00:00:00.000Z" };
+    write(session("aaaa1111", { ...at, claude_session_id: "conv-9", stack: [{ workflow: "batch", current_state: "collect", state_visits: {}, total_transitions: 0 }] }));
+    write(session("bbbb2222", { ...at, claude_session_id: "conv-9", parent_session_id: "aaaa1111" }));
+    write(session("cccc3333", { ...at, claude_session_id: "other" }));
+    write(session("dddd4444", { claude_session_id: "conv-9" }));
+
+    const out = runHook("workflow-start.sh", env, { session_id: "conv-9", source: "resume" });
+    expect(fs.readFileSync(path.join(env.STATE_DIR, `claude-session-${process.pid}`), "utf8").trim()).toBe("conv-9");
+    expect(out).toContain("do NOT call start()");
+    expect(out).toContain('aaaa1111: batch @ collect → mcp__plugin_workflow_wf__resume({ session_id: "aaaa1111" })');
+    expect(out).not.toContain("bbbb2222");
+    expect(out).not.toContain("cccc3333");
+    expect(out).not.toContain("dddd4444");
+
+    const fresh = runHook("workflow-start.sh", env, { session_id: "conv-9", source: "startup" });
+    expect(fresh).not.toContain("aaaa1111");
+    expect(fresh).toContain("Call mcp__plugin_workflow_wf__start");
   });
 });

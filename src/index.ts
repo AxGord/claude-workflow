@@ -48,8 +48,12 @@ if (skillErrors.length > 0) {
 // Start hot-reload
 loader.startWatching();
 
-const executor = new Executor();
-const engine = new Engine(storage, loader, executor);
+const executor = new Executor(undefined, path.join(STATE_DIR, "exec"));
+const ttlDays = Number(process.env["WF_SUSPENDED_TTL_DAYS"]);
+const engine = new Engine(storage, loader, executor, {
+  stateDir: STATE_DIR,
+  ...(Number.isFinite(ttlDays) && ttlDays > 0 ? { suspendedTtlDays: ttlDays } : {}),
+});
 const modifier = new Modifier(storage, loader);
 modifier.setEngine(engine);
 
@@ -68,9 +72,10 @@ setContextEpochFile(path.join(STATE_DIR, `context-epoch-${process.ppid}`));
 // Start dashboard
 createDashboard(storage, loader, DASHBOARD_PORT);
 
-// Reap orphaned sessions from previous processes on startup
-engine.reapOrphanedSessions().then(reaped => {
-  if (reaped.length > 0) console.error(`Reaped orphaned sessions: ${reaped.join(", ")}`);
+// On startup: suspend sessions of dead processes, abandon long-suspended ones
+engine.reapOrphanedSessions().then(({ suspended, expired }) => {
+  if (suspended.length > 0) console.error(`Suspended orphaned sessions: ${suspended.join(", ")}`);
+  if (expired.length > 0) console.error(`Abandoned expired suspended sessions: ${expired.join(", ")}`);
 }).catch(err => console.error("Reap failed:", err));
 
 // Connect via stdio

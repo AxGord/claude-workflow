@@ -25,6 +25,7 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 - **20 bundled workflows** — complete agent lifecycle from routing to reflection, including long-running batch orchestration and a text-only `docs` route
 - **28 bundled skills** — reusable knowledge modules auto-provisioned on first run
 - **SessionStart hook** — auto-provisions missing skills and injects workflow context
+- **Survives a restart** — when Claude Code exits, its sessions are suspended, not abandoned; `claude --resume` continues them (`resume`), sub-agents included, and an exec that was running keeps running and is taken over
 
 ## Quick Start
 
@@ -157,6 +158,17 @@ states:
 
 ## Action States
 
+### Restart: suspend and resume
+
+When Claude Code exits (SessionEnd), its active sessions and their active descendants are **suspended**: stack, context and children stay, no ledger line is written. The SessionStart hook records which conversation each process runs (`$STATE_DIR/claude-session-<pid>`); the server stamps it on every session it starts, and SessionEnd stamps the ending one.
+
+- **`claude --resume` / `--continue`** keep the conversation id: the SessionStart hook (`source: "resume"`) lists that conversation's suspended root sessions with the `resume` call for each. A fresh `startup` lists nothing.
+- **`resume({ session_id })`** hands the session and its sub-tree to the current process and returns the session's state. Its suspended sub-agent sessions are listed as agent → session → state, each with the `SendMessage` that wakes its agent; the agent continues ITS OWN session with `resume`, not a new `start`. `link_agent({ session_id, agent_id })` records which agent drives a child session (call it after the spawn, once the child's session id is known).
+- **Another account** (the conversation cannot be resumed), or `--fork-session` (a new conversation id — the SessionStart hint lists nothing): `suspended()` lists the suspended sessions of this project (git root of the server's cwd; `all: true` for every project) — `resume` any of them.
+- **An exec in flight**: every foreground exec runs detached in its own process group, its output in files and its exit code written to a file when it ends (`$STATE_DIR/exec/`), so it outlives the server; the session records it (`running_exec`) while it runs. `resume` of a session stopped in that exec state finishes it: still running → waits (abort kills it; its `timeout` counts from its start); finished → takes the recorded exit code and output; neither (the machine rebooted) → runs the step again. Its pool lease lives while its process group does. A `fanout:` state runs again. The run dir is owner-only (0700); server start removes run files older than a day that no session references. The output files are not capped while the command runs (`yes` writes until its `timeout`) — only the tail of `max_output` BYTES is read back.
+- A crash that skipped SessionEnd: the next server start suspends the sessions of dead processes. A session suspended longer than `WF_SUSPENDED_TTL_DAYS` (default 7) is abandoned at server start, with its ledger line.
+- `transition` / `context_set` / `modify` refuse a suspended session and name `resume`.
+
 States can run shell commands or HTTP requests automatically — the agent doesn't participate, the engine handles execution and routes to the next state based on the result.
 
 ### `exec` — run a shell command
@@ -173,7 +185,7 @@ run_tests:
   error_prompt: "Tests failed (exit {{exit_code}}):\n{{stderr}}"
 ```
 
-An exec without `cwd:` runs in the session's cwd (`start`'s `cwd`, else the server's); a relative `cwd:` resolves against it. Its env carries `WF_PLUGIN_ROOT`, `WF_SESSION_ID`, `WF_PARENT_SESSION_ID` (empty at the root), `WF_ROOT_SESSION_ID`, `WF_PRIORITY` / `WF_PRIORITY_LEVEL` (the session's priority, below), plus `WF_THREADS` under a `resource:` lease with threads (below). Every exec runs in its own process group: a timeout, `abort`, or a parent's abort cascade kills `sh -c` together with everything it started. The history entry records `exit_code` and `duration_ms`.
+An exec without `cwd:` runs in the session's cwd (`start`'s `cwd`, else the server's); a relative `cwd:` resolves against it. Its env carries `WF_PLUGIN_ROOT`, `WF_SESSION_ID`, `WF_PARENT_SESSION_ID` (empty at the root), `WF_ROOT_SESSION_ID`, `WF_PRIORITY` / `WF_PRIORITY_LEVEL` (the session's priority, below), plus `WF_THREADS` under a `resource:` lease with threads (below). Every exec runs in its own process group: a timeout, `abort`, or a parent's abort cascade kills `sh -c` together with everything it started. A foreground exec writes its output to files, not pipes to the server, and resolves when its shell exits — a background child it left behind keeps running, but no longer holds the step open; a command killed by a signal exits 128+signal; on `timeout` the group gets SIGTERM, then SIGKILL after 5 s if anything in it is still alive, and the step resolves only once the group is gone (a lease is released with it). `max_output` counts bytes of the output's tail. The history entry records `exit_code` and `duration_ms`.
 
 ### Heavy work — the machine-wide thread pool
 
@@ -321,7 +333,7 @@ An unknown key in a workflow, a state, a `retry:`, `resource:` or `fanout:` bloc
 
 ### Ledger
 
-Every session end (complete, fail, abort, cascade or hook abandon) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
+Every session end (complete, fail, abort, cascade, expiry of a suspended session) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
 
 ## Three-Tier Loading
 
@@ -509,6 +521,9 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `sessions` | List all sessions (active first) | — |
 | `set_priority` | Set the priority level of a session and its descendants; re-rank their waiting pool entries (no preemption) | `session_id`, `level` |
 | `pool_status` | The machine-wide pool: one line per lease and waiter (as `wf-run --status`) | — |
+| `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
+| `suspended` | Suspended sessions of this project (or `all`) | `all` |
+| `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) | `session_id`, `agent_id` |
 
 ## Dashboard
 
@@ -533,7 +548,8 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `WORKFLOW_DIR` | `~/.claude/workflows/` | Global workflow YAML directory |
-| `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence |
+| `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence (also `exec/`: foreground exec output and exit codes) |
+| `WF_SUSPENDED_TTL_DAYS` | `7` | A suspended session nobody resumed for this long is abandoned at server start |
 | `DASHBOARD_PORT` | `3100` | Web dashboard HTTP port |
 | `DASHBOARD_HOST` | `127.0.0.1` | Web dashboard bind address |
 

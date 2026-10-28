@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { Engine, StatusResult } from "./engine.js";
+import type { Engine, ResumeResult, StatusResult } from "./engine.js";
 import type { Modifier } from "./modifier.js";
 import type { Loader } from "./loader.js";
 import type { Storage } from "./storage.js";
@@ -14,7 +14,7 @@ import {
   STATUS_KEY_DESCRIPTION,
   type SessionState,
 } from "./types.js";
-import { Pool, formatStatus as formatPoolStatus, resolvePoolDir } from "./pool.js";
+import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -156,6 +156,38 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
   return parts.join("\n");
 }
 
+const RESUME_TOOL = "mcp__plugin_workflow_wf__resume";
+
+/** `workflow @ state` of an active session. */
+function where(s: SessionState): string {
+  const f = s.stack[s.active_frame];
+  return `${f.workflow} @ ${f.current_state}`;
+}
+
+/**
+ * What `resume` prints: the session's status, then the suspended sub-agent
+ * sessions below it — agent → session → state — and the message that wakes
+ * each agent to resume its OWN session.
+ */
+export function formatResume(result: ResumeResult): string {
+  const parts = [`RESUMED: ${result.status.sessionId}`, formatStatus(result.status, { showSessionId: true, forceFullPrompt: true })];
+  const children = result.suspendedChildren;
+  if (children.length > 0) {
+    parts.push("", "SUSPENDED SUB-AGENT SESSIONS — wake each agent (agent → session → state), with the message below it:");
+    for (const c of children) {
+      const agent = c.agent_id ?? "(not linked — find the agent by its task; link_agent records it)";
+      const exec = c.running_exec ? ` [exec in flight: ${c.running_exec.state}]` : "";
+      parts.push(`  ${agent} → ${c.session_id} → ${where(c)}${exec}`);
+      parts.push(`    SendMessage({ to: "${c.agent_id ?? "<agent>"}", message: "Continue: call ${RESUME_TOOL}({ session_id: '${c.session_id}' }) — your own session, NOT start() — then carry on from the state it returns." })`);
+    }
+    parts.push(
+      "",
+      "A session whose agent cannot be woken: abort({ session_id, force: true }).",
+    );
+  }
+  return parts.join("\n");
+}
+
 // Claude Code treats an MCP tool as read-only only via readOnlyHint; without
 // it, plan mode (and every subagent spawned under it) prompts on each call and
 // ignores allow rules. These tools write only the engine's own session files —
@@ -281,7 +313,9 @@ export function registerTools(
       });
 
       const contextLines = formatContext(status.context);
+      const suspendedAt = storage.read(sid)?.suspended_at;
       const text = [
+        ...(suspendedAt ? [`SUSPENDED since ${suspendedAt} — call resume({ session_id: "${sid}" }) to continue it.`, ""] : []),
         formatStatus(status, { showSessionId: true, forceFullPrompt: true }),
         ...(contextLines.length > 0 ? ["", ...contextLines] : []),
         "",
@@ -308,6 +342,7 @@ export function registerTools(
   }, (args) => serialized(sessionKey(args.session_id), async () => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
+      engine.assertNotSuspended(sid);
       const warning = engine.assertOwnership(sid, args.force);
       const status = await engine.transition(sid, args.transition, args.actor);
       const text = (warning ? warning + "\n\n" : "") + formatStatus(status);
@@ -331,6 +366,7 @@ export function registerTools(
   }, (args) => serialized(sessionKey(args.session_id), async () => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
+      engine.assertNotSuspended(sid);
       const warning = engine.assertOwnership(sid, args.force);
       await engine.setContext(sid, args.key, args.value, args.actor);
       const text = (warning ? warning + "\n" : "") + `Context "${args.key}" set successfully.`;
@@ -360,6 +396,7 @@ export function registerTools(
   }, (args) => serialized(sessionKey(args.session_id), async () => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
+      engine.assertNotSuspended(sid);
       const warning = engine.assertOwnership(sid, args.force);
       const messages = await modifier.modify(sid, {
         add_state: args.add_state,
@@ -474,10 +511,11 @@ export function registerTools(
         : `(${s.outcome ?? "completed"})`;
       const depth = s.stack.length > 1 ? ` [depth: ${s.stack.length}]` : "";
       const parent = s.parent_session_id ? ` [child of ${s.parent_session_id}]` : "";
+      const suspended = isActive && s.suspended_at ? ` [suspended since ${s.suspended_at}]` : "";
       const pidInfo = args.all && s.context.claude_code_pid !== undefined
         ? ` [pid: ${s.context.claude_code_pid}${s.context.claude_code_pid === pid ? " ★" : ""}]`
         : "";
-      return `  ${s.session_id}: ${stateInfo}${depth}${parent}${pidInfo} (updated: ${s.updated_at})`;
+      return `  ${s.session_id}: ${stateInfo}${depth}${parent}${suspended}${pidInfo} (updated: ${s.updated_at})`;
     };
 
     const active = sessions.filter(s => s.stack.length > 0);
@@ -556,6 +594,66 @@ export function registerTools(
   }, async () => {
     try {
       return { content: [{ type: "text", text: formatPoolStatus(await pool.measuredStatus(), pool.dir) }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
+    }
+  });
+
+  // 13. resume
+  server.registerTool("resume", {
+    description: "Continue a SUSPENDED session (its Claude Code process exited; `claude --resume` or another account picks it up): "
+      + "the session and its sub-tree become owned by this process, and the session's status is returned. A session stopped inside "
+      + "an exec state finishes it first (waits for the exec still running, takes the result it left, or runs it again). "
+      + "Lists its suspended sub-agent sessions with the message that wakes each agent. A sub-agent continues ITS OWN session with resume, not start.",
+    annotations: ENGINE_STATE_ONLY,
+    inputSchema: z.object({
+      session_id: z.string().describe("The suspended session to continue"),
+    }).strict(),
+  }, (args) => serialized(args.session_id, async () => {
+    try {
+      return { content: [{ type: "text", text: formatResume(await engine.resume(args.session_id)) }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
+    }
+  }));
+
+  // 14. suspended
+  server.registerTool("suspended", {
+    description: "List suspended sessions of this project (the git root of this server's cwd) — e.g. after switching accounts, "
+      + "when the conversation that owned them cannot be resumed. Continue one with resume({ session_id }).",
+    annotations: ENGINE_STATE_ONLY,
+    inputSchema: z.object({
+      all: z.boolean().optional().describe("Every project's suspended sessions. Default: this project's only."),
+    }).strict(),
+  }, async (args) => {
+    const list = engine.listSuspended(args.all ? undefined : projectRoot(process.cwd()));
+    if (list.length === 0) return { content: [{ type: "text", text: "No suspended sessions." }] };
+    const ids = new Set(list.map(s => s.session_id));
+    const lines = ["=== SUSPENDED SESSIONS ==="];
+    for (const s of list) {
+      const child = s.parent_session_id && ids.has(s.parent_session_id);
+      const agent = s.agent_id ? ` [agent ${s.agent_id}]` : "";
+      const exec = s.running_exec ? ` [exec in flight: ${s.running_exec.state}]` : "";
+      const cwd = args.all && typeof s.context.cwd === "string" ? ` [${s.context.cwd}]` : "";
+      lines.push(`  ${child ? "  ↳ " : ""}${s.session_id}: ${where(s)}${child ? ` [child of ${s.parent_session_id}]` : ""}${agent}${exec}${cwd} (since ${s.suspended_at})`);
+    }
+    lines.push("", "Resume a root with resume({ session_id }); its output names the sub-agents to wake.");
+    return { content: [{ type: "text", text: lines.join("\n") }] };
+  });
+
+  // 15. link_agent
+  server.registerTool("link_agent", {
+    description: "Record which sub-agent (the Agent tool's agent id) drives a child session, so that after a restart resume() "
+      + "of the parent names the agent to wake with SendMessage. Call it once the child session id is known (sessions() lists children).",
+    annotations: ENGINE_STATE_ONLY,
+    inputSchema: z.object({
+      session_id: z.string().describe("The sub-agent's session"),
+      agent_id: z.string().min(1).describe("The Agent tool's id of that sub-agent"),
+    }).strict(),
+  }, async (args) => {
+    try {
+      await engine.linkAgent(args.session_id, args.agent_id);
+      return { content: [{ type: "text", text: `Session "${args.session_id}" linked to agent ${args.agent_id}.` }] };
     } catch (err) {
       return { content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }], isError: true };
     }
