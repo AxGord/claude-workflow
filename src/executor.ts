@@ -508,6 +508,7 @@ export class Executor {
         clearTimeout(timer);
         // a run that failed to spawn has no process to take over: its files go too
         if (!detached || !child.pid) Executor.discardRun(files);
+        // ast-grep-ignore: then-without-catch -- `recorded` cannot reject: its failure is caught where it is made
         void recorded.then(() => resolve(result));
       };
 
@@ -519,8 +520,13 @@ export class Executor {
         }
         // The wrapper dies of the SIGTERM even when the command ignores it:
         // the run is over only once the whole group is gone (SIGKILL after the grace).
-        void Executor._reapGroup(child.pid!, killedAt!).then(() =>
-          finish(Executor._runResult(files, maxOutput, EXIT_CODE_TIMEOUT, "Process timed out")),
+        // A failed reap still ends the step: unhandled, it would kill the server and the exec would never settle.
+        const timedOut = (error: string) =>
+          finish(Executor._runResult(files, maxOutput, EXIT_CODE_TIMEOUT, error));
+        void Executor._reapGroup(child.pid!, killedAt!).then(
+          () => timedOut("Process timed out"),
+          (err: unknown) =>
+            timedOut(`Process timed out; reaping its group failed: ${(err as Error).message}`),
         );
       });
 

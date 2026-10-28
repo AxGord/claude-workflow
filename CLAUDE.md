@@ -32,7 +32,8 @@ npm run build    # tsc → compiles src/ to build/
 npm run dev      # tsc --watch
 npm start        # node build/index.js
 npm test         # vitest run (src/*.test.ts)
-npm run check    # tsc --noEmit && lint (eslint vs eslint-baseline.json: only NEW findings fail) && vitest; `ast-grep scan` runs rules/*.yml; `npm run format:check` = biome (not enforced)
+npm run check    # tsc --noEmit && format:check (biome) && lint (eslint vs eslint-baseline.json: only NEW findings fail) && scan && vitest
+npm run scan     # ast-grep scan --error: rules/*.yml (sgconfig.yml) are errors, 0 findings; a vetted site takes `// ast-grep-ignore: <rule-id> -- <why>` (needs ast-grep on PATH)
 ```
 
 Lint = typescript-eslint (`eslint.config.js`, type-checked via `tsconfig.eslint.json`) with a baseline: `npm run lint` fails only on findings absent from `eslint-baseline.json`; fixing old ones → `npm run lint:baseline`. Formatter (biome) is check-only, no mass reformat.

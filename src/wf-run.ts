@@ -186,6 +186,7 @@ function run(
   if (threads !== undefined && threads > 0) env.WF_THREADS = String(threads);
   env.WF_PRIORITY = String(opts.priority);
   if (opts.level) env.WF_PRIORITY_LEVEL = opts.level;
+  // ast-grep-ignore: promise-without-reject -- the executor is synchronous, so a throw in it (spawn) rejects; the child's error/exit always settle
   return new Promise(resolve => {
     const child = spawn(cmd, args, { stdio: "inherit", detached: true, env });
     if (child.pid && onSpawn) {

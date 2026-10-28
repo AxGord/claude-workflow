@@ -400,3 +400,47 @@ describe("abort tool kills before queueing", () => {
     }
   }, 5000);
 });
+
+describe("per-session serialization queue", () => {
+  it("a task that rejects reaches its caller and does not stall the session's queue", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let calls = 0;
+      // A rejection with no Error makes the handler's own catch throw, so the queued task rejects.
+      const engine = {
+        resolveSessionId: (sid: string) => sid,
+        assertNotSuspended: () => {},
+        assertOwnership: () => undefined,
+        transition: () =>
+          ++calls === 1
+            ? // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a non-Error reason is the point
+              Promise.reject(undefined)
+            : Promise.resolve(makeStatus()),
+      };
+      const handlers = new Map<
+        string,
+        (args: object) => Promise<{ content: Array<{ text: string }> }>
+      >();
+      const server = {
+        registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h),
+      };
+      registerTools(server as never, engine as never, {} as never, {} as never, {} as never);
+      const transition = handlers.get("transition")!;
+      const first = transition({ session_id: "s1", transition: "go" });
+      const second = transition({ session_id: "s1", transition: "go" });
+      await expect(first).rejects.toThrow(TypeError);
+      const out = await Promise.race([
+        second,
+        new Promise<"stalled">(res => setTimeout(() => res("stalled"), 1000)),
+      ]);
+      expect(out).not.toBe("stalled");
+      expect((out as { content: Array<{ text: string }> }).content[0].text).toContain("route");
+      await new Promise(res => setTimeout(res, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});

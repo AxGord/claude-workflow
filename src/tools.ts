@@ -239,12 +239,14 @@ export function registerTools(
   const queues = new Map<string, Promise<unknown>>();
   const serialized = <T>(key: string | null, fn: () => Promise<T>): Promise<T> => {
     if (key === null) return fn();
+    // ast-grep-ignore: then-without-catch -- `run` goes back to the caller, who gets its rejection
     const run = (queues.get(key) ?? Promise.resolve()).then(fn);
-    const tail = run.catch(() => undefined);
-    queues.set(key, tail);
-    void tail.then(() => {
+    // Settles either way, so a failed task never stalls the ones queued behind it.
+    const release = (): void => {
       if (queues.get(key) === tail) queues.delete(key);
-    });
+    };
+    const tail: Promise<void> = run.then(release, release);
+    queues.set(key, tail);
     return run;
   };
   // An id that does not resolve yet — the session a parallel top-level start

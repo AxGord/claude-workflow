@@ -598,11 +598,11 @@ npm run build    # tsc → compiles src/ to build/
 npm run dev      # tsc --watch
 npm start        # node build/index.js
 npm test         # vitest run
-npm run check    # tsc --noEmit + lint + vitest (the pre-commit gate)
+npm run check    # tsc --noEmit + format:check + lint + scan + vitest (the pre-commit gate)
 npm run lint     # typescript-eslint (type-checked); fails only on findings absent from eslint-baseline.json
 npm run lint:baseline  # re-record eslint-baseline.json (after fixing findings, to ratchet down)
-npm run format:check   # biome format --check (formatter only; not enforced, tree is not Biome-formatted)
-ast-grep scan    # structural rules in rules/ (sgconfig.yml), e.g. .then() without .catch()
+npm run format:check   # biome format check (formatter only; part of check)
+npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.yml), e.g. .then() without .catch(); 0 findings
 ```
 
 ### Architecture

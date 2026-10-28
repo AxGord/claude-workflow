@@ -257,3 +257,51 @@ describe("killProcessGroup", () => {
     expect(kill).toHaveBeenCalledWith(-4242, "SIGTERM");
   });
 });
+
+describe("exec: a rejection on the way to the result", () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  beforeEach(() => {
+    unhandled.length = 0;
+    process.on("unhandledRejection", onUnhandled);
+  });
+  afterEach(() => {
+    process.off("unhandledRejection", onUnhandled);
+    vi.restoreAllMocks();
+  });
+  const settled = <T>(p: Promise<T>, ms: number): Promise<T | "hung"> =>
+    Promise.race([p, new Promise<"hung">(res => setTimeout(() => res("hung"), ms))]);
+
+  it("a failed group reap after a timeout still yields the timeout result", async () => {
+    const reaper = Executor as unknown as { _reapGroup: () => Promise<void> };
+    vi.spyOn(reaper, "_reapGroup").mockRejectedValue(new Error("reap boom"));
+    const r = await settled(
+      new Executor().execute({ type: "exec", command: "sleep 30", timeout: 100 }, {}),
+      2000,
+    );
+    await new Promise(res => setTimeout(res, 50));
+    expect(unhandled).toEqual([]);
+    expect(r).not.toBe("hung");
+    expect((r as { exit_code: number }).exit_code).toBe(124);
+    expect((r as { error: string }).error).toContain("reap boom");
+  }, 5000);
+
+  it("a failed detached-run record does not hold back the result", async () => {
+    const r = await settled(
+      new Executor().execute(
+        { type: "exec", command: "echo ok" },
+        {},
+        {
+          sessionId: "s",
+          rootSessionId: "s",
+          onDetached: () => Promise.reject(new Error("record boom")),
+        },
+      ),
+      2000,
+    );
+    await new Promise(res => setTimeout(res, 50));
+    expect(unhandled).toEqual([]);
+    expect(r).not.toBe("hung");
+    expect((r as { stdout: string }).stdout.trim()).toBe("ok");
+  }, 5000);
+});
