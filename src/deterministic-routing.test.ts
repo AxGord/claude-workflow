@@ -31,11 +31,19 @@ describe("review routing (review-size.sh)", () => {
   let repo: string;
 
   const git = (...args: string[]) =>
-    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo, encoding: "utf8" }).trim();
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
   const write = (file: string, lines: number) =>
-    fs.writeFileSync(path.join(repo, file), Array.from({ length: lines }, (_, i) => `line ${i}`).join("\n") + "\n");
-  const vars = (context: Record<string, unknown> = {}, root = "master") =>
-    ({ context: { cwd: repo, ...context }, root_workflow: root });
+    fs.writeFileSync(
+      path.join(repo, file),
+      Array.from({ length: lines }, (_, i) => `line ${i}`).join("\n") + "\n",
+    );
+  const vars = (context: Record<string, unknown> = {}, root = "master") => ({
+    context: { cwd: repo, ...context },
+    root_workflow: root,
+  });
 
   beforeEach(() => {
     repo = fs.mkdtempSync(path.join(os.tmpdir(), "wf-review-"));
@@ -128,7 +136,12 @@ describe("review routing (review-size.sh)", () => {
         write("b.txt", 1);
         write("c.txt", 1);
         write("sub/d.txt", 1);
-        expect(await route(review, { context: { cwd: path.join(repo, "sub") }, root_workflow: "master" })).toBe("review_delegate");
+        expect(
+          await route(review, {
+            context: { cwd: path.join(repo, "sub") },
+            root_workflow: "master",
+          }),
+        ).toBe("review_delegate");
       });
 
       it("sub-agent root → review_single whatever the size", async () => {
@@ -166,7 +179,9 @@ describe("testing check_test_changes", () => {
   const state = templateState("testing", "check_test_changes");
 
   it("no fix_* visits → project_gate", async () => {
-    expect(await route(state, { context: {}, visits: { assess: 1, unit_tests: 1 } })).toBe("project_gate");
+    expect(await route(state, { context: {}, visits: { assess: 1, unit_tests: 1 } })).toBe(
+      "project_gate",
+    );
   });
 
   it("any fix_* visit → review_test_changes", async () => {
@@ -183,7 +198,11 @@ describe("review lint pass: probe without a lease, the pass under one", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-lint-"));
     fs.mkdirSync(path.join(dir, "bin"));
     // a stand-in hxq that reports the oracle parallelism it was given
-    fs.writeFileSync(path.join(dir, "bin", "hxq"), '#!/bin/sh\necho "hxq $1 APQ=${APQ_ORACLE_PARALLEL-unset}"\n', { mode: 0o755 });
+    fs.writeFileSync(
+      path.join(dir, "bin", "hxq"),
+      '#!/bin/sh\necho "hxq $1 APQ=${APQ_ORACLE_PARALLEL-unset}"\n',
+      { mode: 0o755 },
+    );
     fs.writeFileSync(path.join(dir, "A.hx"), "class A {}\n");
     fs.writeFileSync(path.join(dir, "a.ts"), "\n");
     outerPath = process.env.PATH;
@@ -195,8 +214,12 @@ describe("review lint pass: probe without a lease, the pass under one", () => {
     if (outerParallel !== undefined) process.env.APQ_ORACLE_PARALLEL = outerParallel;
     fs.rmSync(dir, { recursive: true, force: true });
   });
-  const withHxq = () => { process.env.PATH = `${path.join(dir, "bin")}:${outerPath}`; };
-  const withoutHxq = () => { process.env.PATH = "/usr/bin:/bin"; };
+  const withHxq = () => {
+    process.env.PATH = `${path.join(dir, "bin")}:${outerPath}`;
+  };
+  const withoutHxq = () => {
+    process.env.PATH = "/usr/bin:/bin";
+  };
   const ctx = (files: string) => ({ context: { file_path: files } });
 
   for (const [workflow, probe, pass, skip] of [
@@ -208,7 +231,9 @@ describe("review lint pass: probe without a lease, the pass under one", () => {
         const state = templateState(workflow, probe);
         withHxq();
         expect(await route(state, ctx(path.join(dir, "a.ts")))).toBe(skip);
-        expect(await route(state, ctx(`${path.join(dir, "a.ts")} ${path.join(dir, "A.hx")}`))).toBe(pass);
+        expect(await route(state, ctx(`${path.join(dir, "a.ts")} ${path.join(dir, "A.hx")}`))).toBe(
+          pass,
+        );
         withoutHxq();
         expect(await route(state, ctx(path.join(dir, "A.hx")))).toBe(skip);
       });
@@ -219,20 +244,30 @@ describe("review lint pass: probe without a lease, the pass under one", () => {
         withHxq();
         const poolDir = path.join(dir, "pool");
         fs.mkdirSync(poolDir);
-        fs.writeFileSync(path.join(poolDir, "config.json"), JSON.stringify({ budget: 10, load_threshold: 1000 }));
+        fs.writeFileSync(
+          path.join(poolDir, "config.json"),
+          JSON.stringify({ budget: 10, load_threshold: 1000 }),
+        );
         const r = await new Executor(new Pool(poolDir)).execute(state, ctx(path.join(dir, "A.hx")));
         expect(r.exit_code).toBe(0);
         expect(r.stdout).toMatch(/hxq lint APQ=4/);
         // a value the caller set wins
         process.env.APQ_ORACLE_PARALLEL = "2";
-        expect((await new Executor(new Pool(poolDir)).execute(state, ctx(path.join(dir, "A.hx")))).stdout).toMatch(/hxq lint APQ=2/);
+        expect(
+          (await new Executor(new Pool(poolDir)).execute(state, ctx(path.join(dir, "A.hx"))))
+            .stdout,
+        ).toMatch(/hxq lint APQ=2/);
       });
     });
   }
 });
 
 describe("extension points (project_build / project_test / project_gate)", () => {
-  const states = (workflow: string) => YAML.parse(fs.readFileSync(path.join(TEMPLATES, `${workflow}.yaml`), "utf8")).states as Record<string, StateDefinition>;
+  const states = (workflow: string) =>
+    YAML.parse(fs.readFileSync(path.join(TEMPLATES, `${workflow}.yaml`), "utf8")).states as Record<
+      string,
+      StateDefinition
+    >;
 
   it("testing: writing hands over to project_test, which routes as unit_tests did", () => {
     const t = states("testing");
@@ -244,7 +279,10 @@ describe("extension points (project_build / project_test / project_gate)", () =>
   it("testing: integration builds through project_build, a fix round rebuilds", () => {
     const t = states("testing");
     expect(t.check_integration.transitions!.need_integration).toBe("project_build");
-    expect(t.project_build.transitions).toEqual({ built: "integration", failed: "fix_integration" });
+    expect(t.project_build.transitions).toEqual({
+      built: "integration",
+      failed: "fix_integration",
+    });
     expect(t.fix_integration.transitions!.retry).toBe("project_build");
     // a build that keeps failing loops project_build ⇄ fix_integration without integration's budget
     expect([t.fix_integration.max_visits, t.fix_integration.on_exhausted]).toEqual([5, "failed"]);
@@ -254,7 +292,10 @@ describe("extension points (project_build / project_test / project_gate)", () =>
     const t = states("testing");
     expect(t.check_test_changes.cases!["0"]).toBe("project_gate");
     expect(t.assess.transitions!.skip_all).toBe("project_gate");
-    expect([t.review_test_changes.on_complete, t.review_test_changes.on_fail]).toEqual(["project_gate", "project_gate"]);
+    expect([t.review_test_changes.on_complete, t.review_test_changes.on_fail]).toEqual([
+      "project_gate",
+      "project_gate",
+    ]);
     expect([t.project_gate.on_success, t.project_gate.on_error]).toEqual(["done", "done"]);
     expect((await new Executor().execute(t.project_gate, {})).exit_code).toBe(0);
   });
@@ -267,19 +308,41 @@ describe("extension points (project_build / project_test / project_gate)", () =>
 
   describe("a project heir of testing", () => {
     let dirs: string[] = [];
-    afterEach(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); dirs = []; });
+    afterEach(() => {
+      for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+      dirs = [];
+    });
     const engineWithHeir = () => {
-      const mk = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "wf-heir-")); dirs.push(d); return d; };
+      const mk = () => {
+        const d = fs.mkdtempSync(path.join(os.tmpdir(), "wf-heir-"));
+        dirs.push(d);
+        return d;
+      };
       const project = mk();
-      fs.writeFileSync(path.join(project, "testing.yaml"), YAML.stringify({
-        name: "testing",
-        extends: "testing",
-        states: {
-          project_test: { type: "exec", command: "exit {{context.suite}}", on_success: "check_integration", on_error: "fix_unit" },
-          project_gate: { type: "exec", command: "{{context.gate}}", timeout: 200, on_success: "done", on_error: "failed", on_timeout: "gate_slow" },
-          gate_slow: { prompt: "The gate timed out", transitions: { done: "done" } },
-        },
-      }));
+      fs.writeFileSync(
+        path.join(project, "testing.yaml"),
+        YAML.stringify({
+          name: "testing",
+          extends: "testing",
+          states: {
+            project_test: {
+              type: "exec",
+              command: "exit {{context.suite}}",
+              on_success: "check_integration",
+              on_error: "fix_unit",
+            },
+            project_gate: {
+              type: "exec",
+              command: "{{context.gate}}",
+              timeout: 200,
+              on_success: "done",
+              on_error: "failed",
+              on_timeout: "gate_slow",
+            },
+            gate_slow: { prompt: "The gate timed out", transitions: { done: "done" } },
+          },
+        }),
+      );
       const loader = new Loader(TEMPLATES, mk(), project);
       return new Engine(new InMemoryStorage(), loader, new Executor());
     };

@@ -73,10 +73,14 @@ setContextEpochFile(path.join(STATE_DIR, `context-epoch-${process.ppid}`));
 createDashboard(storage, loader, DASHBOARD_PORT);
 
 // On startup: suspend sessions of dead processes, abandon long-suspended ones
-engine.reapOrphanedSessions().then(({ suspended, expired }) => {
-  if (suspended.length > 0) console.error(`Suspended orphaned sessions: ${suspended.join(", ")}`);
-  if (expired.length > 0) console.error(`Abandoned expired suspended sessions: ${expired.join(", ")}`);
-}).catch(err => console.error("Reap failed:", err));
+engine
+  .reapOrphanedSessions()
+  .then(({ suspended, expired }) => {
+    if (suspended.length > 0) console.error(`Suspended orphaned sessions: ${suspended.join(", ")}`);
+    if (expired.length > 0)
+      console.error(`Abandoned expired suspended sessions: ${expired.join(", ")}`);
+  })
+  .catch(err => console.error("Reap failed:", err));
 
 // Connect via stdio
 async function main(): Promise<void> {
@@ -85,7 +89,7 @@ async function main(): Promise<void> {
   console.error("MCP Workflow Engine running on stdio");
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error("Fatal error:", err);
   process.exit(1);
 });

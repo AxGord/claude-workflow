@@ -69,7 +69,8 @@ function buildApp(storage: Storage, loader: Loader): express.Express {
       };
 
       await storage.write(session.session_id, updated);
-      await storage.appendLedger(ledgerEntry(updated))
+      await storage
+        .appendLedger(ledgerEntry(updated))
         .catch(err => console.error(`Ledger append failed for ${session.session_id}:`, err));
       res.json({ session_id: session.session_id, outcome: "abandoned" });
     } catch (err) {

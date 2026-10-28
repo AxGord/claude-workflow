@@ -18,32 +18,44 @@ export type PriorityLevel = keyof typeof PRIORITY_LEVELS;
 export const DEFAULT_PRIORITY_LEVEL: PriorityLevel = "normal";
 export const PriorityLevelSchema = z.enum(["low", "normal", "high", "urgent"]);
 
-const ThreadCountSchema = z.union([z.number().int().positive(), z.literal(RESOURCE_THREADS_BUDGET)]);
+const ThreadCountSchema = z.union([
+  z.number().int().positive(),
+  z.literal(RESOURCE_THREADS_BUDGET),
+]);
 
 /** `threads: { min, max }`: take what is free, at least `min`, at most `max`. */
-export const FlexibleThreadsSchema = z.object({
-  min: z.number().int().positive(),
-  max: ThreadCountSchema,
-}).strict().refine(t => t.max === RESOURCE_THREADS_BUDGET || t.min <= t.max, { message: "threads.min must not exceed threads.max" });
+export const FlexibleThreadsSchema = z
+  .object({
+    min: z.number().int().positive(),
+    max: ThreadCountSchema,
+  })
+  .strict()
+  .refine(t => t.max === RESOURCE_THREADS_BUDGET || t.min <= t.max, {
+    message: "threads.min must not exceed threads.max",
+  });
 
 /** The keys of `resource:` (the loader names the nearest one for a typo). */
-export const ResourceObjectSchema = z.object({
-  threads: z.union([ThreadCountSchema, FlexibleThreadsSchema]).optional(),
-  // flexible threads only: wait this long for the full max before taking what is free
-  wait_full: z.number().nonnegative().optional(),
-  // machine-wide mutual exclusion by name, granted atomically with the threads
-  locks: z.array(z.string().regex(LOCK_NAME_PATTERN, "a lock name is one word without whitespace")).nonempty().optional(),
-  priority: z.number().int().optional(),
-  wait_timeout: z.number().nonnegative().optional(),
-}).strict();
+export const ResourceObjectSchema = z
+  .object({
+    threads: z.union([ThreadCountSchema, FlexibleThreadsSchema]).optional(),
+    // flexible threads only: wait this long for the full max before taking what is free
+    wait_full: z.number().nonnegative().optional(),
+    // machine-wide mutual exclusion by name, granted atomically with the threads
+    locks: z
+      .array(z.string().regex(LOCK_NAME_PATTERN, "a lock name is one word without whitespace"))
+      .nonempty()
+      .optional(),
+    priority: z.number().int().optional(),
+    wait_timeout: z.number().nonnegative().optional(),
+  })
+  .strict();
 
 export const ResourceSchema = ResourceObjectSchema.refine(
   r => r.threads !== undefined || r.locks !== undefined,
   { message: "resource needs threads, locks, or both" },
-).refine(
-  r => r.wait_full === undefined || typeof r.threads === "object",
-  { message: "wait_full needs threads: { min, max }" },
-);
+).refine(r => r.wait_full === undefined || typeof r.threads === "object", {
+  message: "wait_full needs threads: { min, max }",
+});
 
 /**
  * The keys of `fanout:` (the loader names the nearest one for a typo): run the
@@ -51,12 +63,14 @@ export const ResourceSchema = ResourceObjectSchema.refine(
  * `items_command` prints (`WF_ITEM=<line>`), each instance under its own
  * pool lease of `threads_each` threads, at most `max_parallel` at once.
  */
-export const FanoutObjectSchema = z.object({
-  count: z.number().int().positive().optional(),
-  items_command: z.string().min(1).optional(),
-  threads_each: z.number().int().positive(),
-  max_parallel: z.number().int().positive().optional(),
-}).strict();
+export const FanoutObjectSchema = z
+  .object({
+    count: z.number().int().positive().optional(),
+    items_command: z.string().min(1).optional(),
+    threads_each: z.number().int().positive(),
+    max_parallel: z.number().int().positive().optional(),
+  })
+  .strict();
 
 export const FanoutSchema = FanoutObjectSchema.refine(
   f => (f.count === undefined) !== (f.items_command === undefined),
@@ -65,74 +79,81 @@ export const FanoutSchema = FanoutObjectSchema.refine(
 
 // Single source of truth for state fields. Tool schemas derive from this.
 // To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
-export const StateDefinitionSchema = z.object({
-  prompt: z.string().optional(),
-  transitions: z.record(z.string()).optional(),
-  terminal: z.boolean().optional(),
-  outcome: z.enum(["complete", "fail"]).optional(),
-  max_visits: z.number().int().positive().optional(),
-  // a move past max_visits enters this state instead of being refused
-  on_exhausted: z.string().optional(),
-  sub_workflow: z.string().optional(),
-  on_complete: z.string().optional(),
-  on_fail: z.string().optional(),
-  task: z.string().optional(),
+export const StateDefinitionSchema = z
+  .object({
+    prompt: z.string().optional(),
+    transitions: z.record(z.string()).optional(),
+    terminal: z.boolean().optional(),
+    outcome: z.enum(["complete", "fail"]).optional(),
+    max_visits: z.number().int().positive().optional(),
+    // a move past max_visits enters this state instead of being refused
+    on_exhausted: z.string().optional(),
+    sub_workflow: z.string().optional(),
+    on_complete: z.string().optional(),
+    on_fail: z.string().optional(),
+    task: z.string().optional(),
 
-  // Skill gate: require skills to be loaded before proceeding
-  skills: z.array(z.string()).optional(),
+    // Skill gate: require skills to be loaded before proceeding
+    skills: z.array(z.string()).optional(),
 
-  // Include project-specific workflow list in prompt
-  include_workflows: z.boolean().optional(),
+    // Include project-specific workflow list in prompt
+    include_workflows: z.boolean().optional(),
 
-  // Deliver a short digest instead of the full prompt when this state's
-  // full prompt was already delivered once in this server process (the
-  // agent's context already holds it; status() always returns the full text)
-  digest_on_repeat: z.boolean().optional(),
+    // Deliver a short digest instead of the full prompt when this state's
+    // full prompt was already delivered once in this server process (the
+    // agent's context already holds it; status() always returns the full text)
+    digest_on_repeat: z.boolean().optional(),
 
-  // Action state fields
-  type: z.enum(["prompt", "exec", "fetch"]).optional(),
+    // Action state fields
+    type: z.enum(["prompt", "exec", "fetch"]).optional(),
 
-  // exec
-  command: z.string().optional(),
-  cwd: z.string().optional(),
-  timeout: z.number().positive().optional(),
-  env: z.record(z.string()).optional(),
-  background: z.boolean().optional(),
-  max_output: z.number().int().positive().optional(), // stdout/stderr truncation limit in bytes (default 10KB)
-  // heavy work: lease `threads` and/or named `locks` from the machine-wide
-  // pool before running (wait_timeout seconds, then exit 75); foreground exec only
-  resource: ResourceSchema.optional(),
-  // run the command as N shards, each under its own pool lease; exit 0 only if every shard exits 0
-  fanout: FanoutSchema.optional(),
-  // exec killed by its `timeout` (exit 124) routes here instead of on_error/cases
-  on_timeout: z.string().optional(),
+    // exec
+    command: z.string().optional(),
+    cwd: z.string().optional(),
+    timeout: z.number().positive().optional(),
+    env: z.record(z.string()).optional(),
+    background: z.boolean().optional(),
+    max_output: z.number().int().positive().optional(), // stdout/stderr truncation limit in bytes (default 10KB)
+    // heavy work: lease `threads` and/or named `locks` from the machine-wide
+    // pool before running (wait_timeout seconds, then exit 75); foreground exec only
+    resource: ResourceSchema.optional(),
+    // run the command as N shards, each under its own pool lease; exit 0 only if every shard exits 0
+    fanout: FanoutSchema.optional(),
+    // exec killed by its `timeout` (exit 124) routes here instead of on_error/cases
+    on_timeout: z.string().optional(),
 
-  // fetch
-  url: z.string().optional(),
-  method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]).optional(),
-  headers: z.record(z.string()).optional(),
-  body: z.string().optional(),
+    // fetch
+    url: z.string().optional(),
+    method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]).optional(),
+    headers: z.record(z.string()).optional(),
+    body: z.string().optional(),
 
-  // shared action routing
-  on_success: z.string().optional(),
-  on_error: z.string().optional(),
-  cases: z.record(z.string()).optional(),
-  default: z.string().optional(),
-  success_prompt: z.string().optional(),
-  error_prompt: z.string().optional(),
-  retry: z.object({ max: z.number().int().positive(), interval: z.number().int().positive() }).strict().optional(),
-  context_set: z.record(z.string()).optional(), // auto-set context keys after action succeeds; values are templates (e.g. "{{stdout}}")
-}).strict(); // an unknown key is a typo, never a silently ignored field
+    // shared action routing
+    on_success: z.string().optional(),
+    on_error: z.string().optional(),
+    cases: z.record(z.string()).optional(),
+    default: z.string().optional(),
+    success_prompt: z.string().optional(),
+    error_prompt: z.string().optional(),
+    retry: z
+      .object({ max: z.number().int().positive(), interval: z.number().int().positive() })
+      .strict()
+      .optional(),
+    context_set: z.record(z.string()).optional(), // auto-set context keys after action succeeds; values are templates (e.g. "{{stdout}}")
+  })
+  .strict(); // an unknown key is a typo, never a silently ignored field
 
 export type StateDefinition = z.infer<typeof StateDefinitionSchema>;
 
-export const WorkflowDefinitionSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  initial: z.string().min(1),
-  max_transitions: z.number().int().positive().optional().default(50),
-  states: z.record(StateDefinitionSchema),
-}).strict();
+export const WorkflowDefinitionSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    initial: z.string().min(1),
+    max_transitions: z.number().int().positive().optional().default(50),
+    states: z.record(StateDefinitionSchema),
+  })
+  .strict();
 
 export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 
@@ -142,14 +163,16 @@ export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
  * base's whole), and `initial` / `max_transitions` / `description` from the
  * heir where it sets them. Without `extends`, `initial` and `states` are required.
  */
-export const WorkflowFileObjectSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
-  extends: z.string().min(1).optional(),
-  initial: z.string().min(1).optional(),
-  max_transitions: z.number().int().positive().optional(),
-  states: z.record(StateDefinitionSchema).optional(),
-}).strict();
+export const WorkflowFileObjectSchema = z
+  .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    extends: z.string().min(1).optional(),
+    initial: z.string().min(1).optional(),
+    max_transitions: z.number().int().positive().optional(),
+    states: z.record(StateDefinitionSchema).optional(),
+  })
+  .strict();
 
 export const WorkflowFileSchema = WorkflowFileObjectSchema.refine(
   f => f.extends !== undefined || (f.initial !== undefined && f.states !== undefined),
@@ -280,14 +303,14 @@ export interface WorkflowOverrides {
 // --- Tool input schemas ---
 
 export const START_CWD_DESCRIPTION =
-  "Absolute path of an existing directory the session works in (e.g. a sub-agent's git worktree); "
-  + "exec states without their own cwd run there. Default: the server's cwd";
+  "Absolute path of an existing directory the session works in (e.g. a sub-agent's git worktree); " +
+  "exec states without their own cwd run there. Default: the server's cwd";
 
 export const START_PRIORITY_DESCRIPTION =
   "Priority level of the session's pool leases: low | normal | high | urgent. Default: the parent session's level, else normal";
 
 export const WorkflowStartInputSchema = z.object({
-  workflow: z.string().optional().describe("Name of the workflow to start. Defaults to \"master\""),
+  workflow: z.string().optional().describe('Name of the workflow to start. Defaults to "master"'),
   actor: z.string().optional().describe("Identity of the agent performing this action"),
   parent_session_id: z.string().optional().describe("Parent session ID for sub-agent tracking"),
   cwd: z.string().optional().describe(START_CWD_DESCRIPTION),
@@ -317,26 +340,36 @@ export const WorkflowContextSetInputSchema = z.object({
 
 export const WorkflowModifyInputSchema = z.object({
   session_id: z.string().describe("Session identifier"),
-  add_state: StateDefinitionSchema.extend({ name: z.string() }).optional().describe("Add a new state to the current workflow"),
-  add_transition: z.object({
-    from: z.string(),
-    name: z.string(),
-    to: z.string(),
-  }).optional().describe("Add a transition between states"),
-  remove_transition: z.object({
-    from: z.string(),
-    name: z.string(),
-  }).optional().describe("Remove a transition"),
+  add_state: StateDefinitionSchema.extend({ name: z.string() })
+    .optional()
+    .describe("Add a new state to the current workflow"),
+  add_transition: z
+    .object({
+      from: z.string(),
+      name: z.string(),
+      to: z.string(),
+    })
+    .optional()
+    .describe("Add a transition between states"),
+  remove_transition: z
+    .object({
+      from: z.string(),
+      name: z.string(),
+    })
+    .optional()
+    .describe("Remove a transition"),
 });
 
 export const WorkflowCreateInputSchema = z.object({
   name: z.string().min(1).describe("Workflow name (used as filename)"),
-  definition: z.object({
-    description: z.string().optional(),
-    initial: z.string().min(1),
-    max_transitions: z.number().int().positive().optional(),
-    states: z.record(StateDefinitionSchema),
-  }).describe("Full workflow definition"),
+  definition: z
+    .object({
+      description: z.string().optional(),
+      initial: z.string().min(1),
+      max_transitions: z.number().int().positive().optional(),
+      states: z.record(StateDefinitionSchema),
+    })
+    .describe("Full workflow definition"),
 });
 
 export const WorkflowAbortInputSchema = z.object({

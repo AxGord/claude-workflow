@@ -65,13 +65,17 @@ export class Modifier {
     if (changes.add_transition) {
       const addTransitions = [...(updated.add_transitions ?? []), changes.add_transition];
       (updated as Record<string, unknown>).add_transitions = addTransitions;
-      messages.push(`Added transition "${changes.add_transition.from}" --${changes.add_transition.name}--> "${changes.add_transition.to}"`);
+      messages.push(
+        `Added transition "${changes.add_transition.from}" --${changes.add_transition.name}--> "${changes.add_transition.to}"`,
+      );
     }
 
     if (changes.remove_transition) {
       const removeTransitions = [...(updated.remove_transitions ?? []), changes.remove_transition];
       (updated as Record<string, unknown>).remove_transitions = removeTransitions;
-      messages.push(`Removed transition "${changes.remove_transition.name}" from "${changes.remove_transition.from}"`);
+      messages.push(
+        `Removed transition "${changes.remove_transition.name}" from "${changes.remove_transition.from}"`,
+      );
     }
 
     const updatedSession: SessionState = {
@@ -86,7 +90,9 @@ export class Modifier {
     if (this._engine && updatedSession.pending_pop) {
       const result = await this._engine.retryPendingPop(sessionId);
       if (result) {
-        messages.push(`Pending pop resolved → ${result.currentWorkflow} @ ${result.currentStateName}`);
+        messages.push(
+          `Pending pop resolved → ${result.currentWorkflow} @ ${result.currentStateName}`,
+        );
       }
     }
 
@@ -101,7 +107,7 @@ export class Modifier {
       readonly max_transitions?: number;
       readonly states: Record<string, StateDefinition>;
     },
-    scope?: "project" | "global"
+    scope?: "project" | "global",
   ): Promise<string> {
     const full = { name, ...definition };
 

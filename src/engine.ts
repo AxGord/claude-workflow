@@ -32,7 +32,7 @@ import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { render } from "./template.js";
 
 function stripOptionalPrefix(s: string): string {
-  return s.replace(/^\?/, '');
+  return s.replace(/^\?/, "");
 }
 
 export interface TransitionResult {
@@ -90,10 +90,26 @@ export interface ResumeResult {
 
 export class Engine {
   private static readonly GLOBAL_WORKFLOWS = new Set([
-    "coding", "debugging", "bug-fix", "new-feature", "code-review",
-    "explore", "web-research", "planning", "testing", "reflection",
-    "investigate", "master", "file-code", "file-review", "lint-review", "subagent", "review-push",
-    "github-init", "docs", "batch",
+    "coding",
+    "debugging",
+    "bug-fix",
+    "new-feature",
+    "code-review",
+    "explore",
+    "web-research",
+    "planning",
+    "testing",
+    "reflection",
+    "investigate",
+    "master",
+    "file-code",
+    "file-review",
+    "lint-review",
+    "subagent",
+    "review-push",
+    "github-init",
+    "docs",
+    "batch",
   ]);
 
   private readonly _storage: Storage;
@@ -117,7 +133,9 @@ export class Engine {
   private _claudeSessionId(): string | undefined {
     if (!this._options.stateDir) return undefined;
     try {
-      const id = fs.readFileSync(path.join(this._options.stateDir, `claude-session-${process.ppid}`), "utf8").trim();
+      const id = fs
+        .readFileSync(path.join(this._options.stateDir, `claude-session-${process.ppid}`), "utf8")
+        .trim();
       return id || undefined;
     } catch {
       return undefined;
@@ -133,16 +151,14 @@ export class Engine {
   public resolveSessionId(sessionId?: string): string {
     if (sessionId) return sessionId;
     const pid = process.ppid;
-    const active = this._storage.readAll().filter(
-      s => s.context.claude_code_pid === pid && s.stack.length > 0
-    );
+    const active = this._storage
+      .readAll()
+      .filter(s => s.context.claude_code_pid === pid && s.stack.length > 0);
     if (active.length === 0) throw new Error("No active session found. Call start first.");
     if (active.length > 1) {
-      const candidates = active
-        .map(s => `${s.session_id} (${s.stack[0].workflow})`)
-        .join(", ");
+      const candidates = active.map(s => `${s.session_id} (${s.stack[0].workflow})`).join(", ");
       throw new Error(
-        `Multiple active sessions for this process: ${candidates}. Pass session_id explicitly.`
+        `Multiple active sessions for this process: ${candidates}. Pass session_id explicitly.`,
       );
     }
     return active[0].session_id;
@@ -166,7 +182,9 @@ export class Engine {
   public assertNotSuspended(sessionId: string): void {
     const session = this._storage.read(sessionId);
     if (session?.suspended_at)
-      throw new Error(`Session "${sessionId}" is suspended (since ${session.suspended_at}). Call resume({ session_id: "${sessionId}" }) first.`);
+      throw new Error(
+        `Session "${sessionId}" is suspended (since ${session.suspended_at}). Call resume({ session_id: "${sessionId}" }) first.`,
+      );
   }
 
   public assertOwnership(sessionId: string, force?: boolean): string | undefined {
@@ -176,7 +194,9 @@ export class Engine {
     const currentPid = process.ppid;
     if (ownerPid !== undefined && ownerPid !== currentPid) {
       if (!force) {
-        throw new Error(`Session "${sessionId}" belongs to PID ${ownerPid} (current: ${currentPid}). Use force: true to override.`);
+        throw new Error(
+          `Session "${sessionId}" belongs to PID ${ownerPid} (current: ${currentPid}). Use force: true to override.`,
+        );
       }
       if (Engine._isPidAlive(ownerPid as number)) {
         return `Warning: session "${sessionId}" belongs to PID ${ownerPid} which is still alive. Proceeding due to force: true.`;
@@ -198,9 +218,11 @@ export class Engine {
     // Sub-agent sessions (with parent_session_id) are exempt — they run alongside the parent.
     if (!parentSessionId) {
       const pid = process.ppid;
-      const active = this._storage.readAll().filter(
-        s => s.context.claude_code_pid === pid && !s.parent_session_id && s.stack.length > 0
-      );
+      const active = this._storage
+        .readAll()
+        .filter(
+          s => s.context.claude_code_pid === pid && !s.parent_session_id && s.stack.length > 0,
+        );
       if (active.length > 0) {
         // Idempotent start: return existing session with a short message
         // instead of the full state prompt. This prevents sub-agents
@@ -211,9 +233,10 @@ export class Engine {
         const status = this._buildStatus(existing, []);
         return {
           ...status,
-          prompt: `Session already active: ${existing.session_id} (${frame.workflow} @ ${frame.current_state}). `
-            + `If you are a sub-agent, pass parent_session_id to start your own session. `
-            + `If you lost context, call status() to re-read the full prompt.`,
+          prompt:
+            `Session already active: ${existing.session_id} (${frame.workflow} @ ${frame.current_state}). ` +
+            `If you are a sub-agent, pass parent_session_id to start your own session. ` +
+            `If you lost context, call status() to re-read the full prompt.`,
         };
       }
     }
@@ -275,10 +298,15 @@ export class Engine {
     return this._buildStatus(session, []);
   }
 
-  public async transition(sessionId: string, transitionName: string, actor?: string): Promise<StatusResult> {
+  public async transition(
+    sessionId: string,
+    transitionName: string,
+    actor?: string,
+  ): Promise<StatusResult> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
-    if (session.stack.length === 0) throw new Error(`Session "${sessionId}" has no active workflow`);
+    if (session.stack.length === 0)
+      throw new Error(`Session "${sessionId}" has no active workflow`);
 
     // Session is waiting for children to complete — try to resolve
     if (session.pending_pop) {
@@ -291,7 +319,8 @@ export class Engine {
     const wf = this._getWorkflow(sessionId, frame.workflow);
     const state = this._resolveState(session, frame.workflow, frame.current_state);
 
-    if (!state) throw new Error(`State "${frame.current_state}" not found in workflow "${frame.workflow}"`);
+    if (!state)
+      throw new Error(`State "${frame.current_state}" not found in workflow "${frame.workflow}"`);
     // terminal states without transitions are truly final; with transitions they allow re-entry
     if (state.terminal && (!state.transitions || Object.keys(state.transitions).length === 0)) {
       throw new Error(`Cannot transition from terminal state "${frame.current_state}"`);
@@ -307,13 +336,19 @@ export class Engine {
     // Check max_transitions
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
     if (frame.total_transitions >= maxTransitions) {
-      throw new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`);
+      throw new Error(
+        `Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`,
+      );
     }
 
     const now = new Date().toISOString();
 
-    const { name: targetStateName, state: targetState, visits: targetVisits, exhausted } =
-      this._enterTarget(session, frame, requested);
+    const {
+      name: targetStateName,
+      state: targetState,
+      visits: targetVisits,
+      exhausted,
+    } = this._enterTarget(session, frame, requested);
 
     const updatedFrame: StackFrame = {
       ...frame,
@@ -340,7 +375,9 @@ export class Engine {
       ? {
           loaded_skills: {
             ...(session.loaded_skills ?? {}),
-            ...Object.fromEntries(state.skills.map(s => [stripOptionalPrefix(s), session.skill_epoch ?? 0])),
+            ...Object.fromEntries(
+              state.skills.map(s => [stripOptionalPrefix(s), session.skill_epoch ?? 0]),
+            ),
           },
         }
       : {};
@@ -348,7 +385,7 @@ export class Engine {
     let updated: SessionState = {
       ...session,
       ...skillUpdate,
-      stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
+      stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
       updated_at: now,
       history: [...session.history, historyEntry],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
@@ -363,7 +400,8 @@ export class Engine {
 
     // Check if target is terminal
     if (targetState?.terminal) {
-      const hasTransitions = targetState.transitions && Object.keys(targetState.transitions).length > 0;
+      const hasTransitions =
+        targetState.transitions && Object.keys(targetState.transitions).length > 0;
       if (!hasTransitions) {
         // Hard terminal — pop stack as usual
         const outcome = targetState.outcome === "fail" ? "fail" : "complete";
@@ -401,7 +439,11 @@ export class Engine {
   private static _assertSessionCwd(cwd: string): void {
     if (!path.isAbsolute(cwd)) throw new Error(`cwd must be an absolute path, got "${cwd}"`);
     let isDir = false;
-    try { isDir = fs.statSync(cwd).isDirectory(); } catch { /* missing */ }
+    try {
+      isDir = fs.statSync(cwd).isDirectory();
+    } catch {
+      /* missing */
+    }
     if (!isDir) throw new Error(`cwd "${cwd}" is not an existing directory`);
   }
 
@@ -475,16 +517,22 @@ export class Engine {
    * and each session is changed under its file lock, so a session that ended
    * meanwhile stays ended.
    */
-  public async setPriority(sessionId: string, level: PriorityLevel): Promise<{ sessions: string[]; moved: number }> {
+  public async setPriority(
+    sessionId: string,
+    level: PriorityLevel,
+  ): Promise<{ sessions: string[]; moved: number }> {
     PriorityLevelSchema.parse(level);
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
-    if (session.stack.length === 0) throw new Error(`Session "${sessionId}" has ended (${session.outcome ?? "completed"})`);
+    if (session.stack.length === 0)
+      throw new Error(`Session "${sessionId}" has ended (${session.outcome ?? "completed"})`);
     const tree = [session];
     for (let i = 0; i < tree.length; i++) tree.push(...this._getActiveChildren(tree[i].session_id));
     const ids: string[] = [];
     for (const { session_id: id } of tree) {
-      const set = await this._storage.update(id, cur => (cur && cur.stack.length > 0 ? { ...cur, priority: level } : null));
+      const set = await this._storage.update(id, cur =>
+        cur && cur.stack.length > 0 ? { ...cur, priority: level } : null,
+      );
       if (set) ids.push(id);
     }
     const moved = await this._executor.pool.reprioritize(new Set(ids), level);
@@ -530,12 +578,18 @@ export class Engine {
    * a ledger line — every session left suspended longer than the TTL, and
    * remove exec run files older than a day that no session references.
    */
-  public async reapOrphanedSessions(now: number = Date.now()): Promise<{ suspended: string[]; expired: string[] }> {
+  public async reapOrphanedSessions(
+    now: number = Date.now(),
+  ): Promise<{ suspended: string[]; expired: string[] }> {
     const suspended: string[] = [];
     const expired: string[] = [];
     const ttlMs = (this._options.suspendedTtlDays ?? DEFAULT_SUSPENDED_TTL_DAYS) * DAY_MS;
     const sessions = this._storage.readAll().filter(s => s.stack?.length > 0);
-    const referenced = new Set(sessions.flatMap(s => (s.running_exec ? [s.running_exec.out, s.running_exec.err, s.running_exec.rc] : [])));
+    const referenced = new Set(
+      sessions.flatMap(s =>
+        s.running_exec ? [s.running_exec.out, s.running_exec.err, s.running_exec.rc] : [],
+      ),
+    );
     this._executor.sweepRuns(referenced, DAY_MS, now);
     for (const session of sessions) {
       if (session.suspended_at) {
@@ -546,7 +600,8 @@ export class Engine {
       }
       const pid = session.context.claude_code_pid;
       if (typeof pid !== "number" || Engine._isPidAlive(pid)) continue;
-      if (await this._suspendOne(session.session_id, new Date(now).toISOString())) suspended.push(session.session_id);
+      if (await this._suspendOne(session.session_id, new Date(now).toISOString()))
+        suspended.push(session.session_id);
     }
     return { suspended, expired };
   }
@@ -564,16 +619,24 @@ export class Engine {
   }
 
   private async _suspendOne(sessionId: string, at: string): Promise<boolean> {
-    const set = await this._storage.update(sessionId, cur => cur && cur.stack.length > 0 && !cur.suspended_at
-      ? { ...cur, suspended_at: at, updated_at: at, history: [...cur.history, { frame: cur.active_frame, event: "suspend", at }] }
-      : null);
+    const set = await this._storage.update(sessionId, cur =>
+      cur && cur.stack.length > 0 && !cur.suspended_at
+        ? {
+            ...cur,
+            suspended_at: at,
+            updated_at: at,
+            history: [...cur.history, { frame: cur.active_frame, event: "suspend", at }],
+          }
+        : null,
+    );
     return set !== null;
   }
 
   /** The session and its active descendants, parents first. */
   private _subtree(sessionId: string): string[] {
     const ids = [sessionId];
-    for (let i = 0; i < ids.length; i++) ids.push(...this._getActiveChildren(ids[i]).map(c => c.session_id));
+    for (let i = 0; i < ids.length; i++)
+      ids.push(...this._getActiveChildren(ids[i]).map(c => c.session_id));
     return ids;
   }
 
@@ -588,10 +651,16 @@ export class Engine {
   public async resume(sessionId: string): Promise<ResumeResult> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
-    if (session.stack.length === 0) throw new Error(`Session "${sessionId}" has ended (${session.outcome ?? "completed"})`);
+    if (session.stack.length === 0)
+      throw new Error(`Session "${sessionId}" has ended (${session.outcome ?? "completed"})`);
     const pid = process.ppid;
     const owner = session.context.claude_code_pid;
-    if (!session.suspended_at && owner !== pid && typeof owner === "number" && Engine._isPidAlive(owner))
+    if (
+      !session.suspended_at &&
+      owner !== pid &&
+      typeof owner === "number" &&
+      Engine._isPidAlive(owner)
+    )
       throw new Error(`Session "${sessionId}" is active in PID ${owner}, not suspended.`);
 
     const now = new Date().toISOString();
@@ -607,41 +676,58 @@ export class Engine {
           ...(own && claudeSessionId ? { claude_session_id: claudeSessionId } : {}),
           ...(own ? { suspended_at: undefined } : {}),
           updated_at: now,
-          history: own && cur.suspended_at ? [...cur.history, { frame: cur.active_frame, event: "resume", at: now }] : cur.history,
+          history:
+            own && cur.suspended_at
+              ? [...cur.history, { frame: cur.active_frame, event: "resume", at: now }]
+              : cur.history,
         };
       });
     }
     const resumed = this._storage.read(sessionId)!;
     // the old server's snapshot died with it: the session continues on the workflows loaded now
     if (!this._snapshots.has(sessionId)) this._snapshots.set(sessionId, this._loader.getAll());
-    const suspendedChildren = this._subtree(sessionId).slice(1)
+    const suspendedChildren = this._subtree(sessionId)
+      .slice(1)
       .map(id => this._storage.read(id))
       .filter((s): s is SessionState => !!s?.suspended_at);
 
     const frame = resumed.stack[resumed.active_frame];
     const state = this._resolveState(resumed, frame.workflow, frame.current_state);
-    const status = this._isActionState(state) && !resumed.pending_pop
-      ? await this._executeActionState(resumed, state!, [], 0, resumed.running_exec)
-      : this._buildStatus(resumed, []);
+    const status =
+      this._isActionState(state) && !resumed.pending_pop
+        ? await this._executeActionState(resumed, state!, [], 0, resumed.running_exec)
+        : this._buildStatus(resumed, []);
     return { status, suspendedChildren };
   }
 
   /** Record the Agent-tool id of the sub-agent that drives a session, for a parent's resume. */
   public async linkAgent(sessionId: string, agentId: string): Promise<void> {
-    const set = await this._storage.update(sessionId, cur => (cur ? { ...cur, agent_id: agentId } : null));
+    const set = await this._storage.update(sessionId, cur =>
+      cur ? { ...cur, agent_id: agentId } : null,
+    );
     if (!set) throw new Error(`Session "${sessionId}" not found`);
   }
 
   /** Suspended sessions, oldest first: those whose cwd lies in `projectRootPath` (its git root), or all. */
   public listSuspended(projectRootPath?: string): SessionState[] {
-    return this._storage.readAll()
+    return this._storage
+      .readAll()
       .filter(s => s.stack?.length > 0 && !!s.suspended_at)
-      .filter(s => projectRootPath === undefined
-        || projectRoot(typeof s.context.cwd === "string" ? s.context.cwd : process.cwd()) === projectRootPath)
+      .filter(
+        s =>
+          projectRootPath === undefined ||
+          projectRoot(typeof s.context.cwd === "string" ? s.context.cwd : process.cwd()) ===
+            projectRootPath,
+      )
       .sort((a, b) => a.suspended_at!.localeCompare(b.suspended_at!));
   }
 
-  public async setContext(sessionId: string, key: string, value: unknown, actor?: string): Promise<void> {
+  public async setContext(
+    sessionId: string,
+    key: string,
+    value: unknown,
+    actor?: string,
+  ): Promise<void> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
 
@@ -650,7 +736,10 @@ export class Engine {
       ...session,
       context: { ...session.context, [key]: value },
       updated_at: now,
-      history: [...session.history, { frame: session.active_frame, event: "context_set", at: now, actor }],
+      history: [
+        ...session.history,
+        { frame: session.active_frame, event: "context_set", at: now, actor },
+      ],
     };
 
     await this._storage.write(sessionId, updated);
@@ -669,7 +758,7 @@ export class Engine {
     state: StateDefinition,
     taskOps: TaskOp[],
     depth: number = 0,
-    actionPrompt?: string
+    actionPrompt?: string,
   ): Promise<StatusResult> {
     if (depth >= MAX_ACTION_CHAIN) {
       throw new Error(`Auto-transition chain exceeded max depth (${MAX_ACTION_CHAIN})`);
@@ -683,18 +772,22 @@ export class Engine {
       const required: string[] = [];
       const optional: string[] = [];
       for (const s of missing) {
-        if (s.startsWith('?')) optional.push(stripOptionalPrefix(s));
+        if (s.startsWith("?")) optional.push(stripOptionalPrefix(s));
         else required.push(s);
       }
 
       const lines: string[] = [];
       if (required.length > 0) {
-        lines.push(`Load the following skills before proceeding:\n${required.map(s => `  - Skill("${s}")`).join("\n")}`);
+        lines.push(
+          `Load the following skills before proceeding:\n${required.map(s => `  - Skill("${s}")`).join("\n")}`,
+        );
       }
       if (optional.length > 0) {
-        lines.push(`Load these skills if available (skip if not found):\n${optional.map(s => `  - Skill("${s}")`).join("\n")}`);
+        lines.push(
+          `Load these skills if available (skip if not found):\n${optional.map(s => `  - Skill("${s}")`).join("\n")}`,
+        );
       }
-      lines.push('After loading all skills, transition to continue.');
+      lines.push("After loading all skills, transition to continue.");
 
       const parts: string[] = [];
       if (actionPrompt) parts.push(actionPrompt);
@@ -716,11 +809,17 @@ export class Engine {
     const wf = this._getWorkflow(session.session_id, frame.workflow);
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
     if (frame.total_transitions >= maxTransitions) {
-      throw new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`);
+      throw new Error(
+        `Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`,
+      );
     }
 
-    const { name: targetStateName, state: resolvedTarget, visits: targetVisits, exhausted } =
-      this._enterTarget(session, frame, transitions[transitionName]);
+    const {
+      name: targetStateName,
+      state: resolvedTarget,
+      visits: targetVisits,
+      exhausted,
+    } = this._enterTarget(session, frame, transitions[transitionName]);
 
     const now = new Date().toISOString();
     const updatedFrame: StackFrame = {
@@ -744,7 +843,7 @@ export class Engine {
 
     let updated: SessionState = {
       ...session,
-      stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
+      stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
       updated_at: now,
       history: [...session.history, historyEntry],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
@@ -753,7 +852,8 @@ export class Engine {
     await this._storage.write(session.session_id, updated);
 
     if (resolvedTarget?.terminal) {
-      const hasTransitions = resolvedTarget.transitions && Object.keys(resolvedTarget.transitions).length > 0;
+      const hasTransitions =
+        resolvedTarget.transitions && Object.keys(resolvedTarget.transitions).length > 0;
       if (!hasTransitions) {
         const outcome = resolvedTarget.outcome === "fail" ? "fail" : "complete";
         return this._popStack(updated, outcome, taskOps);
@@ -798,7 +898,8 @@ export class Engine {
       state = this._resolveState(session, frame.workflow, name);
       visits = (frame.state_visits[name] ?? 0) + 1;
     }
-    const exhausted = passed.length > 0 ? `max_visits exhausted: ${passed.join(", ")} → ${name}` : undefined;
+    const exhausted =
+      passed.length > 0 ? `max_visits exhausted: ${passed.join(", ")} → ${name}` : undefined;
     return { name, state, visits, exhausted };
   }
 
@@ -850,18 +951,24 @@ export class Engine {
     let run: DetachedRun | undefined;
     const execCtx: ExecContext = {
       ...this._execContext(session),
-      onDetached: async (detached) => {
+      onDetached: async detached => {
         run = detached;
         const record: RunningExec = { ...detached, frame: frameIndex, state: stateName };
-        await this._storage.update(session.session_id, cur => (cur && cur.stack.length > 0 ? { ...cur, running_exec: record } : null));
+        await this._storage.update(session.session_id, cur =>
+          cur && cur.stack.length > 0 ? { ...cur, running_exec: record } : null,
+        );
       },
     };
-    const own = adopt && adopt.frame === frameIndex && adopt.state === stateName ? adopt : undefined;
+    const own =
+      adopt && adopt.frame === frameIndex && adopt.state === stateName ? adopt : undefined;
     let result = own ? await this._executor.adopt(own, state, execCtx) : null;
     if (own) run = own;
     if (!result) {
       if (own) Executor.discardRun(own);
-      if (this._aborting.has(session.session_id)) throw new Error(`Session "${session.session_id}" ended while its action state ran (aborting)`);
+      if (this._aborting.has(session.session_id))
+        throw new Error(
+          `Session "${session.session_id}" ended while its action state ran (aborting)`,
+        );
       result = await this._executor.execute(state, vars, execCtx);
     }
 
@@ -880,42 +987,62 @@ export class Engine {
     }
     // Suspended, or resumed by another process meanwhile: the run's files stay
     // for whoever resumes it — routing here would race that process.
-    if (current.suspended_at || current.context.claude_code_pid !== session.context.claude_code_pid) {
-      const why = current.suspended_at ? "suspended" : `taken over by PID ${current.context.claude_code_pid}`;
-      throw new Error(`Session "${session.session_id}" was ${why} while its action state ran; resume() takes its result over`);
+    if (
+      current.suspended_at ||
+      current.context.claude_code_pid !== session.context.claude_code_pid
+    ) {
+      const why = current.suspended_at
+        ? "suspended"
+        : `taken over by PID ${current.context.claude_code_pid}`;
+      throw new Error(
+        `Session "${session.session_id}" was ${why} while its action state ran; resume() takes its result over`,
+      );
     }
 
     // Determine target state
     let routedName: string | undefined;
     let detail: string;
 
-    if (state.on_timeout !== undefined && result.type === "exec" && result.exit_code === EXIT_CODE_TIMEOUT) {
+    if (
+      state.on_timeout !== undefined &&
+      result.type === "exec" &&
+      result.exit_code === EXIT_CODE_TIMEOUT
+    ) {
       // a run cut by its timeout is not a failure of the work: its own route
       routedName = state.on_timeout;
       detail = `exit ${EXIT_CODE_TIMEOUT} (timeout)`;
     } else if (state.cases) {
-      const key = result.type === "exec" ? String(result.exit_code ?? 1) : String(result.status ?? 0);
+      const key =
+        result.type === "exec" ? String(result.exit_code ?? 1) : String(result.status ?? 0);
       routedName = state.cases[key] ?? state.default;
-      detail = result.type === "exec" ? `exit ${result.exit_code}` : `HTTP ${result.status ?? "err"}`;
+      detail =
+        result.type === "exec" ? `exit ${result.exit_code}` : `HTTP ${result.status ?? "err"}`;
     } else {
       routedName = result.success ? state.on_success : state.on_error;
-      detail = result.type === "exec"
-        ? `exit ${result.exit_code ?? "?"}`
-        : result.success ? `HTTP ${result.status}` : (result.error ?? "error");
+      detail =
+        result.type === "exec"
+          ? `exit ${result.exit_code ?? "?"}`
+          : result.success
+            ? `HTTP ${result.status}`
+            : (result.error ?? "error");
     }
 
     // A result that cannot be routed is reported, not kept for a resume to retake.
     const unroutable = async (err: Error): Promise<never> => {
       if (run) Executor.discardRun(run);
-      await this._storage.update(session.session_id, cur => (cur?.running_exec ? { ...cur, running_exec: undefined } : null));
+      await this._storage.update(session.session_id, cur =>
+        cur?.running_exec ? { ...cur, running_exec: undefined } : null,
+      );
       throw err;
     };
 
     if (!routedName) {
-      return unroutable(new Error(
-        `Action state has no target for result: ${detail}. ` +
-        `Configure cases/default or on_success/on_error.`
-      ));
+      return unroutable(
+        new Error(
+          `Action state has no target for result: ${detail}. ` +
+            `Configure cases/default or on_success/on_error.`,
+        ),
+      );
     }
 
     const frame = session.stack[session.active_frame];
@@ -925,7 +1052,9 @@ export class Engine {
     const wf = this._getWorkflow(session.session_id, frame.workflow);
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
     if (frame.total_transitions >= maxTransitions) {
-      return unroutable(new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`));
+      return unroutable(
+        new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`),
+      );
     }
 
     let entered: EnteredTarget;
@@ -938,8 +1067,14 @@ export class Engine {
 
     // A rerouted move shows the exhausted-route state's own prompt: the action's
     // prompt was written for the state it routes to by default.
-    const promptTemplate = exhausted ? undefined : result.success ? state.success_prompt : state.error_prompt;
-    const actionPrompt = promptTemplate ? render(promptTemplate, { ...vars, ...result }) : undefined;
+    const promptTemplate = exhausted
+      ? undefined
+      : result.success
+        ? state.success_prompt
+        : state.error_prompt;
+    const actionPrompt = promptTemplate
+      ? render(promptTemplate, { ...vars, ...result })
+      : undefined;
 
     const updatedFrame: StackFrame = {
       ...frame,
@@ -955,12 +1090,16 @@ export class Engine {
       event: "action",
       detail: exhausted ? `${detail}; ${exhausted}` : detail,
       at: now,
-      ...(result.type === "exec" && result.exit_code !== undefined ? { exit_code: result.exit_code } : {}),
+      ...(result.type === "exec" && result.exit_code !== undefined
+        ? { exit_code: result.exit_code }
+        : {}),
       ...(result.duration_ms !== undefined ? { duration_ms: result.duration_ms } : {}),
       ...(result.wait_ms !== undefined ? { wait_ms: result.wait_ms } : {}),
       ...(result.threads_granted !== undefined ? { threads_granted: result.threads_granted } : {}),
       // The time-model key of a leased step: project (the session cwd's git root) | workflow | state.
-      ...(state.resource || state.fanout ? { step_key: `${execCtx.project}|${frame.workflow}|${frame.current_state}` } : {}),
+      ...(state.resource || state.fanout
+        ? { step_key: `${execCtx.project}|${frame.workflow}|${frame.current_state}` }
+        : {}),
       ...(result.shards ? { shards: result.shards } : {}),
     };
 
@@ -979,7 +1118,7 @@ export class Engine {
     if (result.success && state.context_set) {
       const renderVars = { ...vars, ...result };
       const entries = Object.entries(state.context_set).map(
-        ([k, v]) => [k, render(v, renderVars)] as const
+        ([k, v]) => [k, render(v, renderVars)] as const,
       );
       ctx = { ...ctx, ...Object.fromEntries(entries) };
     }
@@ -992,7 +1131,7 @@ export class Engine {
       // so do link_agent and the conversation id a resume stamps
       agent_id: current.agent_id,
       claude_session_id: current.claude_session_id,
-      stack: session.stack.map((f, i) => i === session.active_frame ? updatedFrame : f),
+      stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
       updated_at: now,
       history: [...session.history, historyEntry],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
@@ -1008,7 +1147,8 @@ export class Engine {
     const targetState = this._resolveState(updated, frame.workflow, targetStateName);
 
     if (targetState?.terminal) {
-      const hasTransitions = targetState.transitions && Object.keys(targetState.transitions).length > 0;
+      const hasTransitions =
+        targetState.transitions && Object.keys(targetState.transitions).length > 0;
       if (!hasTransitions) {
         const outcome = targetState.outcome === "fail" ? "fail" : "complete";
         return this._popStack(updated, outcome, taskOps);
@@ -1034,7 +1174,11 @@ export class Engine {
     return this._buildStatus(updated, taskOps, actionPrompt);
   }
 
-  private async _pushSubWorkflow(session: SessionState, state: StateDefinition, taskOps?: TaskOp[]): Promise<StatusResult> {
+  private async _pushSubWorkflow(
+    session: SessionState,
+    state: StateDefinition,
+    taskOps?: TaskOp[],
+  ): Promise<StatusResult> {
     const subName = state.sub_workflow!;
     const wf = this._getWorkflow(session.session_id, subName);
 
@@ -1058,7 +1202,10 @@ export class Engine {
       stack: newStack,
       active_frame: newStack.length - 1,
       updated_at: now,
-      history: [...session.history, { frame: newStack.length - 1, event: "push", workflow: subName, at: now }],
+      history: [
+        ...session.history,
+        { frame: newStack.length - 1, event: "push", workflow: subName, at: now },
+      ],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
     };
 
@@ -1085,7 +1232,11 @@ export class Engine {
    * instructions (report contracts, push steps) are not discarded — both on
    * pop-to-parent and on root completion.
    */
-  private async _popStack(session: SessionState, outcome: "complete" | "fail", taskOps?: TaskOp[]): Promise<StatusResult> {
+  private async _popStack(
+    session: SessionState,
+    outcome: "complete" | "fail",
+    taskOps?: TaskOp[],
+  ): Promise<StatusResult> {
     const frame = session.stack[session.active_frame];
     const terminalState = this._resolveState(session, frame.workflow, frame.current_state);
     const terminalPrompt = terminalState?.prompt
@@ -1108,7 +1259,11 @@ export class Engine {
     };
   }
 
-  private async _popStackCore(session: SessionState, outcome: "complete" | "fail", taskOps?: TaskOp[]): Promise<StatusResult> {
+  private async _popStackCore(
+    session: SessionState,
+    outcome: "complete" | "fail",
+    taskOps?: TaskOp[],
+  ): Promise<StatusResult> {
     const now = new Date().toISOString();
 
     if (session.stack.length <= 1) {
@@ -1145,7 +1300,11 @@ export class Engine {
     const parentIdx = newStack.length - 1;
     const parentFrame = newStack[parentIdx];
     const parentWf = this._getWorkflow(session.session_id, parentFrame.workflow);
-    const parentState = this._resolveState(session, parentFrame.workflow, parentFrame.current_state);
+    const parentState = this._resolveState(
+      session,
+      parentFrame.workflow,
+      parentFrame.current_state,
+    );
 
     // Determine next state in parent
     const nextStateName = outcome === "complete" ? parentState?.on_complete : parentState?.on_fail;
@@ -1181,7 +1340,13 @@ export class Engine {
       history: [
         ...session.history,
         { frame: session.active_frame, event: "pop", at: now },
-        { frame: parentIdx, from: parentFrame.current_state, to: nextStateName, via: `on_${outcome}`, at: now },
+        {
+          frame: parentIdx,
+          from: parentFrame.current_state,
+          to: nextStateName,
+          via: `on_${outcome}`,
+          at: now,
+        },
       ],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
     };
@@ -1230,12 +1395,17 @@ export class Engine {
     return this._buildStatus(updated, taskOps);
   }
 
-  private _formatChildrenBlockError(parentSessionId: string, activeChildren?: SessionState[]): string {
+  private _formatChildrenBlockError(
+    parentSessionId: string,
+    activeChildren?: SessionState[],
+  ): string {
     const children = activeChildren ?? this._getActiveChildren(parentSessionId);
-    const details = children.map(c => {
-      const f = c.stack[c.active_frame];
-      return `  - ${c.session_id}: ${f.workflow} @ ${f.current_state} (${f.total_transitions} transitions)`;
-    }).join("\n");
+    const details = children
+      .map(c => {
+        const f = c.stack[c.active_frame];
+        return `  - ${c.session_id}: ${f.workflow} @ ${f.current_state} (${f.total_transitions} transitions)`;
+      })
+      .join("\n");
     return (
       `Cannot complete: ${children.length} child session(s) still active:\n${details}\n` +
       `Abort them via abort or investigate why they didn't finish.`
@@ -1243,9 +1413,9 @@ export class Engine {
   }
 
   private _getActiveChildren(parentSessionId: string): SessionState[] {
-    return this._storage.readAll().filter(
-      s => s.parent_session_id === parentSessionId && s.stack.length > 0
-    );
+    return this._storage
+      .readAll()
+      .filter(s => s.parent_session_id === parentSessionId && s.stack.length > 0);
   }
 
   private async _cascadeAbandonChildren(parentSessionId: string): Promise<void> {
@@ -1258,7 +1428,10 @@ export class Engine {
         stack: [],
         active_frame: -1,
         updated_at: now,
-        history: [...child.history, { frame: child.active_frame, event: "cascade_abandon", at: now }],
+        history: [
+          ...child.history,
+          { frame: child.active_frame, event: "cascade_abandon", at: now },
+        ],
         outcome: "abandoned",
       };
       await this._storage.write(child.session_id, updated);
@@ -1325,7 +1498,7 @@ export class Engine {
   private _resolveState(
     session: SessionState,
     workflowName: string,
-    stateName: string
+    stateName: string,
   ): StateDefinition | undefined {
     // Check added states first (they may not exist in base YAML)
     const overrides = session.overrides[workflowName];
@@ -1355,7 +1528,7 @@ export class Engine {
     state: StateDefinition,
     _workflowName: string,
     stateName: string,
-    overrides: WorkflowOverrides
+    overrides: WorkflowOverrides,
   ): StateDefinition {
     let transitions = { ...(state.transitions ?? {}) };
 
@@ -1376,7 +1549,11 @@ export class Engine {
     return { ...state, transitions };
   }
 
-  private _buildStatus(session: SessionState, taskOps?: TaskOp[], actionPrompt?: string): StatusResult {
+  private _buildStatus(
+    session: SessionState,
+    taskOps?: TaskOp[],
+    actionPrompt?: string,
+  ): StatusResult {
     if (session.stack.length === 0) {
       const outcome: SessionOutcome = session.outcome ?? "completed";
       const msg = `Workflow ${outcome}.`;
@@ -1400,15 +1577,18 @@ export class Engine {
     const frame = session.stack[session.active_frame];
     const state = this._resolveState(session, frame.workflow, frame.current_state);
     const vars = this._buildTemplateVars(session);
-    const rawPrompt = actionPrompt ?? state?.prompt ?? `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`;
+    const rawPrompt =
+      actionPrompt ?? state?.prompt ?? `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`;
     let prompt = render(rawPrompt, vars);
 
     if (state?.include_workflows) {
       const projectWorkflows = this._getProjectWorkflows(session.session_id);
       if (projectWorkflows.length > 0) {
-        prompt += "\n\nAvailable workflows:\n" + projectWorkflows
-          .map(w => `- ${w.name} — ${w.description ?? "(no description)"}`)
-          .join("\n");
+        prompt +=
+          "\n\nAvailable workflows:\n" +
+          projectWorkflows
+            .map(w => `- ${w.name} — ${w.description ?? "(no description)"}`)
+            .join("\n");
       }
     }
 
@@ -1429,8 +1609,10 @@ export class Engine {
       history: session.history,
       context: session.context,
       taskOps: currentTaskOps,
-      visitCount: session.global_state_visits?.[`${frame.workflow}:${frame.current_state}`]
-        ?? frame.state_visits[frame.current_state] ?? 0,
+      visitCount:
+        session.global_state_visits?.[`${frame.workflow}:${frame.current_state}`] ??
+        frame.state_visits[frame.current_state] ??
+        0,
       forcePrompt: actionPrompt !== undefined,
     };
   }

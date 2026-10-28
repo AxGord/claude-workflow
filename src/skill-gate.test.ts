@@ -1,11 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
-import {
-  InMemoryStorage,
-  createTestLoader,
-  cleanupDir,
-} from "./test-helpers.js";
+import { InMemoryStorage, createTestLoader, cleanupDir } from "./test-helpers.js";
 import type { Loader } from "./loader.js";
 
 describe("Skill Gate", () => {
@@ -193,7 +189,7 @@ describe("Skill Gate", () => {
       const result = await engine.transition(sessionId, "load_skills");
 
       const autoEntry = result.history.find(
-        h => h.event === "skill_gate" && h.from === "gate" && h.to === "work"
+        h => h.event === "skill_gate" && h.from === "gate" && h.to === "work",
       );
       expect(autoEntry).toBeDefined();
     });
@@ -474,8 +470,7 @@ describe("Skill Gate", () => {
         loaded_skills: { "skill-a": 0 },
       });
 
-      await expect(engine.transition(sessionId, "go"))
-        .rejects.toThrow("no transitions defined");
+      await expect(engine.transition(sessionId, "go")).rejects.toThrow("no transitions defined");
     });
   });
 
@@ -1350,12 +1345,12 @@ describe("Skill Gate", () => {
 
       // Verify history has both skill_gate and action events
       const gateEntry = result.history.find(
-        h => h.event === "skill_gate" && h.from === "gate" && h.to === "run"
+        h => h.event === "skill_gate" && h.from === "gate" && h.to === "run",
       );
       expect(gateEntry).toBeDefined();
 
       const actionEntry = result.history.find(
-        h => h.event === "action" && h.from === "run" && h.to === "ok"
+        h => h.event === "action" && h.from === "run" && h.to === "ok",
       );
       expect(actionEntry).toBeDefined();
     });

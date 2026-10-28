@@ -25,9 +25,7 @@ function terminal(id: string, updatedAt: string): SessionState {
 function active(id: string, updatedAt: string): SessionState {
   return {
     session_id: id,
-    stack: [
-      { workflow: "w", current_state: "s", state_visits: { s: 1 }, total_transitions: 0 },
-    ],
+    stack: [{ workflow: "w", current_state: "s", state_visits: { s: 1 }, total_transitions: 0 }],
     active_frame: 0,
     started_at: updatedAt,
     updated_at: updatedAt,
@@ -47,9 +45,7 @@ describe("prunePolicy", () => {
     // has no `stack` property, so `s.stack?.length === 0` must be false.
     const placeholder = {} as unknown as SessionState;
     const deleted: string[] = [];
-    expect(() =>
-      prunePolicy([placeholder], 0, id => deleted.push(id))
-    ).not.toThrow();
+    expect(() => prunePolicy([placeholder], 0, id => deleted.push(id))).not.toThrow();
     expect(deleted).toEqual([]);
   });
 
@@ -115,10 +111,8 @@ describe("prunePolicy", () => {
 
     // Determinism: identical input always yields the identical retained set.
     const deleted2: string[] = [];
-    prunePolicy(
-      [terminal("bbb", ts), terminal("aaa", ts), terminal("ccc", ts)],
-      1,
-      id => deleted2.push(id)
+    prunePolicy([terminal("bbb", ts), terminal("aaa", ts), terminal("ccc", ts)], 1, id =>
+      deleted2.push(id),
     );
     expect(deleted2.sort()).toEqual(["aaa", "bbb"]);
   });
@@ -143,9 +137,18 @@ describe("Storage ledger", () => {
       }
       storage.pruneTerminal(3);
       expect(storage.list()).toHaveLength(3);
-      const lines = fs.readFileSync(path.join(dir, LEDGER_FILE), "utf8").trim().split("\n").map(l => JSON.parse(l));
+      const lines = fs
+        .readFileSync(path.join(dir, LEDGER_FILE), "utf8")
+        .trim()
+        .split("\n")
+        .map(l => JSON.parse(l));
       expect(lines.map(l => l.session_id)).toEqual(["s0", "s1", "s2", "s3", "s4", "s5"]);
-      expect(lines[0]).toMatchObject({ outcome: "completed", exec_ms_total: 0, execs: [], transitions: 0 });
+      expect(lines[0]).toMatchObject({
+        outcome: "completed",
+        exec_ms_total: 0,
+        execs: [],
+        transitions: 0,
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -157,7 +160,9 @@ describe("Storage ledger", () => {
       const writers = [new Storage(dir), new Storage(dir), new Storage(dir)];
       await Promise.all(Array.from({ length: 30 }, (_, i) => writers[i % 3].appendLedger({ i })));
       const lines = fs.readFileSync(path.join(dir, LEDGER_FILE), "utf8").trim().split("\n");
-      expect(lines.map(l => JSON.parse(l).i).sort((a, b) => a - b)).toEqual(Array.from({ length: 30 }, (_, i) => i));
+      expect(lines.map(l => JSON.parse(l).i).sort((a, b) => a - b)).toEqual(
+        Array.from({ length: 30 }, (_, i) => i),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -173,14 +178,24 @@ describe("Storage.update", () => {
       expect(storage.list()).toEqual([]);
       await storage.write("a", active("a", "t1"));
       const seen: Array<SessionState | null> = [];
-      expect(await storage.update("a", cur => { seen.push(cur); return null; })).toBeNull();
+      expect(
+        await storage.update("a", cur => {
+          seen.push(cur);
+          return null;
+        }),
+      ).toBeNull();
       expect(seen.map(s => s?.updated_at)).toEqual(["t1"]);
       expect(storage.read("a")!.updated_at).toBe("t1");
       await storage.update("a", cur => ({ ...cur!, updated_at: "t2" }));
       expect(storage.read("a")!.updated_at).toBe("t2");
       // concurrent writers of one session wait for the lock instead of failing
-      await Promise.all(Array.from({ length: 20 }, (_, i) =>
-        i % 2 ? storage.write("a", active("a", `w${i}`)) : storage.update("a", cur => ({ ...cur!, context: { n: i } }))));
+      await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+          i % 2
+            ? storage.write("a", active("a", `w${i}`))
+            : storage.update("a", cur => ({ ...cur!, context: { n: i } })),
+        ),
+      );
       expect(storage.read("a")!.session_id).toBe("a");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

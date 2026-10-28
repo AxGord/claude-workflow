@@ -199,17 +199,21 @@ describe("Executor", () => {
       const state: StateDefinition = { type: "fetch", url: "https://{{host}}/api" };
       await executor.execute(state, { host: "example.com" });
 
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        "https://example.com/api",
-        expect.any(Object),
-      );
+      expect(globalThis.fetch).toHaveBeenCalledWith("https://example.com/api", expect.any(Object));
     });
   });
 });
 
 describe("Executor — ENG-1a", () => {
   const executor = new Executor();
-  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
 
   it("reports duration_ms for every action", async () => {
     const r = await executor.execute({ type: "exec", command: "sleep 0.05" }, {});
@@ -218,7 +222,10 @@ describe("Executor — ENG-1a", () => {
 
   it("injects session ids and runs in the context cwd", async () => {
     const r = await executor.execute(
-      { type: "exec", command: 'pwd -P; echo "$WF_SESSION_ID/$WF_PARENT_SESSION_ID/$WF_ROOT_SESSION_ID"' },
+      {
+        type: "exec",
+        command: 'pwd -P; echo "$WF_SESSION_ID/$WF_PARENT_SESSION_ID/$WF_ROOT_SESSION_ID"',
+      },
       {},
       { sessionId: "s", rootSessionId: "s", cwd: fs.realpathSync(os.tmpdir()) },
     );

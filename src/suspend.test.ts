@@ -33,16 +33,29 @@ describe("suspend / resume", () => {
     dirs.push(d);
     return d;
   };
-  afterEach(() => { for (const d of dirs.splice(0)) cleanupDir(d); });
+  afterEach(() => {
+    for (const d of dirs.splice(0)) cleanupDir(d);
+  });
 
   function mount(workflows: Record<string, object>, stateDir?: string) {
     const storage = new InMemoryStorage();
     const result = createTestLoader(workflows);
     dirs.push(result.dir);
     const runDir = tmp("wf-runs-");
-    const engine = new Engine(storage, result.loader, new Executor(undefined, runDir), stateDir ? { stateDir } : {});
+    const engine = new Engine(
+      storage,
+      result.loader,
+      new Executor(undefined, runDir),
+      stateDir ? { stateDir } : {},
+    );
     /** A second server over the same state: what `claude --resume` starts. */
-    const restart = () => new Engine(storage, result.loader, new Executor(undefined, runDir), stateDir ? { stateDir } : {});
+    const restart = () =>
+      new Engine(
+        storage,
+        result.loader,
+        new Executor(undefined, runDir),
+        stateDir ? { stateDir } : {},
+      );
     return { storage, engine, restart, loader: result.loader, runDir };
   }
 
@@ -62,7 +75,10 @@ describe("suspend / resume", () => {
     await orphan(storage, [root.sessionId, child.sessionId]);
 
     const now = Date.now();
-    expect(await engine.reapOrphanedSessions(now)).toEqual({ suspended: [root.sessionId, child.sessionId], expired: [] });
+    expect(await engine.reapOrphanedSessions(now)).toEqual({
+      suspended: [root.sessionId, child.sessionId],
+      expired: [],
+    });
     for (const id of [root.sessionId, child.sessionId]) {
       const s = storage.read(id)!;
       expect(s.suspended_at).toBeDefined();
@@ -72,14 +88,18 @@ describe("suspend / resume", () => {
     }
     expect(storage.ledger).toEqual([]);
 
-    expect(await engine.reapOrphanedSessions(now + 6 * DAY_MS)).toEqual({ suspended: [], expired: [] });
+    expect(await engine.reapOrphanedSessions(now + 6 * DAY_MS)).toEqual({
+      suspended: [],
+      expired: [],
+    });
     const later = await engine.reapOrphanedSessions(now + 7 * DAY_MS + 1);
     expect(later.expired).toContain(root.sessionId);
     expect(storage.read(root.sessionId)!.outcome).toBe("abandoned");
     expect(storage.read(child.sessionId)!.outcome).toBe("abandoned");
     expect(storage.read(root.sessionId)!.history.at(-1)!.event).toBe("expire");
-    expect(storage.ledger.map(l => (l as { session_id: string }).session_id).sort())
-      .toEqual([root.sessionId, child.sessionId].sort());
+    expect(storage.ledger.map(l => (l as { session_id: string }).session_id).sort()).toEqual(
+      [root.sessionId, child.sessionId].sort(),
+    );
   });
 
   it("start records the conversation id the SessionStart hook wrote for this process", async () => {
@@ -112,7 +132,9 @@ describe("suspend / resume", () => {
 
     const text = formatResume(r);
     expect(text).toContain(`agent-7 → ${child.sessionId} → simple @ start`);
-    expect(text).toContain(`SendMessage({ to: "agent-7", message: "Continue: call mcp__plugin_workflow_wf__resume({ session_id: '${child.sessionId}' })`);
+    expect(text).toContain(
+      `SendMessage({ to: "agent-7", message: "Continue: call mcp__plugin_workflow_wf__resume({ session_id: '${child.sessionId}' })`,
+    );
 
     // the agent continues its own session
     await next.resume(child.sessionId);
@@ -125,7 +147,10 @@ describe("suspend / resume", () => {
     const { storage, engine } = mount({ simple: SIMPLE_WORKFLOW });
     const { sessionId } = await engine.start("simple");
     const s = storage.read(sessionId)!;
-    await storage.write(sessionId, { ...s, context: { ...s.context, claude_code_pid: process.pid } });
+    await storage.write(sessionId, {
+      ...s,
+      context: { ...s.context, claude_code_pid: process.pid },
+    });
     await expect(engine.resume(sessionId)).rejects.toThrow(/active in PID/);
     await storage.write(sessionId, s);
     await engine.transition(sessionId, "next");
@@ -141,14 +166,24 @@ describe("suspend / resume", () => {
     await engine.suspend(sa.sessionId);
     await engine.suspend(sb.sessionId);
     expect(engine.listSuspended(projectRoot(a)).map(s => s.session_id)).toEqual([sa.sessionId]);
-    expect(engine.listSuspended().map(s => s.session_id).sort()).toEqual([sa.sessionId, sb.sessionId].sort());
+    expect(
+      engine
+        .listSuspended()
+        .map(s => s.session_id)
+        .sort(),
+    ).toEqual([sa.sessionId, sb.sessionId].sort());
     expect(storage.read(sa.sessionId)!.stack).toHaveLength(1);
   });
 
   it("the transition tool refuses a suspended session and names resume", async () => {
     const { storage, engine, loader } = mount({ simple: SIMPLE_WORKFLOW });
-    const handlers = new Map<string, (args: object) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>>();
-    const server = { registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h) };
+    const handlers = new Map<
+      string,
+      (args: object) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>
+    >();
+    const server = {
+      registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h),
+    };
     registerTools(server as never, engine, {} as never, loader, storage);
     const { sessionId } = await engine.start("simple");
     await engine.suspend(sessionId);
@@ -158,7 +193,9 @@ describe("suspend / resume", () => {
     const ok = await handlers.get("resume")!({ session_id: sessionId });
     expect(ok.isError).toBeUndefined();
     expect(ok.content[0].text).toContain(`RESUMED: ${sessionId}`);
-    expect((await handlers.get("transition")!({ session_id: sessionId, transition: "next" })).isError).toBeUndefined();
+    expect(
+      (await handlers.get("transition")!({ session_id: sessionId, transition: "next" })).isError,
+    ).toBeUndefined();
   });
 
   it("link_agent during an exec survives the exec's routed write", async () => {
@@ -175,7 +212,8 @@ describe("suspend / resume", () => {
     });
     const { sessionId } = await engine.start("w");
     const pending = engine.transition(sessionId, "next");
-    for (let i = 0; i < 100 && !storage.read(sessionId)!.running_exec; i++) await new Promise(r => setTimeout(r, 10));
+    for (let i = 0; i < 100 && !storage.read(sessionId)!.running_exec; i++)
+      await new Promise(r => setTimeout(r, 10));
     await engine.linkAgent(sessionId, "agent-x");
     await pending;
     expect(storage.read(sessionId)!.agent_id).toBe("agent-x");
@@ -193,14 +231,27 @@ describe("suspend / resume", () => {
       await storage.write(sessionId, {
         ...s,
         suspended_at: new Date().toISOString(),
-        running_exec: { pgid, out: path.join(work, "o"), err: path.join(work, "e"), rc, started_at: new Date().toISOString(), boot_ms: bootTimeMs(), frame: 0, state: "start" },
+        running_exec: {
+          pgid,
+          out: path.join(work, "o"),
+          err: path.join(work, "e"),
+          rc,
+          started_at: new Date().toISOString(),
+          boot_ms: bootTimeMs(),
+          frame: 0,
+          state: "start",
+        },
       });
       await engine.abort(sessionId);
       await new Promise(r => setTimeout(r, 300)); // a signalled child is reaped by now
       expect(isGroupAlive(pgid)).toBe(true);
       expect(fs.existsSync(rc)).toBe(false);
     } finally {
-      try { process.kill(-pgid, "SIGKILL"); } catch { /* gone */ }
+      try {
+        process.kill(-pgid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
     }
   });
 
@@ -226,13 +277,24 @@ describe("suspend / resume", () => {
     const m = mount({ simple: SIMPLE_WORKFLOW });
     const { sessionId } = await m.engine.start("simple");
     const file = (n: string) => path.join(m.runDir, n);
-    for (const n of ["old.out", "kept.out", "kept.err", "kept.rc", "new.out"]) fs.writeFileSync(file(n), "");
+    for (const n of ["old.out", "kept.out", "kept.err", "kept.rc", "new.out"])
+      fs.writeFileSync(file(n), "");
     const old = new Date(Date.now() - 2 * DAY_MS);
-    for (const n of ["old.out", "kept.out", "kept.err", "kept.rc"]) fs.utimesSync(file(n), old, old);
+    for (const n of ["old.out", "kept.out", "kept.err", "kept.rc"])
+      fs.utimesSync(file(n), old, old);
     const s = m.storage.read(sessionId)!;
     await m.storage.write(sessionId, {
       ...s,
-      running_exec: { pgid: 999_999, out: file("kept.out"), err: file("kept.err"), rc: file("kept.rc"), started_at: old.toISOString(), boot_ms: 0, frame: 0, state: "start" },
+      running_exec: {
+        pgid: 999_999,
+        out: file("kept.out"),
+        err: file("kept.err"),
+        rc: file("kept.rc"),
+        started_at: old.toISOString(),
+        boot_ms: 0,
+        frame: 0,
+        state: "start",
+      },
     });
     await m.engine.reapOrphanedSessions();
     expect(fs.readdirSync(m.runDir).sort()).toEqual(["kept.err", "kept.out", "kept.rc", "new.out"]);
@@ -243,7 +305,13 @@ describe("suspend / resume", () => {
       initial: "start",
       states: {
         start: { prompt: "go", transitions: { next: "gate" } },
-        gate: { type: "exec", command, timeout, cases: { "0": "green", "3": "red" }, default: "red" },
+        gate: {
+          type: "exec",
+          command,
+          timeout,
+          cases: { "0": "green", "3": "red" },
+          default: "red",
+        },
         green: { prompt: "GREEN {{stdout}}", transitions: { done: "end" } },
         red: { prompt: "RED {{exit_code}}", transitions: { done: "end" } },
         end: { terminal: true, outcome: "complete" },
@@ -255,7 +323,8 @@ describe("suspend / resume", () => {
       const { sessionId } = await m.engine.start("w");
       await orphan(m.storage, [sessionId]);
       const first = m.engine.transition(sessionId, "next").catch((e: Error) => e);
-      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.running_exec; i++) await new Promise(r => setTimeout(r, 10));
+      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.running_exec; i++)
+        await new Promise(r => setTimeout(r, 10));
       const run = m.storage.read(sessionId)!.running_exec!;
       expect(run).toMatchObject({ state: "gate", frame: 0 });
       await m.engine.suspend(sessionId);
@@ -293,8 +362,12 @@ describe("suspend / resume", () => {
       // the state as SessionEnd left it on a machine that then rebooted
       const s = m.storage.read(sessionId)!;
       const lost: DetachedRun = {
-        pgid: 999_999, out: path.join(work, "o"), err: path.join(work, "e"), rc: path.join(work, "rc"),
-        started_at: new Date().toISOString(), boot_ms: 0,
+        pgid: 999_999,
+        out: path.join(work, "o"),
+        err: path.join(work, "e"),
+        rc: path.join(work, "rc"),
+        started_at: new Date().toISOString(),
+        boot_ms: 0,
       };
       const stuck: SessionState = {
         ...s,
@@ -312,14 +385,23 @@ describe("suspend / resume", () => {
 
 describe("Executor detached runs", () => {
   const dirs: string[] = [];
-  afterEach(() => { for (const d of dirs.splice(0)) cleanupDir(d); });
+  afterEach(() => {
+    for (const d of dirs.splice(0)) cleanupDir(d);
+  });
 
   it("a foreground exec writes to files, not pipes to the server, so the server's exit cannot break them", async () => {
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-runs-"));
     dirs.push(runDir);
     const executor = new Executor(undefined, runDir);
     // a pipe (or the socketpair node uses for stdio "pipe") breaks when the server dies; a file does not
-    const r = await executor.execute({ type: "exec", command: "[ -f /dev/stdout ] && echo file || echo stream; [ -f /dev/stderr ] && echo file >&2 || echo stream >&2" }, {});
+    const r = await executor.execute(
+      {
+        type: "exec",
+        command:
+          "[ -f /dev/stdout ] && echo file || echo stream; [ -f /dev/stderr ] && echo file >&2 || echo stream >&2",
+      },
+      {},
+    );
     expect(r.stdout!.trim()).toBe("file");
     expect(r.stderr!.trim()).toBe("file");
     expect(fs.readdirSync(runDir)).toEqual([]);
@@ -330,14 +412,25 @@ describe("Executor detached runs", () => {
     dirs.push(runDir);
     const executor = new Executor(undefined, runDir);
     let run: DetachedRun | undefined;
-    const r = await executor.execute({ type: "exec", command: "echo hi; exit 4" }, {}, {
-      sessionId: "s", rootSessionId: "s", onDetached: async d => { run = d; },
-    });
+    const r = await executor.execute(
+      { type: "exec", command: "echo hi; exit 4" },
+      {},
+      {
+        sessionId: "s",
+        rootSessionId: "s",
+        onDetached: async d => {
+          run = d;
+        },
+      },
+    );
     expect(r.exit_code).toBe(4);
     expect(r.stdout).toBe("hi\n");
     expect(run!.pgid).toBeGreaterThan(1);
     expect(fs.readFileSync(run!.rc, "utf8").trim()).toBe("4");
-    const again = await new Executor(undefined, runDir).adopt(run!, { type: "exec", command: "unused" });
+    const again = await new Executor(undefined, runDir).adopt(run!, {
+      type: "exec",
+      command: "unused",
+    });
     expect(again).toMatchObject({ exit_code: 4, stdout: "hi\n", success: false });
     Executor.discardRun(run!);
     expect(fs.readdirSync(runDir)).toEqual([]);
@@ -348,11 +441,23 @@ describe("Executor detached runs", () => {
     dirs.push(runDir);
     const executor = new Executor(undefined, runDir);
     let run: DetachedRun | undefined;
-    const pending = executor.execute({ type: "exec", command: "sleep 30", timeout: 60_000 }, {}, {
-      sessionId: "s", rootSessionId: "s", onDetached: async d => { run = d; },
-    });
+    const pending = executor.execute(
+      { type: "exec", command: "sleep 30", timeout: 60_000 },
+      {},
+      {
+        sessionId: "s",
+        rootSessionId: "s",
+        onDetached: async d => {
+          run = d;
+        },
+      },
+    );
     for (let i = 0; i < 100 && !run; i++) await new Promise(r => setTimeout(r, 10));
-    const r = await new Executor(undefined, runDir).adopt(run!, { type: "exec", command: "sleep 30", timeout: 300 });
+    const r = await new Executor(undefined, runDir).adopt(run!, {
+      type: "exec",
+      command: "sleep 30",
+      timeout: 300,
+    });
     expect(r).toMatchObject({ exit_code: 124, error: "Process timed out" });
     await pending;
   });
@@ -361,9 +466,17 @@ describe("Executor detached runs", () => {
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-runs-"));
     dirs.push(runDir);
     let run: DetachedRun | undefined;
-    const r = await new Executor(undefined, runDir).execute({ type: "exec", command: "trap '' TERM; sleep 30", timeout: 300 }, {}, {
-      sessionId: "s", rootSessionId: "s", onDetached: async d => { run = d; },
-    });
+    const r = await new Executor(undefined, runDir).execute(
+      { type: "exec", command: "trap '' TERM; sleep 30", timeout: 300 },
+      {},
+      {
+        sessionId: "s",
+        rootSessionId: "s",
+        onDetached: async d => {
+          run = d;
+        },
+      },
+    );
     expect(r.exit_code).toBe(124);
     const alive = isGroupAlive(run!.pgid);
     if (alive) process.kill(-run!.pgid, "SIGKILL");
@@ -373,9 +486,15 @@ describe("Executor detached runs", () => {
   it("a run that fails to spawn leaves no files, even with a caller that would own them", async () => {
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-runs-"));
     dirs.push(runDir);
-    const r = await new Executor(undefined, runDir).execute({ type: "exec", command: "true", cwd: path.join(runDir, "missing") }, {}, {
-      sessionId: "s", rootSessionId: "s", onDetached: async () => {},
-    });
+    const r = await new Executor(undefined, runDir).execute(
+      { type: "exec", command: "true", cwd: path.join(runDir, "missing") },
+      {},
+      {
+        sessionId: "s",
+        rootSessionId: "s",
+        onDetached: async () => {},
+      },
+    );
     expect(r.success).toBe(false);
     expect(fs.readdirSync(runDir)).toEqual([]);
   });
@@ -386,13 +505,27 @@ describe("Executor detached runs", () => {
     const pgid = foreignGroup();
     try {
       const run: DetachedRun = {
-        pgid, out: path.join(runDir, "o"), err: path.join(runDir, "e"), rc: path.join(runDir, "rc"),
-        started_at: new Date().toISOString(), boot_ms: bootTimeMs() - 3 * DAY_MS,
+        pgid,
+        out: path.join(runDir, "o"),
+        err: path.join(runDir, "e"),
+        rc: path.join(runDir, "rc"),
+        started_at: new Date().toISOString(),
+        boot_ms: bootTimeMs() - 3 * DAY_MS,
       };
-      expect(await new Executor(undefined, runDir).adopt(run, { type: "exec", command: "x", timeout: 200 })).toBeNull();
+      expect(
+        await new Executor(undefined, runDir).adopt(run, {
+          type: "exec",
+          command: "x",
+          timeout: 200,
+        }),
+      ).toBeNull();
       expect(isGroupAlive(pgid)).toBe(true);
     } finally {
-      try { process.kill(-pgid, "SIGKILL"); } catch { /* gone */ }
+      try {
+        process.kill(-pgid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
     }
   });
 

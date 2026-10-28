@@ -40,7 +40,8 @@ const SAME_BOOT_TOLERANCE_MS = 60_000;
 const NO_EXIT_CODE = "Process ended without writing its exit code (killed)";
 // Runs the command ($1) in a child shell and writes its exit code to $2 when
 // it ends, so a run whose server died still leaves its result behind.
-const EXEC_WRAPPER = 'sh -c "$1"; rc=$?; printf "%s\\n" "$rc" > "$2.tmp" && mv "$2.tmp" "$2"; exit $rc';
+const EXEC_WRAPPER =
+  'sh -c "$1"; rc=$?; printf "%s\\n" "$rc" > "$2.tmp" && mv "$2.tmp" "$2"; exit $rc';
 
 /** One instance of a `fanout:` exec: its id and the env that tells it which one it is. */
 interface Shard {
@@ -95,12 +96,19 @@ export class Executor {
   /** Where foreground execs write their output and exit code. */
   readonly runDir: string;
 
-  constructor(pool: Pool = new Pool(resolvePoolDir()), runDir: string = path.join(os.tmpdir(), "wf-exec")) {
+  constructor(
+    pool: Pool = new Pool(resolvePoolDir()),
+    runDir: string = path.join(os.tmpdir(), "wf-exec"),
+  ) {
     this.pool = pool;
     this.runDir = runDir;
   }
 
-  async execute(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+  async execute(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+    ctx?: ExecContext,
+  ): Promise<ActionResult> {
     const started = performance.now();
     let result: ActionResult;
     if (state.type === "exec") {
@@ -114,7 +122,10 @@ export class Executor {
       throw new Error(`Unknown action type: ${state.type}`);
     }
     // duration_ms is the run; the wait for a lease is wait_ms beside it.
-    return { ...result, duration_ms: Math.round(performance.now() - started) - (result.wait_ms ?? 0) };
+    return {
+      ...result,
+      duration_ms: Math.round(performance.now() - started) - (result.wait_ms ?? 0),
+    };
   }
 
   /** Kill every foreground exec group still running for the session and withdraw its lease waits. */
@@ -135,19 +146,26 @@ export class Executor {
    * No lease within `wait_timeout` exits 75. The lease's priority is the
    * session level's plus the step's own.
    */
-  private async _execLeased(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext, shard?: Shard): Promise<ActionResult> {
+  private async _execLeased(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+    ctx?: ExecContext,
+    shard?: Shard,
+  ): Promise<ActionResult> {
     const resource = state.resource!;
-    const budget = (n: number | typeof RESOURCE_THREADS_BUDGET): number => (n === RESOURCE_THREADS_BUDGET ? this.pool.config().budget : n);
+    const budget = (n: number | typeof RESOURCE_THREADS_BUDGET): number =>
+      n === RESOURCE_THREADS_BUDGET ? this.pool.config().budget : n;
     const asked = resource.threads;
     const flexible = typeof asked === "object" ? asked : undefined;
-    const threads = typeof asked === "object" ? budget(asked.max) : asked === undefined ? 0 : budget(asked);
+    const threads =
+      typeof asked === "object" ? budget(asked.max) : asked === undefined ? 0 : budget(asked);
     // A max the budget clamps below the min still runs: the min clamps with it.
     const minThreads = flexible ? Math.min(flexible.min, threads) : undefined;
     const command = render(state.command!, vars);
     const ac = new AbortController();
     const sessionId = ctx?.sessionId ?? "";
     let waits = this._waiting.get(sessionId);
-    if (!waits) this._waiting.set(sessionId, waits = new Set());
+    if (!waits) this._waiting.set(sessionId, (waits = new Set()));
     waits.add(ac);
     let got: AcquireResult;
     try {
@@ -155,7 +173,8 @@ export class Executor {
         {
           threads,
           minThreads,
-          waitFullMs: flexible && resource.wait_full !== undefined ? resource.wait_full * 1000 : undefined,
+          waitFullMs:
+            flexible && resource.wait_full !== undefined ? resource.wait_full * 1000 : undefined,
           locks: resource.locks,
           priority: Executor._priority(state, ctx),
           level: ctx?.level,
@@ -166,25 +185,36 @@ export class Executor {
           sessionId,
         },
         {
-          waitTimeoutMs: resource.wait_timeout === undefined ? undefined : resource.wait_timeout * 1000,
+          waitTimeoutMs:
+            resource.wait_timeout === undefined ? undefined : resource.wait_timeout * 1000,
           signal: ac.signal,
         },
       );
     } finally {
       waits.delete(ac);
-      if (waits.size === 0 && this._waiting.get(sessionId) === waits) this._waiting.delete(sessionId);
+      if (waits.size === 0 && this._waiting.get(sessionId) === waits)
+        this._waiting.delete(sessionId);
     }
     const wait_ms = got.waitMs;
     // An abort that landed while the grant was being written: give it back, do not run.
     if (got.status === "granted" && ac.signal.aborted) {
       await got.lease.release();
-      return { type: "exec", success: false, stdout: "", stderr: ABORTED_WAIT, exit_code: EXIT_CODE_ABORTED, error: ABORTED_WAIT, wait_ms };
+      return {
+        type: "exec",
+        success: false,
+        stdout: "",
+        stderr: ABORTED_WAIT,
+        exit_code: EXIT_CODE_ABORTED,
+        error: ABORTED_WAIT,
+        wait_ms,
+      };
     }
     if (got.status !== "granted") {
-      const busy = got.status === "timeout"
-        ? `busy: ${describeRequest({ threads, min_threads: minThreads, locks: resource.locks }, got.view.budget)} not free within ${resource.wait_timeout}s `
-          + `(held ${got.view.held}/${got.view.budget}, external ${got.view.external.toFixed(1)})`
-        : ABORTED_WAIT;
+      const busy =
+        got.status === "timeout"
+          ? `busy: ${describeRequest({ threads, min_threads: minThreads, locks: resource.locks }, got.view.budget)} not free within ${resource.wait_timeout}s ` +
+            `(held ${got.view.held}/${got.view.budget}, external ${got.view.external.toFixed(1)})`
+          : ABORTED_WAIT;
       return {
         type: "exec",
         success: false,
@@ -196,10 +226,17 @@ export class Executor {
       };
     }
     try {
-      const leased = { ...(got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : {}), ...shard?.env };
+      const leased = {
+        ...(got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : {}),
+        ...shard?.env,
+      };
       // a fanout shard is not taken over on its own: a resumed fanout runs again
       const detached = shard ? undefined : ctx?.onDetached;
-      return { ...(await this._exec(state, vars, ctx, leased, (pgid) => got.lease.attach(pgid), detached)), wait_ms, threads_granted: got.lease.threads };
+      return {
+        ...(await this._exec(state, vars, ctx, leased, pgid => got.lease.attach(pgid), detached)),
+        wait_ms,
+        threads_granted: got.lease.threads,
+      };
     } finally {
       await got.lease.release();
     }
@@ -215,14 +252,28 @@ export class Executor {
    * shard's run. Abort withdraws the waiting shards, kills the
    * running ones and starts no more.
    */
-  private async _execFanout(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+  private async _execFanout(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+    ctx?: ExecContext,
+  ): Promise<ActionResult> {
     const fanout = state.fanout!;
-    const run: StateDefinition = { ...state, fanout: undefined, resource: { threads: fanout.threads_each } };
+    const run: StateDefinition = {
+      ...state,
+      fanout: undefined,
+      resource: { threads: fanout.threads_each },
+    };
     let shards: Shard[];
     if (fanout.items_command !== undefined) {
-      const listed = await this._exec({ ...run, command: fanout.items_command, max_output: ITEMS_MAX_OUTPUT }, vars, ctx);
+      const listed = await this._exec(
+        { ...run, command: fanout.items_command, max_output: ITEMS_MAX_OUTPUT },
+        vars,
+        ctx,
+      );
       if (!listed.success || listed.stdout!.startsWith(TRUNCATED_MARK)) {
-        const why = listed.success ? `items_command printed over ${ITEMS_MAX_OUTPUT} bytes` : `items_command failed: ${listed.error}`;
+        const why = listed.success
+          ? `items_command printed over ${ITEMS_MAX_OUTPUT} bytes`
+          : `items_command failed: ${listed.error}`;
         const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
         return {
           ...listed,
@@ -233,17 +284,23 @@ export class Executor {
           error: why,
         };
       }
-      shards = listed.stdout!.split("\n").map(line => line.replace(/\r$/, "")).filter(line => line.trim() !== "")
+      shards = listed
+        .stdout!.split("\n")
+        .map(line => line.replace(/\r$/, ""))
+        .filter(line => line.trim() !== "")
         .map(line => ({ id: line, env: { WF_ITEM: line } }));
     } else {
       const n = fanout.count!;
-      shards = Array.from({ length: n }, (_, i) => ({ id: `${i + 1}/${n}`, env: { WF_SHARD: `${i + 1}/${n}` } }));
+      shards = Array.from({ length: n }, (_, i) => ({
+        id: `${i + 1}/${n}`,
+        env: { WF_SHARD: `${i + 1}/${n}` },
+      }));
     }
 
     const sessionId = ctx?.sessionId ?? "";
     const ac = new AbortController();
     let mine = this._fanouts.get(sessionId);
-    if (!mine) this._fanouts.set(sessionId, mine = new Set());
+    if (!mine) this._fanouts.set(sessionId, (mine = new Set()));
     mine.add(ac);
     const results: ShardResult[] = [];
     const tails: string[] = [];
@@ -262,15 +319,18 @@ export class Executor {
           ...(r.threads_granted !== undefined ? { threads_granted: r.threads_granted } : {}),
         };
         if (r.exit_code !== 0)
-          tails[i] = `--- shard ${shards[i].id}: exit ${r.exit_code}${r.exit_code === EXIT_CODE_TIMEOUT ? " (timed out)" : ""} ---\n`
-            + `${r.stdout ?? ""}${r.stderr ?? ""}`.slice(-SHARD_TAIL);
+          tails[i] =
+            `--- shard ${shards[i].id}: exit ${r.exit_code}${r.exit_code === EXIT_CODE_TIMEOUT ? " (timed out)" : ""} ---\n` +
+            `${r.stdout ?? ""}${r.stderr ?? ""}`.slice(-SHARD_TAIL);
       }
     };
     try {
       // Unbounded, every shard would queue in the pool at once and stand ahead
       // of other sessions; by default only as many as the budget can run.
       const budget = this.pool.config().budget;
-      const parallel = fanout.max_parallel ?? Math.max(1, Math.floor(budget / Math.min(fanout.threads_each, budget)));
+      const parallel =
+        fanout.max_parallel ??
+        Math.max(1, Math.floor(budget / Math.min(fanout.threads_each, budget)));
       await Promise.all(Array.from({ length: Math.min(parallel, shards.length) }, worker));
     } finally {
       mine.delete(ac);
@@ -278,17 +338,27 @@ export class Executor {
     }
     // shards an abort kept from starting
     for (let i = 0; i < shards.length; i++)
-      if (!results[i]) results[i] = { shard: shards[i].id, exit_code: EXIT_CODE_ABORTED, duration_ms: 0, wait_ms: 0 };
+      if (!results[i])
+        results[i] = {
+          shard: shards[i].id,
+          exit_code: EXIT_CODE_ABORTED,
+          duration_ms: 0,
+          wait_ms: 0,
+        };
 
     const failed = results.filter(r => r.exit_code !== 0);
     const codes = new Set(failed.map(r => r.exit_code));
     const exit_code = failed.length === 0 ? 0 : codes.size === 1 ? failed[0].exit_code : 1;
-    const summary = `fanout: ${results.length - failed.length}/${results.length} ok`
-      + (failed.length > 0 ? `, ${failed.length} failed (exit ${[...codes].join(", ")})` : "");
+    const summary =
+      `fanout: ${results.length - failed.length}/${results.length} ok` +
+      (failed.length > 0 ? `, ${failed.length} failed (exit ${[...codes].join(", ")})` : "");
     return {
       type: "exec",
       success: exit_code === 0,
-      stdout: truncate([summary, ...tails.filter(t => t !== undefined)].join("\n"), state.max_output ?? DEFAULT_MAX_OUTPUT),
+      stdout: truncate(
+        [summary, ...tails.filter(t => t !== undefined)].join("\n"),
+        state.max_output ?? DEFAULT_MAX_OUTPUT,
+      ),
       stderr: "",
       exit_code,
       error: failed.length > 0 ? summary : undefined,
@@ -305,7 +375,7 @@ export class Executor {
     if (!sessionId || !pid) return;
     let pids = this._running.get(sessionId);
     if (add) {
-      if (!pids) this._running.set(sessionId, pids = new Set());
+      if (!pids) this._running.set(sessionId, (pids = new Set()));
       pids.add(pid);
     } else if (pids) {
       pids.delete(pid);
@@ -314,7 +384,11 @@ export class Executor {
   }
 
   /** A state's cwd resolves against the session's; no state cwd runs in the session's. */
-  private _cwd(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): string | undefined {
+  private _cwd(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+    ctx?: ExecContext,
+  ): string | undefined {
     if (!state.cwd) return ctx?.cwd;
     const own = render(state.cwd, vars);
     return ctx?.cwd ? path.resolve(ctx.cwd, own) : own;
@@ -350,7 +424,14 @@ export class Executor {
           WF_PRIORITY_LEVEL: ctx.level ?? DEFAULT_PRIORITY_LEVEL,
         }
       : undefined;
-    const { WF_THREADS: _threads, WF_PRIORITY: _priority, WF_PRIORITY_LEVEL: _level, WF_SHARD: _shard, WF_ITEM: _item, ...base } = process.env;
+    const {
+      WF_THREADS: _threads,
+      WF_PRIORITY: _priority,
+      WF_PRIORITY_LEVEL: _level,
+      WF_SHARD: _shard,
+      WF_ITEM: _item,
+      ...base
+    } = process.env;
     return { ...base, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...leased, ...envVars };
   }
 
@@ -374,11 +455,14 @@ export class Executor {
     const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
     // run output may hold anything a command prints: owner-only
     fs.mkdirSync(this.runDir, { recursive: true, mode: 0o700 });
-    const base = path.join(this.runDir, `${ctx?.sessionId || "exec"}-${randomBytes(6).toString("hex")}`);
+    const base = path.join(
+      this.runDir,
+      `${ctx?.sessionId || "exec"}-${randomBytes(6).toString("hex")}`,
+    );
     const files = { out: `${base}.out`, err: `${base}.err`, rc: `${base}.rc` };
     const startedAt = new Date().toISOString();
 
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       let killed = false;
       const outFd = fs.openSync(files.out, "w");
       const errFd = fs.openSync(files.err, "w");
@@ -398,9 +482,15 @@ export class Executor {
       // The lease names the child's group too, so a server that dies mid-exec does not free it.
       if (child.pid && onSpawn) onSpawn(child.pid).catch(() => {});
       // The result waits for the record: written after it, the record would outlive the run.
-      const recorded = child.pid && detached
-        ? detached({ pgid: child.pid, ...files, started_at: startedAt, boot_ms: bootTimeMs() }).catch(() => {})
-        : Promise.resolve();
+      const recorded =
+        child.pid && detached
+          ? detached({
+              pgid: child.pid,
+              ...files,
+              started_at: startedAt,
+              boot_ms: bootTimeMs(),
+            }).catch(() => {})
+          : Promise.resolve();
 
       const killGroup = (signal: NodeJS.Signals) => {
         if (child.pid) killProcessGroup(child.pid, signal);
@@ -430,10 +520,11 @@ export class Executor {
         // The wrapper dies of the SIGTERM even when the command ignores it:
         // the run is over only once the whole group is gone (SIGKILL after the grace).
         void Executor._reapGroup(child.pid!, killedAt!).then(() =>
-          finish(Executor._runResult(files, maxOutput, EXIT_CODE_TIMEOUT, "Process timed out")));
+          finish(Executor._runResult(files, maxOutput, EXIT_CODE_TIMEOUT, "Process timed out")),
+        );
       });
 
-      child.on("error", (err) => {
+      child.on("error", err => {
         finish({ ...Executor._runResult(files, maxOutput, 1), error: err.message });
       });
     });
@@ -446,11 +537,17 @@ export class Executor {
    * start, it is killed and exits 124); neither — it never finished, e.g. the
    * machine rebooted → null, the caller runs the step again.
    */
-  async adopt(run: DetachedRun, state: StateDefinition, ctx?: ExecContext): Promise<ActionResult | null> {
+  async adopt(
+    run: DetachedRun,
+    state: StateDefinition,
+    ctx?: ExecContext,
+  ): Promise<ActionResult | null> {
     const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
     const started = Date.parse(run.started_at);
-    const done = (exit_code: number, error?: string): ActionResult =>
-      ({ ...Executor._runResult(run, maxOutput, exit_code, error), duration_ms: Math.max(0, Date.now() - started) });
+    const done = (exit_code: number, error?: string): ActionResult => ({
+      ...Executor._runResult(run, maxOutput, exit_code, error),
+      duration_ms: Math.max(0, Date.now() - started),
+    });
     const alive = () => Executor.sameBoot(run) && isGroupAlive(run.pgid);
 
     const first = Executor._readExitCode(run.rc);
@@ -508,7 +605,11 @@ export class Executor {
    */
   sweepRuns(referenced: ReadonlySet<string>, maxAgeMs: number, now: number = Date.now()): string[] {
     let names: string[];
-    try { names = fs.readdirSync(this.runDir); } catch { return []; }
+    try {
+      names = fs.readdirSync(this.runDir);
+    } catch {
+      return [];
+    }
     const removed: string[] = [];
     for (const name of names) {
       const file = path.join(this.runDir, name);
@@ -517,7 +618,9 @@ export class Executor {
         if (now - fs.statSync(file).mtimeMs < maxAgeMs) continue;
         fs.rmSync(file, { force: true });
         removed.push(file);
-      } catch { /* gone meanwhile */ }
+      } catch {
+        /* gone meanwhile */
+      }
     }
     return removed;
   }
@@ -534,7 +637,11 @@ export class Executor {
 
   private static _readExitCode(file: string): number | undefined {
     let text: string;
-    try { text = fs.readFileSync(file, "utf8").trim(); } catch { return undefined; }
+    try {
+      text = fs.readFileSync(file, "utf8").trim();
+    } catch {
+      return undefined;
+    }
     const code = Number.parseInt(text, 10);
     return Number.isInteger(code) ? code : undefined;
   }
@@ -542,7 +649,11 @@ export class Executor {
   /** The last `limit` bytes of a file, marked when cut; a missing file reads empty. */
   private static _readTail(file: string, limit: number): string {
     let fd: number;
-    try { fd = fs.openSync(file, "r"); } catch { return ""; }
+    try {
+      fd = fs.openSync(file, "r");
+    } catch {
+      return "";
+    }
     try {
       const size = fs.fstatSync(fd).size;
       const length = Math.min(size, limit);
@@ -554,7 +665,12 @@ export class Executor {
     }
   }
 
-  private static _runResult(run: Pick<DetachedRun, "out" | "err">, maxOutput: number, exit_code: number, error?: string): ActionResult {
+  private static _runResult(
+    run: Pick<DetachedRun, "out" | "err">,
+    maxOutput: number,
+    exit_code: number,
+    error?: string,
+  ): ActionResult {
     return {
       type: "exec",
       success: exit_code === 0,
@@ -565,7 +681,11 @@ export class Executor {
     };
   }
 
-  private _execBackground(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+  private _execBackground(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+    ctx?: ExecContext,
+  ): Promise<ActionResult> {
     const command = render(state.command!, vars);
     const cwd = this._cwd(state, vars, ctx);
 
@@ -601,7 +721,10 @@ export class Executor {
     });
   }
 
-  private async _fetch(state: StateDefinition, vars: Record<string, unknown>): Promise<ActionResult> {
+  private async _fetch(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+  ): Promise<ActionResult> {
     const url = render(state.url!, vars);
     const method = state.method ?? "GET";
     const timeout = state.timeout ?? DEFAULT_FETCH_TIMEOUT;

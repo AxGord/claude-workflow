@@ -41,7 +41,10 @@ export class Storage {
    * may see it called twice). For a writer outside the session's transition
    * queue, whose earlier snapshot may be stale by the time it writes.
    */
-  public async update(sessionId: string, change: (current: SessionState | null) => SessionState | null): Promise<SessionState | null> {
+  public async update(
+    sessionId: string,
+    change: (current: SessionState | null) => SessionState | null,
+  ): Promise<SessionState | null> {
     if (!fs.existsSync(this._filePath(sessionId)) && change(null) === null) return null;
     return this._locked(sessionId, () => {
       const current = this.read(sessionId);
@@ -50,7 +53,10 @@ export class Storage {
     });
   }
 
-  private async _locked(sessionId: string, next: () => SessionState | null): Promise<SessionState | null> {
+  private async _locked(
+    sessionId: string,
+    next: () => SessionState | null,
+  ): Promise<SessionState | null> {
     const fp = this._filePath(sessionId);
     fs.mkdirSync(path.dirname(fp), { recursive: true });
     // proper-lockfile locks an existing file; update() reads this placeholder as no session.
@@ -92,7 +98,8 @@ export class Storage {
 
   public list(): string[] {
     if (!fs.existsSync(this._stateDir)) return [];
-    return fs.readdirSync(this._stateDir)
+    return fs
+      .readdirSync(this._stateDir)
       .filter(f => f.endsWith(".json"))
       .map(f => f.replace(/\.json$/, ""));
   }
@@ -146,13 +153,12 @@ export class Storage {
 export function prunePolicy(
   sessions: SessionState[],
   keep: number,
-  del: (sessionId: string) => void
+  del: (sessionId: string) => void,
 ): void {
   if (keep < 0) throw new Error(`prunePolicy: keep must be >= 0, got ${keep}`);
   const terminal = sessions.filter(s => s.stack?.length === 0);
   terminal.sort(
-    (a, b) =>
-      b.updated_at.localeCompare(a.updated_at) || b.session_id.localeCompare(a.session_id)
+    (a, b) => b.updated_at.localeCompare(a.updated_at) || b.session_id.localeCompare(a.session_id),
   );
   for (const s of terminal.slice(keep)) del(s.session_id);
 }

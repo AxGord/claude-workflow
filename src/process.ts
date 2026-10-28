@@ -7,8 +7,17 @@ export function killProcessGroup(pid: number, signal: NodeJS.Signals = "SIGTERM"
   // pids come from session JSON: kill(-1) would signal every process of the
   // user, kill(0) / kill(-0) the server's own group.
   if (!Number.isInteger(pid) || pid <= 1) return;
-  try { process.kill(-pid, signal); return; } catch { /* not a group leader, or gone */ }
-  try { process.kill(pid, signal); } catch { /* already dead */ }
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch {
+    /* not a group leader, or gone */
+  }
+  try {
+    process.kill(pid, signal);
+  } catch {
+    /* already dead */
+  }
 }
 
 /** A process exists (EPERM: it exists but belongs to another user). */

@@ -66,9 +66,14 @@ let perfCoresOfMachine: number | undefined;
 function readPerfCores(): number {
   if (process.platform === "darwin") {
     try {
-      const n = parseInt(execFileSync("sysctl", ["-n", "hw.perflevel0.physicalcpu"], { encoding: "utf8" }).trim(), 10);
+      const n = parseInt(
+        execFileSync("sysctl", ["-n", "hw.perflevel0.physicalcpu"], { encoding: "utf8" }).trim(),
+        10,
+      );
       if (n > 0) return n;
-    } catch { /* Intel / older macOS: no performance levels */ }
+    } catch {
+      /* Intel / older macOS: no performance levels */
+    }
   }
   return os.cpus().length;
 }
@@ -146,7 +151,9 @@ export function effectiveThreads(entry: Pick<PoolEntry, "threads">, budget: numb
 
 /** Queue order: priority descending, then arrival; the id breaks exact ties. */
 export function byQueueOrder(a: PoolEntry, b: PoolEntry): number {
-  return b.priority - a.priority || a.arrived - b.arrived || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  return (
+    b.priority - a.priority || a.arrived - b.arrived || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
 }
 
 /** The fewest threads a waiter accepts: `min_threads` of a flexible request, else all it asks for. */
@@ -155,7 +162,10 @@ function minThreads(entry: Pick<PoolEntry, "threads" | "min_threads">, budget: n
 }
 
 /** What an entry asks for: `6 threads`, `2-8 threads`, `lock port:3000`, `6 threads + lock a + lock b`. */
-export function describeRequest(entry: Pick<PoolEntry, "threads" | "min_threads" | "locks">, budget: number): string {
+export function describeRequest(
+  entry: Pick<PoolEntry, "threads" | "min_threads" | "locks">,
+  budget: number,
+): string {
   const n = effectiveThreads(entry, budget);
   const min = minThreads(entry, budget);
   const threads = min < n ? `${min}-${n} threads` : `${n} threads`;
@@ -171,7 +181,11 @@ export function projectRoot(cwd: string): string {
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
     const dotGit = path.join(dir, ".git");
     let stat: fs.Stats | undefined;
-    try { stat = fs.statSync(dotGit); } catch { /* not here */ }
+    try {
+      stat = fs.statSync(dotGit);
+    } catch {
+      /* not here */
+    }
     if (stat?.isDirectory()) return dir;
     if (stat?.isFile()) {
       const gitdir = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, "utf8"))?.[1].trim();
@@ -230,10 +244,12 @@ export function schedule(
     let n: number | undefined;
     if (max === 0) n = 0;
     else if (!threadsClosed && room >= max) n = max;
-    else if (!threadsClosed && now >= (w.full_until ?? 0) && room >= minThreads(w, config.budget)) n = room;
+    else if (!threadsClosed && now >= (w.full_until ?? 0) && room >= minThreads(w, config.budget))
+      n = room;
     if (locksFree && n !== undefined) {
       const { full_until: _window, ...granted } = w;
-      const asked = w.min_threads !== undefined || n !== w.threads ? { asked_threads: w.threads } : {};
+      const asked =
+        w.min_threads !== undefined || n !== w.threads ? { asked_threads: w.threads } : {};
       leases.push({ ...granted, threads: n, started: now, ...asked });
       held += n;
       for (const l of locks) locked.add(l);
@@ -293,7 +309,11 @@ export type AcquireResult =
   | { readonly status: "timeout" | "aborted"; readonly waitMs: number; readonly view: PoolView };
 
 /** Sleep until `ms` pass, `signal` aborts, or the function handed to `setWake` is called. */
-function sleep(ms: number, signal: AbortSignal | undefined, setWake: (wake: (() => void) | undefined) => void): Promise<void> {
+function sleep(
+  ms: number,
+  signal: AbortSignal | undefined,
+  setWake: (wake: (() => void) | undefined) => void,
+): Promise<void> {
   return new Promise(resolve => {
     const done = (): void => {
       clearTimeout(timer);
@@ -333,17 +353,20 @@ export class Pool {
   config(): PoolConfig {
     const fp = path.join(this.dir, CONFIG_FILE);
     const raw: unknown = fs.existsSync(fp) ? JSON.parse(fs.readFileSync(fp, "utf8")) : {};
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new Error(`${fp}: expected a JSON object`);
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+      throw new Error(`${fp}: expected a JSON object`);
     const obj = raw as Record<string, unknown>;
     for (const key of Object.keys(obj))
-      if (key !== "budget" && key !== "load_threshold") throw new Error(`${fp}: unknown key "${key}"`);
+      if (key !== "budget" && key !== "load_threshold")
+        throw new Error(`${fp}: unknown key "${key}"`);
     const { budget, load_threshold: threshold } = obj;
     if (budget !== undefined && !(Number.isInteger(budget) && (budget as number) > 0))
       throw new Error(`${fp}: budget must be a positive integer`);
     if (threshold !== undefined && !(typeof threshold === "number" && threshold >= 0))
       throw new Error(`${fp}: load_threshold must be a non-negative number`);
     return {
-      budget: (budget as number | undefined) ?? Math.max(1, this._probes.perfCores() - RESERVED_CORES),
+      budget:
+        (budget as number | undefined) ?? Math.max(1, this._probes.perfCores() - RESERVED_CORES),
       load_threshold: (threshold as number | undefined) ?? RESERVED_CORES,
     };
   }
@@ -355,15 +378,24 @@ export class Pool {
 
   async acquire(req: LeaseRequest, opts: AcquireOptions = {}): Promise<AcquireResult> {
     const locks = [...new Set(req.locks ?? [])];
-    for (const l of locks) if (!LOCK_NAME_PATTERN.test(l)) throw new Error(`a lock name is one word without whitespace, got "${l}"`);
+    for (const l of locks)
+      if (!LOCK_NAME_PATTERN.test(l))
+        throw new Error(`a lock name is one word without whitespace, got "${l}"`);
     if (!Number.isInteger(req.threads) || req.threads < (locks.length > 0 ? 0 : 1))
-      throw new Error(`threads must be a positive integer${locks.length > 0 ? " or 0" : ""}, got ${req.threads}`);
+      throw new Error(
+        `threads must be a positive integer${locks.length > 0 ? " or 0" : ""}, got ${req.threads}`,
+      );
     const flexible = req.minThreads !== undefined;
-    if (flexible && !(Number.isInteger(req.minThreads) && req.minThreads! >= 1 && req.minThreads! <= req.threads))
+    if (
+      flexible &&
+      !(Number.isInteger(req.minThreads) && req.minThreads! >= 1 && req.minThreads! <= req.threads)
+    )
       throw new Error(`min threads must be an integer in 1..${req.threads}, got ${req.minThreads}`);
-    if (req.waitFullMs !== undefined && !flexible) throw new Error("waiting for the full threads needs a min");
+    if (req.waitFullMs !== undefined && !flexible)
+      throw new Error("waiting for the full threads needs a min");
     const priority = req.priority ?? 0;
-    if (!Number.isInteger(priority)) throw new Error(`priority must be an integer, got ${priority}`);
+    if (!Number.isInteger(priority))
+      throw new Error(`priority must be an integer, got ${priority}`);
     const pid = req.pid ?? process.pid;
     const arrived = Date.now();
     const cwd = req.cwd ?? process.cwd();
@@ -371,7 +403,9 @@ export class Pool {
       id: `${pid}-${randomUUID().slice(0, 8)}`,
       pid,
       threads: req.threads,
-      ...(flexible ? { min_threads: req.minThreads, full_until: arrived + (req.waitFullMs ?? 0) } : {}),
+      ...(flexible
+        ? { min_threads: req.minThreads, full_until: arrived + (req.waitFullMs ?? 0) }
+        : {}),
       priority,
       ...(req.level ? { level: req.level } : {}),
       label: req.label ?? "",
@@ -397,12 +431,16 @@ export class Pool {
           opts.onProgress?.(self, view);
           lastProgress = now;
         }
-        const left = opts.waitTimeoutMs === undefined ? Infinity : arrived + opts.waitTimeoutMs - now;
+        const left =
+          opts.waitTimeoutMs === undefined ? Infinity : arrived + opts.waitTimeoutMs - now;
         if (left <= 0) return await this._giveUp(self, "timeout", arrived);
         watcher ??= this._watch(() => wake?.());
         // A flexible waiter's window ending changes what it accepts: pass again right then.
-        const window = self.full_until !== undefined && self.full_until > now ? self.full_until - now : Infinity;
-        await sleep(Math.min(opts.pollMs ?? DEFAULT_POLL_MS, left, window), opts.signal, w => { wake = w; });
+        const window =
+          self.full_until !== undefined && self.full_until > now ? self.full_until - now : Infinity;
+        await sleep(Math.min(opts.pollMs ?? DEFAULT_POLL_MS, left, window), opts.signal, w => {
+          wake = w;
+        });
       }
     } finally {
       watcher?.close();
@@ -412,7 +450,9 @@ export class Pool {
   /** Call `onChange` whenever pool.json is replaced; polling stays the fallback. */
   private _watch(onChange: () => void): fs.FSWatcher | undefined {
     try {
-      return fs.watch(this.dir, (_event, filename) => { if (filename === POOL_FILE) onChange(); });
+      return fs.watch(this.dir, (_event, filename) => {
+        if (filename === POOL_FILE) onChange();
+      });
     } catch {
       return undefined;
     }
@@ -440,7 +480,11 @@ export class Pool {
   }
 
   /** Withdraw from the queue; a timeout that raced a grant keeps the lease. */
-  private async _giveUp(self: PoolEntry, why: "timeout" | "aborted", arrived: number): Promise<AcquireResult> {
+  private async _giveUp(
+    self: PoolEntry,
+    why: "timeout" | "aborted",
+    arrived: number,
+  ): Promise<AcquireResult> {
     const view = await this._update(state => {
       const granted = state.leases.some(e => e.id === self.id);
       const keep = granted && why === "timeout";
@@ -465,7 +509,11 @@ export class Pool {
       waiting: state.waiting.map(e => {
         if (!e.level || e.level === level || !sessionIds.has(e.session_id)) return e;
         moved++;
-        return { ...e, priority: e.priority - PRIORITY_LEVELS[e.level] + PRIORITY_LEVELS[level], level };
+        return {
+          ...e,
+          priority: e.priority - PRIORITY_LEVELS[e.level] + PRIORITY_LEVELS[level],
+          level,
+        };
       }),
     }));
     return moved;
@@ -488,7 +536,10 @@ export class Pool {
   /** One admission pass; `self` joins the queue unless it is already queued or leased. */
   private _pass(self?: PoolEntry): Promise<PoolView> {
     return this._update(state => {
-      const known = !self || state.leases.some(e => e.id === self.id) || state.waiting.some(e => e.id === self.id);
+      const known =
+        !self ||
+        state.leases.some(e => e.id === self.id) ||
+        state.waiting.some(e => e.id === self.id);
       return known ? state : { leases: state.leases, waiting: [...state.waiting, self] };
     });
   }
@@ -522,7 +573,13 @@ export class Pool {
       const raw = fs.readFileSync(fp, "utf8");
       const live = (e: PoolEntry): boolean =>
         this._probes.isAlive(e.pid) || (e.pgid !== undefined && this._probes.isGroupAlive(e.pgid));
-      const view = schedule(change(readState(raw, fp)), this.config(), this._load(), live, Date.now());
+      const view = schedule(
+        change(readState(raw, fp)),
+        this.config(),
+        this._load(),
+        live,
+        Date.now(),
+      );
       const next = JSON.stringify({ leases: view.leases, waiting: view.waiting }, null, 2);
       // An unchanged pool is not rewritten: every rewrite wakes every waiter.
       if (next !== raw) {
@@ -549,32 +606,45 @@ export function describeWait(self: PoolEntry, view: PoolView): string {
     const h = view.leases.find(e => e.locks?.includes(l));
     return h ? [`, lock ${l} held by ${h.label || `pid ${h.pid}`}`] : [];
   });
-  return `wf-run: waiting for ${describeRequest(self, view.budget)} — held ${view.held}/${view.budget} by ${holders}, `
-    + `external ${view.external.toFixed(1)}${lockHolders.join("")}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}`;
+  return (
+    `wf-run: waiting for ${describeRequest(self, view.budget)} — held ${view.held}/${view.budget} by ${holders}, ` +
+    `external ${view.external.toFixed(1)}${lockHolders.join("")}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}`
+  );
 }
 
 /** One row per lease or waiter: who (project, session, step), what (threads, locks, priority), since when. */
-export function formatEntry(e: PoolEntry, budget: number, now: number = Date.now(), home: string = os.homedir()): string {
+export function formatEntry(
+  e: PoolEntry,
+  budget: number,
+  now: number = Date.now(),
+  home: string = os.homedir(),
+): string {
   const since = e.started ?? e.arrived;
   let what: string;
   if (e.started === undefined) {
     what = `wants ${describeRequest(e, budget)}`;
   } else {
-    const asked = e.asked_threads === undefined ? "" : ` (asked ${e.min_threads !== undefined ? `${e.min_threads}-` : ""}${e.asked_threads})`;
+    const asked =
+      e.asked_threads === undefined
+        ? ""
+        : ` (asked ${e.min_threads !== undefined ? `${e.min_threads}-` : ""}${e.asked_threads})`;
     what = `holds ${[...(e.threads > 0 ? [`${e.threads} threads${asked}`] : []), ...(e.locks ?? []).map(l => `lock ${l}`)].join(" + ")}`;
   }
   const project = e.project ?? e.cwd;
-  const shown = project === home || project.startsWith(`${home}/`) ? `~${project.slice(home.length)}` : project;
+  const shown =
+    project === home || project.startsWith(`${home}/`) ? `~${project.slice(home.length)}` : project;
   const clock = new Date(since).toTimeString().slice(0, 8);
-  return `  pid ${e.pid}  ${what}  prio ${e.priority}${e.level ? ` ${e.level}` : ""}  since ${clock} (${Math.round((now - since) / 1000)}s)`
-    + `  ${shown}${e.session_id ? `  session ${e.session_id}` : ""}${e.step ? `  step ${e.step}` : ""}  ${e.label || "-"}`;
+  return (
+    `  pid ${e.pid}  ${what}  prio ${e.priority}${e.level ? ` ${e.level}` : ""}  since ${clock} (${Math.round((now - since) / 1000)}s)` +
+    `  ${shown}${e.session_id ? `  session ${e.session_id}` : ""}${e.step ? `  step ${e.step}` : ""}  ${e.label || "-"}`
+  );
 }
 
 /** `wf-run --status` and the `pool_status` tool. */
 export function formatStatus(view: PoolView, dir: string, now: number = Date.now()): string {
   return [
-    `pool ${dir}: budget ${view.budget}, held ${view.held}, load ${view.load.toFixed(2)} `
-      + `(external ${view.external.toFixed(1)}, threshold ${view.load_threshold})`,
+    `pool ${dir}: budget ${view.budget}, held ${view.held}, load ${view.load.toFixed(2)} ` +
+      `(external ${view.external.toFixed(1)}, threshold ${view.load_threshold})`,
     `locks held: ${view.leases.flatMap(e => e.locks ?? []).join(", ") || "none"}`,
     `leases (${view.leases.length}):`,
     ...view.leases.map(e => formatEntry(e, view.budget, now)),

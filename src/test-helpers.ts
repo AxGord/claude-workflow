@@ -20,7 +20,10 @@ export class InMemoryStorage implements Storage {
     this._data.set(sessionId, state);
   }
 
-  async update(sessionId: string, change: (current: SessionState | null) => SessionState | null): Promise<SessionState | null> {
+  async update(
+    sessionId: string,
+    change: (current: SessionState | null) => SessionState | null,
+  ): Promise<SessionState | null> {
     const next = change(this.read(sessionId));
     if (next) this._data.set(sessionId, next);
     return next;
@@ -59,7 +62,10 @@ export function createFixtureDir(workflows: Record<string, object>): string {
   return dir;
 }
 
-export function createTestLoader(workflows: Record<string, object>): { loader: Loader; dir: string } {
+export function createTestLoader(workflows: Record<string, object>): {
+  loader: Loader;
+  dir: string;
+} {
   const dir = createFixtureDir(workflows);
   const loader = new Loader(null, dir, null);
   return { loader, dir };

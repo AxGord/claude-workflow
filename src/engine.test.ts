@@ -70,8 +70,7 @@ describe("Engine", () => {
       setup({ multi: MULTI_STATE_WORKFLOW });
       const { sessionId } = await engine.start("multi");
 
-      await expect(engine.transition(sessionId, "nonexistent"))
-        .rejects.toThrow("not available");
+      await expect(engine.transition(sessionId, "nonexistent")).rejects.toThrow("not available");
     });
 
     it("enforces max_transitions", async () => {
@@ -90,8 +89,7 @@ describe("Engine", () => {
       const { sessionId } = await engine.start("limited");
       await engine.transition(sessionId, "go"); // a→b (1)
       await engine.transition(sessionId, "go"); // b→a (2)
-      await expect(engine.transition(sessionId, "go"))
-        .rejects.toThrow("Max transitions");
+      await expect(engine.transition(sessionId, "go")).rejects.toThrow("Max transitions");
     });
 
     it("enforces max_visits", async () => {
@@ -107,12 +105,11 @@ describe("Engine", () => {
       });
 
       const { sessionId } = await engine.start("visits");
-      await engine.transition(sessionId, "go");   // a→b (visit 1)
-      await engine.transition(sessionId, "back");  // b→a
-      await engine.transition(sessionId, "go");    // a→b (visit 2)
-      await engine.transition(sessionId, "back");  // b→a
-      await expect(engine.transition(sessionId, "go"))
-        .rejects.toThrow("max_visits");
+      await engine.transition(sessionId, "go"); // a→b (visit 1)
+      await engine.transition(sessionId, "back"); // b→a
+      await engine.transition(sessionId, "go"); // a→b (visit 2)
+      await engine.transition(sessionId, "back"); // b→a
+      await expect(engine.transition(sessionId, "go")).rejects.toThrow("max_visits");
     });
 
     it("terminal state pops stack (single frame = complete)", async () => {
@@ -518,17 +515,31 @@ describe("Engine", () => {
         hub: {
           initial: "menu",
           states: {
-            menu: { prompt: "Choose a workflow.", include_workflows: true, transitions: { done: "end" } },
+            menu: {
+              prompt: "Choose a workflow.",
+              include_workflows: true,
+              transitions: { done: "end" },
+            },
             end: { terminal: true, outcome: "complete" },
           },
         },
         "my-project-flow": SIMPLE_WORKFLOW,
       });
       try {
-        const bundledDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
-        const realEngine = new Engine(new InMemoryStorage(), new Loader(bundledDir, fixtureDir, null), new Executor());
+        const bundledDir = path.join(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "..",
+          "templates",
+        );
+        const realEngine = new Engine(
+          new InMemoryStorage(),
+          new Loader(bundledDir, fixtureDir, null),
+          new Executor(),
+        );
         const result = await realEngine.start("hub");
-        const listed = result.prompt.split("Available workflows:\n")[1].split("\n")
+        const listed = result.prompt
+          .split("Available workflows:\n")[1]
+          .split("\n")
           .map(line => line.replace(/^- (\S+) — .*$/, "$1"));
         // A new bundled template missing from GLOBAL_WORKFLOWS shows up here
         expect(listed).toEqual(["hub", "my-project-flow"]);
@@ -680,7 +691,10 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
         on_error: "show",
         success_prompt: "{{stdout}}",
       },
-      show: { prompt: "sid={{session_id}} parent={{parent_session_id}}", transitions: { done: "end" } },
+      show: {
+        prompt: "sid={{session_id}} parent={{parent_session_id}}",
+        transitions: { done: "end" },
+      },
       end: { terminal: true, outcome: "complete" },
     },
   };
@@ -699,7 +713,14 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
       rel: {
         initial: "run",
         states: {
-          run: { type: "exec", command: "pwd -P", cwd: "sub", on_success: "show", on_error: "show", success_prompt: "{{stdout}}" },
+          run: {
+            type: "exec",
+            command: "pwd -P",
+            cwd: "sub",
+            on_success: "show",
+            on_error: "show",
+            success_prompt: "{{stdout}}",
+          },
           show: { prompt: "x", transitions: { done: "end" } },
           end: { terminal: true, outcome: "complete" },
         },
@@ -719,9 +740,12 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
 
   it("start cwd: a relative or missing directory is an error", async () => {
     setup({ simple: SIMPLE_WORKFLOW });
-    await expect(engine.start("simple", undefined, undefined, "rel/dir")).rejects.toThrow("absolute");
-    await expect(engine.start("simple", undefined, undefined, path.join(tmpDir(), "nope")))
-      .rejects.toThrow("not an existing directory");
+    await expect(engine.start("simple", undefined, undefined, "rel/dir")).rejects.toThrow(
+      "absolute",
+    );
+    await expect(
+      engine.start("simple", undefined, undefined, path.join(tmpDir(), "nope")),
+    ).rejects.toThrow("not an existing directory");
     expect(storage.readAll()).toHaveLength(0);
   });
 
@@ -732,7 +756,9 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
     const child = await engine.start("pwd", undefined, mid.sessionId);
     const r = await engine.transition(child.sessionId, "next");
     expect(r.prompt.split("\n")[1]).toBe(`${child.sessionId}|${mid.sessionId}|${root.sessionId}`);
-    expect(engine.getStatus(child.sessionId).prompt).toBe(`sid=${child.sessionId} parent=${mid.sessionId}`);
+    expect(engine.getStatus(child.sessionId).prompt).toBe(
+      `sid=${child.sessionId} parent=${mid.sessionId}`,
+    );
 
     const solo = await engine.start("pwd", undefined, "unknownparent");
     const s = await engine.transition(solo.sessionId, "next");
@@ -837,7 +863,9 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
     expect(first.root_session_id).toBe(a.sessionId);
     expect(first.transitions).toBe(2);
     expect((first.execs as Array<{ state: string }>).map(x => x.state)).toEqual(["run"]);
-    expect(first.exec_ms_total).toBe((first.execs as Array<{ duration_ms: number }>)[0].duration_ms);
+    expect(first.exec_ms_total).toBe(
+      (first.execs as Array<{ duration_ms: number }>)[0].duration_ms,
+    );
     expect(typeof first.started_at).toBe("string");
     expect(typeof first.ended_at).toBe("string");
     expect(ledger[3].parent_session_id).toBe(c.sessionId);
@@ -845,7 +873,12 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
   });
 
   function pidAlive(pid: number): boolean {
-    try { process.kill(pid, 0); return true; } catch { return false; }
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
   }
   async function waitDead(pid: number): Promise<boolean> {
     for (let i = 0; i < 50 && pidAlive(pid); i++) await new Promise(r => setTimeout(r, 20));
@@ -872,7 +905,8 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
       },
     });
     const { sessionId } = await engine.start("bg");
-    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++) await new Promise(r => setTimeout(r, 20));
+    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++)
+      await new Promise(r => setTimeout(r, 20));
     const grandchild = Number(fs.readFileSync(pidFile, "utf8").trim());
     expect(pidAlive(grandchild)).toBe(true);
     await engine.abort(sessionId);
@@ -902,7 +936,8 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
     const parent = await engine.start("simple");
     const child = await engine.start("fg", undefined, parent.sessionId);
     const running = engine.transition(child.sessionId, "next").catch(e => e as Error);
-    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++) await new Promise(r => setTimeout(r, 20));
+    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++)
+      await new Promise(r => setTimeout(r, 20));
     const grandchild = Number(fs.readFileSync(pidFile, "utf8").trim());
     await engine.abort(parent.sessionId);
     expect(await waitDead(grandchild)).toBe(true);
@@ -916,7 +951,10 @@ describe("Engine — ENG-1a review fixes", () => {
   let storage: InMemoryStorage;
   let engine: Engine;
   let dir: string;
-  afterEach(() => { if (dir) cleanupDir(dir); vi.restoreAllMocks(); });
+  afterEach(() => {
+    if (dir) cleanupDir(dir);
+    vi.restoreAllMocks();
+  });
 
   function setup(workflows: Record<string, object>) {
     storage = new InMemoryStorage();
@@ -955,7 +993,13 @@ describe("Engine — ENG-1a review fixes", () => {
         initial: "start",
         states: {
           start: { prompt: "go", transitions: { next: "run" } },
-          run: { type: "exec", command: 'echo "$WF_ROOT_SESSION_ID"', on_success: "show", on_error: "show", success_prompt: "{{stdout}}" },
+          run: {
+            type: "exec",
+            command: 'echo "$WF_ROOT_SESSION_ID"',
+            on_success: "show",
+            on_error: "show",
+            success_prompt: "{{stdout}}",
+          },
           show: { prompt: "x", transitions: { done: "end" } },
           end: { terminal: true, outcome: "complete" },
         },
@@ -969,7 +1013,9 @@ describe("Engine — ENG-1a review fixes", () => {
     const r = await engine.transition(child.sessionId, "next");
     expect(r.prompt.trim()).toBe(parent.sessionId);
     await engine.transition(child.sessionId, "done");
-    expect((storage.ledger.at(-1) as { root_session_id: string }).root_session_id).toBe(parent.sessionId);
+    expect((storage.ledger.at(-1) as { root_session_id: string }).root_session_id).toBe(
+      parent.sessionId,
+    );
   });
 });
 
@@ -984,7 +1030,10 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
     dir = result.dir;
     engine = new Engine(storage, result.loader, new Executor());
   }
-  afterEach(() => { if (dir) cleanupDir(dir); dir = undefined; });
+  afterEach(() => {
+    if (dir) cleanupDir(dir);
+    dir = undefined;
+  });
 
   it("a transition past max_visits enters on_exhausted and records why", async () => {
     setup({
@@ -992,7 +1041,12 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
         initial: "a",
         states: {
           a: { prompt: "A", transitions: { go: "b" } },
-          b: { prompt: "B {{visits.b}}", transitions: { back: "a" }, max_visits: 2, on_exhausted: "giveup" },
+          b: {
+            prompt: "B {{visits.b}}",
+            transitions: { back: "a" },
+            max_visits: 2,
+            on_exhausted: "giveup",
+          },
           giveup: { prompt: "gave up after {{visits.b}}", transitions: { done: "end" } },
           end: { terminal: true, outcome: "fail" },
         },
@@ -1008,7 +1062,12 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
     expect(r.prompt).toBe("gave up after 2");
     const s = storage.read(sessionId)!;
     expect(s.stack[0].state_visits.b).toBe(2);
-    expect(s.history.at(-1)).toMatchObject({ from: "a", to: "giveup", via: "go", detail: "max_visits exhausted: b → giveup" });
+    expect(s.history.at(-1)).toMatchObject({
+      from: "a",
+      to: "giveup",
+      via: "go",
+      detail: "max_visits exhausted: b → giveup",
+    });
   });
 
   it("an action state's route past max_visits enters on_exhausted with no agent turn", async () => {
@@ -1017,8 +1076,19 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
         initial: "start",
         states: {
           start: { prompt: "go", transitions: { verify: "check" } },
-          check: { type: "exec", command: "exit 1", on_success: "end", on_error: "fix", error_prompt: "failed, fix it" },
-          fix: { prompt: "fix #{{visits.fix}}", transitions: { retry: "check" }, max_visits: 2, on_exhausted: "escalate" },
+          check: {
+            type: "exec",
+            command: "exit 1",
+            on_success: "end",
+            on_error: "fix",
+            error_prompt: "failed, fix it",
+          },
+          fix: {
+            prompt: "fix #{{visits.fix}}",
+            transitions: { retry: "check" },
+            max_visits: 2,
+            on_exhausted: "escalate",
+          },
           escalate: { prompt: "escalate (exit {{exit_code}})", transitions: { done: "end" } },
           end: { terminal: true, outcome: "complete" },
         },
@@ -1032,7 +1102,10 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
     // the error_prompt was written for fix: the rerouted move shows escalate's own prompt
     expect(r.prompt).toBe("escalate (exit 1)");
     expect(storage.read(sessionId)!.history.at(-1)).toMatchObject({
-      event: "action", from: "check", to: "escalate", detail: "exit 1; max_visits exhausted: fix → escalate",
+      event: "action",
+      from: "check",
+      to: "escalate",
+      detail: "exit 1; max_visits exhausted: fix → escalate",
     });
   });
 
@@ -1050,8 +1123,8 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
       },
     });
     const { sessionId } = await engine.start("gated");
-    await engine.transition(sessionId, "go");           // gate: skill missing
-    await engine.transition(sessionId, "continue");     // gate → work (visit 1), skill now loaded
+    await engine.transition(sessionId, "go"); // gate: skill missing
+    await engine.transition(sessionId, "continue"); // gate → work (visit 1), skill now loaded
     await engine.transition(sessionId, "again");
     const r = await engine.transition(sessionId, "go"); // gate auto-passes → work exhausted
     expect(r.currentStateName).toBe("stop");
@@ -1082,18 +1155,22 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
     expect(storage.read(sessionId)!.history.at(-1)!.detail).toBe("max_visits exhausted: b, c → d");
 
     await engine.transition(sessionId, "back");
-    await engine.transition(sessionId, "loop");      // x (visit 1)
+    await engine.transition(sessionId, "loop"); // x (visit 1)
     await engine.transition(sessionId, "back");
     // x exhausted → y (first visit) is fine
     expect((await engine.transition(sessionId, "loop")).currentStateName).toBe("y");
     await engine.transition(sessionId, "back");
-    await expect(engine.transition(sessionId, "loop")).rejects.toThrow("on_exhausted routes loop: x → y → x");
+    await expect(engine.transition(sessionId, "loop")).rejects.toThrow(
+      "on_exhausted routes loop: x → y → x",
+    );
 
-    await engine.transition(sessionId, "go");        // → d
+    await engine.transition(sessionId, "go"); // → d
     await engine.transition(sessionId, "cap");
     await engine.transition(sessionId, "back");
     await engine.transition(sessionId, "go");
-    await expect(engine.transition(sessionId, "cap")).rejects.toThrow('State "cap" max_visits (1) exceeded');
+    await expect(engine.transition(sessionId, "cap")).rejects.toThrow(
+      'State "cap" max_visits (1) exceeded',
+    );
   });
 
   it("{{stdout}} / {{exit_code}} reach the next prompt state and persist until the next action runs", async () => {
@@ -1101,8 +1178,16 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
       results: {
         initial: "run",
         states: {
-          run: { type: "exec", command: "echo out; echo err >&2; exit 3", on_success: "seen", on_error: "seen" },
-          seen: { prompt: "code={{exit_code}} out={{stdout}} err={{stderr}}", transitions: { next: "later" } },
+          run: {
+            type: "exec",
+            command: "echo out; echo err >&2; exit 3",
+            on_success: "seen",
+            on_error: "seen",
+          },
+          seen: {
+            prompt: "code={{exit_code}} out={{stdout}} err={{stderr}}",
+            transitions: { next: "later" },
+          },
           later: { prompt: "still {{exit_code}}", transitions: { rerun: "probe" } },
           probe: {
             type: "exec",
@@ -1120,7 +1205,11 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
     expect(first.currentStateName).toBe("seen");
     expect(first.prompt).toBe("code=3 out=out\n err=err\n");
     const { sessionId } = first;
-    expect(storage.read(sessionId)!.last_action_result).toMatchObject({ type: "exec", exit_code: 3, stdout: "out\n" });
+    expect(storage.read(sessionId)!.last_action_result).toMatchObject({
+      type: "exec",
+      exit_code: 3,
+      stdout: "out\n",
+    });
     expect((await engine.transition(sessionId, "next")).prompt).toBe("still 3");
     expect((await engine.transition(sessionId, "rerun")).prompt).toBe("now 0: prev=3\n");
   });

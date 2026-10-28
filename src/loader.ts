@@ -6,8 +6,12 @@ import { ZodError } from "zod";
 import { resetDeliveredPrompts } from "./tools.js";
 import type { WorkflowDefinition, WorkflowFile } from "./types.js";
 import {
-  WorkflowDefinitionSchema, WorkflowFileSchema, WorkflowFileObjectSchema, StateDefinitionSchema,
-  ResourceObjectSchema, FanoutObjectSchema,
+  WorkflowDefinitionSchema,
+  WorkflowFileSchema,
+  WorkflowFileObjectSchema,
+  StateDefinitionSchema,
+  ResourceObjectSchema,
+  FanoutObjectSchema,
 } from "./types.js";
 
 /** A parsed workflow file of one load tier (bundled, global, project). */
@@ -49,18 +53,21 @@ function knownKeysAt(issuePath: readonly (string | number)[]): readonly string[]
  * file, the state, the key and the nearest known key (a typo is the usual cause).
  */
 export function describeSchemaError(file: string, err: ZodError): string {
-  return err.issues.map(issue => {
-    if (issue.code !== "unrecognized_keys") {
-      return `${file}: ${issue.path.join(".") || "(root)"}: ${issue.message}`;
-    }
-    const where = issue.path[0] === "states" && issue.path[1] !== undefined
-      ? `state "${issue.path[1]}"${issue.path.length > 2 ? ` (${issue.path.slice(2).join(".")})` : ""}`
-      : "workflow";
-    const known = knownKeysAt(issue.path);
-    return issue.keys
-      .map(k => `${file}: ${where}: unknown key "${k}" — did you mean "${nearest(k, known)}"?`)
-      .join("\n");
-  }).join("\n");
+  return err.issues
+    .map(issue => {
+      if (issue.code !== "unrecognized_keys") {
+        return `${file}: ${issue.path.join(".") || "(root)"}: ${issue.message}`;
+      }
+      const where =
+        issue.path[0] === "states" && issue.path[1] !== undefined
+          ? `state "${issue.path[1]}"${issue.path.length > 2 ? ` (${issue.path.slice(2).join(".")})` : ""}`
+          : "workflow";
+      const known = knownKeysAt(issue.path);
+      return issue.keys
+        .map(k => `${file}: ${where}: unknown key "${k}" — did you mean "${nearest(k, known)}"?`)
+        .join("\n");
+    })
+    .join("\n");
 }
 
 export class Loader {
@@ -132,7 +139,10 @@ export class Loader {
 
     for (const dir of dirs) {
       const fp = this._findFile(dir, name);
-      if (fp) { fs.unlinkSync(fp); return fp; }
+      if (fp) {
+        fs.unlinkSync(fp);
+        return fp;
+      }
     }
 
     const where = scope ?? "project or global";
@@ -150,8 +160,7 @@ export class Loader {
   private _watchDir(dir: string): fs.FSWatcher | null {
     try {
       return fs.watch(dir, (_event, filename) => {
-        if (filename && (filename.endsWith(".yaml") || filename.endsWith(".yml")))
-          this._loadAll();
+        if (filename && (filename.endsWith(".yaml") || filename.endsWith(".yml"))) this._loadAll();
       });
     } catch {
       return null;
@@ -175,9 +184,15 @@ export class Loader {
       // A file that fails falls back to the same name one tier down, like a
       // file that fails the schema: a half-saved project `testing` must not
       // take `sub_workflow: testing` away from every new session.
-      for (let found = Loader._find(tiers, name, tiers.length - 1); found; found = Loader._find(tiers, name, found.tier - 1)) {
+      for (
+        let found = Loader._find(tiers, name, tiers.length - 1);
+        found;
+        found = Loader._find(tiers, name, found.tier - 1)
+      ) {
         try {
-          const merged = WorkflowDefinitionSchema.parse(Loader._resolve(tiers, name, found.tier, []));
+          const merged = WorkflowDefinitionSchema.parse(
+            Loader._resolve(tiers, name, found.tier, []),
+          );
           const errors = this._validate(merged);
           if (errors.length === 0) {
             next.set(name, merged);
@@ -193,7 +208,11 @@ export class Loader {
   }
 
   /** The highest tier at or below `maxTier` that defines `name`. */
-  private static _find(tiers: readonly Tier[], name: string, maxTier: number): { entry: TierEntry; tier: number } | undefined {
+  private static _find(
+    tiers: readonly Tier[],
+    name: string,
+    maxTier: number,
+  ): { entry: TierEntry; tier: number } | undefined {
     for (let tier = maxTier; tier >= 0; tier--) {
       const entry = tiers[tier].get(name);
       if (entry) return { entry, tier };
@@ -207,18 +226,31 @@ export class Loader {
    * project `coding` over the global/bundled one); another name resolves from
    * the top tier. `chain` holds the `name@tier` links walked so far: a repeat is a cycle.
    */
-  private static _resolve(tiers: readonly Tier[], name: string, maxTier: number, chain: readonly string[]): object {
+  private static _resolve(
+    tiers: readonly Tier[],
+    name: string,
+    maxTier: number,
+    chain: readonly string[],
+  ): object {
     const found = Loader._find(tiers, name, maxTier);
     if (!found) {
-      const from = chain.length > 0 ? ` (extended by ${chain[chain.length - 1].split("@")[0]})` : "";
-      throw new Error(`extends "${name}": no such workflow${maxTier < tiers.length - 1 ? " below this tier" : ""}${from}`);
+      const from =
+        chain.length > 0 ? ` (extended by ${chain[chain.length - 1].split("@")[0]})` : "";
+      throw new Error(
+        `extends "${name}": no such workflow${maxTier < tiers.length - 1 ? " below this tier" : ""}${from}`,
+      );
     }
     const link = `${name}@${found.tier}`;
     if (chain.includes(link))
       throw new Error(`extends cycle: ${[...chain, link].map(l => l.split("@")[0]).join(" → ")}`);
     const { extends: baseName, ...own } = found.entry.def;
     if (baseName === undefined) return own;
-    const base = Loader._resolve(tiers, baseName, baseName === name ? found.tier - 1 : tiers.length - 1, [...chain, link]) as WorkflowFile;
+    const base = Loader._resolve(
+      tiers,
+      baseName,
+      baseName === name ? found.tier - 1 : tiers.length - 1,
+      [...chain, link],
+    ) as WorkflowFile;
     return {
       name: own.name,
       description: own.description ?? base.description,
@@ -232,8 +264,7 @@ export class Loader {
     const tier: Tier = new Map();
     if (!fs.existsSync(dir)) return tier;
 
-    const files = fs.readdirSync(dir)
-      .filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
+    const files = fs.readdirSync(dir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
 
     for (const file of files) {
       const fp = path.join(dir, file);
@@ -257,12 +288,10 @@ export class Loader {
     const errors: string[] = [];
     const stateNames = new Set(Object.keys(wf.states));
 
-    if (!stateNames.has(wf.initial))
-      errors.push(`initial state "${wf.initial}" does not exist`);
+    if (!stateNames.has(wf.initial)) errors.push(`initial state "${wf.initial}" does not exist`);
 
     const hasTerminal = Object.values(wf.states).some(s => s.terminal);
-    if (!hasTerminal)
-      errors.push("no terminal state defined");
+    if (!hasTerminal) errors.push("no terminal state defined");
 
     for (const [name, state] of Object.entries(wf.states)) {
       const isAction = state.type === "exec" || state.type === "fetch";
@@ -277,8 +306,7 @@ export class Loader {
       if (state.on_exhausted !== undefined) {
         if (!stateNames.has(state.on_exhausted))
           errors.push(`state "${name}" on_exhausted → unknown state "${state.on_exhausted}"`);
-        if (!state.max_visits)
-          errors.push(`state "${name}" on_exhausted needs max_visits`);
+        if (!state.max_visits) errors.push(`state "${name}" on_exhausted needs max_visits`);
       }
 
       if (isAction) {
@@ -289,8 +317,7 @@ export class Loader {
           errors.push(`state "${name}" type fetch requires url`);
 
         if (state.cases) {
-          if (!state.default)
-            errors.push(`state "${name}" has cases but no default`);
+          if (!state.default) errors.push(`state "${name}" has cases but no default`);
           for (const [key, tgt] of Object.entries(state.cases)) {
             if (!stateNames.has(tgt))
               errors.push(`state "${name}" cases "${key}" → unknown state "${tgt}"`);

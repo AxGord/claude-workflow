@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { formatContext, formatStatus, registerTools, resetDeliveredPrompts, setContextEpochFile } from "./tools.js";
+import {
+  formatContext,
+  formatStatus,
+  registerTools,
+  resetDeliveredPrompts,
+  setContextEpochFile,
+} from "./tools.js";
 import { Engine, type StatusResult } from "./engine.js";
 import { Executor } from "./executor.js";
 import { InMemoryStorage, createTestLoader, cleanupDir, SIMPLE_WORKFLOW } from "./test-helpers.js";
@@ -121,7 +127,9 @@ describe("registerTools mutation serialization", () => {
   }
 
   let dir: string | undefined;
-  afterEach(() => { if (dir) cleanupDir(dir); });
+  afterEach(() => {
+    if (dir) cleanupDir(dir);
+  });
 
   function mountTools(workflows: Record<string, object>) {
     const storage = new SlowStorage();
@@ -129,7 +137,9 @@ describe("registerTools mutation serialization", () => {
     dir = result.dir;
     const engine = new Engine(storage, result.loader, new Executor());
     const handlers = new Map<string, (args: object) => Promise<{ isError?: boolean }>>();
-    const server = { registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h) };
+    const server = {
+      registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h),
+    };
     registerTools(server as never, engine, {} as never, result.loader, storage);
     return { storage, engine, call: (name: string, args: object) => handlers.get(name)!(args) };
   }
@@ -166,8 +176,14 @@ describe("registerTools mutation serialization", () => {
     const b = await engine.start("simple", undefined, a.sessionId);
     const finished: string[] = [];
     const [ra, rb] = await Promise.all([
-      call("transition", { session_id: a.sessionId, transition: "next" }).then(r => { finished.push("a"); return r; }),
-      call("context_set", { session_id: b.sessionId, key: "k", value: "v" }).then(r => { finished.push("b"); return r; }),
+      call("transition", { session_id: a.sessionId, transition: "next" }).then(r => {
+        finished.push("a");
+        return r;
+      }),
+      call("context_set", { session_id: b.sessionId, key: "k", value: "v" }).then(r => {
+        finished.push("b");
+        return r;
+      }),
     ]);
 
     expect(ra.isError).toBeUndefined();
@@ -180,11 +196,23 @@ describe("registerTools annotations", () => {
   it("readOnlyHint marks exactly the engine-state tools", () => {
     const annotations = new Map<string, unknown>();
     const server = {
-      registerTool: (name: string, cfg: { annotations?: unknown }) => annotations.set(name, cfg.annotations),
+      registerTool: (name: string, cfg: { annotations?: unknown }) =>
+        annotations.set(name, cfg.annotations),
     };
     registerTools(server as never, {} as never, {} as never, {} as never, {} as never);
 
-    const readOnly = ["list", "start", "status", "transition", "context_set", "sessions", "pool_status", "resume", "suspended", "link_agent"];
+    const readOnly = [
+      "list",
+      "start",
+      "status",
+      "transition",
+      "context_set",
+      "sessions",
+      "pool_status",
+      "resume",
+      "suspended",
+      "link_agent",
+    ];
     // Mutating tools keep their confirmation prompt
     const confirmed = ["modify", "create", "delete", "abort", "set_priority"];
     expect([...annotations.keys()].sort()).toEqual([...readOnly, ...confirmed].sort());
@@ -195,15 +223,23 @@ describe("registerTools annotations", () => {
 
 describe("ENG-1a: status context, failed outcome, start cwd", () => {
   let dir: string | undefined;
-  afterEach(() => { if (dir) cleanupDir(dir); dir = undefined; });
+  afterEach(() => {
+    if (dir) cleanupDir(dir);
+    dir = undefined;
+  });
 
   function mount(workflows: Record<string, object>) {
     const storage = new InMemoryStorage();
     const result = createTestLoader(workflows);
     dir = result.dir;
     const engine = new Engine(storage, result.loader, new Executor());
-    const handlers = new Map<string, (args: object) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>>();
-    const server = { registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h) };
+    const handlers = new Map<
+      string,
+      (args: object) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>
+    >();
+    const server = {
+      registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h),
+    };
     registerTools(server as never, engine, {} as never, result.loader, storage);
     const call = async (name: string, args: object) => {
       const r = await handlers.get(name)!(args);
@@ -213,7 +249,11 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
   }
 
   it("formatContext cuts long values and folds keys past the limit", () => {
-    const ctx: Record<string, unknown> = { long: "x".repeat(500), obj: { a: [1, 2] }, multi: "a\nb" };
+    const ctx: Record<string, unknown> = {
+      long: "x".repeat(500),
+      obj: { a: [1, 2] },
+      multi: "a\nb",
+    };
     for (let i = 0; i < 45; i++) ctx[`k${i}`] = i;
     const lines = formatContext(ctx);
     expect(lines[0]).toBe("CONTEXT:");
@@ -239,16 +279,21 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
     const { engine, call } = mount({ simple: SIMPLE_WORKFLOW });
     const parent = await engine.start("simple");
     const child = await engine.start("simple", undefined, parent.sessionId);
-    const table = Array.from({ length: 20 }, (_, i) => `| row ${i} | ${"y".repeat(30)} |`).join("\n");
+    const table = Array.from({ length: 20 }, (_, i) => `| row ${i} | ${"y".repeat(30)} |`).join(
+      "\n",
+    );
     await engine.setContext(child.sessionId, "gate", table);
     await engine.setContext(child.sessionId, "edits", { files: ["a.ts", "b.ts"], lines: 42 });
     await engine.transition(child.sessionId, "next");
-    expect((await call("status", { session_id: child.sessionId })).text).toContain('chars; status key="gate" for all]');
+    expect((await call("status", { session_id: child.sessionId })).text).toContain(
+      'chars; status key="gate" for all]',
+    );
     const gate = await call("status", { session_id: child.sessionId, key: "gate" });
     expect(gate.isError).toBeUndefined();
     expect(gate.text).toBe(table);
-    expect((await call("status", { session_id: child.sessionId, key: "edits" })).text)
-      .toBe(JSON.stringify({ files: ["a.ts", "b.ts"], lines: 42 }, null, 2));
+    expect((await call("status", { session_id: child.sessionId, key: "edits" })).text).toBe(
+      JSON.stringify({ files: ["a.ts", "b.ts"], lines: 42 }, null, 2),
+    );
     const missing = await call("status", { session_id: child.sessionId, key: "nope" });
     expect(missing.isError).toBe(true);
     expect(missing.text).toMatch(/^ERROR: Context key "nope" is not set\. Keys: .*gate, edits$/);
@@ -278,7 +323,11 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
       expect(ok.isError).toBeUndefined();
       const sid = /SESSION: (\w+)/.exec(ok.text)![1];
       expect(storage.read(sid)!.context.cwd).toBe(wt);
-      const bad = await call("start", { workflow: "simple", parent_session_id: "p", cwd: "relative" });
+      const bad = await call("start", {
+        workflow: "simple",
+        parent_session_id: "p",
+        cwd: "relative",
+      });
       expect(bad.isError).toBe(true);
     } finally {
       cleanupDir(wt);
@@ -288,7 +337,10 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
 
 describe("abort tool kills before queueing", () => {
   let dir: string | undefined;
-  afterEach(() => { if (dir) cleanupDir(dir); dir = undefined; });
+  afterEach(() => {
+    if (dir) cleanupDir(dir);
+    dir = undefined;
+  });
 
   it("abort of a session whose transition is running a foreground exec kills that exec at once", async () => {
     const storage = new InMemoryStorage();
@@ -299,7 +351,13 @@ describe("abort tool kills before queueing", () => {
         initial: "start",
         states: {
           start: { prompt: "go", transitions: { next: "run" } },
-          run: { type: "exec", timeout: 60_000, command: `sleep 30 & echo $! > "${pidFile}"; wait`, on_success: "end", on_error: "end" },
+          run: {
+            type: "exec",
+            timeout: 60_000,
+            command: `sleep 30 & echo $! > "${pidFile}"; wait`,
+            on_success: "end",
+            on_error: "end",
+          },
           end: { terminal: true, outcome: "complete" },
         },
       },
@@ -307,13 +365,23 @@ describe("abort tool kills before queueing", () => {
     dir = result.dir;
     const engine = new Engine(storage, result.loader, new Executor());
     const handlers = new Map<string, (args: object) => Promise<{ isError?: boolean }>>();
-    const server = { registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h) };
+    const server = {
+      registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h),
+    };
     registerTools(server as never, engine, {} as never, result.loader, storage);
-    const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
 
     const { sessionId } = await engine.start("fg");
     const transition = handlers.get("transition")!({ session_id: sessionId, transition: "next" });
-    for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++) await new Promise(r => setTimeout(r, 10));
+    for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++)
+      await new Promise(r => setTimeout(r, 10));
     const grandchild = Number(fs.readFileSync(pidFile, "utf8"));
     try {
       const abort = handlers.get("abort")!({ session_id: sessionId });
@@ -323,7 +391,11 @@ describe("abort tool kills before queueing", () => {
       expect((await transition).isError).toBe(true);
       expect(storage.read(sessionId)!.outcome).toBe("abandoned");
     } finally {
-      try { process.kill(grandchild, "SIGKILL"); } catch { /* gone */ }
+      try {
+        process.kill(grandchild, "SIGKILL");
+      } catch {
+        /* gone */
+      }
       cleanupDir(work);
     }
   }, 5000);

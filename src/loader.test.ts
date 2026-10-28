@@ -172,11 +172,16 @@ describe("Loader", () => {
 
 describe("Loader strict schema", () => {
   const dirs: string[] = [];
-  afterEach(() => { for (const d of dirs.splice(0)) cleanupDir(d); vi.restoreAllMocks(); });
+  afterEach(() => {
+    for (const d of dirs.splice(0)) cleanupDir(d);
+    vi.restoreAllMocks();
+  });
 
   function loadWithErrors(workflows: Record<string, object>) {
     const errors: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
     const { loader, dir } = createTestLoader(workflows);
     dirs.push(dir);
     return { loader, errors: errors.join("\n"), dir };
@@ -187,13 +192,21 @@ describe("Loader strict schema", () => {
       typo: {
         initial: "run",
         states: {
-          run: { type: "exec", comand: "true", command: "true", on_success: "end", on_error: "end" },
+          run: {
+            type: "exec",
+            comand: "true",
+            command: "true",
+            on_success: "end",
+            on_error: "end",
+          },
           end: { terminal: true, outcome: "complete" },
         },
       },
     });
     expect(loader.get("typo")).toBeUndefined();
-    expect(errors).toContain(`${dir}/typo.yaml: state "run": unknown key "comand" — did you mean "command"?`);
+    expect(errors).toContain(
+      `${dir}/typo.yaml: state "run": unknown key "comand" — did you mean "command"?`,
+    );
   });
 
   it("an unknown workflow key and an unknown retry key are errors too", () => {
@@ -206,7 +219,13 @@ describe("Loader strict schema", () => {
       retry: {
         initial: "f",
         states: {
-          f: { type: "fetch", url: "http://x", retry: { max: 2, intervall: 5 }, on_success: "e", on_error: "e" },
+          f: {
+            type: "fetch",
+            url: "http://x",
+            retry: { max: 2, intervall: 5 },
+            on_success: "e",
+            on_error: "e",
+          },
           e: { terminal: true },
         },
       },
@@ -214,7 +233,9 @@ describe("Loader strict schema", () => {
     expect(loader.get("top")).toBeUndefined();
     expect(loader.get("retry")).toBeUndefined();
     expect(errors).toContain('workflow: unknown key "intial" — did you mean "initial"?');
-    expect(errors).toContain('state "f" (retry): unknown key "intervall" — did you mean "interval"?');
+    expect(errors).toContain(
+      'state "f" (retry): unknown key "intervall" — did you mean "interval"?',
+    );
   });
 
   it("resource: is strict, exec-only and never on a background exec", () => {
@@ -240,19 +261,35 @@ describe("Loader strict schema", () => {
       fetch: {
         initial: "f",
         states: {
-          f: { type: "fetch", url: "http://x", resource: { threads: 1 }, on_success: "e", on_error: "e" },
+          f: {
+            type: "fetch",
+            url: "http://x",
+            resource: { threads: 1 },
+            on_success: "e",
+            on_error: "e",
+          },
           e: { terminal: true },
         },
       },
     });
-    expect(loader.get("ok")!.states.r.resource).toEqual({ threads: 4, priority: 1, wait_timeout: 30 });
+    expect(loader.get("ok")!.states.r.resource).toEqual({
+      threads: 4,
+      priority: 1,
+      wait_timeout: 30,
+    });
     expect(loader.get("budget")!.states.r.resource).toEqual({ threads: "budget" });
     expect(loader.get("locks")!.states.r.resource).toEqual({ locks: ["port:3000"] });
-    expect(loader.get("both")!.states.r.resource).toEqual({ threads: 2, locks: ["sim", "port:3000"] });
-    for (const name of ["typo", "bg", "zero", "all", "fetch", "none", "emptyLocks", "spaced"]) expect(loader.get(name)).toBeUndefined();
+    expect(loader.get("both")!.states.r.resource).toEqual({
+      threads: 2,
+      locks: ["sim", "port:3000"],
+    });
+    for (const name of ["typo", "bg", "zero", "all", "fetch", "none", "emptyLocks", "spaced"])
+      expect(loader.get(name)).toBeUndefined();
     expect(errors).toMatch(/states\.r\.resource: resource needs threads, locks, or both/);
     expect(errors).toMatch(/states\.r\.resource\.locks\.0: a lock name is one word/);
-    expect(errors).toContain('state "r" (resource): unknown key "wait_timout" — did you mean "wait_timeout"?');
+    expect(errors).toContain(
+      'state "r" (resource): unknown key "wait_timout" — did you mean "wait_timeout"?',
+    );
     expect(errors).toContain('state "r" resource cannot hold a lease for a background exec');
     expect(errors).toContain('state "f" resource is for exec states');
   });
@@ -260,7 +297,10 @@ describe("Loader strict schema", () => {
   it("resource: threads { min, max } with wait_full; wait_full only beside it", () => {
     const exec = (resource: object) => ({
       initial: "r",
-      states: { r: { type: "exec", command: "true", resource, on_success: "e", on_error: "e" }, e: { terminal: true } },
+      states: {
+        r: { type: "exec", command: "true", resource, on_success: "e", on_error: "e" },
+        e: { terminal: true },
+      },
     });
     const { loader, errors } = loadWithErrors({
       flex: exec({ threads: { min: 2, max: 8 }, wait_full: 30, priority: 1 }),
@@ -270,16 +310,27 @@ describe("Loader strict schema", () => {
       waitFixed: exec({ threads: 4, wait_full: 30 }),
       extraKey: exec({ threads: { min: 1, max: 2, avg: 1 } }),
     });
-    expect(loader.get("flex")!.states.r.resource).toEqual({ threads: { min: 2, max: 8 }, wait_full: 30, priority: 1 });
-    expect(loader.get("flexBudget")!.states.r.resource).toEqual({ threads: { min: 4, max: "budget" } });
-    for (const name of ["inverted", "noMin", "waitFixed", "extraKey"]) expect(loader.get(name)).toBeUndefined();
+    expect(loader.get("flex")!.states.r.resource).toEqual({
+      threads: { min: 2, max: 8 },
+      wait_full: 30,
+      priority: 1,
+    });
+    expect(loader.get("flexBudget")!.states.r.resource).toEqual({
+      threads: { min: 4, max: "budget" },
+    });
+    for (const name of ["inverted", "noMin", "waitFixed", "extraKey"])
+      expect(loader.get(name)).toBeUndefined();
     expect(errors).toMatch(/states\.r\.resource: wait_full needs threads: \{ min, max \}/);
   });
 
   it("on_exhausted must name a known state and needs max_visits", () => {
     const wf = (b: object) => ({
       initial: "a",
-      states: { a: { prompt: "A", transitions: { go: "b" } }, b: { prompt: "B", transitions: { back: "a" }, ...b }, e: { terminal: true } },
+      states: {
+        a: { prompt: "A", transitions: { go: "b" } },
+        b: { prompt: "B", transitions: { back: "a" }, ...b },
+        e: { terminal: true },
+      },
     });
     const { loader, errors } = loadWithErrors({
       ok: wf({ max_visits: 2, on_exhausted: "e" }),
@@ -295,7 +346,9 @@ describe("Loader strict schema", () => {
 
   it("every bundled template loads under the strict schema", () => {
     const errors: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
     const templates = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "wf-empty-"));
     dirs.push(empty);
@@ -315,10 +368,20 @@ describe("Loader: extends", () => {
     vi.restoreAllMocks();
   });
   /** One loader over up to three tiers (bundled, global, project), console errors captured. */
-  const load = (bundled: Record<string, object>, global: Record<string, object> = {}, project?: Record<string, object>) => {
+  const load = (
+    bundled: Record<string, object>,
+    global: Record<string, object> = {},
+    project?: Record<string, object>,
+  ) => {
     errors = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
-    const tier = (wfs: Record<string, object>) => { const d = createFixtureDir(wfs); dirs.push(d); return d; };
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
+    const tier = (wfs: Record<string, object>) => {
+      const d = createFixtureDir(wfs);
+      dirs.push(d);
+      return d;
+    };
     return new Loader(tier(bundled), tier(global), project ? tier(project) : null);
   };
   const BASE = {
@@ -333,16 +396,20 @@ describe("Loader: extends", () => {
   };
 
   it("a project heir of its own name inherits the lower tier's definition: states merge, a same-named state is replaced whole", () => {
-    const loader = load({ flow: BASE }, {}, {
-      flow: {
-        extends: "flow",
-        max_transitions: 40,
-        states: {
-          b: { type: "exec", command: "true", on_success: "end", on_error: "x" },
-          x: { prompt: "X", transitions: { back: "a" } },
+    const loader = load(
+      { flow: BASE },
+      {},
+      {
+        flow: {
+          extends: "flow",
+          max_transitions: 40,
+          states: {
+            b: { type: "exec", command: "true", on_success: "end", on_error: "x" },
+            x: { prompt: "X", transitions: { back: "a" } },
+          },
         },
       },
-    });
+    );
     const wf = loader.get("flow")!;
     expect(errors).toEqual([]);
     expect(wf.initial).toBe("a");
@@ -350,29 +417,50 @@ describe("Loader: extends", () => {
     expect(wf.max_transitions).toBe(40);
     expect(Object.keys(wf.states).sort()).toEqual(["a", "b", "end", "x"]);
     // replaced whole: nothing of the base's b (prompt, max_visits, transitions) survives
-    expect(wf.states.b).toEqual({ type: "exec", command: "true", on_success: "end", on_error: "x" });
+    expect(wf.states.b).toEqual({
+      type: "exec",
+      command: "true",
+      on_success: "end",
+      on_error: "x",
+    });
     expect(wf.states.a).toEqual(BASE.states.a);
     expect("extends" in wf).toBe(false);
   });
 
   it("initial, description and max_transitions come from the heir when it sets them, else from the base (default 50 at the end)", () => {
     const { max_transitions: _m, ...noMax } = BASE;
-    const loader = load({ base: noMax, flow: BASE }, {
-      heir: { extends: "base", initial: "b", description: "mine" },
-      plain: { extends: "base" },
+    const loader = load(
+      { base: noMax, flow: BASE },
+      {
+        heir: { extends: "base", initial: "b", description: "mine" },
+        plain: { extends: "base" },
+      },
+    );
+    expect(loader.get("heir")).toMatchObject({
+      name: "heir",
+      initial: "b",
+      description: "mine",
+      max_transitions: 50,
     });
-    expect(loader.get("heir")).toMatchObject({ name: "heir", initial: "b", description: "mine", max_transitions: 50 });
-    expect(loader.get("plain")).toMatchObject({ name: "plain", initial: "a", description: "base flow" });
+    expect(loader.get("plain")).toMatchObject({
+      name: "plain",
+      initial: "a",
+      description: "base flow",
+    });
   });
 
   it("chains resolve through every tier; another name resolves from the top tier", () => {
-    const loader = load({ base: BASE }, {
-      mid: { extends: "base", states: { m: { prompt: "M", transitions: { done: "end" } } } },
-    }, {
-      // the project's own `base` is what `top → mid → base` sees
-      base: { extends: "base", states: { p: { prompt: "P", transitions: { done: "end" } } } },
-      top: { extends: "mid", states: { t: { prompt: "T", transitions: { done: "end" } } } },
-    });
+    const loader = load(
+      { base: BASE },
+      {
+        mid: { extends: "base", states: { m: { prompt: "M", transitions: { done: "end" } } } },
+      },
+      {
+        // the project's own `base` is what `top → mid → base` sees
+        base: { extends: "base", states: { p: { prompt: "P", transitions: { done: "end" } } } },
+        top: { extends: "mid", states: { t: { prompt: "T", transitions: { done: "end" } } } },
+      },
+    );
     expect(errors).toEqual([]);
     expect(Object.keys(loader.get("top")!.states).sort()).toEqual(["a", "b", "end", "m", "p", "t"]);
     expect(Object.keys(loader.get("mid")!.states).sort()).toEqual(["a", "b", "end", "m", "p"]);
@@ -398,12 +486,18 @@ describe("Loader: extends", () => {
   });
 
   it("references are validated on the merged result", () => {
-    const loader = load({ base: BASE }, {
-      // `b` and `end` exist only in the base: fine
-      good: { extends: "base", states: { a: { prompt: "A2", transitions: { go: "b", stop: "end" } } } },
-      bad: { extends: "base", states: { a: { prompt: "A2", transitions: { go: "missing" } } } },
-      badInitial: { extends: "base", initial: "nowhere" },
-    });
+    const loader = load(
+      { base: BASE },
+      {
+        // `b` and `end` exist only in the base: fine
+        good: {
+          extends: "base",
+          states: { a: { prompt: "A2", transitions: { go: "b", stop: "end" } } },
+        },
+        bad: { extends: "base", states: { a: { prompt: "A2", transitions: { go: "missing" } } } },
+        badInitial: { extends: "base", initial: "nowhere" },
+      },
+    );
     expect(loader.get("good")!.states.a.transitions).toEqual({ go: "b", stop: "end" });
     expect(loader.get("bad")).toBeUndefined();
     expect(loader.get("badInitial")).toBeUndefined();
@@ -413,13 +507,17 @@ describe("Loader: extends", () => {
   });
 
   it("a file that fails validation or resolution falls back to the same name one tier down", () => {
-    const loader = load({ flow: BASE, other: BASE }, {
-      // valid, then shadowed by the broken project file
-      other: { extends: "other", states: { g: { prompt: "G", transitions: { done: "end" } } } },
-    }, {
-      flow: { extends: "flow", states: { a: { prompt: "A2", transitions: { go: "missing" } } } },
-      other: { extends: "nope" },
-    });
+    const loader = load(
+      { flow: BASE, other: BASE },
+      {
+        // valid, then shadowed by the broken project file
+        other: { extends: "other", states: { g: { prompt: "G", transitions: { done: "end" } } } },
+      },
+      {
+        flow: { extends: "flow", states: { a: { prompt: "A2", transitions: { go: "missing" } } } },
+        other: { extends: "nope" },
+      },
+    );
     expect(loader.get("flow")!.states.a).toEqual(BASE.states.a);
     expect(Object.keys(loader.get("other")!.states).sort()).toEqual(["a", "b", "end", "g"]);
     const text = errors.join("\n");
@@ -449,12 +547,18 @@ describe("Loader: fanout and on_timeout", () => {
   });
   const exec = (extra: object) => ({
     initial: "r",
-    states: { r: { type: "exec", command: "true", on_success: "e", on_error: "e", ...extra }, e: { terminal: true }, slow: { terminal: true } },
+    states: {
+      r: { type: "exec", command: "true", on_success: "e", on_error: "e", ...extra },
+      e: { terminal: true },
+      slow: { terminal: true },
+    },
   });
 
   it("validates fanout and on_timeout", () => {
     const errors: string[] = [];
-    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
     const { loader, dir } = createTestLoader({
       count: exec({ fanout: { count: 4, threads_each: 2, max_parallel: 2 }, on_timeout: "slow" }),
       items: exec({ fanout: { items_command: "ls", threads_each: 1 } }),
@@ -466,16 +570,37 @@ describe("Loader: fanout and on_timeout", () => {
       unknownTimeout: exec({ on_timeout: "nope" }),
       caseTimeout: exec({ on_timeout: "slow", cases: { "124": "e" }, default: "e" }),
       bgTimeout: exec({ on_timeout: "slow", background: true }),
-      promptTimeout: { initial: "p", states: { p: { prompt: "P", on_timeout: "e", transitions: { go: "e" } }, e: { terminal: true } } },
+      promptTimeout: {
+        initial: "p",
+        states: {
+          p: { prompt: "P", on_timeout: "e", transitions: { go: "e" } },
+          e: { terminal: true },
+        },
+      },
     });
     dirs.push(dir);
-    expect(loader.get("count")!.states.r).toMatchObject({ fanout: { count: 4, threads_each: 2, max_parallel: 2 }, on_timeout: "slow" });
+    expect(loader.get("count")!.states.r).toMatchObject({
+      fanout: { count: 4, threads_each: 2, max_parallel: 2 },
+      on_timeout: "slow",
+    });
     expect(loader.get("items")!.states.r.fanout).toEqual({ items_command: "ls", threads_each: 1 });
-    for (const name of ["both", "neither", "typo", "bg", "leased", "unknownTimeout", "caseTimeout", "bgTimeout", "promptTimeout"])
+    for (const name of [
+      "both",
+      "neither",
+      "typo",
+      "bg",
+      "leased",
+      "unknownTimeout",
+      "caseTimeout",
+      "bgTimeout",
+      "promptTimeout",
+    ])
       expect(loader.get(name), name).toBeUndefined();
     const text = errors.join("\n");
     expect(text).toMatch(/fanout needs exactly one of count, items_command/);
-    expect(text).toContain('state "r" (fanout): unknown key "threads_eahc" — did you mean "threads_each"?');
+    expect(text).toContain(
+      'state "r" (fanout): unknown key "threads_eahc" — did you mean "threads_each"?',
+    );
     expect(text).toContain('state "r" fanout cannot run as a background exec');
     expect(text).toContain('state "r" fanout leases threads_each per shard; drop resource');
     expect(text).toContain('state "r" on_timeout → unknown state "nope"');
