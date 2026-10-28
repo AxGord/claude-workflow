@@ -1,14 +1,15 @@
 // The machine-wide thread pool for heavy work: every `wf-run` process and
-// every exec with `resource:` takes a lease from one directory shared by all
-// sessions, projects and Claude config dirs on the machine. Admission happens
-// under a file lock (the storage's proper-lockfile discipline) on `pool.json`.
+// every exec with `resource:` takes a lease — threads, named locks, or both —
+// from one directory shared by all sessions, projects and Claude config dirs
+// on the machine. Admission happens under a file lock (the storage's
+// proper-lockfile discipline) on `pool.json`.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import lockfile from "proper-lockfile";
-import { LOCK_STALE_MS } from "./types.js";
+import { LOCK_NAME_PATTERN, LOCK_STALE_MS } from "./types.js";
 import { isGroupAlive, isPidAlive } from "./process.js";
 
 /** EX_TEMPFAIL: no lease within the wait timeout ("busy"). */
@@ -105,6 +106,8 @@ export interface PoolEntry {
   readonly started?: number;
   /** The leased command's process group: the lease lives while `pid` OR this group does. */
   readonly pgid?: number;
+  /** Named locks, held exclusively machine-wide for the lease's life; granted together with the threads. */
+  readonly locks?: readonly string[];
 }
 
 export interface PoolState {
@@ -131,12 +134,23 @@ export function byQueueOrder(a: PoolEntry, b: PoolEntry): number {
   return b.priority - a.priority || a.arrived - b.arrived || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
+/** What an entry asks for: `6 threads`, `lock port:3000`, `6 threads + lock a + lock b`. */
+export function describeRequest(entry: Pick<PoolEntry, "threads" | "locks">, budget: number): string {
+  const n = effectiveThreads(entry, budget);
+  return [...(n > 0 ? [`${n} threads`] : []), ...(entry.locks ?? []).map(l => `lock ${l}`)].join(" + ");
+}
+
 /**
- * One admission pass: drop dead entries, then grant waiters in queue order
- * while `held + N <= budget` and, unless the pool is empty, also
- * `held + N + external <= budget`. External load never blocks an empty pool:
- * a head of N >= budget would otherwise wait forever on background load. The
- * first waiter that does not fit stops the pass — nothing overtakes it.
+ * One admission pass: drop dead entries, then grant waiters in queue order.
+ * A waiter gets everything it asks for at once or nothing: its threads fit
+ * (`held + N <= budget` and, unless the pool is empty, also
+ * `held + N + external <= budget` — external load never blocks an empty pool:
+ * a head of N >= budget would otherwise wait forever on background load) AND
+ * none of its locks is held or wanted by an earlier waiter. Nothing overtakes
+ * a waiter on what it waits for: once one fits by locks but not by threads,
+ * no later waiter takes threads; a lock is handed out in queue order. A waiter
+ * blocked only by a held lock claims no threads, so a long-held lock does not
+ * stall the rest of the queue; holding nothing while waiting, nobody deadlocks.
  */
 export function schedule(
   state: PoolState,
@@ -149,17 +163,33 @@ export function schedule(
   const waiting = state.waiting.filter(isLive).sort(byQueueOrder);
   let held = leases.reduce((sum, e) => sum + effectiveThreads(e, config.budget), 0);
   const external = Math.max(0, load - held - config.load_threshold);
-  while (waiting.length > 0) {
-    const n = effectiveThreads(waiting[0], config.budget);
-    if (held + n > config.budget || (held > 0 && held + n + external > config.budget)) break;
-    leases.push({ ...waiting.shift()!, started: now });
-    held += n;
+  const locked = new Set(leases.flatMap(e => e.locks ?? []));
+  const claimed = new Set<string>();
+  const still: PoolEntry[] = [];
+  let threadsClosed = false;
+  for (const w of waiting) {
+    const locks = w.locks ?? [];
+    const n = effectiveThreads(w, config.budget);
+    const locksFree = !locks.some(l => locked.has(l) || claimed.has(l));
+    const fits = n === 0
+      || (!threadsClosed && held + n <= config.budget && (held === 0 || held + n + external <= config.budget));
+    if (locksFree && fits) {
+      leases.push({ ...w, started: now });
+      held += n;
+      for (const l of locks) locked.add(l);
+      continue;
+    }
+    still.push(w);
+    for (const l of locks) claimed.add(l);
+    if (locksFree) threadsClosed = true;
   }
-  return { ...config, load, external, held, leases, waiting };
+  return { ...config, load, external, held, leases, waiting: still };
 }
 
 export interface LeaseRequest {
+  /** 0 only beside `locks`: a lock-only lease takes no threads and is never blocked by load. */
   readonly threads: number;
+  readonly locks?: readonly string[];
   readonly priority?: number;
   readonly label?: string;
   readonly cwd?: string;
@@ -180,6 +210,8 @@ export interface AcquireOptions {
 
 export interface Lease {
   readonly entry: PoolEntry;
+  /** Threads granted: the request clamped to the budget at the grant (`WF_THREADS` of the leased command). */
+  readonly threads: number;
   /** Record the leased command's process group: it keeps the lease alive if the leaseholder dies first. */
   attach(pgid: number): Promise<void>;
   /** Idempotent; also grants the waiters the freed threads now fit. */
@@ -252,7 +284,10 @@ export class Pool {
   }
 
   async acquire(req: LeaseRequest, opts: AcquireOptions = {}): Promise<AcquireResult> {
-    if (!Number.isInteger(req.threads) || req.threads < 1) throw new Error(`threads must be a positive integer, got ${req.threads}`);
+    const locks = [...new Set(req.locks ?? [])];
+    for (const l of locks) if (!LOCK_NAME_PATTERN.test(l)) throw new Error(`a lock name is one word without whitespace, got "${l}"`);
+    if (!Number.isInteger(req.threads) || req.threads < (locks.length > 0 ? 0 : 1))
+      throw new Error(`threads must be a positive integer${locks.length > 0 ? " or 0" : ""}, got ${req.threads}`);
     const priority = req.priority ?? 0;
     if (!Number.isInteger(priority)) throw new Error(`priority must be an integer, got ${priority}`);
     const pid = req.pid ?? process.pid;
@@ -266,6 +301,7 @@ export class Pool {
       cwd: req.cwd ?? process.cwd(),
       session_id: req.sessionId ?? "",
       arrived,
+      ...(locks.length > 0 ? { locks } : {}),
     };
     const progressMs = opts.progressMs ?? DEFAULT_PROGRESS_MS;
     let lastProgress: number | undefined;
@@ -276,7 +312,7 @@ export class Pool {
       for (;;) {
         if (opts.signal?.aborted) return await this._giveUp(self, "aborted", arrived);
         const view = await this._pass(self);
-        if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived);
+        if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived, view.budget);
         const now = Date.now();
         if (lastProgress === undefined || now - lastProgress >= progressMs) {
           opts.onProgress?.(self, view);
@@ -301,10 +337,11 @@ export class Pool {
     }
   }
 
-  private _granted(self: PoolEntry, arrived: number): AcquireResult {
+  private _granted(self: PoolEntry, arrived: number, budget: number): AcquireResult {
     let released = false;
     const lease: Lease = {
       entry: self,
+      threads: effectiveThreads(self, budget),
       attach: async pgid => {
         await this._update(state => ({
           leases: state.leases.map(e => (e.id === self.id ? { ...e, pgid } : e)),
@@ -330,7 +367,7 @@ export class Pool {
         waiting: state.waiting.filter(e => e.id !== self.id),
       };
     });
-    if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived);
+    if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived, view.budget);
     return { status: why, waitMs: Date.now() - arrived, view };
   }
 
@@ -401,8 +438,12 @@ function holder(e: PoolEntry, budget: number): string {
 export function describeWait(self: PoolEntry, view: PoolView): string {
   const ahead = view.waiting.findIndex(e => e.id === self.id);
   const holders = view.leases.map(e => holder(e, view.budget)).join(", ") || "nobody";
-  return `wf-run: waiting for ${effectiveThreads(self, view.budget)} threads — held ${view.held}/${view.budget} by ${holders}, `
-    + `external ${view.external.toFixed(1)}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}`;
+  const lockHolders = (self.locks ?? []).flatMap(l => {
+    const h = view.leases.find(e => e.locks?.includes(l));
+    return h ? [`, lock ${l} held by ${h.label || `pid ${h.pid}`}`] : [];
+  });
+  return `wf-run: waiting for ${describeRequest(self, view.budget)} — held ${view.held}/${view.budget} by ${holders}, `
+    + `external ${view.external.toFixed(1)}${lockHolders.join("")}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}`;
 }
 
 /** `wf-run --status`. */
@@ -410,10 +451,12 @@ export function formatStatus(view: PoolView, dir: string, now: number = Date.now
   const age = (t: number | undefined): string => `${Math.round((now - (t ?? now)) / 1000)}s`;
   const row = (e: PoolEntry, since: number | undefined): string =>
     `  pid ${e.pid}  threads ${effectiveThreads(e, view.budget)}${e.threads > view.budget ? ` (asked ${e.threads})` : ""}`
-    + `  prio ${e.priority}  ${age(since)}  ${e.label || "-"}  ${e.cwd}${e.session_id ? `  session ${e.session_id}` : ""}`;
+    + `${e.locks ? `  locks ${e.locks.join(",")}` : ""}  prio ${e.priority}  ${age(since)}  ${e.label || "-"}  ${e.cwd}`
+    + `${e.session_id ? `  session ${e.session_id}` : ""}`;
   return [
     `pool ${dir}: budget ${view.budget}, held ${view.held}, load ${view.load.toFixed(2)} `
       + `(external ${view.external.toFixed(1)}, threshold ${view.load_threshold})`,
+    `locks held: ${view.leases.flatMap(e => e.locks ?? []).join(", ") || "none"}`,
     `leases (${view.leases.length}):`,
     ...view.leases.map(e => row(e, e.started)),
     `waiting (${view.waiting.length}, in admission order):`,

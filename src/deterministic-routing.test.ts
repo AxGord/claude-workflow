@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { Executor } from "./executor.js";
+import { Pool } from "./pool.js";
 import type { StateDefinition } from "./types.js";
 
 // Runs the bundled templates' routing exec states as the engine would and
@@ -169,4 +170,60 @@ describe("testing check_test_changes", () => {
     for (const fix of ["fix_unit", "fix_integration", "fix_user_issue"])
       expect(await route(state, { context: {}, visits: { [fix]: 1 } })).toBe("review_test_changes");
   });
+});
+
+describe("review lint pass: probe without a lease, the pass under one", () => {
+  let dir: string;
+  let outerPath: string | undefined;
+  let outerParallel: string | undefined;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-lint-"));
+    fs.mkdirSync(path.join(dir, "bin"));
+    // a stand-in hxq that reports the oracle parallelism it was given
+    fs.writeFileSync(path.join(dir, "bin", "hxq"), '#!/bin/sh\necho "hxq $1 APQ=${APQ_ORACLE_PARALLEL-unset}"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(dir, "A.hx"), "class A {}\n");
+    fs.writeFileSync(path.join(dir, "a.ts"), "\n");
+    outerPath = process.env.PATH;
+    outerParallel = process.env.APQ_ORACLE_PARALLEL;
+    delete process.env.APQ_ORACLE_PARALLEL;
+  });
+  afterEach(() => {
+    process.env.PATH = outerPath;
+    if (outerParallel !== undefined) process.env.APQ_ORACLE_PARALLEL = outerParallel;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const withHxq = () => { process.env.PATH = `${path.join(dir, "bin")}:${outerPath}`; };
+  const withoutHxq = () => { process.env.PATH = "/usr/bin:/bin"; };
+  const ctx = (files: string) => ({ context: { file_path: files } });
+
+  for (const [workflow, probe, pass, skip] of [
+    ["file-review", "mechanical_probe", "mechanical_pass", "determine_authorship"],
+    ["lint-review", "probe", "run", "act"],
+  ] as const) {
+    describe(workflow, () => {
+      it("nothing to lint (non-.hx, no hxq) skips the leased pass; a .hx with hxq runs it", async () => {
+        const state = templateState(workflow, probe);
+        withHxq();
+        expect(await route(state, ctx(path.join(dir, "a.ts")))).toBe(skip);
+        expect(await route(state, ctx(`${path.join(dir, "a.ts")} ${path.join(dir, "A.hx")}`))).toBe(pass);
+        withoutHxq();
+        expect(await route(state, ctx(path.join(dir, "A.hx")))).toBe(skip);
+      });
+
+      it("the pass leases threads and hands them to the oracle as APQ_ORACLE_PARALLEL", async () => {
+        const state = templateState(workflow, pass);
+        expect(state.resource?.threads).toBe(4);
+        withHxq();
+        const poolDir = path.join(dir, "pool");
+        fs.mkdirSync(poolDir);
+        fs.writeFileSync(path.join(poolDir, "config.json"), JSON.stringify({ budget: 10, load_threshold: 1000 }));
+        const r = await new Executor(new Pool(poolDir)).execute(state, ctx(path.join(dir, "A.hx")));
+        expect(r.exit_code).toBe(0);
+        expect(r.stdout).toMatch(/hxq lint APQ=4/);
+        // a value the caller set wins
+        process.env.APQ_ORACLE_PARALLEL = "2";
+        expect((await new Executor(new Pool(poolDir)).execute(state, ctx(path.join(dir, "A.hx")))).stdout).toMatch(/hxq lint APQ=2/);
+      });
+    });
+  }
 });

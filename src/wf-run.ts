@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // wf-run: run a heavy command under a lease from the machine-wide thread pool.
-//   wf-run [--threads N|budget] [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]
+//   wf-run [--threads N|budget] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]
 //   wf-run --status
+// The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run).
 import { spawn } from "node:child_process";
 import os from "node:os";
-import { EX_TEMPFAIL, Pool, describeWait, effectiveThreads, formatStatus, resolvePoolDir } from "./pool.js";
+import { EX_TEMPFAIL, Pool, describeRequest, describeWait, formatStatus, resolvePoolDir } from "./pool.js";
 import { killProcessGroup } from "./process.js";
-import { RESOURCE_THREADS_BUDGET } from "./types.js";
+import { LOCK_NAME_PATTERN, RESOURCE_THREADS_BUDGET } from "./types.js";
 
-const USAGE = "usage: wf-run [--threads N|budget] [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]\n"
+const USAGE = "usage: wf-run [--threads N|budget] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]\n"
   + "       wf-run --status";
 const EX_USAGE = 64;
 const EX_NOEXEC = 126;
@@ -20,6 +21,7 @@ const FORWARDED: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
 interface Options {
   readonly status: boolean;
   readonly threads: number | typeof RESOURCE_THREADS_BUDGET;
+  readonly locks: readonly string[];
   readonly priority: number;
   readonly waitTimeoutSec?: number;
   readonly label?: string;
@@ -30,7 +32,9 @@ interface Options {
 function parseArgs(argv: readonly string[]): Options {
   let status = false;
   let efficiency = false;
-  let threads: Options["threads"] = 1;
+  // Default: 1 thread, none beside a --lock (a lock-only lease).
+  let threads: Options["threads"] | undefined;
+  const locks: string[] = [];
   let priority = 0;
   let waitTimeoutSec: number | undefined;
   let label: string | undefined;
@@ -61,6 +65,12 @@ function parseArgs(argv: readonly string[]): Options {
         threads = v === RESOURCE_THREADS_BUDGET ? v : integer(flag, v, 1);
         break;
       }
+      case "--lock": {
+        const v = value(flag, inline);
+        if (!LOCK_NAME_PATTERN.test(v)) throw new Error(`${flag}: a lock name is one word without whitespace, got "${v}"`);
+        locks.push(v);
+        break;
+      }
       case "--priority": priority = integer(flag, value(flag, inline), -Infinity); break;
       case "--label": label = value(flag, inline); break;
       case "--wait-timeout": {
@@ -74,16 +84,20 @@ function parseArgs(argv: readonly string[]): Options {
   }
   const command = argv.slice(i);
   if (!status && command.length === 0) throw new Error("no command given");
-  return { status, threads, priority, waitTimeoutSec, label, efficiency, command };
+  return { status, threads: threads ?? (locks.length > 0 ? 0 : 1), locks, priority, waitTimeoutSec, label, efficiency, command };
 }
 
 /**
  * Run the child in its own process group, forwarding signals to the group;
  * resolves its exit code. `onSpawn` gets the group id once the child exists.
+ * WF_THREADS describes this run's own lease: `threads` when it has threads,
+ * never one inherited from an outer lease.
  */
-function run(cmd: string, args: readonly string[], onSpawn?: (pgid: number) => Promise<void>): Promise<number> {
+function run(cmd: string, args: readonly string[], threads?: number, onSpawn?: (pgid: number) => Promise<void>): Promise<number> {
+  const { WF_THREADS: _inherited, ...env } = process.env;
+  if (threads !== undefined && threads > 0) env.WF_THREADS = String(threads);
   return new Promise(resolve => {
-    const child = spawn(cmd, args, { stdio: "inherit", detached: true });
+    const child = spawn(cmd, args, { stdio: "inherit", detached: true, env });
     if (child.pid && onSpawn) {
       onSpawn(child.pid).catch(err => process.stderr.write(`wf-run: could not record the process group: ${(err as Error).message}\n`));
     }
@@ -119,11 +133,15 @@ async function main(argv: readonly string[]): Promise<number> {
     process.stdout.write(formatStatus(await pool.status(), pool.dir) + "\n");
     return 0;
   }
-  const [cmd, ...args] = opts.command;
-  if (opts.efficiency) {
-    // Background QoS: efficiency cores, lowest priority — outside the budget.
-    if (process.platform === "darwin") return run("taskpolicy", ["-b", cmd, ...args]);
+  let [cmd, ...args] = opts.command;
+  // Background QoS: efficiency cores, lowest priority — outside the budget, but its locks still hold.
+  const efficient = opts.efficiency && process.platform === "darwin";
+  if (opts.efficiency && !efficient)
     process.stderr.write(`wf-run: --efficiency needs macOS (taskpolicy); running through the pool instead\n`);
+  if (efficient) {
+    args = ["-b", cmd, ...args];
+    cmd = "taskpolicy";
+    if (opts.locks.length === 0) return run(cmd, args);
   }
 
   // A signal while waiting withdraws from the queue and exits as that signal would.
@@ -134,10 +152,11 @@ async function main(argv: readonly string[]): Promise<number> {
     ac.abort();
   };
   for (const s of FORWARDED) process.on(s, onSignal);
-  const threads = opts.threads === RESOURCE_THREADS_BUDGET ? pool.config().budget : opts.threads;
+  const threads = efficient ? 0 : opts.threads === RESOURCE_THREADS_BUDGET ? pool.config().budget : opts.threads;
   const result = await pool.acquire(
     {
       threads,
+      locks: opts.locks,
       priority: opts.priority,
       label: opts.label ?? opts.command.join(" ").slice(0, LABEL_MAX),
       cwd: process.cwd(),
@@ -156,14 +175,14 @@ async function main(argv: readonly string[]): Promise<number> {
     if (result.status === "aborted") return 128 + (caught ? os.constants.signals[caught] : 0);
     const { view } = result;
     process.stderr.write(
-      `wf-run: busy — ${effectiveThreads({ threads }, view.budget)} threads not free within ${opts.waitTimeoutSec}s `
+      `wf-run: busy — ${describeRequest({ threads, locks: opts.locks }, view.budget)} not free within ${opts.waitTimeoutSec}s `
       + `(held ${view.held}/${view.budget}, external ${view.external.toFixed(1)})\n`,
     );
     return EX_TEMPFAIL;
   }
   try {
     // A SIGKILLed wf-run cannot release: the child's group keeps the lease alive while it runs.
-    return await run(cmd, args, pgid => result.lease.attach(pgid));
+    return await run(cmd, args, result.lease.threads, pgid => result.lease.attach(pgid));
   } finally {
     await result.lease.release();
   }

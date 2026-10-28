@@ -10,6 +10,7 @@ import { isGroupAlive, isPidAlive } from "./process.js";
 import { Executor } from "./executor.js";
 import { Engine } from "./engine.js";
 import { InMemoryStorage, createTestLoader, cleanupDir } from "./test-helpers.js";
+import type { StateDefinition } from "./types.js";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const tmpDirs: string[] = [];
@@ -92,6 +93,61 @@ describe("schedule (one admission pass)", () => {
     const v = schedule({ leases: [dead], waiting: [deadWaiter, w] }, cfg, 0, e => e.pid !== 666, 1);
     expect(ids(v.leases)).toEqual([w.id]);
     expect(v.waiting).toEqual([]);
+  });
+
+  it("a lock and the threads are granted together or not at all", () => {
+    const holder = entry(1, { locks: ["L"] });
+    const w = entry(3, { locks: ["L", "M"] });
+    // L is held: w takes neither its threads nor the free lock M
+    const blocked = schedule({ leases: [holder], waiting: [w] }, cfg, 0, alive, 1);
+    expect(ids(blocked.leases)).toEqual([holder.id]);
+    expect(blocked.held).toBe(1);
+    // L free but the threads do not fit: w holds no lock either
+    const full = entry(9);
+    const noThreads = schedule({ leases: [full], waiting: [w] }, cfg, 0, alive, 1);
+    expect(ids(noThreads.leases)).toEqual([full.id]);
+    expect(ids(schedule({ leases: [full], waiting: [w, entry(0, { locks: ["M"] })] }, cfg, 0, alive, 1).leases)).toEqual([full.id]);
+    const v = schedule({ leases: [], waiting: [w] }, cfg, 0, alive, 1);
+    expect(v.leases.map(e => [e.id, e.locks])).toEqual([[w.id, ["L", "M"]]]);
+    expect(v.held).toBe(3);
+  });
+
+  it("a lock goes in queue order; a waiter blocked by a lock claims no threads, one blocked by threads does", () => {
+    const holder = entry(0, { locks: ["L"] });
+    const a = entry(6, { locks: ["L"], arrived: 1 });
+    const b = entry(0, { locks: ["L"], arrived: 2 });
+    const c = entry(8, { arrived: 3 });
+    const v = schedule({ leases: [holder], waiting: [a, b, c] }, cfg, 0, alive, 1);
+    expect(ids(v.leases)).toEqual([holder.id, c.id]);
+    expect(ids(v.waiting)).toEqual([a.id, b.id]);
+    // the holder ends: a (first in line for L) gets it, b still waits for it
+    const next = schedule({ leases: [], waiting: [a, b] }, cfg, 0, alive, 1);
+    expect(ids(next.leases)).toEqual([a.id]);
+    expect(ids(next.waiting)).toEqual([b.id]);
+
+    const big = entry(8);
+    const e = entry(6, { locks: ["M"], arrived: 1 });
+    const f = entry(1, { arrived: 2 });
+    const g = entry(0, { locks: ["N"], arrived: 3 });
+    const h = entry(0, { locks: ["M"], arrived: 4 });
+    // e fits by locks, not by threads: f may not take threads past it, h not its lock; g needs neither
+    const w = schedule({ leases: [big], waiting: [e, f, g, h] }, cfg, 0, alive, 1);
+    expect(ids(w.leases)).toEqual([big.id, g.id]);
+    expect(ids(w.waiting)).toEqual([e.id, f.id, h.id]);
+  });
+
+  it("a lock-only lease takes no threads and no load blocks it", () => {
+    const held = entry(10);
+    const lockOnly = entry(0, { locks: ["port:3000"] });
+    const v = schedule({ leases: [held], waiting: [lockOnly] }, cfg, 100, alive, 1);
+    expect(ids(v.leases)).toEqual([held.id, lockOnly.id]);
+    expect(v.held).toBe(10);
+  });
+
+  it("reaps a dead lock holder, freeing its lock", () => {
+    const dead = entry(0, { pid: 666, locks: ["L"] });
+    const w = entry(0, { locks: ["L"] });
+    expect(ids(schedule({ leases: [dead], waiting: [w] }, cfg, 0, e => e.pid !== 666, 1).leases)).toEqual([w.id]);
   });
 });
 
@@ -180,6 +236,23 @@ describe("Pool", () => {
     if (got.status === "granted") await got.lease.release();
   }, 10_000);
 
+  it("a lease reports its threads clamped to the budget; a lock-only request needs locks, a lock name one word", async () => {
+    const pool = new Pool(poolDir(), fakeProbes());
+    const big = await pool.acquire({ threads: 20, locks: ["L", "L"] });
+    expect(big.status).toBe("granted");
+    if (big.status !== "granted") return;
+    expect(big.lease.threads).toBe(10);
+    expect(big.lease.entry.locks).toEqual(["L"]);
+    await big.lease.release();
+    await expect(pool.acquire({ threads: 0 })).rejects.toThrow(/threads must be a positive integer, got 0/);
+    await expect(pool.acquire({ threads: 0, locks: ["a b"] })).rejects.toThrow(/one word/);
+    const lockOnly = await pool.acquire({ threads: 0, locks: ["L"] });
+    expect(lockOnly.status === "granted" && lockOnly.lease.threads).toBe(0);
+    const second = await pool.acquire({ threads: 0, locks: ["L"], label: "b" }, { waitTimeoutMs: 100, pollMs: 20 });
+    expect(second.status).toBe("timeout");
+    if (lockOnly.status === "granted") await lockOnly.lease.release();
+  });
+
   it("an abort signal withdraws a waiter", async () => {
     const dir = poolDir({ budget: 2, load_threshold: 0 });
     const pool = new Pool(dir, fakeProbes());
@@ -263,6 +336,48 @@ describe("Executor resource:", () => {
     expect(fs.existsSync(marker)).toBe(false);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
   });
+
+  it("WF_THREADS = the threads granted (clamped, budget); absent without threads, inherited one dropped", async () => {
+    const dir = poolDir({ budget: 7, load_threshold: 0 });
+    const executor = new Executor(new Pool(dir, fakeProbes()));
+    const threadsOf = async (resource?: StateDefinition["resource"]) =>
+      (await executor.execute({ type: "exec", command: 'printf "%s" "${WF_THREADS-unset}"', resource }, {})).stdout;
+    const outer = process.env.WF_THREADS;
+    process.env.WF_THREADS = "99";
+    try {
+      expect(await threadsOf({ threads: 3 })).toBe("3");
+      expect(await threadsOf({ threads: 20 })).toBe("7");
+      expect(await threadsOf({ threads: "budget" })).toBe("7");
+      expect(await threadsOf({ locks: ["L"] })).toBe("unset");
+      expect(await threadsOf()).toBe("unset");
+    } finally {
+      if (outer === undefined) delete process.env.WF_THREADS;
+      else process.env.WF_THREADS = outer;
+    }
+  });
+
+  it("a held lock: wait_timeout exits 75 naming the lock; abort withdraws the wait", async () => {
+    const dir = poolDir();
+    const pool = new Pool(dir, fakeProbes());
+    const executor = new Executor(pool);
+    const holder = await pool.acquire({ threads: 0, locks: ["port:3000"] });
+    const marker = path.join(dir, "ran");
+    const busy = await executor.execute(
+      { type: "exec", command: `touch "${marker}"`, resource: { threads: 2, locks: ["port:3000"], wait_timeout: 0.2 } }, {},
+    );
+    expect(busy.exit_code).toBe(75);
+    expect(busy.stderr).toMatch(/^busy: 2 threads \+ lock port:3000 not free within 0.2s/);
+    expect(fs.existsSync(marker)).toBe(false);
+    const pending = executor.execute(
+      { type: "exec", command: `touch "${marker}"`, resource: { locks: ["port:3000"] } }, {}, { sessionId: "s4", rootSessionId: "s4" },
+    );
+    await new Promise(r => setTimeout(r, 100));
+    executor.killSession("s4");
+    expect((await pending).exit_code).toBe(130);
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(readPool(dir).waiting).toEqual([]);
+    if (holder.status === "granted") await holder.lease.release();
+  }, 10_000);
 
   it('threads: "budget" leases the configured budget', async () => {
     const dir = poolDir({ budget: 7, load_threshold: 0 });
@@ -351,7 +466,7 @@ describe("wf-run CLI (real processes)", () => {
 
   interface Run { code: number | null; stderr: string; stdout: string }
   function wfRun(dir: string, args: string[]): { child: ChildProcess; done: Promise<Run> } {
-    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, WF_POOL_DIR: dir }, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, WF_THREADS: "99", WF_POOL_DIR: dir }, stdio: ["ignore", "pipe", "pipe"] });
     children.push(child);
     let stdout = "";
     let stderr = "";
@@ -401,6 +516,51 @@ describe("wf-run CLI (real processes)", () => {
     expect(readPool(dir).waiting).toEqual([]);
     if (holder.status === "granted") await holder.lease.release();
   }, 15_000);
+
+  it("two processes behind one --lock never overlap; a lock-only run takes no threads", async () => {
+    const dir = poolDir(quiet);
+    const log = path.join(dir, "log");
+    const job = (name: string) => wfRun(dir, [
+      "--lock", "port:3000", "--label", name, "--", process.execPath, "-e",
+      `const fs=require("fs");fs.appendFileSync(${JSON.stringify(log)},"start ${name} "+Date.now()+" "+(process.env.WF_THREADS??"-")+"\\n");`
+      + `setTimeout(()=>fs.appendFileSync(${JSON.stringify(log)},"end ${name} "+Date.now()+"\\n"),300)`,
+    ]);
+    // a full pool: the lock-only runs still go, one at a time
+    const holder = await new Pool(dir, fakeProbes()).acquire({ threads: 10, label: "full" });
+    const runs = await Promise.all([job("a"), job("b")].map(j => j.done));
+    if (holder.status === "granted") await holder.lease.release();
+    expect(runs.map(r => r.code)).toEqual([0, 0]);
+    const lines = fs.readFileSync(log, "utf8").trim().split("\n").map(l => l.split(" "));
+    expect(lines.filter(l => l[0] === "start").map(l => l[3])).toEqual(["-", "-"]);
+    const at = (kind: string, name: string) => Number(lines.find(l => l[0] === kind && l[1] === name)![2]);
+    const [first, second] = at("start", "a") < at("start", "b") ? ["a", "b"] : ["b", "a"];
+    expect(at("start", second)).toBeGreaterThanOrEqual(at("end", first));
+    expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
+  }, 30_000);
+
+  it("--lock: --status shows it, a busy lock exits 75, a dead holder is reaped; the child gets WF_THREADS", async () => {
+    const dir = poolDir({ budget: 5, load_threshold: 1000 });
+    const pool = new Pool(dir, fakeProbes());
+    const holder = await pool.acquire({ threads: 1, locks: ["sim"], label: "holder" });
+    const status = await wfRun(dir, ["--status"]).done;
+    expect(status.stdout).toMatch(/locks held: sim/);
+    expect(status.stdout).toMatch(/threads 1 {2}locks sim {2}prio 0 .* holder/);
+    const busy = await wfRun(dir, ["--lock", "sim", "--wait-timeout", "0.3", "--", "true"]).done;
+    expect(busy.code).toBe(75);
+    expect(busy.stderr).toMatch(/waiting for lock sim — .*lock sim held by holder/);
+    expect(busy.stderr).toMatch(/busy — lock sim not free/);
+    if (holder.status === "granted") await holder.lease.release();
+    // a holder whose process is gone
+    const gone = spawn(process.execPath, ["-e", ""]);
+    await new Promise(r => gone.on("exit", r));
+    const dead: PoolEntry = { ...entry(0, { pid: gone.pid!, locks: ["sim"] }), started: 1 };
+    fs.writeFileSync(path.join(dir, "pool.json"), JSON.stringify({ leases: [dead], waiting: [] }));
+    const r = await wfRun(dir, ["--lock", "sim", "--threads", "9", "--wait-timeout", "5", "--", "sh", "-c", 'printf "%s" "$WF_THREADS"']).done;
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("5");
+    expect((await wfRun(dir, ["--lock", "a b", "--", "true"]).done).code).toBe(64);
+    expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
+  }, 20_000);
 
   it("--threads budget leases the configured budget", async () => {
     const dir = poolDir({ budget: 5, load_threshold: 1000 });

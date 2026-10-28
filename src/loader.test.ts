@@ -232,6 +232,11 @@ describe("Loader strict schema", () => {
       zero: exec({ threads: 0 }),
       budget: exec({ threads: "budget" }),
       all: exec({ threads: "all" }),
+      locks: exec({ locks: ["port:3000"] }),
+      both: exec({ threads: 2, locks: ["sim", "port:3000"] }),
+      none: exec({ priority: 1 }),
+      emptyLocks: exec({ locks: [] }),
+      spaced: exec({ locks: ["a b"] }),
       fetch: {
         initial: "f",
         states: {
@@ -242,7 +247,11 @@ describe("Loader strict schema", () => {
     });
     expect(loader.get("ok")!.states.r.resource).toEqual({ threads: 4, priority: 1, wait_timeout: 30 });
     expect(loader.get("budget")!.states.r.resource).toEqual({ threads: "budget" });
-    for (const name of ["typo", "bg", "zero", "all", "fetch"]) expect(loader.get(name)).toBeUndefined();
+    expect(loader.get("locks")!.states.r.resource).toEqual({ locks: ["port:3000"] });
+    expect(loader.get("both")!.states.r.resource).toEqual({ threads: 2, locks: ["sim", "port:3000"] });
+    for (const name of ["typo", "bg", "zero", "all", "fetch", "none", "emptyLocks", "spaced"]) expect(loader.get(name)).toBeUndefined();
+    expect(errors).toMatch(/states\.r\.resource: resource needs threads, locks, or both/);
+    expect(errors).toMatch(/states\.r\.resource\.locks\.0: a lock name is one word/);
     expect(errors).toContain('state "r" (resource): unknown key "wait_timout" — did you mean "wait_timeout"?');
     expect(errors).toContain('state "r" resource cannot hold a lease for a background exec');
     expect(errors).toContain('state "f" resource is for exec states');

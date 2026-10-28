@@ -7,7 +7,7 @@ import type { StateDefinition, ActionResult } from "./types.js";
 import { RESOURCE_THREADS_BUDGET } from "./types.js";
 import { render } from "./template.js";
 import { killProcessGroup } from "./process.js";
-import { EX_TEMPFAIL, Pool, resolvePoolDir } from "./pool.js";
+import { EX_TEMPFAIL, Pool, describeRequest, resolvePoolDir } from "./pool.js";
 import type { AcquireResult } from "./pool.js";
 
 // Plugin root (the dir holding templates/ and scripts/) — injected into every
@@ -85,11 +85,12 @@ export class Executor {
 
   /**
    * An exec with `resource:` waits for a pool lease (the same admission as
-   * `wf-run`), runs, and releases it. No lease within `wait_timeout` exits 75.
+   * `wf-run`), runs with `WF_THREADS` = the threads granted, and releases it.
+   * No lease within `wait_timeout` exits 75.
    */
   private async _execLeased(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
     const resource = state.resource!;
-    const threads = resource.threads === RESOURCE_THREADS_BUDGET ? this._pool.config().budget : resource.threads;
+    const threads = resource.threads === RESOURCE_THREADS_BUDGET ? this._pool.config().budget : (resource.threads ?? 0);
     const command = render(state.command!, vars);
     const ac = new AbortController();
     const sessionId = ctx?.sessionId ?? "";
@@ -101,6 +102,7 @@ export class Executor {
       got = await this._pool.acquire(
         {
           threads,
+          locks: resource.locks,
           priority: resource.priority,
           label: command.slice(0, LEASE_LABEL_MAX),
           cwd: this._cwd(state, vars, ctx) ?? process.cwd(),
@@ -123,7 +125,7 @@ export class Executor {
     }
     if (got.status !== "granted") {
       const busy = got.status === "timeout"
-        ? `busy: ${threads} threads not free within ${resource.wait_timeout}s `
+        ? `busy: ${describeRequest({ threads, locks: resource.locks }, got.view.budget)} not free within ${resource.wait_timeout}s `
           + `(held ${got.view.held}/${got.view.budget}, external ${got.view.external.toFixed(1)})`
         : ABORTED_WAIT;
       return {
@@ -137,7 +139,8 @@ export class Executor {
       };
     }
     try {
-      return { ...(await this._exec(state, vars, ctx)), wait_ms };
+      const leased = got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : undefined;
+      return { ...(await this._exec(state, vars, ctx, leased, (pgid) => got.lease.attach(pgid))), wait_ms };
     } finally {
       await got.lease.release();
     }
@@ -163,13 +166,20 @@ export class Executor {
   }
 
   /**
-   * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT and the
+   * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT, the
    * session ids (WF_SESSION_ID, WF_PARENT_SESSION_ID — empty at the root,
-   * WF_ROOT_SESSION_ID), overridable by the state's own rendered env: entries.
+   * WF_ROOT_SESSION_ID) and, under a lease with threads, WF_THREADS —
+   * overridable by the state's own rendered env: entries. An inherited
+   * WF_THREADS is dropped: it is set only for this exec's own lease.
    * Single source for both foreground and background spawns so the injection
    * contract can't drift.
    */
-  private _buildEnv(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): NodeJS.ProcessEnv {
+  private _buildEnv(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+    ctx?: ExecContext,
+    leased?: Record<string, string>,
+  ): NodeJS.ProcessEnv {
     const envVars = state.env
       ? Object.fromEntries(Object.entries(state.env).map(([k, v]) => [k, render(v, vars)]))
       : undefined;
@@ -180,10 +190,17 @@ export class Executor {
           WF_ROOT_SESSION_ID: ctx.rootSessionId,
         }
       : undefined;
-    return { ...process.env, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...envVars };
+    const { WF_THREADS: _inherited, ...base } = process.env;
+    return { ...base, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...leased, ...envVars };
   }
 
-  private _exec(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+  private _exec(
+    state: StateDefinition,
+    vars: Record<string, unknown>,
+    ctx?: ExecContext,
+    leased?: Record<string, string>,
+    onSpawn?: (pgid: number) => Promise<void>,
+  ): Promise<ActionResult> {
     const command = render(state.command!, vars);
     const cwd = this._cwd(state, vars, ctx);
     const timeout = state.timeout ?? DEFAULT_EXEC_TIMEOUT;
@@ -196,11 +213,13 @@ export class Executor {
 
       const child = spawn("sh", ["-c", command], {
         cwd,
-        env: this._buildEnv(state, vars, ctx),
+        env: this._buildEnv(state, vars, ctx, leased),
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,
       });
       this._track(ctx?.sessionId, child.pid, true);
+      // The lease names the child's group too, so a server that dies mid-exec does not free it.
+      if (child.pid && onSpawn) onSpawn(child.pid).catch(() => {});
 
       const killGroup = (signal: NodeJS.Signals) => {
         if (child.pid) killProcessGroup(child.pid, signal);

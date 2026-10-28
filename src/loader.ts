@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { ZodError } from "zod";
 import { resetDeliveredPrompts } from "./tools.js";
 import type { WorkflowDefinition } from "./types.js";
-import { WorkflowDefinitionSchema, StateDefinitionSchema, ResourceSchema } from "./types.js";
+import { WorkflowDefinitionSchema, StateDefinitionSchema, ResourceObjectSchema } from "./types.js";
 
 function editDistance(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -28,7 +28,7 @@ function nearest(key: string, known: readonly string[]): string {
 function knownKeysAt(issuePath: readonly (string | number)[]): readonly string[] {
   if (issuePath.length === 0) return Object.keys(WorkflowDefinitionSchema.shape);
   if (issuePath[2] === "retry") return ["max", "interval"];
-  if (issuePath[2] === "resource") return Object.keys(ResourceSchema.shape);
+  if (issuePath[2] === "resource") return Object.keys(ResourceObjectSchema.shape);
   return Object.keys(StateDefinitionSchema.shape);
 }
 

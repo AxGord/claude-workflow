@@ -5,11 +5,22 @@ import { z } from "zod";
 /** `threads: "budget"` asks for the pool's whole budget as configured when the request is made; a later raise of `budget` does not grow a waiting or held lease. */
 export const RESOURCE_THREADS_BUDGET = "budget";
 
-export const ResourceSchema = z.object({
-  threads: z.union([z.number().int().positive(), z.literal(RESOURCE_THREADS_BUDGET)]),
+/** A named lock: one word, no whitespace (`port:3000`, `ios-simulator`). */
+export const LOCK_NAME_PATTERN = /^\S+$/;
+
+/** The keys of `resource:` (the loader names the nearest one for a typo). */
+export const ResourceObjectSchema = z.object({
+  threads: z.union([z.number().int().positive(), z.literal(RESOURCE_THREADS_BUDGET)]).optional(),
+  // machine-wide mutual exclusion by name, granted atomically with the threads
+  locks: z.array(z.string().regex(LOCK_NAME_PATTERN, "a lock name is one word without whitespace")).nonempty().optional(),
   priority: z.number().int().optional(),
   wait_timeout: z.number().nonnegative().optional(),
 }).strict();
+
+export const ResourceSchema = ResourceObjectSchema.refine(
+  r => r.threads !== undefined || r.locks !== undefined,
+  { message: "resource needs threads, locks, or both" },
+);
 
 // Single source of truth for state fields. Tool schemas derive from this.
 // To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
@@ -47,8 +58,8 @@ export const StateDefinitionSchema = z.object({
   env: z.record(z.string()).optional(),
   background: z.boolean().optional(),
   max_output: z.number().int().positive().optional(), // stdout/stderr truncation limit in bytes (default 10KB)
-  // heavy work: lease `threads` from the machine-wide pool before running
-  // (wait_timeout seconds, then exit 75); foreground exec only
+  // heavy work: lease `threads` and/or named `locks` from the machine-wide
+  // pool before running (wait_timeout seconds, then exit 75); foreground exec only
   resource: ResourceSchema.optional(),
 
   // fetch

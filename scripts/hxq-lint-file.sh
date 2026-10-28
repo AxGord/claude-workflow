@@ -18,6 +18,15 @@
 # report is detectable. The rule state goes first on purpose: max_output
 # truncation keeps the tail, so findings survive it and the reusable list is
 # what gets dropped.
+#
+# LINT_PROBE=1: only self-gate — print the SKIP lines and exit 0 when there is
+# nothing to lint, exit 10 (nothing printed past per-file SKIPs) when there
+# is: the review templates take a pool lease for the real pass only then, so
+# a review of a non-Haxe file never queues for one.
+#
+# Under a pool lease (WF_THREADS set by the engine or wf-run) the compiler
+# oracle's concurrent compiles follow it: APQ_ORACLE_PARALLEL defaults to
+# WF_THREADS; one the caller set wins.
 
 [ $# -gt 0 ] || { echo "SKIP: no file path"; exit 0; }
 
@@ -42,6 +51,11 @@ done
 
 [ -n "$hx" ] || { echo "SKIP: no .hx files to lint"; exit 0; }
 command -v hxq >/dev/null 2>&1 || { echo "SKIP: hxq unavailable"; exit 0; }
+[ "$LINT_PROBE" = "1" ] && exit 10
+if [ -n "$WF_THREADS" ] && [ -z "$APQ_ORACLE_PARALLEL" ]; then
+    APQ_ORACLE_PARALLEL=$WF_THREADS
+    export APQ_ORACLE_PARALLEL
+fi
 
 # The rule state is what a checklist-building reviewer subtracts by; a review
 # that only acts on findings (lint-review) does not ask for it. The `===`

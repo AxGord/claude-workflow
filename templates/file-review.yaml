@@ -51,7 +51,7 @@ states:
 
       Then → transition `done`.
     transitions:
-      done: mechanical_pass
+      done: mechanical_probe
 
   # Engine-run lint pass — the agent cannot skip or water it down. The script
   # self-gates (non-.hx file or missing hxq → "SKIP: ..." output, exit 0).
@@ -63,12 +63,37 @@ states:
   # cost for keeping the exec chain linear. The path goes via env, not
   # template interpolation into sh -c: a hostile filename ($(cmd).hx) in a
   # reviewed repo must not execute.
+  #
+  # The probe self-gates first, without a lease: nothing to lint (non-.hx,
+  # no hxq) stores its SKIP lines and exit 0 skips the pass; exit 10 (work)
+  # or anything else runs it.
+  mechanical_probe:
+    type: exec
+    command: "sh \"$WF_PLUGIN_ROOT/scripts/hxq-lint-file.sh\" \"$REVIEW_FILE\""
+    env:
+      REVIEW_FILE: "{{context.file_path}}"
+      LINT_PROBE: "1"
+    context_set:
+      lint_report: "{{stdout}}"
+    cases:
+      "0": determine_authorship
+    default: mechanical_pass
+
+  # A lint with a compiler oracle builds the project: up to one haxe per
+  # configuration at once, each a single-threaded process. The lease caps
+  # that at 4 (the script hands WF_THREADS to APQ_ORACLE_PARALLEL): a fixed
+  # share, not `budget`, so a review runs beside a suite instead of waiting
+  # for an empty machine; priority 1 — a short step an agent waits on goes
+  # ahead of queued suites (never of running ones). No wait_timeout: the
+  # report is load-bearing, an abort withdraws the wait.
   mechanical_pass:
     type: exec
     command: "sh \"$WF_PLUGIN_ROOT/scripts/hxq-lint-file.sh\" \"$REVIEW_FILE\""
     env:
       REVIEW_FILE: "{{context.file_path}}"
       LINT_LIST_RULES: "1"
+      LINT_PROBE: "0"
+    resource: { threads: 4, priority: 1 }
     timeout: 120000
     max_output: 204800
     context_set:
