@@ -1,0 +1,12 @@
+#!/bin/sh
+# wf-run through the plugin: "$WF_PLUGIN_ROOT/scripts/wf-run" … from an exec,
+# or a symlink to this file on PATH (the link is resolved to find build/).
+self=$0
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in
+    /*) self=$link ;;
+    *) self=$(dirname "$self")/$link ;;
+  esac
+done
+exec node "$(cd "$(dirname "$self")/.." && pwd -P)/build/wf-run.js" "$@"

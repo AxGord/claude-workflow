@@ -175,6 +175,32 @@ run_tests:
 
 An exec without `cwd:` runs in the session's cwd (`start`'s `cwd`, else the server's); a relative `cwd:` resolves against it. Its env carries `WF_PLUGIN_ROOT`, `WF_SESSION_ID`, `WF_PARENT_SESSION_ID` (empty at the root) and `WF_ROOT_SESSION_ID`. Every exec runs in its own process group: a timeout, `abort`, or a parent's abort cascade kills `sh -c` together with everything it started. The history entry records `exit_code` and `duration_ms`.
 
+### Heavy work — the machine-wide thread pool
+
+Light commands run as plain execs and never wait. Heavy ones (test suites, release builds, corpus runs) take a lease from one pool shared by every session, project and Claude config dir on the machine — `$WF_POOL_DIR`, default `~/.claude/workflow-pool` (deliberately not under `CLAUDE_CONFIG_DIR`):
+
+```yaml
+run_suite:
+  type: exec
+  command: "npm test"
+  resource: { threads: 6, priority: 0, wait_timeout: 900 }
+  cases: { "0": analyze, "75": machine_busy }
+  default: fix
+```
+
+The same admission is a CLI for shell steps and agents' own commands (`bin` of the package; `scripts/wf-run` for execs: `"$WF_PLUGIN_ROOT/scripts/wf-run"`):
+
+```bash
+wf-run [--threads N] [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]
+wf-run --status    # leases and the queue
+```
+
+- **Admission** (under a proper-lockfile lock on `<pool dir>/pool.json`): `held + N <= budget`, and beside a live lease also `held + N + external <= budget` — external load never blocks an EMPTY pool (a head with N ≥ budget would otherwise wait forever on background load). `external = max(0, load − held − load_threshold)` is the load not taken through the pool. `load` is measured from cpu ticks (`os.cpus()`): busy cpus over the window since the pool's previous pass (≥ 0.5 s; a window over 5 s is stale and restarts); without a window (first pass, stale) it falls back to `loadavg1`, which is conservative — it lags a minute and still holds load that has ended. `<pool dir>/config.json` (optional): `budget` (default: performance cores − 2 — `hw.perflevel0.physicalcpu` on macOS, else `os.cpus().length` − 2, at least 1) and `load_threshold` (default 2: the noise floor of light work).
+- **Order**: strictly priority descending, then arrival — a smaller task never overtakes the head of the queue. `N` above the budget counts as the budget: it waits for an empty machine and runs alone.
+- **Reaping**: leases and waiters whose pid is dead are dropped on every pass; a `wf-run` lease records its child's process group and lives while `wf-run` OR that group does (a SIGKILLed `wf-run` leaves its child running — inside the budget). A waiter polls each second and wakes at once when `pool.json` changes; `wf-run` prints a progress line to stderr when it starts waiting and every 30 s.
+- **Busy**: no lease within `--wait-timeout` / `wait_timeout` → exit **75** (EX_TEMPFAIL). An exec routes it through `cases`/`on_error`; its `timeout` counts the run only, and `wait_ms` is recorded beside `duration_ms` in the history and the ledger. `abort` withdraws a waiting exec. `resource:` is for foreground execs only (a load error on `background: true` or a fetch).
+- **`wf-run`**: the child runs in its own process group with inherited stdio; `--status` measures over a 0.6 s tick window; SIGINT/SIGTERM/SIGHUP are forwarded to the group; the exit code is the child's; the lease is released on exit. `--efficiency` (macOS) runs the command under `taskpolicy -b` (efficiency cores, low priority) outside the budget; elsewhere it warns and goes through the pool.
+
 ### `fetch` — make an HTTP request
 
 ```yaml
@@ -213,18 +239,18 @@ All prompts support `{{mustache}}` templates. Context values are available every
 
 | Source | Variables |
 |--------|-----------|
-| `exec` | `{{stdout}}`, `{{stderr}}`, `{{exit_code}}`, `{{pid}}` (background) |
+| `exec` | `{{stdout}}`, `{{stderr}}`, `{{exit_code}}`, `{{pid}}` (background), `{{wait_ms}}` (`resource:`) |
 | `fetch` | `{{status}}`, `{{body}}`, `{{error}}` |
 
 Action states can be chained — `exec` → `exec` → `fetch` → `prompt` — up to 20 steps without agent involvement.
 
 ### Strict schema
 
-An unknown key in a workflow, a state or a `retry:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.
+An unknown key in a workflow, a state, a `retry:` or a `resource:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.
 
 ### Ledger
 
-Every session end (complete, fail, abort, cascade or hook abandon) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count and the exec durations by state. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
+Every session end (complete, fail, abort, cascade or hook abandon) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
 
 ## Three-Tier Loading
 
@@ -423,7 +449,10 @@ npm test         # vitest run
 | `src/storage.ts` | JSON persistence with atomic writes and lockfile mutex |
 | `src/modifier.ts` | Runtime overlays + create (YAML writer) |
 | `src/tools.ts` | MCP tool registrations + response formatting |
-| `src/executor.ts` | Action state execution — shell commands (`exec`) and HTTP requests (`fetch`) |
+| `src/executor.ts` | Action state execution — shell commands (`exec`, a `resource:` exec under a pool lease) and HTTP requests (`fetch`) |
+| `src/pool.ts` | Machine-wide thread pool: config, admission pass, lease acquire/release under a file lock |
+| `src/wf-run.ts` | The `wf-run` CLI over the pool |
+| `src/process.ts` | Process-group kill and pid liveness |
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |

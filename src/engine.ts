@@ -15,7 +15,7 @@ import { MAX_STACK_DEPTH, DEFAULT_MAX_TRANSITIONS, KEEP_TERMINAL_SESSIONS } from
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { Executor, ExecContext } from "./executor.js";
-import { killProcessGroup } from "./executor.js";
+import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { render } from "./template.js";
 
@@ -604,6 +604,7 @@ export class Engine {
       if (ar.body !== undefined) vars.body = ar.body;
       if (ar.error !== undefined) vars.error = ar.error;
       if (ar.pid !== undefined) vars.pid = ar.pid;
+      if (ar.wait_ms !== undefined) vars.wait_ms = ar.wait_ms;
     }
     return vars;
   }
@@ -694,6 +695,7 @@ export class Engine {
       at: now,
       ...(result.type === "exec" && result.exit_code !== undefined ? { exit_code: result.exit_code } : {}),
       ...(result.duration_ms !== undefined ? { duration_ms: result.duration_ms } : {}),
+      ...(result.wait_ms !== undefined ? { wait_ms: result.wait_ms } : {}),
     };
 
     const globalKey = `${frame.workflow}:${targetStateName}`;

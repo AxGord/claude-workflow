@@ -17,6 +17,8 @@ export interface LedgerExec {
   readonly state: string;
   readonly duration_ms: number;
   readonly exit_code?: number;
+  /** Wait for a pool lease before the run (`resource:` execs). */
+  readonly wait_ms?: number;
 }
 
 /** One line of `$STATE_DIR/ledger.jsonl`: a finished session's accounting. */
@@ -30,6 +32,7 @@ export interface LedgerEntry {
   readonly ended_at: string;
   readonly transitions: number;
   readonly exec_ms_total: number;
+  readonly wait_ms_total: number;
   readonly execs: LedgerExec[];
 }
 
@@ -44,6 +47,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
       state: h.from ?? "?",
       duration_ms: h.duration_ms!,
       ...(h.exit_code !== undefined ? { exit_code: h.exit_code } : {}),
+      ...(h.wait_ms !== undefined ? { wait_ms: h.wait_ms } : {}),
     }));
   return {
     session_id: session.session_id,
@@ -55,6 +59,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
     ended_at: session.updated_at,
     transitions: session.history.filter(h => h.to !== undefined).length,
     exec_ms_total: execs.reduce((sum, e) => sum + e.duration_ms, 0),
+    wait_ms_total: execs.reduce((sum, e) => sum + (e.wait_ms ?? 0), 0),
     execs,
   };
 }

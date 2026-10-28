@@ -5,7 +5,7 @@ import YAML from "yaml";
 import { ZodError } from "zod";
 import { resetDeliveredPrompts } from "./tools.js";
 import type { WorkflowDefinition } from "./types.js";
-import { WorkflowDefinitionSchema, StateDefinitionSchema } from "./types.js";
+import { WorkflowDefinitionSchema, StateDefinitionSchema, ResourceSchema } from "./types.js";
 
 function editDistance(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -28,6 +28,7 @@ function nearest(key: string, known: readonly string[]): string {
 function knownKeysAt(issuePath: readonly (string | number)[]): readonly string[] {
   if (issuePath.length === 0) return Object.keys(WorkflowDefinitionSchema.shape);
   if (issuePath[2] === "retry") return ["max", "interval"];
+  if (issuePath[2] === "resource") return Object.keys(ResourceSchema.shape);
   return Object.keys(StateDefinitionSchema.shape);
 }
 
@@ -239,6 +240,10 @@ export class Loader {
             errors.push(`state "${name}" on_error → unknown state "${state.on_error}"`);
         }
 
+        if (state.resource && state.type !== "exec")
+          errors.push(`state "${name}" resource is for exec states`);
+        if (state.resource && state.background)
+          errors.push(`state "${name}" resource cannot hold a lease for a background exec`);
         if (state.sub_workflow)
           errors.push(`state "${name}" action state cannot have sub_workflow`);
         if (state.transitions && Object.keys(state.transitions).length > 0)
@@ -250,6 +255,9 @@ export class Loader {
 
         if (state.sub_workflow && !state.on_complete)
           errors.push(`state "${name}" has sub_workflow but no on_complete`);
+
+        if (state.resource)
+          errors.push(`state "${name}" resource is for exec states`);
       }
 
       // terminal + transitions is allowed: "soft terminal" — considered complete

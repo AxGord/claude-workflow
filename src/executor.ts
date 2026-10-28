@@ -5,6 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StateDefinition, ActionResult } from "./types.js";
 import { render } from "./template.js";
+import { killProcessGroup } from "./process.js";
+import { EX_TEMPFAIL, Pool, resolvePoolDir } from "./pool.js";
+import type { AcquireResult } from "./pool.js";
 
 // Plugin root (the dir holding templates/ and scripts/) — injected into every
 // exec's env so templates can reference bundled scripts portably:
@@ -19,6 +22,9 @@ const SIGKILL_GRACE_MS = 5_000;
 const EXIT_CODE_TIMEOUT = 124;
 const TRIM_TRIGGER_FACTOR = 4;
 const TRIM_TARGET_FACTOR = 2;
+const EXIT_CODE_ABORTED = 130;
+const LEASE_LABEL_MAX = 80;
+const ABORTED_WAIT = "aborted while waiting for a pool lease";
 
 /**
  * Who an exec runs for: the engine-injected identity env and the session's
@@ -31,18 +37,7 @@ export interface ExecContext {
   readonly cwd?: string;
 }
 
-/**
- * Signal a whole process group: every exec spawns detached (its own group),
- * so `sh -c` and everything it started die together. Falls back to the bare
- * pid for a process that is not a group leader.
- */
-export function killProcessGroup(pid: number, signal: NodeJS.Signals = "SIGTERM"): void {
-  // pids come from session JSON: kill(-1) would signal every process of the
-  // user, kill(0) / kill(-0) the server's own group.
-  if (!Number.isInteger(pid) || pid <= 1) return;
-  try { process.kill(-pid, signal); return; } catch { /* not a group leader, or gone */ }
-  try { process.kill(pid, signal); } catch { /* already dead */ }
-}
+export { killProcessGroup };
 
 function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
   if (s.length <= limit) return s;
@@ -52,26 +47,98 @@ function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
 export class Executor {
   // Foreground exec groups still running, per session — abort kills them.
   private readonly _running = new Map<string, Set<number>>();
+  // Execs still queued for a pool lease, per session — abort withdraws them.
+  private readonly _waiting = new Map<string, Set<AbortController>>();
+  private readonly _pool: Pool;
+
+  /** `pool`: the machine-wide thread pool `resource:` execs lease from. */
+  constructor(pool: Pool = new Pool(resolvePoolDir())) {
+    this._pool = pool;
+  }
 
   async execute(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
     const started = performance.now();
     let result: ActionResult;
     if (state.type === "exec") {
-      result = state.background ? await this._execBackground(state, vars, ctx) : await this._exec(state, vars, ctx);
+      if (state.background) result = await this._execBackground(state, vars, ctx);
+      else if (state.resource) result = await this._execLeased(state, vars, ctx);
+      else result = await this._exec(state, vars, ctx);
     } else if (state.type === "fetch") {
       result = await this._fetch(state, vars);
     } else {
       throw new Error(`Unknown action type: ${state.type}`);
     }
-    return { ...result, duration_ms: Math.round(performance.now() - started) };
+    // duration_ms is the run; the wait for a lease is wait_ms beside it.
+    return { ...result, duration_ms: Math.round(performance.now() - started) - (result.wait_ms ?? 0) };
   }
 
-  /** Kill every foreground exec group still running for the session. */
+  /** Kill every foreground exec group still running for the session and withdraw its lease waits. */
   killSession(sessionId: string): void {
+    for (const ac of this._waiting.get(sessionId) ?? []) ac.abort();
+    this._waiting.delete(sessionId);
     const pids = this._running.get(sessionId);
     if (!pids) return;
     for (const pid of pids) killProcessGroup(pid);
     this._running.delete(sessionId);
+  }
+
+  /**
+   * An exec with `resource:` waits for a pool lease (the same admission as
+   * `wf-run`), runs, and releases it. No lease within `wait_timeout` exits 75.
+   */
+  private async _execLeased(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
+    const resource = state.resource!;
+    const command = render(state.command!, vars);
+    const ac = new AbortController();
+    const sessionId = ctx?.sessionId ?? "";
+    let waits = this._waiting.get(sessionId);
+    if (!waits) this._waiting.set(sessionId, waits = new Set());
+    waits.add(ac);
+    let got: AcquireResult;
+    try {
+      got = await this._pool.acquire(
+        {
+          threads: resource.threads,
+          priority: resource.priority,
+          label: command.slice(0, LEASE_LABEL_MAX),
+          cwd: this._cwd(state, vars, ctx) ?? process.cwd(),
+          sessionId,
+        },
+        {
+          waitTimeoutMs: resource.wait_timeout === undefined ? undefined : resource.wait_timeout * 1000,
+          signal: ac.signal,
+        },
+      );
+    } finally {
+      waits.delete(ac);
+      if (waits.size === 0 && this._waiting.get(sessionId) === waits) this._waiting.delete(sessionId);
+    }
+    const wait_ms = got.waitMs;
+    // An abort that landed while the grant was being written: give it back, do not run.
+    if (got.status === "granted" && ac.signal.aborted) {
+      await got.lease.release();
+      return { type: "exec", success: false, stdout: "", stderr: ABORTED_WAIT, exit_code: EXIT_CODE_ABORTED, error: ABORTED_WAIT, wait_ms };
+    }
+    if (got.status !== "granted") {
+      const busy = got.status === "timeout"
+        ? `busy: ${resource.threads} threads not free within ${resource.wait_timeout}s `
+          + `(held ${got.view.held}/${got.view.budget}, external ${got.view.external.toFixed(1)})`
+        : ABORTED_WAIT;
+      return {
+        type: "exec",
+        success: false,
+        stdout: "",
+        stderr: busy,
+        exit_code: got.status === "timeout" ? EX_TEMPFAIL : EXIT_CODE_ABORTED,
+        error: busy,
+        wait_ms,
+      };
+    }
+    try {
+      return { ...(await this._exec(state, vars, ctx)), wait_ms };
+    } finally {
+      await got.lease.release();
+    }
   }
 
   private _track(sessionId: string | undefined, pid: number | undefined, add: boolean): void {

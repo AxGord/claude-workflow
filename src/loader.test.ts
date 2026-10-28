@@ -217,6 +217,34 @@ describe("Loader strict schema", () => {
     expect(errors).toContain('state "f" (retry): unknown key "intervall" — did you mean "interval"?');
   });
 
+  it("resource: is strict, exec-only and never on a background exec", () => {
+    const exec = (resource: object, extra: object = {}) => ({
+      initial: "r",
+      states: {
+        r: { type: "exec", command: "true", resource, on_success: "e", on_error: "e", ...extra },
+        e: { terminal: true },
+      },
+    });
+    const { loader, errors } = loadWithErrors({
+      ok: exec({ threads: 4, priority: 1, wait_timeout: 30 }),
+      typo: exec({ threads: 4, wait_timout: 30 }),
+      bg: exec({ threads: 4 }, { background: true }),
+      zero: exec({ threads: 0 }),
+      fetch: {
+        initial: "f",
+        states: {
+          f: { type: "fetch", url: "http://x", resource: { threads: 1 }, on_success: "e", on_error: "e" },
+          e: { terminal: true },
+        },
+      },
+    });
+    expect(loader.get("ok")!.states.r.resource).toEqual({ threads: 4, priority: 1, wait_timeout: 30 });
+    for (const name of ["typo", "bg", "zero", "fetch"]) expect(loader.get(name)).toBeUndefined();
+    expect(errors).toContain('state "r" (resource): unknown key "wait_timout" — did you mean "wait_timeout"?');
+    expect(errors).toContain('state "r" resource cannot hold a lease for a background exec');
+    expect(errors).toContain('state "f" resource is for exec states');
+  });
+
   it("every bundled template loads under the strict schema", () => {
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => { errors.push(a.map(String).join(" ")); });

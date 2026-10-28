@@ -11,6 +11,9 @@
   "homepage": "https://github.com/AxGord/claude-workflow",
   "type": "module",
   "main": "build/index.js",
+  "bin": {
+    "wf-run": "build/wf-run.js"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",

@@ -143,7 +143,7 @@ key of the same name overrides it. It also carries `WF_SESSION_ID`,
 An exec without `cwd:` runs in the session's cwd — a sub-agent started with
 `start(cwd: <worktree>)` runs its execs in the worktree, not the server's tree;
 a relative `cwd:` resolves against it. Each exec's history entry carries
-`exit_code` and `duration_ms`; every session end appends one line to
+`exit_code` and `duration_ms` (plus `wait_ms` for a `resource:` exec); every session end appends one line to
 `$STATE_DIR/ledger.jsonl`.
 
 Unknown keys are a LOAD ERROR (strict schema): a typo like `comand:` drops
@@ -166,6 +166,32 @@ start_build:
 - `timeout` is **ignored** on background exec — the process runs until it exits or the session is aborted
 - Abort (and a parent's abort cascade) kills each background exec's whole process group — `sh -c` and its children; a timeout on a foreground exec does the same
 - Abort also kills a FOREGROUND exec still running in that session (or a descendant) at once — it does not wait for the exec to finish; the interrupted transition returns an error instead of routing the killed result
+
+### Heavy Work: `resource:` and `wf-run`
+
+Light commands (a lint, a grep, a quick build check) run as plain execs — no
+queue, they never wait. HEAVY work (a full test suite, a release build, a
+corpus run) takes threads from ONE machine-wide pool shared by every session,
+project and Claude config dir (`$WF_POOL_DIR`, default `~/.claude/workflow-pool`):
+
+```yaml
+run_suite:
+  type: exec
+  command: "npm test"
+  timeout: 600000
+  resource: { threads: 6, priority: 0, wait_timeout: 900 }
+  cases:
+    "0": analyze
+    "75": machine_busy      # no lease within wait_timeout
+  default: fix
+```
+
+- Admission: `held + N <= budget` and, beside a live lease, `held + N + external <= budget` — external load never blocks an EMPTY pool. `budget` defaults to performance cores − 2; `external = max(0, load − held − load_threshold)` is load not taken through the pool, `load` = busy cpus measured from cpu ticks over the window since the pool's previous pass (loadavg1 only before a window exists — it lags a minute), `load_threshold` (default 2) is the noise floor. Both settings live in `<pool dir>/config.json`
+- Strict queue order: priority descending, then arrival — a smaller task never overtakes the head, so big tasks do not starve. `threads` above the budget counts as the budget: it waits for an empty machine and runs alone
+- `wait_timeout` (seconds) expired → exit **75** (busy), routed through `cases`/`on_error` like any exit; without it the exec waits until granted or aborted (abort withdraws the wait)
+- `timeout` counts the run, not the wait; the history entry and the ledger record `wait_ms` beside `duration_ms`; `{{wait_ms}}` is a template var
+- Foreground exec only: `resource:` with `background: true` (or on a fetch) is a load error
+- A shell step inside a larger command, or an agent's own Bash call, uses the CLI instead: `"$WF_PLUGIN_ROOT/scripts/wf-run" --threads 6 [--priority P] [--wait-timeout SEC] [--label TEXT] -- <cmd> [args…]` — same pool and admission, the child runs in its own process group, SIGINT/SIGTERM/SIGHUP are forwarded, the exit code is the child's (75 = busy). `wf-run --status` prints leases and the queue; a SIGKILLed `wf-run` keeps its lease while its child's process group runs; `--efficiency` (macOS) runs the command on efficiency cores via `taskpolicy -b`, outside the budget
 
 ### Terminal States & Outcomes
 

@@ -17,7 +17,7 @@ Transport: stdio. Packaged as a Claude Code plugin (`.claude-plugin/`).
 | `hooks/hooks.json` | Hook declarations (SessionStart, SessionEnd) |
 | `hooks/workflow-start.sh` | Detects plan resume, context clear, or fresh start; on every start rewrites `$STATE_DIR/context-epoch-<pid>` so the server re-delivers `digest_on_repeat` prompts, and deletes the markers of dead pids |
 | `hooks/workflow-cleanup.sh` | Abandons this instance's active sessions on session end, appends their ledger lines via `build/ledger-cli.js`, caps retained terminal sessions |
-| `scripts/` | Shell scripts exec states run via the engine-injected `$WF_PLUGIN_ROOT`, plus `check-skill-sync.sh` (bundled-vs-live skill drift check; `.skillsyncignore` lists intentional divergence) |
+| `scripts/` | Shell scripts exec states run via the engine-injected `$WF_PLUGIN_ROOT` (incl. the `wf-run` shim → `build/wf-run.js`), plus `check-skill-sync.sh` (bundled-vs-live skill drift check; `.skillsyncignore` lists intentional divergence) |
 
 **Tool naming**: `mcp__plugin_workflow_wf__<tool>` (e.g., `mcp__plugin_workflow_wf__start`).
 
@@ -44,6 +44,7 @@ No linter or formatter is configured.
 | `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence |
 | `DASHBOARD_PORT` | `3100` | Web dashboard HTTP port |
 | `DASHBOARD_HOST` | `127.0.0.1` | Web dashboard bind address |
+| `WF_POOL_DIR` | `$HOME/.claude/workflow-pool` | Machine-wide thread pool (`pool.json`, optional `config.json`); NOT under `CLAUDE_CONFIG_DIR` — every config dir shares one budget |
 
 Project-local workflows load from `./.claude/workflows/` (relative to server CWD). Project-local overrides global on name conflict.
 
@@ -58,6 +59,9 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 | `engine.ts` | FSM core — `start()`, `transition()`, `abort()`, `setContext()`. Manages snapshot isolation and stack push/pop |
 | `loader.ts` | YAML loading + Zod validation (strict: an unknown key fails the load, nearest known key named) + `fs.watch` hot-reload. Two-tier: global dir, then project dir (project wins) |
 | `storage.ts` | JSON session persistence with atomic writes (temp+rename) and `proper-lockfile` mutex; `appendLedger` → `ledger.jsonl` (same lock discipline, its own lock file) |
+| `pool.ts` | Machine-wide thread pool: `config.json` (`budget`, `load_threshold`), the pure admission pass `schedule()` (reap dead entries — a lease lives while its pid OR its attached child group does; grant in strict priority/arrival order while `held + N <= budget` and, beside a live lease, `held + N + external <= budget` — external never blocks an empty pool), `Pool.acquire` / lease attach / release under a proper-lockfile lock; load = busy cpus over the cpu-tick window since the pool's previous pass (loadavg1 only without a window); cpu/tick/load/liveness probes injectable |
+| `wf-run.ts` | CLI over `pool.ts` (`package.json` `bin`): lease, run the child in its own group, forward signals, exit with its code; 75 = busy |
+| `process.ts` | `killProcessGroup`, `isPidAlive` — shared by executor, engine and `wf-run` |
 | `ledger.ts` / `ledger-cli.ts` | The ledger line of an ended session; the CLI the cleanup hook runs for sessions it ends outside the server |
 | `modifier.ts` | Runtime overlays via `modify` (stored in session JSON, never touches YAML). Also `create` (writes new YAML) |
 | `tools.ts` | 10 MCP tool registrations + text formatting for status output |
@@ -74,6 +78,8 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 **Atomic writes**: Storage uses temp file + `fs.renameSync` + `proper-lockfile` for safe concurrent access.
 
 **Session cwd and ids**: `start(cwd)` sets `context.cwd`; execs without their own `cwd:` run there. Execs get `WF_SESSION_ID` / `WF_PARENT_SESSION_ID` / `WF_ROOT_SESSION_ID`, prompts `{{session_id}}` / `{{parent_session_id}}`. A root ending on a `fail` terminal is `outcome: "failed"`.
+
+**Heavy work through the pool**: an exec with `resource: { threads, priority?, wait_timeout? }` leases from `pool.ts` (the same code path as `wf-run`, not a CLI call) before it runs: no lease within `wait_timeout` → exit 75, routed like any exit; abort withdraws the wait; `wait_ms` sits beside `duration_ms` in history and ledger. Light execs never queue.
 
 **Task hints**: States can declare a `task:` string. The engine emits `create`/`complete` TaskOp signals in responses, letting the agent manage external task lists.
 

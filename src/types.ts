@@ -2,6 +2,12 @@ import { z } from "zod";
 
 // --- Workflow Definition (parsed from YAML) ---
 
+export const ResourceSchema = z.object({
+  threads: z.number().int().positive(),
+  priority: z.number().int().optional(),
+  wait_timeout: z.number().nonnegative().optional(),
+}).strict();
+
 // Single source of truth for state fields. Tool schemas derive from this.
 // To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
 export const StateDefinitionSchema = z.object({
@@ -36,6 +42,9 @@ export const StateDefinitionSchema = z.object({
   env: z.record(z.string()).optional(),
   background: z.boolean().optional(),
   max_output: z.number().int().positive().optional(), // stdout/stderr truncation limit in bytes (default 10KB)
+  // heavy work: lease `threads` from the machine-wide pool before running
+  // (wait_timeout seconds, then exit 75); foreground exec only
+  resource: ResourceSchema.optional(),
 
   // fetch
   url: z.string().optional(),
@@ -79,6 +88,8 @@ export interface ActionResult {
   readonly error?: string;
   readonly pid?: number;
   readonly duration_ms?: number;
+  /** Time spent waiting for a pool lease (`resource:` execs); not part of duration_ms. */
+  readonly wait_ms?: number;
 }
 
 // --- Session State (persisted as JSON) ---
@@ -102,6 +113,7 @@ export interface HistoryEntry {
   readonly detail?: string;
   readonly exit_code?: number;
   readonly duration_ms?: number;
+  readonly wait_ms?: number;
 }
 
 export type SessionOutcome = "completed" | "failed" | "abandoned";
