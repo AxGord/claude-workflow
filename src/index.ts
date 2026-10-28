@@ -30,6 +30,21 @@ const DASHBOARD_PORT = parseInt(process.env["DASHBOARD_PORT"] ?? "3100", 10);
 const projectDir = path.resolve(process.cwd(), ".claude", "workflows");
 const PROJECT_WORKFLOW_DIR = projectDir !== GLOBAL_WORKFLOW_DIR ? projectDir : null;
 
+// Last-resort net: one stray rejection or throw in a callback must not take the
+// MCP server (and every session it holds) down. Staying alive after an
+// uncaughtException is acceptable here: the server keeps no in-memory state a
+// half-run callback could corrupt — sessions live in files written under locks —
+// and a request that hit it fails on its own; exiting would only drop the others.
+process.on("unhandledRejection", reason => {
+  console.error(
+    "[workflow-engine] unhandledRejection:",
+    reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+  );
+});
+process.on("uncaughtException", err => {
+  console.error("[workflow-engine] uncaughtException:", err.stack ?? err.message);
+});
+
 // Initialize components
 const storage = new Storage(STATE_DIR);
 const loader = new Loader(BUNDLED_DIR, GLOBAL_WORKFLOW_DIR, PROJECT_WORKFLOW_DIR);

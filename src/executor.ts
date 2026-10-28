@@ -512,17 +512,38 @@ export class Executor {
         void recorded.then(() => resolve(result));
       };
 
+      // Building the result reads the run's files and can throw; thrown inside a
+      // handler it would be lost (or kill the server) and the exec never settle.
+      const resultOf = (exit_code: number, error?: string): ActionResult => {
+        try {
+          return Executor._runResult(files, maxOutput, exit_code, error);
+        } catch (err) {
+          return {
+            type: "exec",
+            success: false,
+            stdout: "",
+            stderr: "",
+            exit_code: 1,
+            error: `Reading the exec result failed: ${(err as Error).message}`,
+          };
+        }
+      };
+
       child.on("close", (code: number | null) => {
         if (!killed) {
-          const exit_code = Executor._readExitCode(files.rc) ?? code ?? 1;
-          finish(Executor._runResult(files, maxOutput, exit_code));
+          let exit_code: number;
+          try {
+            exit_code = Executor._readExitCode(files.rc) ?? code ?? 1;
+          } catch {
+            exit_code = code ?? 1;
+          }
+          finish(resultOf(exit_code));
           return;
         }
         // The wrapper dies of the SIGTERM even when the command ignores it:
         // the run is over only once the whole group is gone (SIGKILL after the grace).
         // A failed reap still ends the step: unhandled, it would kill the server and the exec would never settle.
-        const timedOut = (error: string) =>
-          finish(Executor._runResult(files, maxOutput, EXIT_CODE_TIMEOUT, error));
+        const timedOut = (error: string) => finish(resultOf(EXIT_CODE_TIMEOUT, error));
         void Executor._reapGroup(child.pid!, killedAt!).then(
           () => timedOut("Process timed out"),
           (err: unknown) =>
@@ -531,7 +552,7 @@ export class Executor {
       });
 
       child.on("error", err => {
-        finish({ ...Executor._runResult(files, maxOutput, 1), error: err.message });
+        finish({ ...resultOf(1), error: err.message });
       });
     });
   }

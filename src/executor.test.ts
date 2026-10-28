@@ -304,4 +304,33 @@ describe("exec: a rejection on the way to the result", () => {
     expect(r).not.toBe("hung");
     expect((r as { stdout: string }).stdout.trim()).toBe("ok");
   }, 5000);
+
+  it("a throwing result reader ends the step with exit 1 and its message", async () => {
+    const ex = Executor as unknown as { _runResult: () => never };
+    vi.spyOn(ex, "_runResult").mockImplementation(() => {
+      throw new Error("read boom");
+    });
+    const r = await settled(new Executor().execute({ type: "exec", command: "echo ok" }, {}), 2000);
+    await new Promise(res => setTimeout(res, 50));
+    expect(unhandled).toEqual([]);
+    expect(r).not.toBe("hung");
+    expect((r as { exit_code: number }).exit_code).toBe(1);
+    expect((r as { success: boolean }).success).toBe(false);
+    expect((r as { error: string }).error).toContain("read boom");
+  }, 5000);
+
+  it("a throwing result reader after a timeout still settles", async () => {
+    const ex = Executor as unknown as { _runResult: () => never };
+    vi.spyOn(ex, "_runResult").mockImplementation(() => {
+      throw new Error("read boom");
+    });
+    const r = await settled(
+      new Executor().execute({ type: "exec", command: "sleep 30", timeout: 100 }, {}),
+      3000,
+    );
+    await new Promise(res => setTimeout(res, 50));
+    expect(unhandled).toEqual([]);
+    expect(r).not.toBe("hung");
+    expect((r as { error: string }).error).toContain("read boom");
+  }, 6000);
 });
