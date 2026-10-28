@@ -5,7 +5,7 @@ import type { Engine, StatusResult } from "./engine.js";
 import type { Modifier } from "./modifier.js";
 import type { Loader } from "./loader.js";
 import type { Storage } from "./storage.js";
-import { StateDefinitionSchema, START_CWD_DESCRIPTION, type SessionState } from "./types.js";
+import { StateDefinitionSchema, START_CWD_DESCRIPTION, STATUS_KEY_DESCRIPTION, type SessionState } from "./types.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -39,8 +39,9 @@ const CONTEXT_KEY_LIMIT = 40;
 
 /**
  * The session context as status() shows it, so a parent can read a child's
- * results: one line per key, each value cut to a fixed length; past the key
- * limit the remaining keys are listed by name only.
+ * results: one line per key, each value cut to a fixed length (status with
+ * `key` returns one value whole); past the key limit the remaining keys are
+ * listed by name only.
  */
 export function formatContext(context: Record<string, unknown>): string[] {
   const keys = Object.keys(context);
@@ -50,7 +51,7 @@ export function formatContext(context: Record<string, unknown>): string[] {
     const raw = context[key];
     const text = (typeof raw === "string" ? raw : JSON.stringify(raw) ?? String(raw)).replace(/\n/g, "\\n");
     const cut = text.length > CONTEXT_VALUE_LIMIT
-      ? `${text.slice(0, CONTEXT_VALUE_LIMIT)}… [${text.length} chars]`
+      ? `${text.slice(0, CONTEXT_VALUE_LIMIT)}… [${text.length} chars; status key="${key}" for all]`
       : text;
     lines.push(`  ${key}: ${cut}`);
   }
@@ -93,6 +94,16 @@ function syncContextEpoch(): void {
   if (epoch === seenContextEpoch) return;
   seenContextEpoch = epoch;
   deliveredFullPrompts.clear();
+}
+
+/** One context value whole, as status({ key }) returns it: a string as is, anything else as JSON. */
+export function formatContextValue(context: Record<string, unknown>, key: string): string {
+  if (!Object.hasOwn(context, key)) {
+    const keys = Object.keys(context);
+    throw new Error(`Context key "${key}" is not set. Keys: ${keys.length > 0 ? keys.join(", ") : "(none)"}`);
+  }
+  const raw = context[key];
+  return typeof raw === "string" ? raw : JSON.stringify(raw, null, 2) ?? String(raw);
 }
 
 export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): string {
@@ -237,22 +248,25 @@ export function registerTools(
 
   // 3. status
   server.registerTool("status", {
-    description: "Get current state, full stack, available transitions, and history for a session.",
+    description: "Get current state, full stack, available transitions, and history for a session. With `key`: only that context value, in full.",
     annotations: ENGINE_STATE_ONLY,
     inputSchema: z.object({
       session_id: z.string().optional().describe("Session identifier"),
+      key: z.string().optional().describe(STATUS_KEY_DESCRIPTION),
     }).strict(),
   }, async (args) => {
     try {
       const sid = engine.resolveSessionId(args.session_id);
       const status = engine.getStatus(sid);
+      if (args.key !== undefined)
+        return { content: [{ type: "text", text: formatContextValue(status.context, args.key) }] };
       const historyLines = status.history.slice(-10).map(h => {
         const actorStr = h.actor ? ` [${h.actor}]` : "";
         const detailStr = h.detail ? ` (${h.detail})` : "";
         if (h.event === "action") return `  [${h.frame}] [auto] ${h.from} --${detailStr}--> ${h.to} at ${h.at}`;
         if (h.event === "skill_gate") return `  [${h.frame}] [auto] ${h.from} --skills--> ${h.to} at ${h.at}`;
         if (h.event) return `  [${h.frame}] ${h.event}${h.workflow ? ` (${h.workflow})` : ""}${actorStr} at ${h.at}`;
-        return `  [${h.frame}] ${h.from} --${h.via}--> ${h.to}${actorStr} at ${h.at}`;
+        return `  [${h.frame}] ${h.from} --${h.via}--> ${h.to}${detailStr}${actorStr} at ${h.at}`;
       });
 
       const contextLines = formatContext(status.context);

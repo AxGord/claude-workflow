@@ -50,6 +50,15 @@ export interface StatusResult {
   readonly forcePrompt?: boolean;
 }
 
+/** Where a move actually lands once `on_exhausted` routes are followed. */
+interface EnteredTarget {
+  readonly name: string;
+  readonly state: StateDefinition | undefined;
+  readonly visits: number;
+  /** History detail when the move was rerouted past an exhausted state. */
+  readonly exhausted?: string;
+}
+
 const MAX_ACTION_CHAIN = 20;
 const TERMINAL_PROMPT_DIVIDER = "\n\n---\n\n";
 
@@ -232,8 +241,8 @@ export class Engine {
     }
 
     const transitions = state.transitions ?? {};
-    const targetStateName = transitions[transitionName];
-    if (!targetStateName) {
+    const requested = transitions[transitionName];
+    if (!requested) {
       const available = Object.keys(transitions).join(", ");
       throw new Error(`Transition "${transitionName}" not available. Available: ${available}`);
     }
@@ -246,16 +255,8 @@ export class Engine {
 
     const now = new Date().toISOString();
 
-    // Update frame
-    const targetVisits = (frame.state_visits[targetStateName] ?? 0) + 1;
-    const targetState = this._resolveState(session, frame.workflow, targetStateName);
-
-    // Check max_visits
-    if (targetState?.max_visits && targetVisits > targetState.max_visits) {
-      throw new Error(
-        `State "${targetStateName}" max_visits (${targetState.max_visits}) exceeded`
-      );
-    }
+    const { name: targetStateName, state: targetState, visits: targetVisits, exhausted } =
+      this._enterTarget(session, frame, requested);
 
     const updatedFrame: StackFrame = {
       ...frame,
@@ -271,6 +272,7 @@ export class Engine {
       via: transitionName,
       at: now,
       actor,
+      ...(exhausted ? { detail: exhausted } : {}),
     };
 
     const globalKey = `${frame.workflow}:${targetStateName}`;
@@ -515,7 +517,6 @@ export class Engine {
     }
 
     const transitionName = transitionNames[0];
-    const targetStateName = transitions[transitionName];
 
     const frame = session.stack[session.active_frame];
     const wf = this._getWorkflow(session.session_id, frame.workflow);
@@ -524,11 +525,8 @@ export class Engine {
       throw new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`);
     }
 
-    const targetVisits = (frame.state_visits[targetStateName] ?? 0) + 1;
-    const resolvedTarget = this._resolveState(session, frame.workflow, targetStateName);
-    if (resolvedTarget?.max_visits && targetVisits > resolvedTarget.max_visits) {
-      throw new Error(`State "${targetStateName}" max_visits (${resolvedTarget.max_visits}) exceeded`);
-    }
+    const { name: targetStateName, state: resolvedTarget, visits: targetVisits, exhausted } =
+      this._enterTarget(session, frame, transitions[transitionName]);
 
     const now = new Date().toISOString();
     const updatedFrame: StackFrame = {
@@ -544,6 +542,7 @@ export class Engine {
       to: targetStateName,
       event: "skill_gate",
       at: now,
+      ...(exhausted ? { detail: exhausted } : {}),
     };
 
     const globalKey = `${frame.workflow}:${targetStateName}`;
@@ -583,6 +582,30 @@ export class Engine {
     }
 
     return this._buildStatus(updated, taskOps, actionPrompt);
+  }
+
+  /**
+   * The state a move into `requested` enters. Past its max_visits the move
+   * follows that state's `on_exhausted` route, and on through the next one's
+   * while it is exhausted too; a state without the route refuses the move.
+   */
+  private _enterTarget(session: SessionState, frame: StackFrame, requested: string): EnteredTarget {
+    const passed: string[] = [];
+    let name = requested;
+    let state = this._resolveState(session, frame.workflow, name);
+    let visits = (frame.state_visits[name] ?? 0) + 1;
+    while (state?.max_visits && visits > state.max_visits) {
+      const next = state.on_exhausted;
+      if (!next) throw new Error(`State "${name}" max_visits (${state.max_visits}) exceeded`);
+      passed.push(name);
+      if (passed.includes(next))
+        throw new Error(`on_exhausted routes loop: ${[...passed, next].join(" → ")}`);
+      name = next;
+      state = this._resolveState(session, frame.workflow, name);
+      visits = (frame.state_visits[name] ?? 0) + 1;
+    }
+    const exhausted = passed.length > 0 ? `max_visits exhausted: ${passed.join(", ")} → ${name}` : undefined;
+    return { name, state, visits, exhausted };
   }
 
   private _buildTemplateVars(session: SessionState): Record<string, unknown> {
@@ -636,34 +659,28 @@ export class Engine {
     }
 
     // Determine target state
-    let targetStateName: string | undefined;
+    let routedName: string | undefined;
     let detail: string;
 
     if (state.cases) {
       const key = result.type === "exec" ? String(result.exit_code ?? 1) : String(result.status ?? 0);
-      targetStateName = state.cases[key] ?? state.default;
+      routedName = state.cases[key] ?? state.default;
       detail = result.type === "exec" ? `exit ${result.exit_code}` : `HTTP ${result.status ?? "err"}`;
     } else {
-      targetStateName = result.success ? state.on_success : state.on_error;
+      routedName = result.success ? state.on_success : state.on_error;
       detail = result.type === "exec"
         ? `exit ${result.exit_code ?? "?"}`
         : result.success ? `HTTP ${result.status}` : (result.error ?? "error");
     }
 
-    if (!targetStateName) {
+    if (!routedName) {
       throw new Error(
         `Action state has no target for result: ${detail}. ` +
         `Configure cases/default or on_success/on_error.`
       );
     }
 
-    // Determine prompt
-    const promptTemplate = result.success ? state.success_prompt : state.error_prompt;
-    const actionPrompt = promptTemplate ? render(promptTemplate, { ...vars, ...result }) : undefined;
-
-    // Update frame
     const frame = session.stack[session.active_frame];
-    const targetVisits = (frame.state_visits[targetStateName] ?? 0) + 1;
     const now = new Date().toISOString();
 
     // Check max_transitions
@@ -673,11 +690,12 @@ export class Engine {
       throw new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`);
     }
 
-    // Check max_visits on target
-    const resolvedTarget = this._resolveState(session, frame.workflow, targetStateName);
-    if (resolvedTarget?.max_visits && targetVisits > resolvedTarget.max_visits) {
-      throw new Error(`State "${targetStateName}" max_visits (${resolvedTarget.max_visits}) exceeded`);
-    }
+    const { name: targetStateName, visits: targetVisits, exhausted } = this._enterTarget(session, frame, routedName);
+
+    // A rerouted move shows the exhausted-route state's own prompt: the action's
+    // prompt was written for the state it routes to by default.
+    const promptTemplate = exhausted ? undefined : result.success ? state.success_prompt : state.error_prompt;
+    const actionPrompt = promptTemplate ? render(promptTemplate, { ...vars, ...result }) : undefined;
 
     const updatedFrame: StackFrame = {
       ...frame,
@@ -691,7 +709,7 @@ export class Engine {
       from: frame.current_state,
       to: targetStateName,
       event: "action",
-      detail,
+      detail: exhausted ? `${detail}; ${exhausted}` : detail,
       at: now,
       ...(result.type === "exec" && result.exit_code !== undefined ? { exit_code: result.exit_code } : {}),
       ...(result.duration_ms !== undefined ? { duration_ms: result.duration_ms } : {}),

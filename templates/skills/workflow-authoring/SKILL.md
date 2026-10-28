@@ -130,6 +130,14 @@ After exec/fetch, also available:
 - `{{status}}`, `{{body}}` — fetch results
 - `{{error}}` — error message (both types)
 - `{{pid}}` — PID for background exec
+- `{{wait_ms}}` — pool wait of a `resource:` exec
+
+These come from the session's LAST action result (`last_action_result`), not
+only the action state's own `success_prompt`/`error_prompt`/`context_set`: the
+state the action routes into renders them in its own `prompt` (no
+`success_prompt` needed), every later prompt state still sees them, and the
+next action state reads them in its `command`/`env` — until that action
+replaces them. To keep a result past the next action, `context_set` it.
 
 Templates are single-pass, no recursion. `undefined` → empty string.
 
@@ -188,10 +196,11 @@ run_suite:
 
 - Admission: `held + N <= budget` and, beside a live lease, `held + N + external <= budget` — external load never blocks an EMPTY pool. `budget` defaults to performance cores − 2; `external = max(0, load − held − load_threshold)` is load not taken through the pool, `load` = busy cpus measured from cpu ticks over the window since the pool's previous pass (loadavg1 only before a window exists — it lags a minute), `load_threshold` (default 2) is the noise floor. Both settings live in `<pool dir>/config.json`
 - Strict queue order: priority descending, then arrival — a smaller task never overtakes the head, so big tasks do not starve. `threads` above the budget counts as the budget: it waits for an empty machine and runs alone
+- `threads: budget` (the only non-number value, strict) asks for the whole budget as `config.json` sets it when the request is made (a later raise does not grow a waiting or held lease) — no hardcoded core count; `wf-run --threads budget` is the same
 - `wait_timeout` (seconds) expired → exit **75** (busy), routed through `cases`/`on_error` like any exit; without it the exec waits until granted or aborted (abort withdraws the wait)
 - `timeout` counts the run, not the wait; the history entry and the ledger record `wait_ms` beside `duration_ms`; `{{wait_ms}}` is a template var
 - Foreground exec only: `resource:` with `background: true` (or on a fetch) is a load error
-- A shell step inside a larger command, or an agent's own Bash call, uses the CLI instead: `"$WF_PLUGIN_ROOT/scripts/wf-run" --threads 6 [--priority P] [--wait-timeout SEC] [--label TEXT] -- <cmd> [args…]` — same pool and admission, the child runs in its own process group, SIGINT/SIGTERM/SIGHUP are forwarded, the exit code is the child's (75 = busy). `wf-run --status` prints leases and the queue; a SIGKILLed `wf-run` keeps its lease while its child's process group runs; `--efficiency` (macOS) runs the command on efficiency cores via `taskpolicy -b`, outside the budget
+- A shell step inside a larger command, or an agent's own Bash call, uses the CLI instead: `"$WF_PLUGIN_ROOT/scripts/wf-run" --threads 6|budget [--priority P] [--wait-timeout SEC] [--label TEXT] -- <cmd> [args…]` — same pool and admission, the child runs in its own process group, SIGINT/SIGTERM/SIGHUP are forwarded, the exit code is the child's (75 = busy). `wf-run --status` prints leases and the queue; a SIGKILLed `wf-run` keeps its lease while its child's process group runs; `--efficiency` (macOS) runs the command on efficiency cores via `taskpolicy -b`, outside the budget
 
 ### Terminal States & Outcomes
 
@@ -211,7 +220,7 @@ finish:
 - `task:` on a hard terminal is **ignored** (the state is popped before a task op could be emitted). When you need a task op at the end, use the soft-terminal pattern above: a prompt state carrying the `prompt`/`task` with a `done` transition into a bare `finish` terminal
 - **Soft terminal** = `terminal: true` WITH transitions: the session is marked finishable but stays in the state; the agent may re-enter/continue via its transitions
 - **Outcome collapse on pop**: `outcome: fail` routes the parent to its `on_fail`; anything else (including omitted `outcome`) routes to `on_complete`. If the parent state lacks the needed route, the pop parks as pending (a `modify` adding the route resumes it)
-- A ROOT frame ending on `outcome: fail` leaves the session `failed` (shown by `status` / `sessions`); a parent reads a finished child's results via `status(child_session_id)`, which lists its context
+- A ROOT frame ending on `outcome: fail` leaves the session `failed` (shown by `status` / `sessions`); a parent reads a finished child's results via `status(child_session_id)`, which lists its context with each value cut to 200 chars; `status({ session_id, key })` returns that one value whole (a gate table, an edit list)
 
 ### Common Patterns
 
@@ -261,7 +270,7 @@ state X requires auditing ALL transitions INTO X for bypasses.
 - **A chained action state's prompt is DISCARDED**: in an exec→exec→… chain only the LAST state's `success_prompt`/`error_prompt` reaches the agent. The engine renders each state's prompt, then recurses into the next action state without passing it on — every intermediate one is dropped silently. So an intermediate state can never REPORT anything: a check whose whole value is its output (a `--list`, a `--dry-run`, a diff stat) is invisible where it sits. Either make it the chain's last state, have it ACT rather than report (`--write` over `--list`), or gate it on a non-zero exit into its own prompt state — and note that a `--list`-style check usually exits 0 whether or not it found anything, so `cases` never fires and the chain sails past
 - Background processes are NOT monitored — use a subsequent fetch/exec to check
 - **Template injection**: `{{...}}` values are substituted **unescaped** into `command:` and run via `sh -c`. A context value containing quotes, `$`, `;`, or backticks breaks the command — or executes as shell. Never interpolate untrusted/free-form context into commands; keep interpolated values to known-safe tokens (paths you set, enum-like flags). **Safe channel for everything else — `env:`**: env values are set on the process, never parsed by the shell, so `env: { REVIEW_FILE: "{{context.file_path}}" }` + `command: "script.sh \"$REVIEW_FILE\""` is injection-proof. Any AGENT-set context value (a `context_set` an agent made — e.g. a file path from a reviewed repo, where a hostile `$(cmd).hx` filename would otherwise execute) and even engine-set paths (`{{context.cwd}}` — a `$(payload)`-named directory) must go via `env:`, not into `command:`
-- **Guards throw, they don't reroute**: exceeding a state's `max_visits` throws an error (the transition is refused); hitting `max_transitions` likewise throws
+- **Guards throw unless routed**: a move past a state's `max_visits` throws (the transition is refused) — unless that state has `on_exhausted: <state>`, which enters that state instead (agent transitions, action-state routes and skill-gate auto-transitions alike; chained routes are followed, a route cycle throws; the history entry's `detail` names the exhausted states; a rerouted action move shows the routed-to state's own prompt, not the action's `success_prompt`/`error_prompt`; `on_exhausted` without `max_visits` or to an unknown state is a load error). `{{visits.<state>}}` in the exhausted-route state's prompt shows how many tries ran. A pop's `on_complete`/`on_fail` move does not check `max_visits`. Hitting `max_transitions` always throws
 - `max_transitions` accounting is **per stack frame** — each sub-workflow push starts a fresh counter checked against that workflow's own `max_transitions` (default 50)
 - **Duplicate YAML keys** — parser rejects the entire file with a `YAMLParseError`; the loader logs it to stderr and skips the file (workflow not loaded). Always validate YAML before deploying (no duplicate `success_prompt`, `error_prompt`, etc. on the same state)
 - **Long-running commands** (dev servers, log tailers, watchers — anything that doesn't exit) — always use `background: true`. Foreground exec resolves on the child's `close` event, which fires only after the process exits **and** its stdio pipes close: a command that never exits blocks forever, and so does one that exits after handing its stdout to a still-running grandchild

@@ -972,3 +972,156 @@ describe("Engine — ENG-1a review fixes", () => {
     expect((storage.ledger.at(-1) as { root_session_id: string }).root_session_id).toBe(parent.sessionId);
   });
 });
+
+describe("Engine — ENG-1d: on_exhausted, action results in later states", () => {
+  let storage: InMemoryStorage;
+  let engine: Engine;
+  let dir: string | undefined;
+
+  function setup(workflows: Record<string, object>) {
+    storage = new InMemoryStorage();
+    const result = createTestLoader(workflows);
+    dir = result.dir;
+    engine = new Engine(storage, result.loader, new Executor());
+  }
+  afterEach(() => { if (dir) cleanupDir(dir); dir = undefined; });
+
+  it("a transition past max_visits enters on_exhausted and records why", async () => {
+    setup({
+      loop: {
+        initial: "a",
+        states: {
+          a: { prompt: "A", transitions: { go: "b" } },
+          b: { prompt: "B {{visits.b}}", transitions: { back: "a" }, max_visits: 2, on_exhausted: "giveup" },
+          giveup: { prompt: "gave up after {{visits.b}}", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "fail" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("loop");
+    expect((await engine.transition(sessionId, "go")).prompt).toBe("B 1");
+    await engine.transition(sessionId, "back");
+    expect((await engine.transition(sessionId, "go")).prompt).toBe("B 2");
+    await engine.transition(sessionId, "back");
+    const r = await engine.transition(sessionId, "go");
+    expect(r.currentStateName).toBe("giveup");
+    expect(r.prompt).toBe("gave up after 2");
+    const s = storage.read(sessionId)!;
+    expect(s.stack[0].state_visits.b).toBe(2);
+    expect(s.history.at(-1)).toMatchObject({ from: "a", to: "giveup", via: "go", detail: "max_visits exhausted: b → giveup" });
+  });
+
+  it("an action state's route past max_visits enters on_exhausted with no agent turn", async () => {
+    setup({
+      fixloop: {
+        initial: "start",
+        states: {
+          start: { prompt: "go", transitions: { verify: "check" } },
+          check: { type: "exec", command: "exit 1", on_success: "end", on_error: "fix", error_prompt: "failed, fix it" },
+          fix: { prompt: "fix #{{visits.fix}}", transitions: { retry: "check" }, max_visits: 2, on_exhausted: "escalate" },
+          escalate: { prompt: "escalate (exit {{exit_code}})", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("fixloop");
+    expect((await engine.transition(sessionId, "verify")).prompt).toBe("failed, fix it");
+    expect((await engine.transition(sessionId, "retry")).prompt).toBe("failed, fix it");
+    const r = await engine.transition(sessionId, "retry");
+    expect(r.currentStateName).toBe("escalate");
+    // the error_prompt was written for fix: the rerouted move shows escalate's own prompt
+    expect(r.prompt).toBe("escalate (exit 1)");
+    expect(storage.read(sessionId)!.history.at(-1)).toMatchObject({
+      event: "action", from: "check", to: "escalate", detail: "exit 1; max_visits exhausted: fix → escalate",
+    });
+  });
+
+  it("a skill gate's auto-transition past max_visits enters on_exhausted", async () => {
+    setup({
+      gated: {
+        initial: "a",
+        states: {
+          a: { prompt: "A", transitions: { go: "gate" } },
+          gate: { skills: ["s"], transitions: { continue: "work" } },
+          work: { prompt: "W", transitions: { again: "a" }, max_visits: 1, on_exhausted: "stop" },
+          stop: { prompt: "stopped", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("gated");
+    await engine.transition(sessionId, "go");           // gate: skill missing
+    await engine.transition(sessionId, "continue");     // gate → work (visit 1), skill now loaded
+    await engine.transition(sessionId, "again");
+    const r = await engine.transition(sessionId, "go"); // gate auto-passes → work exhausted
+    expect(r.currentStateName).toBe("stop");
+  });
+
+  it("follows chained on_exhausted routes; refuses a route cycle and a state without the route", async () => {
+    setup({
+      chain: {
+        initial: "a",
+        states: {
+          a: { prompt: "A", transitions: { go: "b", loop: "x" } },
+          b: { prompt: "B", transitions: { back: "a", c: "c" }, max_visits: 1, on_exhausted: "c" },
+          c: { prompt: "C", transitions: { back: "a" }, max_visits: 1, on_exhausted: "d" },
+          d: { prompt: "D", transitions: { back: "a", cap: "cap" } },
+          x: { prompt: "X", transitions: { back: "a" }, max_visits: 1, on_exhausted: "y" },
+          y: { prompt: "Y", transitions: { back: "a" }, max_visits: 1, on_exhausted: "x" },
+          cap: { prompt: "cap", transitions: { back: "a" }, max_visits: 1 },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("chain");
+    await engine.transition(sessionId, "go");
+    await engine.transition(sessionId, "c");
+    await engine.transition(sessionId, "back");
+    const r = await engine.transition(sessionId, "go");
+    expect(r.currentStateName).toBe("d");
+    expect(storage.read(sessionId)!.history.at(-1)!.detail).toBe("max_visits exhausted: b, c → d");
+
+    await engine.transition(sessionId, "back");
+    await engine.transition(sessionId, "loop");      // x (visit 1)
+    await engine.transition(sessionId, "back");
+    // x exhausted → y (first visit) is fine
+    expect((await engine.transition(sessionId, "loop")).currentStateName).toBe("y");
+    await engine.transition(sessionId, "back");
+    await expect(engine.transition(sessionId, "loop")).rejects.toThrow("on_exhausted routes loop: x → y → x");
+
+    await engine.transition(sessionId, "go");        // → d
+    await engine.transition(sessionId, "cap");
+    await engine.transition(sessionId, "back");
+    await engine.transition(sessionId, "go");
+    await expect(engine.transition(sessionId, "cap")).rejects.toThrow('State "cap" max_visits (1) exceeded');
+  });
+
+  it("{{stdout}} / {{exit_code}} reach the next prompt state and persist until the next action runs", async () => {
+    setup({
+      results: {
+        initial: "run",
+        states: {
+          run: { type: "exec", command: "echo out; echo err >&2; exit 3", on_success: "seen", on_error: "seen" },
+          seen: { prompt: "code={{exit_code}} out={{stdout}} err={{stderr}}", transitions: { next: "later" } },
+          later: { prompt: "still {{exit_code}}", transitions: { rerun: "probe" } },
+          probe: {
+            type: "exec",
+            command: 'echo "prev=$P"',
+            env: { P: "{{exit_code}}" },
+            on_success: "after",
+            on_error: "after",
+          },
+          after: { prompt: "now {{exit_code}}: {{stdout}}", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const first = await engine.start("results");
+    expect(first.currentStateName).toBe("seen");
+    expect(first.prompt).toBe("code=3 out=out\n err=err\n");
+    const { sessionId } = first;
+    expect(storage.read(sessionId)!.last_action_result).toMatchObject({ type: "exec", exit_code: 3, stdout: "out\n" });
+    expect((await engine.transition(sessionId, "next")).prompt).toBe("still 3");
+    expect((await engine.transition(sessionId, "rerun")).prompt).toBe("now 0: prev=3\n");
+  });
+});

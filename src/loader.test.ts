@@ -230,6 +230,8 @@ describe("Loader strict schema", () => {
       typo: exec({ threads: 4, wait_timout: 30 }),
       bg: exec({ threads: 4 }, { background: true }),
       zero: exec({ threads: 0 }),
+      budget: exec({ threads: "budget" }),
+      all: exec({ threads: "all" }),
       fetch: {
         initial: "f",
         states: {
@@ -239,10 +241,28 @@ describe("Loader strict schema", () => {
       },
     });
     expect(loader.get("ok")!.states.r.resource).toEqual({ threads: 4, priority: 1, wait_timeout: 30 });
-    for (const name of ["typo", "bg", "zero", "fetch"]) expect(loader.get(name)).toBeUndefined();
+    expect(loader.get("budget")!.states.r.resource).toEqual({ threads: "budget" });
+    for (const name of ["typo", "bg", "zero", "all", "fetch"]) expect(loader.get(name)).toBeUndefined();
     expect(errors).toContain('state "r" (resource): unknown key "wait_timout" — did you mean "wait_timeout"?');
     expect(errors).toContain('state "r" resource cannot hold a lease for a background exec');
     expect(errors).toContain('state "f" resource is for exec states');
+  });
+
+  it("on_exhausted must name a known state and needs max_visits", () => {
+    const wf = (b: object) => ({
+      initial: "a",
+      states: { a: { prompt: "A", transitions: { go: "b" } }, b: { prompt: "B", transitions: { back: "a" }, ...b }, e: { terminal: true } },
+    });
+    const { loader, errors } = loadWithErrors({
+      ok: wf({ max_visits: 2, on_exhausted: "e" }),
+      unknown: wf({ max_visits: 2, on_exhausted: "nope" }),
+      bare: wf({ on_exhausted: "e" }),
+    });
+    expect(loader.get("ok")!.states.b.on_exhausted).toBe("e");
+    expect(loader.get("unknown")).toBeUndefined();
+    expect(loader.get("bare")).toBeUndefined();
+    expect(errors).toContain('state "b" on_exhausted → unknown state "nope"');
+    expect(errors).toContain('state "b" on_exhausted needs max_visits');
   });
 
   it("every bundled template loads under the strict schema", () => {

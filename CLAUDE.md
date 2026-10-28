@@ -79,7 +79,13 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 
 **Session cwd and ids**: `start(cwd)` sets `context.cwd`; execs without their own `cwd:` run there. Execs get `WF_SESSION_ID` / `WF_PARENT_SESSION_ID` / `WF_ROOT_SESSION_ID`, prompts `{{session_id}}` / `{{parent_session_id}}`. A root ending on a `fail` terminal is `outcome: "failed"`.
 
-**Heavy work through the pool**: an exec with `resource: { threads, priority?, wait_timeout? }` leases from `pool.ts` (the same code path as `wf-run`, not a CLI call) before it runs: no lease within `wait_timeout` → exit 75, routed like any exit; abort withdraws the wait; `wait_ms` sits beside `duration_ms` in history and ledger. Light execs never queue.
+**Visit guards**: every move into a state (agent transition, action route, skill-gate auto-transition) goes through `Engine._enterTarget`: past the target's `max_visits` it follows `on_exhausted` (chained, cycle = error) or throws. Pop moves (`on_complete`/`on_fail`) do not check `max_visits`.
+
+**Action results in later states**: `_buildTemplateVars` exposes the session's `last_action_result` (`{{stdout}}`, `{{exit_code}}`, …) to every prompt and action until the next action replaces it — not only to the action's own `success_prompt`.
+
+**Reading a child's results**: `status` cuts each context value to 200 chars; `status({ session_id, key })` returns one value whole (`formatContextValue`), finished sessions included, with no ownership check (like `status`).
+
+**Heavy work through the pool**: an exec with `resource: { threads, priority?, wait_timeout? }` leases from `pool.ts` (the same code path as `wf-run`, not a CLI call) before it runs (`threads: budget` = the configured budget, read when the request is made — a later raise does not grow a waiting or held lease): no lease within `wait_timeout` → exit 75, routed like any exit; abort withdraws the wait; `wait_ms` sits beside `duration_ms` in history and ledger. Light execs never queue.
 
 **Task hints**: States can declare a `task:` string. The engine emits `create`/`complete` TaskOp signals in responses, letting the agent manage external task lists.
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // wf-run: run a heavy command under a lease from the machine-wide thread pool.
-//   wf-run [--threads N] [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]
+//   wf-run [--threads N|budget] [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]
 //   wf-run --status
 import { spawn } from "node:child_process";
 import os from "node:os";
 import { EX_TEMPFAIL, Pool, describeWait, effectiveThreads, formatStatus, resolvePoolDir } from "./pool.js";
 import { killProcessGroup } from "./process.js";
+import { RESOURCE_THREADS_BUDGET } from "./types.js";
 
-const USAGE = "usage: wf-run [--threads N] [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]\n"
+const USAGE = "usage: wf-run [--threads N|budget] [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]\n"
   + "       wf-run --status";
 const EX_USAGE = 64;
 const EX_NOEXEC = 126;
@@ -18,7 +19,7 @@ const FORWARDED: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 interface Options {
   readonly status: boolean;
-  readonly threads: number;
+  readonly threads: number | typeof RESOURCE_THREADS_BUDGET;
   readonly priority: number;
   readonly waitTimeoutSec?: number;
   readonly label?: string;
@@ -29,7 +30,7 @@ interface Options {
 function parseArgs(argv: readonly string[]): Options {
   let status = false;
   let efficiency = false;
-  let threads = 1;
+  let threads: Options["threads"] = 1;
   let priority = 0;
   let waitTimeoutSec: number | undefined;
   let label: string | undefined;
@@ -55,7 +56,11 @@ function parseArgs(argv: readonly string[]): Options {
     switch (flag) {
       case "--status": status = true; break;
       case "--efficiency": efficiency = true; break;
-      case "--threads": threads = integer(flag, value(flag, inline), 1); break;
+      case "--threads": {
+        const v = value(flag, inline);
+        threads = v === RESOURCE_THREADS_BUDGET ? v : integer(flag, v, 1);
+        break;
+      }
       case "--priority": priority = integer(flag, value(flag, inline), -Infinity); break;
       case "--label": label = value(flag, inline); break;
       case "--wait-timeout": {
@@ -129,9 +134,10 @@ async function main(argv: readonly string[]): Promise<number> {
     ac.abort();
   };
   for (const s of FORWARDED) process.on(s, onSignal);
+  const threads = opts.threads === RESOURCE_THREADS_BUDGET ? pool.config().budget : opts.threads;
   const result = await pool.acquire(
     {
-      threads: opts.threads,
+      threads,
       priority: opts.priority,
       label: opts.label ?? opts.command.join(" ").slice(0, LABEL_MAX),
       cwd: process.cwd(),
@@ -150,7 +156,7 @@ async function main(argv: readonly string[]): Promise<number> {
     if (result.status === "aborted") return 128 + (caught ? os.constants.signals[caught] : 0);
     const { view } = result;
     process.stderr.write(
-      `wf-run: busy — ${effectiveThreads(opts, view.budget)} threads not free within ${opts.waitTimeoutSec}s `
+      `wf-run: busy — ${effectiveThreads({ threads }, view.budget)} threads not free within ${opts.waitTimeoutSec}s `
       + `(held ${view.held}/${view.budget}, external ${view.external.toFixed(1)})\n`,
     );
     return EX_TEMPFAIL;

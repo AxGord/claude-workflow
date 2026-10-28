@@ -264,6 +264,18 @@ describe("Executor resource:", () => {
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
   });
 
+  it('threads: "budget" leases the configured budget', async () => {
+    const dir = poolDir({ budget: 7, load_threshold: 0 });
+    const executor = new Executor(new Pool(dir, fakeProbes()));
+    const seen = path.join(dir, "seen");
+    const r = await executor.execute(
+      { type: "exec", command: `cp "${path.join(dir, "pool.json")}" "${seen}"`, resource: { threads: "budget" } }, {},
+    );
+    expect(r.exit_code).toBe(0);
+    expect((JSON.parse(fs.readFileSync(seen, "utf8")) as PoolState).leases.map(l => l.threads)).toEqual([7]);
+    expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
+  });
+
   it("{{wait_ms}} reaches the states after a resource: exec", async () => {
     const dir = poolDir();
     const pool = new Pool(dir, fakeProbes());
@@ -388,6 +400,15 @@ describe("wf-run CLI (real processes)", () => {
     expect(r.stderr).toMatch(/busy/);
     expect(readPool(dir).waiting).toEqual([]);
     if (holder.status === "granted") await holder.lease.release();
+  }, 15_000);
+
+  it("--threads budget leases the configured budget", async () => {
+    const dir = poolDir({ budget: 5, load_threshold: 1000 });
+    const seen = path.join(dir, "seen");
+    const r = await wfRun(dir, ["--threads", "budget", "--", "cp", path.join(dir, "pool.json"), seen]).done;
+    expect(r.code).toBe(0);
+    expect((JSON.parse(fs.readFileSync(seen, "utf8")) as PoolState).leases.map(l => l.threads)).toEqual([5]);
+    expect((await wfRun(dir, ["--threads", "all", "--", "true"]).done).code).toBe(64);
   }, 15_000);
 
   it("forwards SIGTERM to the child's group, exits with the child's code and releases the lease", async () => {

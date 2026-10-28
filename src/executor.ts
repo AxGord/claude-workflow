@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StateDefinition, ActionResult } from "./types.js";
+import { RESOURCE_THREADS_BUDGET } from "./types.js";
 import { render } from "./template.js";
 import { killProcessGroup } from "./process.js";
 import { EX_TEMPFAIL, Pool, resolvePoolDir } from "./pool.js";
@@ -88,6 +89,7 @@ export class Executor {
    */
   private async _execLeased(state: StateDefinition, vars: Record<string, unknown>, ctx?: ExecContext): Promise<ActionResult> {
     const resource = state.resource!;
+    const threads = resource.threads === RESOURCE_THREADS_BUDGET ? this._pool.config().budget : resource.threads;
     const command = render(state.command!, vars);
     const ac = new AbortController();
     const sessionId = ctx?.sessionId ?? "";
@@ -98,7 +100,7 @@ export class Executor {
     try {
       got = await this._pool.acquire(
         {
-          threads: resource.threads,
+          threads,
           priority: resource.priority,
           label: command.slice(0, LEASE_LABEL_MAX),
           cwd: this._cwd(state, vars, ctx) ?? process.cwd(),
@@ -121,7 +123,7 @@ export class Executor {
     }
     if (got.status !== "granted") {
       const busy = got.status === "timeout"
-        ? `busy: ${resource.threads} threads not free within ${resource.wait_timeout}s `
+        ? `busy: ${threads} threads not free within ${resource.wait_timeout}s `
           + `(held ${got.view.held}/${got.view.budget}, external ${got.view.external.toFixed(1)})`
         : ABORTED_WAIT;
       return {

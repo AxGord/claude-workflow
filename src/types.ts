@@ -2,8 +2,11 @@ import { z } from "zod";
 
 // --- Workflow Definition (parsed from YAML) ---
 
+/** `threads: "budget"` asks for the pool's whole budget as configured when the request is made; a later raise of `budget` does not grow a waiting or held lease. */
+export const RESOURCE_THREADS_BUDGET = "budget";
+
 export const ResourceSchema = z.object({
-  threads: z.number().int().positive(),
+  threads: z.union([z.number().int().positive(), z.literal(RESOURCE_THREADS_BUDGET)]),
   priority: z.number().int().optional(),
   wait_timeout: z.number().nonnegative().optional(),
 }).strict();
@@ -16,6 +19,8 @@ export const StateDefinitionSchema = z.object({
   terminal: z.boolean().optional(),
   outcome: z.enum(["complete", "fail"]).optional(),
   max_visits: z.number().int().positive().optional(),
+  // a move past max_visits enters this state instead of being refused
+  on_exhausted: z.string().optional(),
   sub_workflow: z.string().optional(),
   on_complete: z.string().optional(),
   on_fail: z.string().optional(),
@@ -165,8 +170,12 @@ export const WorkflowTransitionInputSchema = z.object({
   actor: z.string().optional().describe("Identity of the agent performing this action"),
 });
 
+export const STATUS_KEY_DESCRIPTION =
+  "Return only this context key's FULL value (status cuts every value to 200 chars)";
+
 export const WorkflowStatusInputSchema = z.object({
   session_id: z.string().describe("Session identifier"),
+  key: z.string().optional().describe(STATUS_KEY_DESCRIPTION),
 });
 
 export const WorkflowContextSetInputSchema = z.object({

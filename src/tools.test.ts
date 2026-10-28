@@ -217,7 +217,7 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
     for (let i = 0; i < 45; i++) ctx[`k${i}`] = i;
     const lines = formatContext(ctx);
     expect(lines[0]).toBe("CONTEXT:");
-    expect(lines[1]).toBe(`  long: ${"x".repeat(200)}… [500 chars]`);
+    expect(lines[1]).toBe(`  long: ${"x".repeat(200)}… [500 chars; status key="long" for all]`);
     expect(lines[2]).toBe('  obj: {"a":[1,2]}');
     expect(lines[3]).toBe("  multi: a\\nb");
     expect(lines.at(-1)).toBe("  … 8 more: k37, k38, k39, k40, k41, k42, k43, k44");
@@ -233,6 +233,25 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
     const r = await call("status", { session_id: child.sessionId });
     expect(r.text).toContain("CONTEXT:");
     expect(r.text).toContain("  verdict: GREEN: 12 tests");
+  });
+
+  it("status({ key }) returns one context value whole, of a finished child too", async () => {
+    const { engine, call } = mount({ simple: SIMPLE_WORKFLOW });
+    const parent = await engine.start("simple");
+    const child = await engine.start("simple", undefined, parent.sessionId);
+    const table = Array.from({ length: 20 }, (_, i) => `| row ${i} | ${"y".repeat(30)} |`).join("\n");
+    await engine.setContext(child.sessionId, "gate", table);
+    await engine.setContext(child.sessionId, "edits", { files: ["a.ts", "b.ts"], lines: 42 });
+    await engine.transition(child.sessionId, "next");
+    expect((await call("status", { session_id: child.sessionId })).text).toContain('chars; status key="gate" for all]');
+    const gate = await call("status", { session_id: child.sessionId, key: "gate" });
+    expect(gate.isError).toBeUndefined();
+    expect(gate.text).toBe(table);
+    expect((await call("status", { session_id: child.sessionId, key: "edits" })).text)
+      .toBe(JSON.stringify({ files: ["a.ts", "b.ts"], lines: 42 }, null, 2));
+    const missing = await call("status", { session_id: child.sessionId, key: "nope" });
+    expect(missing.isError).toBe(true);
+    expect(missing.text).toMatch(/^ERROR: Context key "nope" is not set\. Keys: .*gate, edits$/);
   });
 
   it("status and sessions show a failed root as (failed)", async () => {

@@ -215,6 +215,13 @@ export class Loader {
         }
       }
 
+      if (state.on_exhausted !== undefined) {
+        if (!stateNames.has(state.on_exhausted))
+          errors.push(`state "${name}" on_exhausted → unknown state "${state.on_exhausted}"`);
+        if (!state.max_visits)
+          errors.push(`state "${name}" on_exhausted needs max_visits`);
+      }
+
       if (isAction) {
         // Action state validation
         if (state.type === "exec" && !state.command)
