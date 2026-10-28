@@ -50,7 +50,7 @@ Distinct from the read-only query subcommands above: these REWRITE source. All a
 
 **Writer-emit ops caveat — inserting NEW `#if` conditional-compilation blocks FAILS.** The writer structurally re-emits newly-inserted source; it mangles `#if (...)`/`#else`/`#end` blocks inside a method body (collapses them inline, emits stray `;;`) → the op aborts with `result does not parse`. EXISTING `#if` blocks survive ops fine (their trivia is preserved verbatim — `recon --probe <file> --writer-equals` shows WRITER PASS), so an op that does NOT touch the `#if` region works, AND replacing an `#if`-containing member with `#if`-FREE new source works (e.g. repointing it to a helper). WORKAROUND: put any new `#if`-containing class/method in a NEW file via `hxq new <path> --raw - --write` (reads from stdin, writes bytes VERBATIM, only parse-validates — no writer re-emit). Note: `--raw -` requires the `-` adjacent to `--raw`, and `--write` to apply.
 
-**Writer-emit ops caveat — whole-class `replace-node --select 'ClassDecl:<Name>'` is unreliable.** Observed failure: `apq replace-node: result does not parse: error at 25:7: unexpected input (expected //)` — the whole-file re-emit mangles the class's LEADING doc comment (`/** */`). Reproduced both with and without `#if` in the new body — this is distinct from the `#if` gotcha above; the culprit is whole-class re-emit of the leading doc. WORKAROUND: use per-member ops instead — `replace-node --select 'FnMember:<name>'`, `add-member`, `remove-member`. Single-member replaces round-trip fine even when the member body contains inline `//` comments. To reorder members (e.g. move a private static below a public static): `remove-member <name> --with-doc` then `add-member` (append-only → lands last).
+**FIXED (2026-10-17, anyparse N5 + `bf7c68763`) — whole-class `replace-node --select 'ClassDecl:<Name>'` round-trips.** The old failure (`result does not parse … (expected //)`, the leading `/** */` mangled) no longer reproduces: an identity rewrite of every type in TM (1114) and anyparse (2199), with and without docs, is byte-identical. The span covers the leading doc and `final`, so `<newSource>` must spell both (omit the doc and it is dropped). Per-member ops stay the cheaper choice for a small change.
 
 **Writer-emit ops caveat — ops/`hxq new` auto-rebuild aborts on a non-compiling src tree.** The shim auto-rebuilds `apq.js` when `src/` is stale; if the CURRENT tree does not compile (e.g. right after `rm`-ing a file still referenced elsewhere, or mid-multi-edit where two members' signatures temporarily mismatch), the rebuild fails and the op aborts BEFORE writing — the intended edit silently does not happen. WORKAROUND: pass `HXQ_QUIET=1` to skip the staleness check for each intermediate edit in a multi-step sequence, then run one clean `haxe bin/apq-js.hxml` at the end to validate. **COROLLARY: after a run of `HXQ_QUIET=1` edits, `apq.js` is STALE — a `hxq lint … --fix` / any CLI call you run next executes the OLD binary and silently shows pre-edit behaviour (e.g. "0 edit(s)" when your new code should make 1). Rebuild `haxe bin/apq-js.hxml` (or drop `HXQ_QUIET` so the shim auto-rebuilds) BEFORE running the CLI. `haxe test-js.hxml` builds `test.js`, NOT `apq.js` — they are separate binaries.**
 
@@ -106,11 +106,17 @@ Distinct from the read-only query subcommands above: these REWRITE source. All a
 
 **`replace-node --at <l:c> --kind <Kind>` can resolve a CO-STARTING node of `<Kind>` that ENCLOSES the one you mean — a silent-corruption hazard.** Editing the inner `return X;` of `return arr.filter(v -> { … return X; })` via `--at <innerReturn> --kind ReturnStmt` grabbed the OUTER `return arr.filter(…)` ReturnStmt (both contain the cursor, both are `ReturnStmt`) → the new `return X;` replaced the WHOLE outer return, the filter/lambda body vanished, and the file still PARSED (caught only on the next build / `source` read). **FIX: don't use `--at --kind` for nested statements at all — `--match '<the exact statement>' --kind <Kind>` (lift semantics, exactly-one discipline) or `--select 'FnMember:<fn>'` (replace the whole function) have no co-starting ambiguity.** `--at <l> --kind <K>` remains only for operator nodes a pattern can't spell easily; if you must use it, probe `ast --at` first.
 
-**Ops caveat — `move-member` carries `import`s but NOT `using` declarations.** The advisory ("import-carrying is best-effort — type-position dependencies only") reads as covering the whole header; it doesn't — a `using StringTools;`/`using Lambda;` in the source file is left behind, so the moved bodies lose their static extensions and the destination fails to compile with errors naming the STDLIB type, not the missing `using` (`String has no field fastCodeAt`, `Array<T> has no field find`). Fix: after the move, `hxq add-import <dest> StringTools --using --write` per `using` the moved bodies rely on. Order matters — `add-import` is writer-emit + canonical-gated while `move-member` is a verbatim splice, so `hxq fmt <dest> --write` must run BETWEEN them or `add-import` refuses as "not canonical".
+**FIXED (2026-10-17, anyparse N10/N12) — `move-member` carries `import`s AND the `using`s the moved code calls.** Carried statements land canonically: imports sorted, a blank line, then the `using`s in source order, then guarded blocks; a destination with no imports gets an import seat of its own (`importLessSeat`). A `using` whose extension methods the moved code never calls is NOT carried (same test as `unused-import`). Sub-type imports of the source module (`import <module>.<Sub>;`) are carried too (a private sub-type is still a refusal). Other N10/N12 behaviour worth knowing before a split:
+- mutable fields that ONLY the moved group references travel with it automatically (fixed point; refused when anything else reads them, the refusal names the readers);
+- receiver-qualified callers (`_g.x()`) are routed through the holding field (`_g.library.x()`) when the receiver is PROVEN the source class or a subtype; a receiver proven an unrelated class/interface is left alone; anything else (unknown, Dynamic, abstract, typedef/structure, `super`, `?.`) is a refusal;
+- `--keep-bare` keeps bare calls in the source bare through one `import Dest.*;` (refused when the wildcard could rebind any name);
+- private access needed by 2+ moved members gets ONE type-level `@:access` on the destination;
+- `override`s, interface/abstract implementations and members a subclass overrides are refused;
+- `--scaffold` wires the via field right after the last constructor statement that writes a field from the destination's arguments (and after `super()`), so `@:nullSafety(Strict)` constructors still compile.
 
-**Ops caveat — `move-member` can leave the DESTINATION file non-canonical, so the NEXT writer-emit op on it refuses (not only when a `using` needs re-adding, per the note above).** Cause: the moved bodies' sibling calls get requalified to `Src.member`, which lengthens those lines — a call that fit the width before now doesn't, and the writer would re-wrap it. `move-member` is a verbatim splice with NO canonical gate, so it writes happily regardless; the next `patch`/`add-member`/`add-import`/`set-doc` on that file then errors `apq patch: file is not in canonical form — format it first`. Rule: run `hxq fmt <dest> --write` immediately after EVERY `move-member`, before any writer-emit op on it.
+**Ops caveat — `move-member` can leave the DESTINATION file non-canonical, so the NEXT writer-emit op on it refuses (not only when a `using` needs re-adding, per the note above).** Cause: the moved bodies' sibling calls get requalified to `Src.member`, which lengthens those lines — a call that fit the width before now doesn't, and the writer would re-wrap it. `move-member` is a verbatim splice with NO canonical gate, so it writes happily regardless; the next `patch`/`add-member`/`add-import`/`set-doc` on that file then errors `apq patch: file is not in canonical form — format it first`. Rule: run `hxq fmt <dest> --write` immediately after EVERY `move-member`, before any writer-emit op on it. (`--keep-bare`, since 2026-10-17, avoids the requalification where the source called the members bare.)
 
-**Ops caveat — a class-level `@:meta` is a SIBLING of the type node, so `patch --select 'ClassDecl:X'` can't reach it.** The fragment `@:nullSafety(Strict)\nfinal class X {` errors "the old fragment does not occur in the resolved ClassForm node" — but `patch --at <metaLine>:1` DOES resolve it: the cursor lands on the `MetaCall` node (`hxq ast --at <line>:1 --depth 1` prints `(MetaCall @:nullSafety …)`), so patching that node's own text with itself plus a new line above adds a `@:access(...)`/any other class-level metadata without retyping the declaration. (Since `e8ec6cc1` prefer `hxq add-meta` — the `patch --at` recipe still works but needs an existing metadata node; whole-class `replace-node --select 'ClassDecl:…'` is separately documented above as unreliable.)
+**Ops caveat — a class-level `@:meta` is a SIBLING of the type node, so `patch --select 'ClassDecl:X'` can't reach it.** The fragment `@:nullSafety(Strict)\nfinal class X {` errors "the old fragment does not occur in the resolved ClassForm node" — but `patch --at <metaLine>:1` DOES resolve it: the cursor lands on the `MetaCall` node (`hxq ast --at <line>:1 --depth 1` prints `(MetaCall @:nullSafety …)`), so patching that node's own text with itself plus a new line above adds a `@:access(...)`/any other class-level metadata without retyping the declaration. (Since `e8ec6cc1` prefer `hxq add-meta` — the `patch --at` recipe still works but needs an existing metadata node; whole-class `replace-node --select 'ClassDecl:…'` works since 2026-10-17 but retypes the whole type.)
 
 **Ops caveat — `move-member` auto-PROMOTES every moved non-public member that still has a caller outside the destination.** That's a visibility (API) change the advisory reports but nothing gates — and it has a second-order cost: `doc-coverage` fires on "a public API type or member without a doc comment", so a batch of previously-private helpers arrives as a pile of new doc-coverage findings. When the project idiom is `@:access` rather than promotion, restore it in two steps: `@:access(<pkg>.<Dest>)` on the SOURCE type (`hxq add-meta <src> --select 'ClassDecl:<Src>' '@:access(<pkg>.<Dest>)' --write` — works whether or not the type already carries metadata), then `hxq set-modifier <dest> --select 'FnMember:<name>' private --write` per moved member (`FinalMember:<NAME>` for moved constants). Do the `@:access` first and run the intermediate ops with `HXQ_AUTO_REBUILD=0`, since each single-member state in between doesn't compile.
 
@@ -127,3 +133,50 @@ Distinct from the read-only query subcommands above: these REWRITE source. All a
 **Ops caveat — no op addresses a TRAILING orphan comment at EOF; build a throwaway decl under it and delete both.** A comment with no declaration after it belongs to no node, so every address mode misses it: the last decl's `patch --select` region stops at that decl's own closing brace, `remove-element` needs an element, and `set-comment` can only replace a comment with another comment. Working three-step recipe: (1) `add-element --after --select '<LastDecl>'` with a throwaway decl — at MODULE level the insert overshoots the trailing doc and lands BELOW it, which is exactly the documented `--after` overshoot trap, here working for you; (2) `set-doc --select '<Kind>:<throwaway>'` with any placeholder — it collapses the WHOLE doc run above the target into the one block you pass, absorbing the orphan; (3) `remove-element --select '<Kind>:<throwaway>' --with-doc`, which takes the placeholder with it. Then `fmt --list` to confirm.
 
 **Ops caveat — the `--scope` path-form false ambiguity applies to `hxq move`, not just `rename --scope`.** `hxq move src/pkg/F.hx <l>:<c> src/pkg/G.hx --scope /abs/root/src` refuses with `type "X" is declared in 2 files under scope — ambiguous` for a type declared exactly once, because the cursor file's relative spelling and the scope walk's absolute one count as two files. Spell the cursor path and the `--scope` the SAME way (relative+relative or absolute+absolute); a `declares`-confirmed-unique type reporting "declared in 2 files" is a path-form symptom, never a real duplicate.
+
+## JSON files — the same ops, never python / sed (anyparse N47, 2026-10-19)
+
+A `.json` path selects the `json` grammar plugin whatever `--lang` says (the shim's `--lang haxe` included), so
+`add-element` (`--after` / `--before` / `--append` / `--sorted`), `remove-element`, `replace-node` and the readers `ast`
+/ `source --select` work on JSON exactly as on Haxe. **Edit `test/testkit/mutation-arms.json`, an `apqlint.json`, an
+`hxformat.json` with these ops — not with python, `jq`, `sed` or by hand.**
+
+Vocabulary (the JSON grammar's ctor names; `hxq ast f.json` prints the tree):
+
+| Node | Name | Address |
+|---|---|---|
+| `JObject` | — | `Member:<key> > JObject` |
+| `Member` (one `"key": value` entry; span = key's quote .. value's end) | its decoded key | `Member:rules >> Member:thread-safety >> Member:registers` |
+| `JArray` | — | `Member:registers > JArray` (the container `--append` / `--sorted` address) |
+| `JString` | its decoded value | `Member:spawns > JArray > JString:api.APIRequest2.success` |
+| `JNumber` / `JBool` / `JNull` | — | by `--nth`, or `--match` |
+
+An array element is picked by VALUE (`JString:<v>`), by ORDINAL (`--select 'Member:arms > JArray > JObject' --nth 12`),
+or by PATTERN: `--match` takes a JSON value whose `"$x"` / `"$_"` strings are metavariables — an object pattern must
+list every member in order: `--match '{"name": "M-X", "type": "$_", "method": "$_", "force": "$_", "note": "$_"}'`.
+A key containing `>` cannot be spelled in `--select` (the selector splits on it) — use `--match` or a position.
+
+Recipes:
+```sh
+# append an arm (DeclaredArms order = JSON order, so --append, never --sorted)
+hxq add-element test/testkit/mutation-arms.json --append --select 'Member:arms > JArray' - --write <<'EOF2'
+{"name": "M-X", "type": "anyparse.query.Foo", "method": "bar", "force": "null", "note": "…"}
+EOF2
+# re-aim an arm: replace the whole object, addressed by pattern
+hxq replace-node test/testkit/mutation-arms.json --match '{"name": "M-X", "type": "$_", "method": "$_", "force": "$_", "note": "$_"}' - --write <<'EOF2'
+{"name": "M-X", "type": "anyparse.query.Foo", "method": "baz", "force": "null", "note": "…"}
+EOF2
+# move entries between two lists of a config
+hxq add-element apqlint.json --append --select 'Member:registers > JArray' '"a.B.c", "a.B.d"' --write
+hxq remove-element apqlint.json --select 'Member:spawns > JArray > JString:a.B.c' --write
+# a new member next to a sibling, a value replaced
+hxq add-element apqlint.json --after --select 'Member:closedWorld' '"throwers": []' --write
+hxq replace-node apqlint.json --select 'Member:closedWorld > JBool' 'false' --write
+```
+
+The writer is FORMAT-PRESERVING: a parseable JSON file is always "canonical" (no `--reformat` needed), an edit changes
+its own lines only, and what it adds is laid out like its siblings — one entry per line or inline as the container is,
+the document's indent unit (tab or N spaces) and line end, the siblings' `:` spacing; a new object / array copies its
+nearest same-kind sibling's shape, else its container's. Pass the element text compact; the layout is the writer's.
+`remove-element` on the last entry also takes the `,` before it. Not covered (edit by hand, report the gap): `patch`,
+`move-elements`, `--sorted` over objects by key, comments (JSON has none).

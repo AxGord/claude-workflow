@@ -477,6 +477,23 @@ The render pipe only rebuilds attachment geometry when a private `_stateChanged`
 - Tell: bones move correctly across samples but the rendered shape/silhouette doesn't change; a slot hidden via `setAttachment(null)` reappears later.
 - Related trap: the first bounds read (`getBounds()`, or `renderer.extract.*({target: spine})`) on an instance that has never rendered (`hasNeverUpdated`) triggers its own `_updateAndApplyState(0)`, re-applying the animation — so any slot edit made before that first read gets silently overwritten.
 
+### 40. `AnimationState` pools `TrackEntry` objects — a held reference can later point at an unrelated clip
+
+spine-core (used by spine-pixi-v8, verified against 4.2) frees a track entry back to the pool when its `dispose` event drains — track end, `clearTrack`, mix-out completion, or (for an entry replaced before it was ever applied) immediately, in that same `setAnimation` call — and `Pool.obtain` hands objects out LIFO, so the exact same `TrackEntry` object gets reused by a LATER `setAnimation`/`addAnimation` call for a completely different clip.
+
+- Any code that holds a `TrackEntry` and later checks `state.getCurrent(track) === heldEntry` — an "action already in flight" re-entry guard, or a per-frame poll asking "has my clip been replaced?" — silently matches the wrong, unrelated clip once it inherits the recycled object.
+- Symptom: a re-entry guard meant to refuse one action while it plays can end up refusing EVERY future action of that kind, forever, with no error — it is waiting on an identity match that will never recur. Sibling: a stale poll fires its "clip ended" callback on the next clip's clock instead (double-trigger).
+- Tell: an intermittent hang or double-fire whose reproduction depends on the SEQUENCE of clips played before it, not on the clip itself.
+- Wrong: `const held = state.setAnimation(t, name, false); /* later */ if (state.getCurrent(t) === held) { ... }`
+- Right: attach a `dispose` listener when the entry starts and gate on a flag it clears, not on identity alone:
+  ```ts
+  let live = true;
+  entry.listener = { dispose: () => { live = false; } };
+  // later: live && state.getCurrent(track) === entry
+  ```
+  (or compare by animation name plus the dispose-cleared flag). Spine's own docs: "References to the entry should not be kept after dispose is called, as it may be destroyed or reused."
+- Testing note: the real `AnimationState` runs fine in Node against a bare `SkeletonData` with an empty-timeline `Animation(name, [], duration)` pushed onto it, driven by `state.update(dt); state.apply(new Skeleton(data))` — a regression test can exercise the actual pool instead of a hand-rolled fake.
+
 ## Verification & capture
 
 General Playwright/browser-capture traps (stale headless AND headed screenshots,

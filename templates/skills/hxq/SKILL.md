@@ -133,7 +133,8 @@ hxq extract-var f.hx --match 'a * 2' doubled --write
 | Who calls function F (direct/transitive) | `callers 'Type.method' <scope> [--depth N]` (same graph, in-edges) |
 | Is B reachable from A + through which chain | `reach --from 'A.m' --to 'B.n' <scope> [--to …] [--max-paths N]` (`--to` repeatable, `Type.*` patterns; BFS shortest path per pair; default kinds call,ref,new,virtual) |
 | Along which lines does a god-type split (decomposition recon) | `clusters <TypeName> <scope> [--hubs N]` — connected components over aggregated intra-type call edges after top-fan-in hubs go to a utils bucket (`--hubs 0` = off, default auto — conservative: cap 10% of members; crank `--hubs` manually to dissolve a persistent blob); lambdas/local fns condense into their member; per-component `-> hubs`/`<- hubs` traffic = the future module interface; `<- hubs` ≠ 0 flags a dispatcher wrongly bucketed as a utility. ⚠️ SCOPE = the type's own package dir, NOT whole src/ — the graph builds over every file in scope; whole-project scope is ~25× slower (minutes of CPU, kills a subagent's stream watchdog) and only adds unresolved-call noise |
-| Main-thread stall candidates (blocking call on main / lock held across blocking call) | `lint <scope> --rule thread-safety` — config-driven via `apqlint.json` (`sinks` required, `spawns`/`marshals`/`lockPairs` optional; inert without config — projects using this rule keep `apqlint.json` in the repo root) |
+| Main-thread stall candidates (blocking call on main / lock held across blocking call) | `lint <scope> --rule thread-safety` — config-driven via `apqlint.json` (`sinks` required, `spawns`/`marshals`/`lockPairs` optional; inert without config — projects using this rule keep `apqlint.json` in the repo root). `--format json` findings carry `data` {family A/B/C/D, function, subject, chain}; `--explain-long` lists WHY each lock counts as long (crossing/leak/blind/unnamed/untraced/spans-blocking with `via`) — its findings are CANDIDATES, not proven stalls |
+| Measure a rule's precision/recall against a labelled truth file | `lint-score --truth <truth.json> <report.json>` (key = family+function+subject; exit 1 = a real-long/recall entry lost, 2 = nothing scoreable) |
 | ONLY switch case-patterns `case Foo:` / `case Foo(_):` | `cases Foo <dir>` |
 | Decls carrying `@:meta` | `meta @:meta <dir>` |
 | Match expression / statement shape with metavars | `search 'pattern with $x' <dir>` |
@@ -200,6 +201,11 @@ Writer-emit ops (canonical-gated): add-member · add-import · replace-node ·
 add-element · remove-element · remove-import · remove-member · safe-delete ·
 encapsulate-field · set-doc · set-modifier · set-comment · rewrite ·
 comment-rewrite · resolve-define · patch · extract-method · add-meta.
+JSON files (`mutation-arms.json`, `apqlint.json`, `hxformat.json`): add-element
+(--after/--before/--append/--sorted) · remove-element · replace-node · ast ·
+source work on a `.json` path, format-preserving — NEVER python/sed/jq for
+these files. Vocabulary `Member:<key>` / `JArray` / `JString:<value>` →
+references/ops.md § "JSON files".
 
 Six SILENT hazards that must never wait for the reference read:
 - **`replace-node`'s span covers the WHOLE declaration INCLUDING its leading modifiers**,
@@ -209,10 +215,13 @@ Six SILENT hazards that must never wait for the reference read:
   error that names a DIFFERENT problem — an interface-conformance failure at the type, or
   an access error at some caller — so the modifier is the last place you look. Always spell
   the modifiers verbatim (`private static function walk(…)`), and prefer `patch` when the
-  change is a few lines inside a bigger body. (Modifier FLIPS are `set-modifier`'s job, and
-  a whole-type `replace-node --select 'ClassDecl:X'`/`ClassForm:X` is separately documented
-  as unreliable — its span excludes the leading `final` keyword, so a replacement copied
-  from `source --select` duplicates it and the op refuses with a confusing parse error.)
+  change is a few lines inside a bigger body. (Modifier FLIPS are `set-modifier`'s job. A
+  whole-type `replace-node --select 'ClassDecl:X'` works since 2026-10-17 (anyparse N5 +
+  `bf7c68763`): its span covers the type's leading doc AND `final`, so `<newSource>` spells
+  both — omit the doc and it is dropped.)
+- **`replace-node --select 'FnMember:x'` also silently DROPS the member's leading `@:meta`s**
+  (`@:pin`, `@:killer`, …; an open bug): spell them verbatim in
+  `<newSource>` like the modifiers, or prefer `patch`; read the node back after the op.
 - **`set-doc` replaces EVERY doc block above the target, not just the adjacent one.**
   Two `/** */` blocks can sit back-to-back before a declaration — the usual cause is an
   earlier type's doc left ORPHANED above the next declaration, which is exactly the shape
@@ -254,31 +263,21 @@ Six SILENT hazards that must never wait for the reference read:
   the next member's modifier group. That is why `--after` overshot at module level only.
   Verified fixed on 2026-09-01 with both probes: `--before --select 'FnMember:m1'` lands
   ABOVE m1's doc, and `--after --select 'TypedefDecl:A'` lands BEFORE B's doc.
-- **A TYPE-LEVEL doc comment is trivia BEFORE the node's own span — `patch` cannot reach
-  it.** A declaration's leading `/** */` sits outside the type's node, so every address
-  mode reports absence: `--select 'ClassDecl:X'` → `apq patch: the old fragment does not
-  occur in the resolved ClassForm node`; `--at <line-inside-the-doc>` → `apq patch:
-  position L:C is not on a node`; `--at <line-of-a-@:meta-above-the-class>` resolves the
-  `FinalDecl` and still reports the fragment absent. The op that DOES reach it is `hxq
-  comment-rewrite '<find>' '<replace>' <f> --write` — a LITERAL `<find>` is matched
-  against the normalized body (each line break, plus the ` * ` continuation after it,
-  collapsed to one space) and the find is normalized the SAME way since 2026-08-20, so a
-  multi-line find works written either with those prefixes or with bare newlines; a
-  `--regex` find is matched against the RAW body instead and needs `\s+\*\s+` to cross a
-  line. A multi-line `<replace>` gets the block's own continuation on every line it adds,
-  so write PLAIN lines with real newlines (a shell `$'first line\nsecond line'` literal)
-  and a ` * ` you add yourself is stripped, not doubled; long lines are reflowed into the
-  configured width (see the `comment-rewrite` bullet below). A find that
-  matches nothing now SAYS so on stderr — "rewrote 0 file(s)" alone used to be the only
-  signal, and it reads as "the text was already right". `set-doc` also reaches a type doc but
-  replaces the WHOLE block — prefer `comment-rewrite` for a one-sentence correction inside
-  a longer doc, `set-doc` only when replacing the entire thing.
-- **A TYPE's own doc block is outside its node; a MEMBER's doc is inside the type's.** So
-  `patch --select 'ClassDecl:T'` reaches every member doc of `T` as an ordinary fragment,
-  but its own leading doc is not in the resolved text and the call fails with "the old
-  fragment does not occur in the resolved node". Correcting a type doc therefore goes
-  through `comment-rewrite` (one sentence) or `set-doc` (the whole block) — reaching for
-  `patch` first and then retyping the entire doc into `set-doc` is the avoidable cost here.
+- **`patch` reaches a TYPE's own leading doc (since 2026-10-17, anyparse N5).** The doc is
+  trivia outside the type's node, so `patch --select 'ClassDecl:X'` first searches the
+  declaration as before; ONLY when the fragment is not there does it search the declaration's
+  own doc block (old payloads behave byte-identically). Before N5 this failed with "the old
+  fragment does not occur in the resolved ClassForm node". Inserting text ABOVE a documented
+  declaration via patch is still refused (the doc would land on the wrong owner) — extend the
+  fragment to include the doc on the same address instead. Other doc tools: `hxq
+  comment-rewrite '<find>' '<replace>' <f> --write` — a LITERAL `<find>` is matched against the
+  normalized body (each line break, plus the ` * ` continuation after it, collapsed to one
+  space; the find is normalized the SAME way), a `--regex` find against the RAW body (needs
+  `\s+\*\s+` to cross a line); a multi-line `<replace>` gets the block's own continuation on
+  every line it adds, so write PLAIN lines with real newlines and a ` * ` you add yourself is
+  stripped, not doubled; long lines are reflowed into the configured width (see the
+  `comment-rewrite` bullet below); a find that matches nothing SAYS so on stderr. `set-doc`
+  replaces the WHOLE block — use it only when replacing the entire doc.
 - **`add-member` only reaches a TYPE BODY.** A new module-level sibling — a second typedef,
   an enum beside the class — goes in with `add-element --after --select '<Kind>:<name>'`
   addressing an existing top-level declaration; `add-member` has no address for that slot.

@@ -9,6 +9,19 @@
 
 Fix: pass narrowed value through a helper with non-null param, or use `.bind()` at call site for value types.
 
+### Optional callback forwarded into async callbacks: bind it into a method, don't default it to a no-op lambda
+Shape: `function f(?cb: () -> Void)` that calls `cb` from inside nested success/error callbacks. Under `@:nullSafety(Strict)`, `if (cb != null) cb();` inside a local function/lambda fails with "Null safety: Cannot call a nullable value" because `cb` is captured (see Lambda captures above).
+
+- **WRONG**: `final done: () -> Void = cb != null ? cb : () -> {};` — noise, allocates a dummy.
+- **RIGHT**: pass it as a parameter via `.bind()` to private methods typed `Null<() -> Void>`; as a plain parameter it narrows normally:
+```haxe
+api.call(arg, successHandler.bind(cb), errorHandler.bind(cb));
+
+private function successHandler(cb: Null<() -> Void>): Void { /* ... */ if (cb != null) cb(); }
+private function errorHandler(cb: Null<() -> Void>, err: Error): Void { /* ... */ if (cb != null) cb(); }
+```
+The bound arg goes first; the API's own callback args follow.
+
 ### Strict (`@:nullSafety(Strict)`)
 Fields DO narrow right after a null check, but the narrowing is fragile: ANY intervening statement that could mutate state (a call, a write to any field) resets it — the compiler assumes another thread/callback could modify the field. In practice a field is only usable as non-null on the line directly after its check. Local variables narrow normally and stay narrowed — with two exceptions that look like compiler bugs and are easy to misdiagnose as something else in the same function (see "Two Places a LOCAL Refuses to Narrow" below).
 

@@ -217,6 +217,14 @@ interrupts). Two rules make that cheap instead of catastrophic:
   research) instead of re-spawning fresh. If its workflow session was
   abandoned with the parent, tell it the NEW parent_session_id to start a
   fresh child session. Re-spawn fresh only when resume is unavailable.
+- **After a session restart / compaction, "the agent is still running" is
+  a claim to verify, not to inherit.** A summary or system note that says
+  an agent is in flight can describe a worker that died with the old
+  session — and a queue's `[>]` mark then reads as live while nothing
+  advances. Tell: its output-file path no longer exists, the processes its
+  current step needs (build, test runner) are absent, the last commit is
+  long past. Check those before telling the user it is working or ending
+  the turn to "wait for it"; dead → resume it via SendMessage at once.
 
 Also **time-box research inside implementation agents**: an agent told to
 verify facts can rabbit-hole into open-ended web verification. Say "apply

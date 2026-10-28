@@ -81,11 +81,14 @@ load_skills:
 - Skill gate states have `transitions` (unlike action states) — exactly **one**, conventionally named `continue`. The engine auto-takes the *first* transition when all skills are loaded, and its blocking prompt tells the agent "transition to continue", so any other name breaks the instruction
 
 **digest_on_repeat** (per-state flag, prompt states): after the state's full
-prompt was delivered once in this server PROCESS, later deliveries send a
+prompt was delivered once in the agent's current context, later deliveries send a
 2-line digest ("already delivered earlier — status() for the full text")
 instead — for large prompts re-delivered every task (routing rubrics,
 doc-sync/reflect ceremony). `status()` always returns the full text; a
-template reload clears the delivered-set; the same-session Revisit
+template reload clears the delivered-set, and so does a context reset —
+every SessionStart (`/clear`, `/compact`, `/resume`) rewrites a per-process
+marker (`$STATE_DIR/context-epoch-<claude pid>`) that the server checks on
+every status render; the same-session Revisit
 abbreviation takes precedence. Do NOT flag states whose prompt a FRESH
 agent context may hit mid-flow without having seen it (spawned-agent
 workflows share the server process — their first delivery may be a digest;

@@ -269,6 +269,16 @@ Both routes past it work, in Chromium and in real Chrome: grant the site local-n
 
 **Method, not just the fact:** when a browser refuses a cross-origin/permission-shaped request, settle it with a ONE-VARIABLE matrix before documenting any constraint — arms for default, permission-granted, flag-disabled, × the automation build and the real browser channel, asserting one observable (the status of the first request). Six cheap arms replace a guess, and they separate "the app's transport is wrong" from "the browser refused" — a distinction that inverts the fix.
 
+### 19. A per-frame motion trace timestamped with `performance.now()` lies under machine load when the animation runs on gsap
+
+gsap's `lagSmoothing` (default: 500 ms threshold, 33 ms adjusted lag) credits a stalled frame with only ~33 ms of animation time. When a loaded machine drops a headless page to ~1 fps, the traced object advances a tiny game-time step per callback while the wall clock between callbacks is a full second — every wall-clock speed derived from the trace collapses roughly 30x, and detectors built on speed or shape (speed-collapse, "moves without traveling forward", teleport-by-speed) convict clean motion.
+
+- **Tell:** a finding that reproduces only when several harness shards (or another heavy job) run in parallel, and vanishes on a solo rerun; a trace whose frame gaps run 1-2 seconds instead of ~16 ms.
+- Fix: stamp samples with `gsap.ticker.time * 1000` (the lag-smoothed clock the timeline actually runs on — multiply by the active `timeScale` if one is set), not `performance.now()`.
+- Corollary: a harness that stops recording by polling for an end state from the automation side (`waitForFunction`) is itself subject to the same lag, and records whatever happened AFTER the end state fired (a reset, a teleport home) — its capture is a fresh source of the same lie.
+- Always solo-rerun a finding before trusting it; a parallel-only reproduction is machine load, not a bug.
+- Related trap: a probe reading a scene object by CHILD INDEX of a container (`layer.children[2]`) silently reads the wrong node once anything else is mounted earlier in that container — every detector then reads a flat line and "passes". Read the traced object by reference via an app-installed debug getter, and fail the run (don't silently pass) if the object it traces never moves.
+
 ### Framework-specific siblings
 
 Rendering-framework-specific verification recipes (freezing a scene's tickers for a deterministic screenshot, sampling motion on the render ticker instead of your own rAF) live in the domain skills — e.g. `domain-pixi` for Pixi.js.

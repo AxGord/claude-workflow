@@ -82,6 +82,34 @@ the alternate config dir, not the base one: in headless `-p`, have a
 pre-approved command overflow its output (`seq 1 40000`), then `Read` the
 persisted file, and check `permission_denials` in `--output-format json`.
 
+### A `.claude` path segment makes every edit a sensitive-file prompt
+
+Any write whose path, in ANY spelling (original or symlink-resolved), contains
+a segment named exactly `.claude` (case-insensitive) fails a safety check:
+`Claude requested permissions to edit <path> which is a sensitive file.` The
+exemption for `.claude/skills|agents|commands` applies only in remote mode.
+The check runs AFTER normal rule matching and is not bypassed by:
+- allow rules in any settings file, including an exact `Edit(...)` rule;
+- `--allowedTools`;
+- a `PreToolUse` hook returning `permissionDecision: "allow"`.
+
+What does get past it:
+- a **session-scoped** rule, i.e. answering the prompt with "allow edits to
+  skill X for this session". The CLI offers that only for
+  `~/.claude/skills/<name>/` and `./.claude/skills/<name>/` spellings, so
+  editing through an alternate config dir (`~/.claude-acc/skills/...`) gets
+  one-shot prompts every time;
+- a `PermissionRequest` hook returning
+  `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}`
+  — it answers the dialog, works in `default` and `auto` mode, and fires in
+  `-p` too;
+- keeping the file's real location out of any `.claude` segment. A segment
+  like `.claude-acc` is not `.claude`, so for skills shared across config dirs
+  put the store elsewhere (e.g. `~/dev/claude/skills`), symlink each config
+  dir's `skills/` to it directly, and add `Edit`/`Read` allow rules for both
+  the store and `~/.claude-*/skills/**`. The base `~/.claude/skills/...`
+  spelling still contains `.claude`, so the base account keeps prompting.
+
 ## Permission Path Syntax (Critical)
 
 **Single vs Double Slash**:
@@ -265,6 +293,8 @@ Two more things that bite a `matcher: "Bash"` PostToolUse hook:
   line that could be scrolled out of the capture; cross-check it against
   `tool_input.command`.
 
+- **`tool_response` is the tool's structured DATA, not the model-facing tool_result text.** A `run_in_background` Bash gives `{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"<id>"}`; the "Output is being written to: <path>" sentence exists ONLY in the tool_result the model sees, never in the hook payload. Monitor gives `{"taskId":"<id>","timeoutMs":300000,"persistent":false}`. Async Agent's model-facing text ("Async agent launched…") is likewise not the hook's shape. Never parse model-facing text from a hook payload; dump a real payload first (see "Capturing a Real Hook Payload").
+
 **Hook edits take effect immediately.** A new entry added to a settings file
 mid-session fires on the very next tool call — no restart, no `/hooks` visit.
 
@@ -275,9 +305,17 @@ Entry shape: `{"id","type","status","description"}` + type-specific fields (`com
 - `id` is stable across Stop firings; there are **NO timestamps** or turn counters. Distinguishing "started this turn" from "long-lived since an earlier turn" (dev server, watcher) requires persisting seen ids between Stop firings yourself (state file keyed by `session_id`).
 - Non-empty `background_tasks` ≠ new work in progress: a persistent dev server stays listed at EVERY Stop — a hook that suppresses on non-empty silences itself for the whole session.
 - Suppression heuristics must be TYPE-aware: `subagent`/`workflow` tasks always complete and re-invoke the main agent (their Stop is not the real finish), but `shell` tasks may NEVER complete (`npm run dev`) — a Stop with a freshly started shell task IS a real completion. "Started this turn ⇒ still working" is false for shell.
-- Only live tasks are listed (completed ones are removed), and `session_crons` entries also carry `id`.
+- Only live tasks are listed (completed ones are removed). `session_crons` entries are `{id,schedule,recurring,prompt}` (no `type`), so a `{"id":…,"type":` pattern cannot match them.
+- Payload is compact JSON; keys come in schema order `id,type,status,description`, then the type-specific key (`command` shell, `agent_type` subagent, `server`/`tool` MCP, `name` workflow). Example: `{"id":"b4z5bg6o2","type":"shell","status":"running","description":"…","command":"python3 -m http.server 8765"}`.
+- The built-in **Monitor tool's tasks are listed as `type:"shell"`** (internally a local shell task of kind monitor); `type:"monitor"` is only MCP/websocket monitors. To tell a Monitor apart, record its id at PostToolUse (see the PostToolUse section).
+- A shell task's output file `<tmp>/claude-<uid>/<project-slug>/<session-id>/tasks/<id>.output` is held open by the TASK's own processes (its shell plus every child that inherited stdout, e.g. a server), NOT by the claude CLI. So `lsof -t <file>` yields the task's process tree (empty = finished), and `lsof -a -p <those pids> -iTCP -sTCP:LISTEN` spots a server. For async subagents the tasks dir holds `<agentId>.output` as a symlink to `<project>/<session-id>/subagents/agent-<agentId>.jsonl` (the subagent transcript).
+- Subagent done-detection from that transcript: a finished subagent's last user/assistant line is its final assistant text, with `stop_reason:"end_turn"` often but frequently `null` (a streaming snapshot). "Done" = last assistant line has a text block and no tool_use block, and either `stop_reason` is a string other than `"tool_use"` or the file has been quiet ~1-2 min. Mid-message null text lines are followed by their tool_use line within milliseconds.
 - `prompt_id` (v2.1.196+) identifies the current prompt; `last_assistant_message` (v2.1.145+) holds the final text.
 - JSON string values escape quotes as `\"`, so a naive grep for `"key":"` cannot false-match text inside `command`/`description` values.
+
+## Notification `idle_prompt` Ignores Background Work
+
+The 60 s "Claude is waiting for your input" Notification (`notification_type: idle_prompt`) fires after a turn ends even while background tasks (subagents, bg shells) are still running. Its gate checks only isLoading, an open dialog, a pending /loop wakeup and an armed quota auto-resume. A hook treating any Notification as "session idle" will mis-release during background work; check `notification_type` and/or the last Stop's `background_tasks`.
 
 ## npx Argument Re-parsing Under PreToolUse Hooks
 
@@ -304,7 +342,13 @@ Payload = common fields (`session_id`, `transcript_path`, `cwd`, `hook_event_nam
 - optional `error_details`
 - optional `last_assistant_message` — the rendered error text shown to the user, e.g. `You've hit your session limit · resets 4:30pm (Europe/London)` (weekly form: `resets Sep 9 at 3pm (…)`)
 
+The hook `matcher` filters on the `error` value — `"matcher": "rate_limit"` fires only for limit stops, no payload parsing needed in the script.
+
 The CLI **ignores the hook's output and exit code** — `StopFailure` is notification-only, it cannot block, continue the turn, or inject a prompt. (`decision: "block"` to keep a turn going only works for `Stop`/`SubagentStop`.) No hook can start a new turn by itself.
+
+**StopFailure fires per SUBAGENT too.** Every subagent rejected on the limit fires its own `StopFailure` (`matcher: "rate_limit"` matches it), and its payload carries `agent_id` + `agent_type`; the main agent's payload has neither. A notify-on-limit hook that ignores this alerts once per running subagent. Filter on `"agent_id":"` in the payload (string values escape quotes as `\"`, so a quoted key inside a message cannot false-match).
+
+**Wrap-up allowance** (v2.1.277+): when the 5-hour limit is hit mid-response, the CLI may let the turn finish. It appends a meta user line to the transcript — `"isMeta":true,"turnCompanion":true,"usageLimitNote":"wrap_up"` with the turn's `"promptId":"…"` — and the wrapped-up turn ends with a normal **`Stop`, not `StopFailure`**. Other `usageLimitNote` values: `near_limit` (approaching the limit, not a stop) and `release` (limit lifted after a `wrap_up`). To recognise a wrap-up stop in a Stop hook: payload `prompt_id` equals the transcript's `promptId`; take the LAST `usageLimitNote` among that prompt's lines and check it is `wrap_up`. Subagents keep running through the wrap-up and are rejected individually later.
 
 File-level marker for the same event (useful when no hook was configured, or when scanning history after the fact): the transcript line is a synthetic assistant message with top-level `"isApiErrorMessage": true`.
 
@@ -331,6 +375,10 @@ Gotchas:
 - Escape `\` and `"` when interpolating the token or message content into the JSON frames.
 
 **Built-in sleep prevention**: on macOS the CLI itself spawns `caffeinate -i -t 300` as a child of `claude`, re-spawned roughly every 4 minutes while a turn is running and killed when the turn ends. It shows up in `pmset -g assertions` / `pmset -g log` as short-lived caffeinate assertions — not a plugin or hook leak. It does **not** cover an `autoContinueAtUsageLimit` wait: the Mac can still sleep before the scheduled reset.
+
+**Limit options dialog** ("What do you want to do? 1. Stop and wait for limit to reset…"): auto-opened when the main agent's rate-limit error message renders, at most once per limit reset, and NOT when auto-continue is armed (5-hour limit with `autoContinueAtUsageLimit` on shows the "continuing automatically" notice instead). The main agent's `StopFailure` fires in the same millisecond as the dialog appears — no hook is gated on the user's choice.
+
+**Reproducing a limit stop without hitting a real limit**: run the interactive CLI in a PTY (Python `pty.fork`) with `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` pointing at a stub that answers `POST /v1/messages*` with HTTP 429, body `{"type":"error","error":{"type":"rate_limit_error",…}}`, and headers `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset: <epoch>`, `anthropic-ratelimit-unified-representative-claim: five_hour|seven_day`, `x-should-retry: false`. The OAuth login stays in effect, so the claude.ai limit UI (dialog / auto-continue notice) renders and `StopFailure` fires with a real payload. Pass hooks via `--settings <file>` that log hook timestamps; put a logging stub of the sound player first in `PATH` to see when it starts. Set `"autoContinueAtUsageLimit": false` or use `seven_day` to get the dialog. A wrap-up allowance cannot be mocked this way (it is driven by grace headers on successful responses).
 
 **Method**: none of the above is documented; all of it is in the shipped binary. `strings ~/.local/share/claude/versions/<version> > /tmp/cc.txt`, then `LC_ALL=C /usr/bin/grep -F` or a Python `re.finditer` with ±300-char context turns up hook event lists, zod-like payload schemas (`hook_event_name:x("StopFailure"),error:…`), settings keys with their defaults, and internal protocol strings — the binary is consistently ahead of the docs. Never `cat` the dump (tens of MB). To date a feature, pull the changelog and search it: `gh api repos/anthropics/claude-code/contents/CHANGELOG.md -H "Accept: application/vnd.github.raw" | grep -n <term>`, then take the nearest `## <version>` header above the hit.
 

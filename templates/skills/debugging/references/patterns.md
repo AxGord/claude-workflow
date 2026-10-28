@@ -545,3 +545,51 @@ A value pushed through arithmetic that is an identity "on paper" — wrap into a
 **DO:** detect the event by the condition that causes it — a range check before wrapping, an explicit flag from the code path that changes the value — then normalize. Skipping the round-trip in the common no-op case also removes its noise.
 
 **Tell:** a callback meant to fire rarely (teleport, recycle, overflow) fires for every entity every frame. Concrete gamedev case with measurements: `domain-gamedev` → "Modulo-wrap round-trip is NOT identity".
+
+## `pkill -f` Inside a Remote Command String Kills Its Own Shell
+
+`ssh host 'pkill -f some/path/proc; next-command'` (or any `sh -c '<string>'`) runs the string in a
+shell whose own command line contains the pattern. `pkill -f` matches that shell and kills it: the
+session dies (ssh exits 255) and everything after the `;` never runs.
+
+The pattern can also miss the real target: a process started as `./proc` from its own directory does
+NOT match a pattern holding its absolute path, so the old instance survives and two instances fight
+for an exclusive resource.
+
+**DON'T:** `pkill -f` with a pattern that appears literally in the string you are executing.
+
+**DO:** `pkill -x <name>` (exact process name), or a bracket pattern such as `pkill -f '[s]ome/path'`
+that cannot match its own command line. Afterwards confirm with `pgrep -a` that exactly the
+intended instance is alive.
+
+**Tell:** a remote command exits 255 with no output and the steps after the kill did not run; or a
+"restarted" process behaves as if two copies were running.
+
+## A Screen-Capture Session on the Device Voids Every Display Measurement
+
+An active remote-desktop or screen-sharing session captures the screen at refresh rate. The display
+server then burns most of a core (measured: 8% -> 70%), frames drop, and GPU writes lose their
+timing — a known-good build suddenly shows lag and tearing.
+
+**DO:** before any visual or display-performance test, and whenever results flip for no code
+reason, list established remote-desktop connections and the capture process CPU
+(`ss -tnp state established`, `top`), and compare display-server CPU against the known baseline.
+
+**Tell:** display-server CPU far above baseline while the build under test is unchanged.
+
+Same family as "A Measurement on an EXCLUSIVE Resource Is Void Unless Exclusivity Was Re-Checked
+Right Before It": another client's activity on a shared resource, re-checked before every run.
+
+## Examples in a Comment Must Be Recomputed From the Code's Formula
+
+A guard's comment listed which inputs pass and which fail, copied from an earlier analysis whose
+formula differed slightly from the one the code ended up with (alignment 16 in the analysis, 32 in
+the code). The code rejected an input the comment said passes, and the device test missed it
+because the tested inputs give the same result under both formulas.
+
+**DO:** before writing "X passes, Y fails" in a comment or report, evaluate the exact expression
+from the code for every listed example (a 3-line script), and pick at least one test input where
+the candidate formulas disagree.
+
+**Tell:** examples in prose that were carried over from notes rather than computed from the final
+code.
