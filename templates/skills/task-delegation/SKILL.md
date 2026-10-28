@@ -221,6 +221,22 @@ report instead of digging."
   unmarked; after writing any plan/queue file, re-read just the state
   marks before using it.
 
+## When the Window Changes
+
+- **A new agent window invalidates the dispatch plan.** A loop written as
+  strictly sequential under "one agent" keeps running one at a time after the
+  user raises the window — the orchestrator then hand-runs parallel work
+  around it, or idles slots. On every window change, re-derive which pending
+  items are independent (disjoint files/packages and no shared owning
+  component) and move the dispatch onto a rolling window with a
+  deterministic admission check, instead of patching it by hand.
+- **A change that rewrites the merge tool itself must be merged by its own
+  new version.** The merge command runs from the main tree's built binary,
+  i.e. the OLD version; a slice that removes or renames what the old merge
+  step expects fails mid-merge. Land such a slice with the branch's own
+  freshly built tool (or by hand), and verify the merged tree equals the
+  reviewed tip.
+
 ## Orphan Cleanup
 
 After collecting all reports: `sessions` → `abort` any orphaned child
