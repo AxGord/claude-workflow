@@ -683,30 +683,29 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 
 ## Status Line
 
-Show the active workflow and state in Claude Code's status bar:
+Show this Claude Code instance's workflow sessions in the status bar:
 
 ![Status line showing coding:think](docs/screenshots/statusline.png)
 
-Add this snippet to your statusline script:
+Source `scripts/statusline-workflows.sh` from your statusline script — it sets two variables and prints
+nothing:
 
 ```sh
-# Workflow status — add to your ~/.claude/statusline-command.sh
-wf_state_dir="$HOME/.claude/workflow-state"
-if [ -d "$wf_state_dir" ]; then
-  for f in "$wf_state_dir"/*.json; do
-    [ -f "$f" ] || continue
-    slen=$(jq -r '.stack | length' "$f" 2>/dev/null)
-    if [ "$slen" -gt 0 ]; then
-      cpid=$(jq -r '.context.claude_code_pid // 0' "$f" 2>/dev/null)
-      [ "$cpid" != "$PPID" ] && continue
-      wf=$(jq -r '.stack[.active_frame].workflow // ""' "$f" 2>/dev/null)
-      st=$(jq -r '.stack[.active_frame].current_state // ""' "$f" 2>/dev/null)
-      printf "\033[96m\xE2\x9A\x99 %s:%s\033[0m" "$wf" "$st"
-      break
-    fi
-  done
-fi
+# in ~/.claude/statusline-command.sh
+. /path/to/mcp-workflow-engine/scripts/statusline-workflows.sh
+printf "%b\n" "<your line 1> ${wf_info}"          # the root session, inline
+[ -n "$wf_lines" ] && printf "%b\n" "$wf_lines"    # the others, on their own lines
 ```
+
+- Only the sessions of THIS instance (`context.claude_code_pid` = the statusline's parent pid), read with one
+  `jq` pass over `~/.claude/workflow-state`.
+- `wf_info` — the root session. Alone it is drawn like any session; once it has children it is marked `◆` in
+  bold.
+- `wf_lines` — the other sessions, oldest first, three per line, at most six (five and `+N workflows` past
+  six); each as `workflow[slice or task]:state`.
+- Bright cyan `⚙` — a leaf session an agent or an engine step is working in; plain cyan `⚙` — waiting (on a
+  child, or idle).
+- `STATUSLINE_PID` / `WF_STATE_DIR` override the parent pid and the state directory (for testing).
 
 Then in `~/.claude/settings.json`:
 
