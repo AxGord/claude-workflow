@@ -27,10 +27,12 @@ import { projectRoot } from "./pool.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { ExecContext } from "./executor.js";
+import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { render } from "./template.js";
+import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver } from "./takeover.js";
 
 function stripOptionalPrefix(s: string): string {
@@ -1015,8 +1017,10 @@ export class Engine {
     // A lease granted after the session left this server (suspended, picked up
     // by another process) is given back: the new owner runs the step.
     let refused = false;
+    const phaseSink: { set?: (phase: ExecPhase) => void } = {};
     const execCtx: ExecContext = {
       ...this._execContext(session),
+      onPhase: phase => phaseSink.set?.(phase),
       mayStart: () => {
         const cur = this._storage.read(session.session_id);
         const mine =
@@ -1051,6 +1055,9 @@ export class Engine {
       );
     }
     let result: ActionResult | null;
+    // tells the waiting tool call's client the exec is alive (only when it asked for progress)
+    const beat = startHeartbeat(currentProgress(), stateName);
+    phaseSink.set = beat.setPhase;
     try {
       result = own ? await this._executor.adopt(own, state, execCtx) : null;
       if (own) run = own;
@@ -1072,6 +1079,8 @@ export class Engine {
           : null,
       );
       throw err;
+    } finally {
+      beat.stop();
     }
     // its aborted-wait result must not route: the session is another owner's now
     if (refused)

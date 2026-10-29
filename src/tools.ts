@@ -15,6 +15,7 @@ import {
   type SessionState,
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
+import { withProgress, type ProgressSink } from "./progress.js";
 import { RESUME_TOOL, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
 
 interface FormatOptions {
@@ -217,6 +218,15 @@ function formatAdopted(status: StatusResult, how: "exec" | "rerun" | undefined):
 // keep their confirmation.
 const ENGINE_STATE_ONLY = { readOnlyHint: true } as const;
 
+/** The slice of the SDK's request extra a progress heartbeat needs. */
+interface ToolExtra {
+  readonly _meta?: { readonly progressToken?: string | number };
+  readonly sendNotification: (n: {
+    method: "notifications/progress";
+    params: { progressToken: string | number; progress: number; message?: string };
+  }) => Promise<void>;
+}
+
 export function registerTools(
   server: McpServer,
   engine: Engine,
@@ -257,6 +267,26 @@ export function registerTools(
     } catch {
       return "start";
     }
+  };
+
+  // The progress sink of a call whose client sent a progressToken: heartbeats of
+  // a long exec reach it as notifications/progress, so the client's no-response
+  // timeout does not cut a call that is only waiting.
+  const progressOf = (extra: ToolExtra | undefined): ProgressSink | undefined => {
+    // a direct handler call (tests) has no request extra
+    if (!extra) return undefined;
+    const token = extra._meta?.progressToken;
+    if (token === undefined) return undefined;
+    let n = 0;
+    return message => {
+      n += 1;
+      extra
+        .sendNotification({
+          method: "notifications/progress",
+          params: { progressToken: token, progress: n, message },
+        })
+        .catch(() => undefined);
+    };
   };
 
   // 1. list
@@ -320,15 +350,17 @@ export function registerTools(
         })
         .strict(),
     },
-    args =>
+    (args, extra) =>
       serialized(args.parent_session_id ? null : "start", async () => {
         try {
-          const status = await engine.start(
-            args.workflow ?? "master",
-            args.actor,
-            args.parent_session_id,
-            args.cwd,
-            args.priority,
+          const status = await withProgress(progressOf(extra), () =>
+            engine.start(
+              args.workflow ?? "master",
+              args.actor,
+              args.parent_session_id,
+              args.cwd,
+              args.priority,
+            ),
           );
           // No forceFullPrompt here: a digest_on_repeat initial state (master
           // route) digests on repeat start() calls in the same process — the
@@ -365,13 +397,15 @@ export function registerTools(
         })
         .strict(),
     },
-    async args => {
+    async (args, extra) => {
       try {
         const sid = engine.resolveSessionId(args.session_id);
         // checked outside the queue first: status must not wait behind this server's own exec
         const how = args.key === undefined ? engine.orphanedStep(sid) : undefined;
         if (how) {
-          const adopted = await serialized(sid, () => engine.adoptOrphanedExec(sid));
+          const adopted = await serialized(sid, () =>
+            withProgress(progressOf(extra), () => engine.adoptOrphanedExec(sid)),
+          );
           if (adopted) return { content: [{ type: "text", text: formatAdopted(adopted, how) }] };
         }
         const status = engine.getStatus(sid);
@@ -436,19 +470,24 @@ export function registerTools(
         })
         .strict(),
     },
-    args =>
+    (args, extra) =>
       serialized(sessionKey(args.session_id), async () => {
         try {
+          const progress = progressOf(extra);
           const sid = engine.resolveSessionId(args.session_id);
           engine.assertNotSuspended(sid);
           const warning = engine.assertOwnership(sid, args.force);
           const how = engine.orphanedStep(sid);
-          const adopted = how ? await engine.adoptOrphanedExec(sid) : null;
+          const adopted = how
+            ? await withProgress(progress, () => engine.adoptOrphanedExec(sid))
+            : null;
           if (adopted) {
             const text = `${warning ? warning + "\n\n" : ""}${formatAdopted(adopted, how)}\n\nTransition "${args.transition}" was NOT taken — the session moved on; choose from the state above.`;
             return { content: [{ type: "text", text }], isError: true };
           }
-          const status = await engine.transition(sid, args.transition, args.actor);
+          const status = await withProgress(progress, () =>
+            engine.transition(sid, args.transition, args.actor),
+          );
           const text = (warning ? warning + "\n\n" : "") + formatStatus(status);
           return { content: [{ type: "text", text }] };
         } catch (err) {
@@ -850,12 +889,13 @@ export function registerTools(
         })
         .strict(),
     },
-    args =>
+    (args, extra) =>
       serialized(args.session_id, async () => {
         try {
-          return {
-            content: [{ type: "text", text: formatResume(await engine.resume(args.session_id)) }],
-          };
+          const resumed = await withProgress(progressOf(extra), () =>
+            engine.resume(args.session_id),
+          );
+          return { content: [{ type: "text", text: formatResume(resumed) }] };
         } catch (err) {
           return {
             content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],

@@ -10,6 +10,7 @@ import { render } from "./template.js";
 import { isGroupAlive, killProcessGroup } from "./process.js";
 import { EX_TEMPFAIL, Pool, describeRequest, levelPriority, resolvePoolDir } from "./pool.js";
 import type { AcquireResult } from "./pool.js";
+import type { ExecPhase } from "./progress.js";
 
 // Plugin root (the dir holding templates/ and scripts/) — injected into every
 // exec's env so templates can reference bundled scripts portably:
@@ -71,6 +72,8 @@ export interface ExecContext {
   readonly onDetached?: (run: DetachedRun) => Promise<void>;
   /** False once the session is no longer this server's to run: a granted lease is given back unused. */
   readonly mayStart?: () => boolean;
+  /** Reports whether the exec is queued for a pool lease or running (progress heartbeat). */
+  readonly onPhase?: (phase: ExecPhase) => void;
 }
 
 /** This machine's boot time; a pgid recorded under another boot names some other process. */
@@ -170,6 +173,7 @@ export class Executor {
     if (!waits) this._waiting.set(sessionId, (waits = new Set()));
     waits.add(ac);
     let got: AcquireResult;
+    ctx?.onPhase?.("lease");
     try {
       got = await this.pool.acquire(
         {
@@ -198,6 +202,7 @@ export class Executor {
         this._waiting.delete(sessionId);
     }
     const wait_ms = got.waitMs;
+    ctx?.onPhase?.("run");
     // An abort that landed while the grant was being written: give it back, do not run.
     if (got.status === "granted" && (ac.signal.aborted || ctx?.mayStart?.() === false)) {
       await got.lease.release();
