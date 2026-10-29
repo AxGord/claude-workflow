@@ -1,0 +1,226 @@
+name: batch-task
+description: "One task of a `batch` queue — a child session the batch dispatcher drives: claim → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
+initial: claim
+max_transitions: 60
+
+# Extension points (a heir replaces a state whole and keeps its routes):
+#   project_prepare — stdout = the worktree path alone (→ context.wt); on_success: work, on_error: prepare_failed
+#   project_land    — merge the task's branch and verify; "0" → mark_done, else land_failed, on_timeout: land_failed
+# The session's cwd is the task's repo (the dispatcher starts it there).
+states:
+  claim:
+    prompt: |-
+      Task session {{session_id}} (dispatcher {{parent_session_id}}), repo {{context.cwd}}. The pick already
+      marked the line `[>]`. context_set on THIS session (session_id {{session_id}}), each its own call:
+        task       — the line's ID
+        queue_file — the queue's absolute path (the dispatcher's `queue_file`)
+        model, effort — the line's columns (effort `-` → task-delegation's table)
+      Then transition `prepare` (an exec: the worktree is made before any agent starts).
+    transitions:
+      prepare: project_prepare
+
+  project_prepare:
+    type: exec
+    # stdout is the worktree path alone (no newline) — it becomes context.wt; messages go to stderr.
+    # Worktrees live beside the repo (`<repo>/../.wt/<repo-name>/<ID>`), never under /tmp.
+    command: |-
+      case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'" >&2; exit 2;; esac
+      repo=$(git rev-parse --show-toplevel) || exit 2
+      root=$(dirname "$repo")/.wt/$(basename "$repo")
+      wt=$root/$TASK
+      if [ -d "$wt" ]; then
+        echo "kept $wt ($(git -C "$wt" symbolic-ref --short HEAD) @ $(git -C "$wt" rev-parse --short HEAD))" >&2
+      else
+        mkdir -p "$root" || exit 1
+        git worktree add "$wt" -b "batch/$TASK" HEAD >&2 || exit 1
+        echo "made $wt on batch/$TASK @ $(git rev-parse --short HEAD)" >&2
+      fi
+      printf %s "$wt"
+    env:
+      TASK: "{{context.task}}"
+    timeout: 60000
+    context_set:
+      wt: "{{stdout}}"
+    on_success: work
+    on_error: prepare_failed
+
+  prepare_failed:
+    prompt: |-
+      The worktree for {{context.task}} was not made (exit {{exit_code}}):
+      {{stderr}}
+      A stale branch `batch/{{context.task}}` without its directory: decide (delete it only if it holds nothing
+      unmerged) and `retry`. Otherwise `queue_mark({file: "{{context.queue_file}}", id: "{{context.task}}", to:
+      "released"})` (back to `[ ]`, nothing was made) → `release`, or `to: "failed"` with the reason as `note`
+      → `close`.
+    transitions:
+      retry: project_prepare
+      release: released
+      close: closed
+
+  work:
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      {{stderr}}
+      Worktree {{context.wt}} (branch `batch/{{context.task}}`). Visit {{visits.work}} of 3.
+      First visit — start the worker's session yourself, then hand it to the agent:
+      1. `start({workflow: "subagent", parent_session_id: "{{session_id}}", cwd: "{{context.wt}}"})` → W;
+         context_set `worker_session` = W.
+      2. Spawn ONE worker: Agent, model {{context.model}}, effort {{context.effort}}, `run_in_background: true`,
+         prompt:
+
+           You are the worker of task {{context.task}}. Your brief is its line in {{context.queue_file}}
+           (read it there; it is self-contained). Your workflow session is W, already started — do NOT call
+           start(): first `status({session_id: "W"})`, then follow it to its terminal, passing session_id W
+           in every call. Work ONLY inside {{context.wt}} (branch `batch/{{context.task}}`): ONE commit on
+           that branch, a clean worktree at the end; never touch {{context.cwd}} itself; never push. Check
+           the on-disk state first — work already applied is reconciled, not done twice.
+
+      3. `link_agent({session_id: W, agent_id: <its id>})`; context_set `worker_agent`.
+      A later visit (a fix round) — SendMessage `{{context.worker_agent}}` with the cause, verbatim.
+      Then END your turn on this task. On the worker's notification verify ON-TREE (artifacts outrank the
+      report): `git -C {{context.cwd}} log --oneline HEAD..batch/{{context.task}}` shows its commit and
+      `git -C {{context.wt}} status --porcelain` is empty → `land`; the worker is stuck, or the work is wrong
+      and another round would not help → `blocked`.
+    transitions:
+      land: project_land
+      blocked: blocked
+
+  project_land:
+    type: exec
+    # One land per repo at a time machine-wide: the merge and its tests never interleave with another
+    # task's. The test command is the queue header's `land_test:` (none → merge only); a failed test
+    # takes the merge back (`reset --keep`, never `--hard`: edits made meanwhile survive), so the repo is
+    # not left red; when that is unsafe it exits 4 and touches nothing.
+    command: |-
+      case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'"; exit 2;; esac
+      branch=batch/$TASK
+      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "refused: $(pwd) has uncommitted changes"; git status --short --untracked-files=no | head -5; exit 3
+      fi
+      test_cmd=$("$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --header land_test) || exit 2
+      before=$(git rev-parse HEAD)
+      if ! out=$(git merge --no-ff --no-edit "$branch" 2>&1); then
+        echo "$out" | tail -20; git diff --name-only --diff-filter=U | head -20
+        git merge --abort 2>/dev/null || git reset -q --keep "$before" ||
+          { echo "merge of $branch failed and could not be taken back: see git status"; exit 4; }
+        echo "merge of $branch onto $(git rev-parse --short HEAD) failed: taken back"; exit 1
+      fi
+      merged=$(git rev-parse HEAD)
+      if [ -n "$test_cmd" ]; then
+        log=$(mktemp); sh -c "$test_cmd" >"$log" 2>&1; rc=$?
+        if [ "$rc" -ne 0 ]; then
+          tail -40 "$log"; rm -f "$log"
+          # Only the merge is taken back: --keep refuses to touch a file edited meanwhile, and a HEAD that
+          # moved during the test (a commit, another branch) is never reset.
+          [ "$(git rev-parse HEAD)" = "$merged" ] || { echo "HEAD moved during land_test: nothing taken back"; exit 4; }
+          git reset -q --keep "$before" ||
+            { echo "local edits on files the merge changed: the merge is left on top"; exit 4; }
+          echo "land_test failed (exit $rc): the merge of $branch is taken back"; exit 1
+        fi
+        tail -5 "$log"; rm -f "$log"
+      fi
+      echo "landed $branch: $(git rev-parse --short HEAD)"
+    env:
+      TASK: "{{context.task}}"
+      QUEUE: "{{context.queue_file}}"
+    timeout: 3600000
+    resource: { locks: ["{{context.cwd}}-land"] }
+    max_output: 16384
+    context_set:
+      land_out: "{{stdout}}"
+    on_timeout: land_failed
+    cases:
+      "0": mark_done
+    default: land_failed
+
+  land_failed:
+    prompt: |-
+      The land of {{context.task}} failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      - 3 (the repo's own tree has uncommitted changes) → never stash or reset someone's work: tell the
+        user and `retry` once it is clean, or `stop`.
+      - 1 (merge conflict, or land_test failed — the merge is taken back) → `fix`: the cause goes to the
+        worker as its fix round; `close` when it cannot be fixed in the branch.
+      - 4 (the merge could not be taken back safely: HEAD moved during land_test, or local edits on the
+        merged files) → `stop` and report the repo's exact state (`git log --oneline -3`, `git status`).
+      - 124 (timeout) → read `git -C {{context.cwd}} log --oneline -3` and `status`: no merge on top and
+        clean → `retry`; otherwise `stop` and report the repo's exact state.
+    transitions:
+      retry: project_land
+      fix: work
+      close: blocked
+      stop: stopped
+
+  mark_done:
+    type: exec
+    command: '"$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --done "$TASK" --note "landed $(git rev-parse --short HEAD)"'
+    env:
+      TASK: "{{context.task}}"
+      QUEUE: "{{context.queue_file}}"
+    timeout: 60000
+    on_success: cleanup
+    on_error: cleanup_failed
+
+  cleanup:
+    type: exec
+    # Exact paths of this task only; the worktree path must end in the task id.
+    command: |-
+      case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'"; exit 2;; esac
+      case "$WT" in /*/"$TASK") ;; *) echo "refused worktree path: '$WT'"; exit 2;; esac
+      if [ -d "$WT" ]; then
+        dirty=$(git -C "$WT" status --porcelain)
+        [ -z "$dirty" ] || { echo "kept $WT: not clean"; echo "$dirty" | head -5; exit 1; }
+        git worktree remove --force "$WT" || exit 1
+      fi
+      git branch -d "batch/$TASK" || exit 1
+      echo "removed $WT and batch/$TASK"
+    env:
+      TASK: "{{context.task}}"
+      WT: "{{context.wt}}"
+    timeout: 120000
+    on_success: done
+    on_error: cleanup_failed
+
+  cleanup_failed:
+    prompt: |-
+      Bookkeeping or cleanup of the landed {{context.task}} refused (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      Leave what it kept; make sure the line is `[x]` (`queue_mark` to `done` if the mark step failed) and
+      note what was kept on it. Transition `done`.
+    transitions:
+      done: done
+
+  blocked:
+    prompt: |-
+      {{context.task}} will not land. `queue_mark({file: "{{context.queue_file}}", id: "{{context.task}}", to:
+      "failed", note: "<the reason, one line>"})`; keep the worktree {{context.wt}} and the branch for the
+      user. Transition `close`, or `stop` when the next lines depend on it.
+    transitions:
+      close: closed
+      stop: stopped
+
+  done:
+    terminal: true
+    outcome: complete
+    prompt: "Task {{context.task}} landed and cleaned: its slot is free — in the dispatcher session {{parent_session_id}} transition `slot_free`."
+
+  closed:
+    terminal: true
+    outcome: complete
+    prompt: "Task {{context.task}} closed without landing (`[!]`): its slot is free — in the dispatcher session {{parent_session_id}} transition `slot_free`."
+
+  released:
+    terminal: true
+    outcome: complete
+    prompt: "Task {{context.task}} released before any work (`[ ]` again): in the dispatcher session {{parent_session_id}} transition `slot_free`."
+
+  stopped:
+    terminal: true
+    outcome: fail
+    prompt: |-
+      Task {{context.task}} STOPPED: report to the user the task, the reason, and the exact state of
+      {{context.cwd}} (`git log --oneline -3`, `git status`). In the dispatcher session {{parent_session_id}}
+      transition `stop`.

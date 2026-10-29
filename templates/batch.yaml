@@ -1,8 +1,11 @@
 name: batch
-description: "Long-running batch orchestration — a queue of independent tasks dispatched to background sub-agent workers with rolling one-by-one collection."
+description: "Long-running batch orchestration — a queue file of tasks; the engine admits the next lines into the window (wf-queue / queue_next: batch_size, after:, touches:, owner:, ⏸), each admitted task runs as a child session (`batch-task`: worktree → worker → merge + tests under the repo's land lock) driven by this agent, and every freed slot re-runs the pick; one fresh-eyes review of the combined diff."
 initial: load_skills
 max_transitions: 1000
 
+# A project's heir (`extends: batch`) usually overrides `plan_queue` with an exec that names its fixed
+# queue and its own task workflow (context_set `queue_file`, `task_workflow`); the per-task steps a
+# project owns (`project_prepare`, `project_land`) live in `batch-task`.
 states:
   load_skills:
     skills:
@@ -16,133 +19,140 @@ states:
       Build the task queue for this batch run.
 
       1. **Resume check** — list `{{context.cwd}}/.claude/batch/*.md`. If a
-         queue file has pending `[ ]` or running `[>]` marks and matches the
-         user's ask, RESUME it: reset stale `[>]` to `[ ]` (their workers
-         died with the old session). No `base:` line (a queue written by an
-         older version) → reconstruct it per repo the tasks touch — the
-         last commit before the queue's first task landed (`git log
-         --before=<queue file ctime>`) — and write the lines into the header. Then go to step 3.
+         queue file has pending `[ ]` or running `[>]` lines and matches the
+         user's ask, RESUME it: `suspended` → `resume` the task sessions of
+         the previous run (they keep their worktrees); a `[>]` line whose
+         session is gone → `queue_mark({file, id, to: "released"})` (nothing
+         of it landed) and its worktree is reused by the next pick. No
+         `base:` line → reconstruct it per repo (the last commit before the
+         queue's first task landed: `git log --before=<queue file ctime>`).
+         Then go to step 3.
       2. **New queue** — write `{{context.cwd}}/.claude/batch/<short-name>.md`:
          ```
          # Batch: <short-name>
          batch_size: 3
          base: <repo-abs-path>=<sha>
+         land_test: <the project's test command, run after each merge; omit for none>
          ## Tasks
-         - [ ] T1 | model: opus | effort: high | <self-contained task prompt> | <files/dirs if known>
+         - [ ] T1 | model: opus | effort: high | touches: src/a, docs | <self-contained task prompt> |
+         - [ ] T2 | model: sonnet | effort: high | after: T1 | touches: src/b | repo: other-repo | <prompt> |
          ```
+         Keep the queue file out of git (untracked + ignored, e.g. `.claude/batch/`
+         in `.gitignore`): a tracked queue dirties the tree on the first pick and
+         every land refuses (exit 3).
          One `base:` line per repo the tasks touch; <sha> = `git -C <repo>
-         stash create` (snapshots a dirty tree without touching it — the
-         user's own uncommitted work stays out of the review) or `git -C
+         stash create` (snapshots a dirty tree without touching it) or `git -C
          <repo> rev-parse HEAD` when that prints nothing (clean tree).
-         One line per task. Rules:
-         - Tasks must be INDEPENDENT — merge coupled changes into ONE task
-           (workers share the working tree; two workers editing the same
-           files corrupt each other).
-         - Shared-tree conflicts are NOT a reason to serialize when tasks
-           are logically independent and only collide on infrastructure
-           (a common registration file, build artifacts, `git add -A`
-           commits): give each worker its OWN git worktree — the task
-           line/prompt instructs `git -C <repo> worktree add
-           /tmp/<batch>-<TN> -b batch/<TN>`, ALL work with CWD inside it,
-           commit on that branch, never touch the main tree. Parent
-           merges branches at collect (registration-file conflicts =
-           mechanical union), reruns the gate suite once on the merged
-           tree. Reserve serial (batch_size: 1) for tasks editing the
-           SAME logic files or building on each other's results. NOTE:
-           the Agent tool's `isolation: "worktree"` isolates the
-           SESSION's repo — for work in another repo the worker must
-           create the worktree itself as above.
-         - Each task line is self-contained: a worker sees ONLY its line.
-         - Assign `model` and `effort` per task-delegation's table: opus/high for
-           non-trivial code/judgement, sonnet/high for code from a detailed plan,
-           sonnet/medium for routine review, haiku/low for runners / locate.
-         - `batch_size` = max parallel workers (default 3; raise for cheap
-           independent tasks, lower for heavy builds sharing resources).
-           The user may edit the queue file mid-run — batch_size and task
-           lines are re-read every wave.
-         - Ceiling: ~400 tasks per run (the transition budget allows
-           ~500 dispatch/collect waves); a larger set → split into
-           multiple queue files and runs.
-      3. `context_set(key: "queue_file", value: "<absolute path>")`
+         Line fields (`key: value`, any order; the rest is the task's text):
+         - `model` / `effort` — per task-delegation's table: opus/high for
+           non-trivial code/judgement, sonnet/high for code from a detailed
+           plan, sonnet/medium for routine review, haiku/low for runners.
+           `model: —` = a line the parent does itself (never admitted).
+         - `touches:` — the paths (prefixes) the task edits. Two lines whose
+           paths overlap never run together; a line WITHOUT `touches:` runs
+           alone. `owner:` — one name (`typer`, `typer.flow`): lines of one
+           owner run one at a time.
+         - `after:` — ids that must be `[x]` first.
+         - `repo:` — another repo (absolute path, or a name: the `base:` repo
+           of that name, else the directory beside this project); default
+           this project.
+         - `⏸` in a field — the line is skipped until the mark is removed.
+         Each task runs in its OWN worktree (`<repo>/../.wt/<repo-name>/<ID>`,
+         branch `batch/<ID>`) and lands by `git merge --no-ff` + `land_test`,
+         one land per repo at a time — so tasks need not avoid sharing
+         infrastructure files; `touches:` is about logic that must not be
+         edited twice at once. Each line is self-contained: a worker sees ONLY
+         its line. `batch_size` = max parallel tasks; `batch_size: 0  # why,
+         was N` pauses: running tasks finish, nothing new starts. The user may
+         edit the file mid-run — every pick re-reads it.
+      3. `context_set(key: "queue_file", value: "<absolute path>")` and
+         `context_set(key: "task_workflow", value: "batch-task")` (a project
+         with its own heir of `batch-task` names it here).
       4. → transition `ready`.
 
-      Status marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed.
-      The queue FILE is the source of truth — it survives context
-      compression and session restarts. Re-read it; never trust memory.
+      Marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed. Only the
+      engine changes marks: `queue_next` / `queue_mark` (exec: `wf-queue`),
+      under the queue's lock. The queue FILE is the source of truth — it
+      survives context compression and session restarts.
     transitions:
-      ready: dispatch
+      ready: pick
+
+  pick:
+    type: exec
+    # Deterministic admission + `[>]` marks under the queue's lock (the exec form of queue_next).
+    command: '"$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --explain'
+    env:
+      QUEUE: "{{context.queue_file}}"
+    timeout: 60000
+    max_output: 16384
+    cases:
+      "0": dispatch
+      "10": collect
+      "11": cross_check
+      "12": paused
+    default: pick_failed
+
+  pick_failed:
+    prompt: |-
+      The pick failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      A held lock (`<queue>.lock`: another pick is writing) → `retry`. A malformed queue (no `## Tasks`,
+      no `batch_size:`) → fix the header and `retry`, or `stop`.
+    transitions:
+      retry: pick
+      stop: report
+
+  paused:
+    prompt: |-
+      The queue is paused (`batch_size: 0`) and none of its tasks runs:
+      {{stderr}}
+      Tell the user the pause and its reason (the comment above). When they lift it (`batch_size: N` in
+      {{context.queue_file}}) → `retry`; to end the run now → `report`.
+    transitions:
+      retry: pick
+      report: report
 
   dispatch:
-    prompt: |
-      Queue: {{context.queue_file}} — re-read it NOW (it may have been
-      edited; after context compression it is your only truth).
+    prompt: |-
+      The pick admitted (and marked `[>]` in {{context.queue_file}}) one line per free slot, `ID model effort repo`:
+      {{stdout}}
+      {{stderr}}
 
-      Spawn one worker per pending `[ ]` task until the running `[>]`
-      count reaches `batch_size` (or no pending remain). Mark each
-      spawned task `[>]` in the queue file.
-
-      Spawn rules:
-      - Sync vs background is decided PER WAVE: a wave that leaves exactly
-        ONE worker running is a gating single, not a background task —
-        spawn it with `run_in_background: false` (its report gates
-        collect; a serial batch_size:1 queue runs every worker sync).
-        Only when the window holds 2+ CONCURRENT workers spawn with
-        `run_in_background: true` — that is the rolling-window case:
-        completions are consumed one-by-one in collect while the rest
-        keep running.
-      - `subagent_type="general-purpose"`; explicit `model` and `effort`
-        from the task line (effort unset → task-delegation table) — never
-        silent session-model inheritance.
-      - Worker prompt = the task line's full text, PLUS
-        verify-then-complete ("check the on-disk state first; if the
-        work is already applied, reconcile instead of double-applying"),
-        PLUS this preamble VERBATIM:
-      ---
-      IMPORTANT: Override the default CLAUDE.md rule about start().
-      Do NOT call start() without arguments.
-      Instead, your FIRST action must be:
-        mcp__plugin_workflow_wf__start({ workflow: "subagent", parent_session_id: "<SESSION_ID>" })
-      where <SESSION_ID> is the current session ID (substitute it before sending).
-      Then follow the subagent workflow until completion — its `route` state
-      self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
-      start() returns `SESSION: <id>` — pass that session_id explicitly in every
-      subsequent workflow tool call; parallel siblings share the same ppid.
-      ---
-
-      Nothing running, nothing pending, nothing spawned → `all_done`.
-      Otherwise → `dispatched`, then END your turn — worker completions
-      wake you in collect.
+      For EACH admitted line, one task session:
+      1. `start({workflow: "{{context.task_workflow}}", parent_session_id: "{{session_id}}", cwd: "<its repo>"})`
+         → session P. Drive P by its prompts, passing session_id P in every call (its `claim` names what to
+         record, its exec steps make the worktree before any agent starts).
+      2. context_set `tasks` on THIS session ({{session_id}}): one `ID=P` per running task session (all of
+         them, not only the new ones) — after a context compression `status({session_id: "{{session_id}}",
+         key: "tasks"})` and `sessions` are the truth, not your memory.
+      Then transition `dispatched` and END your turn: agent notifications wake you in `collect`.
     transitions:
       dispatched: collect
-      all_done: report
 
   collect:
-    prompt: |
-      Queue: {{context.queue_file}} — re-read it NOW. A worker completion
-      woke you (or you re-entered after compression — the file is the
-      truth, not your memory).
+    prompt: |-
+      Task sessions: `status({session_id: "{{session_id}}", key: "tasks"})` (ID=P). Last pick:
+      {{stderr}}
 
-      For EACH worker that completed since the last visit:
-      1. Verify its deliverable ON-TREE — artifacts outrank the report in
-         both directions (don't trust a report the tree contradicts;
-         don't wait for a report the tree already proves).
-      2. Update its mark: `[x]` done, or `[!]` + one-line reason.
-      3. Failed once → ONE retry: SendMessage to the same agent (context
-         intact), or respawn with verify-then-complete. Failed twice →
-         leave `[!]`, move on — never stall the batch on one task.
-      4. `sessions` → `abort` the worker's orphaned child session if
-         still active.
+      Woken by an agent notification: find its task session (the agent is linked to a session whose
+      parent is P; `sessions` shows `[agent …]`), read `status(P)` and advance P by its prompt (session_id
+      P). A transition into P's exec steps (the land waits for the repo's land lock) may outlive the call
+      and finish in the background — move other tasks meanwhile.
+      Resumed after a restart: every task session P is YOURS — `resume` each; the sessions the resume
+      lists are their agents' (SendMessage exactly as it prints).
 
-      Then route:
-      - pending `[ ]` remain AND running `[>]` count < batch_size →
-        `next_wave` (refill the window)
-      - any `[>]` still running (window full, or nothing left to spawn) →
-        END your turn HERE, no transition — the next completion wakes
-        you in this state
-      - no pending, no running → `all_done`
+      Route this session:
+      - a task session reached its terminal (`done` / `closed` / `released`) → update `tasks`, then
+        `slot_free` (the pick runs again and refills the freed slot).
+      - a task session ended `stopped` → `stop`.
+      - task sessions still running, none ended → END your turn here, no transition.
+      - none of YOURS runs and the last pick admitted nothing (exit 10: the `[>]` lines left belong to
+        other sessions, or block by overlap) → `stalled`.
     transitions:
-      next_wave: dispatch
-      all_done: cross_check
+      slot_free: pick
+      stalled: cross_check
+      stop: report
 
   cross_check:
     max_visits: 3
@@ -191,14 +201,14 @@ states:
       4. Real findings: trivial → fix inline; substantial → first write
          one `review_base: <repo-abs-path>=<sha>` line per repo (same
          snapshot rule as `base:`, taken NOW) into the header, then append the findings as
-         new `[ ]` task lines and → `refill` (the normal dispatch/collect
-         machinery handles them). At most 3 visits — on the 3rd (the
+         new `[ ]` task lines and → `refill` (the pick admits them like any
+         other line). At most 3 visits — on the 3rd (the
          engine's `Revisit #3` header) no `refill`: fix inline or list what
          remains for the report as a human decision (a 4th entry throws).
       5. No findings → `done`.
     transitions:
       done: report
-      refill: dispatch
+      refill: pick
 
   report:
     task: "Batch summary"
@@ -210,7 +220,8 @@ states:
          - What the batch ACCOMPLISHED — outcomes grouped by theme,
            not a per-task echo of the queue.
          - Counts: done / failed / total; one line per `[!]` task with
-           its reason.
+           its reason; why the remaining `[ ]` lines were not admitted
+           (the last pick's reasons: after:, ⏸, overlap, pause).
          - Review verdict (findings and how they were resolved, seams
            between tasks, or "clean").
          - Anything left unverified or needing a human decision.

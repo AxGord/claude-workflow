@@ -213,8 +213,16 @@ describe("registerTools annotations", () => {
       "suspended",
       "link_agent",
     ];
-    // Mutating tools keep their confirmation prompt
-    const confirmed = ["modify", "create", "delete", "abort", "set_priority"];
+    // Mutating tools keep their confirmation prompt; the queue tools write a project file
+    const confirmed = [
+      "modify",
+      "create",
+      "delete",
+      "abort",
+      "set_priority",
+      "queue_next",
+      "queue_mark",
+    ];
     expect([...annotations.keys()].sort()).toEqual([...readOnly, ...confirmed].sort());
     for (const name of readOnly) expect(annotations.get(name)).toEqual({ readOnlyHint: true });
     for (const name of confirmed) expect(annotations.get(name)).toBeUndefined();

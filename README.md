@@ -227,7 +227,7 @@ wf-run --status    # one line per lease and waiter
 **The lease only counts threads — the command must actually use that many.** Compilers, test runners and optimizers take every core by default, whatever the lease says. The leased command gets `WF_THREADS` = the threads granted (after `budget` and the clamp to the budget); pass it on: `make -j"$WF_THREADS"`, `vitest --maxWorkers="$WF_THREADS"`, `HXCPP_COMPILE_THREADS="$WF_THREADS" haxe build.hxml`, `oxipng -t "$WF_THREADS"`, `APQ_ORACLE_PARALLEL="$WF_THREADS"`. It is set only for a lease with threads — never for a light exec, a lock-only lease or `--efficiency` (an inherited value is dropped). It is env only, not a template variable: write `$WF_THREADS` in the command.
 
 - **Admission** (under a proper-lockfile lock on `<pool dir>/pool.json`): `held + N <= budget`, and beside a live lease also `held + N + external <= budget` — external load never blocks an EMPTY pool (a head with N ≥ budget would otherwise wait forever on background load). `external = max(0, load − held − load_threshold)` is the load not taken through the pool. `load` is measured from cpu ticks (`os.cpus()`): busy cpus over the window since the pool's previous pass (≥ 0.5 s; a window over 5 s is stale and restarts); without a window (first pass, stale) it falls back to `loadavg1`, which is conservative — it lags a minute and still holds load that has ended. `<pool dir>/config.json` (optional): `budget` (default: performance cores − 2 — `hw.perflevel0.physicalcpu` on macOS, else `os.cpus().length` − 2, at least 1) and `load_threshold` (default 2: the noise floor of light work).
-- **Named locks**: `resource: { locks: [NAME, …] }` / `--lock NAME` (repeatable) — machine-wide mutual exclusion by name (one word, no whitespace: `port:3000`, `ios-simulator`), for dev servers, bridges and anything else on a fixed port or a single device. `threads` is optional beside `locks` (a lock-only lease takes no threads and is never blocked by load; `wf-run --lock` without `--threads` is lock-only), at least one of the two is required. Locks and threads are granted ATOMICALLY in one pass: a task gets everything it asked for or keeps waiting holding nothing — no partial hold, so no deadlock between two tasks wanting the same pair. A dead holder is reaped like any lease; `abort` withdraws a lock wait; `--status` lists held locks; `wait_timeout` → 75.
+- **Named locks**: `resource: { locks: [NAME, …] }` / `--lock NAME` (repeatable) — machine-wide mutual exclusion by name (one word, no whitespace: `port:3000`, `ios-simulator`; a name may template a session value — `"{{context.cwd}}-land"` — and whitespace it renders becomes `_`), for dev servers, bridges and anything else on a fixed port or a single device. `threads` is optional beside `locks` (a lock-only lease takes no threads and is never blocked by load; `wf-run --lock` without `--threads` is lock-only), at least one of the two is required. Locks and threads are granted ATOMICALLY in one pass: a task gets everything it asked for or keeps waiting holding nothing — no partial hold, so no deadlock between two tasks wanting the same pair. A dead holder is reaped like any lease; `abort` withdraws a lock wait; `--status` lists held locks; `wait_timeout` → 75.
 - **Order**: strictly priority descending, then arrival — nothing overtakes a waiter on what it waits for. A smaller task never overtakes the head waiting for threads; a lock goes to its waiters in queue order. A waiter blocked by a held lock claims no threads, so a long-held lock (a dev server) does not stall the rest of the queue. `N` above the budget counts as the budget: it waits for an empty machine and runs alone. `threads: budget` / `--threads budget` asks for the whole budget as `config.json` sets it when the request is made — no hardcoded core count in a workflow.
 - **Priority levels**: a session has a level — `low` (−100), `normal` (0, the default), `high` (100), `urgent` (200) — set by `start({ priority })` and inherited by its child sessions (an explicit `priority` on a child's `start` overrides it for that subtree). A lease's priority = the session level + the step's own `resource.priority`, so a step fine-tunes within its level (keep it under ±100). `set_priority({ session_id, level })` changes the level of a session and of its active descendants at once (later children inherit it) and re-ranks their WAITING pool entries in the same pass; running leases keep theirs — there is no preemption. Every exec gets `WF_PRIORITY` (that sum) and `WF_PRIORITY_LEVEL`; `wf-run` without `--priority` queues at `WF_PRIORITY` and keeps the level, so a nested `wf-run` is re-ranked with its session. Two windows keep the old level: an exec whose context was built just before `set_priority` but had not yet joined the queue waits at the old level until it is granted, and a `wf-run` inside an exec started before `set_priority` takes that exec's old `WF_PRIORITY`. An explicit `--priority P` is the whole priority and has no level. `set_priority` is for the user's request — an agent never raises its own session or changes another project's.
 - **Flexible threads**: `threads: { min: A, max: B|budget }` with `wait_full: SEC` (default 0), or `wf-run --threads A-B [--wait-full SEC]` (`B` may be `budget`). The waiter gets `B` when `B` fits; otherwise, once `wait_full` seconds have passed since it queued, it takes every thread that fits if that is at least `A`. `WF_THREADS` = the threads granted. Order is unchanged: while a flexible head waits — for `B` inside its window, or for `A` after it — it closes the threads to everyone behind it like any waiter (the window waits for threads being freed; a smaller task taking them would defeat it). `A`/`B` above the budget clamp to it. `wait_full` without a `{ min, max }` is a load error, `--wait-full` without a range a usage error. `threads: N` is `{ min: N, max: N }`.
@@ -387,9 +387,68 @@ states with contract names; bundled, each keeps the old behaviour (the agent doe
 | `project_build` | `testing` | prompt: build before integration | `on_success: integration`, `on_error: fix_integration` |
 | `project_gate` | `testing` | exec `true` — no gate | `on_success: done`, `on_error: failed` (the caller's fix round) |
 | `project_build` | `bug-fix` | prompt: build the fixed app before the visual check | `on_success: verify_visual`, `on_error: write_fix` |
+| `project_prepare` | `batch-task` | exec: `git worktree add <repo>/../.wt/<repo-name>/<ID> -b batch/<ID>`; stdout = the path alone | `on_success: work`, `on_error: prepare_failed` |
+| `project_land` | `batch-task` | exec under the lock `{{context.cwd}}-land`: `git merge --no-ff` + the queue's `land_test:` (red → the merge is taken back with `reset --keep`; unsafe → exit 4, nothing touched) | `cases: {"0": mark_done}`, `default: land_failed`, `on_timeout: land_failed` |
 
 `coding` and `bug-fix` verify through `testing`, so one heir of `testing` serves both. Give every
 heavy step `on_timeout:` and a state of its own for it.
+
+### Task queue — `batch`, `queue_next`, `wf-queue`
+
+A long run of tasks is a queue FILE the engine admits from — one format for every project:
+
+```markdown
+# Batch: wave-3
+batch_size: 3                       # the window; `batch_size: 0  # pause: <why>, was 3` pauses
+base: /abs/repo=<sha>
+land_test: npm test                 # run after each merge (batch-task's default land)
+## Tasks
+- [ ] T1 | model: opus | effort: high | touches: src/engine | <self-contained brief> |
+- [ ] T2 | model: sonnet | after: T1 | touches: src/a, docs | owner: typer | repo: other-repo | <brief> |
+```
+
+Keep the queue file untracked and ignored (e.g. `.claude/batch/` in `.gitignore`): a tracked queue is
+dirtied by the first pick, and `batch-task`'s land refuses a dirty tree (exit 3). The land takes a
+merge back with `git reset --keep` only while HEAD is still that merge; otherwise (HEAD moved during
+`land_test`, or local edits on the merged files) it exits 4 and touches nothing.
+
+Marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed. A pick fills the window (`batch_size`
+minus the `[>]` lines) in file order with the `[ ]` lines that:
+
+- are not parent-run (`model: —`) and carry no `⏸` in a metadata field or in `after:` (inside long
+  prose it is a mention);
+- have every `after:` id `[x]` (an id-like token that names no line, or prose beside the ids, is a
+  condition for a human: never admitted);
+- overlap no running and no just-admitted line: `touches:` paths overlap when one is a prefix of the
+  other on a `/` boundary, `owner:` names when equal or one is a `.`-prefix; a line WITHOUT
+  `touches:` overlaps everything (it runs alone);
+- name a `repo:` that resolves (absolute path; a name = the `base:` repo of that basename, else the
+  directory of that name beside the queue's project; none = the queue's project).
+
+Each admitted line is marked `[>]` under the queue's lock (`<file>.lock`, an atomic mkdir), so two
+picks — two tools, two processes — never admit one line. `batch_size: 0` is the pause: nothing new is
+admitted, running tasks finish; the pick answers `window 0 — paused: <the comment>`.
+
+- `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, text);
+  `explain` adds why each other pending line waits.
+- `queue_mark({ file, id, to, note? })` — `running` `[ ]`→`[>]`, `done` `[>]`→`[x]`, `failed`
+  `[>]`→`[!]`, `released` `[>]`→`[ ]`; any other current mark is refused; `note` is written after the id
+  (one line without `|`, `⏸` or a leading `key:`). A write lands only while the file still reads as
+  the pick read it — a hand edit in between makes it plan again, never lost.
+- From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" <file> [--dry-run] [--explain]` (also the `wf-queue`
+  bin) prints `ID<TAB>model<TAB>effort<TAB>repo` per admitted line and the summary on stderr; exit 0
+  admitted, 10 none but `[>]` lines run, 11 none and nothing runs (done), 12 none, nothing runs and
+  `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]`, `--header <key>`.
+
+The bundled `batch` drives a queue: `plan_queue` (write or resume it; context `queue_file`,
+`task_workflow`) → `pick` (exec, routes on the exit code: `dispatch` / `collect` / `cross_check` /
+`paused`) → `dispatch` starts one child session per admitted line in its repo → `collect` advances them
+on agent notifications and re-picks on every freed slot → one `cross_check` of the combined diff. The
+child is `batch-task`: `claim` → `project_prepare` (worktree) → `work` (one worker agent, its session
+linked) → `project_land` (merge + `land_test` under the repo's land lock) → `mark_done` → `cleanup`.
+A project with its own procedure is a heir: `extends: batch` with `plan_queue` as an exec that sets
+`queue_file` and `task_workflow` (`context_set:`), and a task workflow of its own or `extends:
+batch-task` overriding `project_prepare` / `project_land`.
 
 ### When a project should have its own workflow
 
@@ -443,7 +502,8 @@ itself is different.
 | `file-code` | Per-file coding — spawned by coding/bug-fix for each file |
 | `file-review` | Per-file deep review — spawned by code-review for each file |
 | `lint-review` | Trivial-diff review — engine-run lint, act on findings, one intent re-read |
-| `batch` | Long-running queue of independent tasks dispatched to sub-agent workers, one fresh-eyes review of the combined diff |
+| `batch` | Long-running task queue: the engine admits lines into the window (`after:` / `touches:` / `owner:` / pause), one `batch-task` child per task, one fresh-eyes review of the combined diff |
+| `batch-task` | One queued task: worktree → worker → merge + `land_test` under the repo's land lock → mark done → cleanup |
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 
@@ -527,6 +587,8 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
 | `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) | `session_id`, `agent_id` |
+| `queue_next` | Admit the next lines of a task queue file and mark them `[>]` (§ Task queue) | `file`, `dry_run`, `explain` |
+| `queue_mark` | Move one queue line's mark (`running` / `done` / `failed` / `released`) | `file`, `id`, `to`, `note` |
 
 ## Dashboard
 
@@ -621,6 +683,8 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/executor.ts` | Action state execution — shell commands (`exec`, a `resource:` exec under a pool lease) and HTTP requests (`fetch`) |
 | `src/pool.ts` | Machine-wide thread pool: config, admission pass, lease acquire/release under a file lock |
 | `src/wf-run.ts` | The `wf-run` CLI over the pool |
+| `src/queue.ts` | Task queue files: parse, admission (`after:` / `touches:` / `owner:` / pause), `[.]` marks under the queue's lock |
+| `src/queue-cli.ts` | The `wf-queue` CLI over `queue.ts` (exec form of `queue_next` / `queue_mark`) |
 | `src/process.ts` | Process-group kill and pid liveness |
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |

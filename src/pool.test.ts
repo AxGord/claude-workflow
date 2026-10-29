@@ -497,6 +497,48 @@ describe("Executor resource:", () => {
     if (holder.status === "granted") await holder.lease.release();
   }, 10_000);
 
+  it("a lock name renders session values: the rendered name is the lock held", async () => {
+    const dir = poolDir();
+    const executor = new Executor(new Pool(dir, fakeProbes()));
+    const holder = await new Pool(dir, fakeProbes()).acquire({
+      threads: 0,
+      locks: ["/r/a_b-land"],
+    });
+    const run = (cwd: string) =>
+      executor.execute(
+        {
+          type: "exec",
+          command: "true",
+          resource: { locks: ["{{context.cwd}}-land"], wait_timeout: 0.2 },
+        },
+        { context: { cwd } },
+      );
+    const blocked = await run("/r/a b");
+    expect(blocked.exit_code).toBe(75);
+    expect(blocked.stderr).toContain("lock /r/a_b-land");
+    expect((await run("/r/other")).exit_code).toBe(0);
+    if (holder.status === "granted") await holder.lease.release();
+  }, 10_000);
+
+  it("a lock name that renders empty keeps its template text", async () => {
+    const dir = poolDir();
+    const executor = new Executor(new Pool(dir, fakeProbes()));
+    const holder = await new Pool(dir, fakeProbes()).acquire({
+      threads: 0,
+      locks: ["{{context.none}}"],
+    });
+    const r = await executor.execute(
+      {
+        type: "exec",
+        command: "true",
+        resource: { locks: ["{{context.none}}"], wait_timeout: 0.2 },
+      },
+      {},
+    );
+    expect(r.exit_code).toBe(75);
+    if (holder.status === "granted") await holder.lease.release();
+  }, 10_000);
+
   it("an abort that lands as the lease is granted gives the lease back without running", async () => {
     const dir = poolDir();
     const marker = path.join(dir, "ran");

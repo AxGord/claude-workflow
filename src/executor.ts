@@ -146,6 +146,15 @@ export class Executor {
   }
 
   /**
+   * A lock name may name a session value (`"{{context.cwd}}-land"`); what it renders to stays one
+   * word (whitespace becomes `_`), and one that renders empty keeps its template text.
+   */
+  private static _lockName(name: string, vars: Record<string, unknown>): string {
+    const rendered = render(name, vars).replace(/\s+/g, "_");
+    return rendered === "" ? name : rendered;
+  }
+
+  /**
    * An exec with `resource:` waits for a pool lease (the same admission as
    * `wf-run`), runs with `WF_THREADS` = the threads granted, and releases it.
    * No lease within `wait_timeout` exits 75. The lease's priority is the
@@ -167,6 +176,7 @@ export class Executor {
     // A max the budget clamps below the min still runs: the min clamps with it.
     const minThreads = flexible ? Math.min(flexible.min, threads) : undefined;
     const command = render(state.command!, vars);
+    const locks = resource.locks?.map(l => Executor._lockName(l, vars));
     const ac = new AbortController();
     const sessionId = ctx?.sessionId ?? "";
     let waits = this._waiting.get(sessionId);
@@ -181,7 +191,7 @@ export class Executor {
           minThreads,
           waitFullMs:
             flexible && resource.wait_full !== undefined ? resource.wait_full * 1000 : undefined,
-          locks: resource.locks,
+          locks,
           priority: Executor._priority(state, ctx),
           level: ctx?.level,
           label: (shard ? `[${shard.id}] ${command}` : command).slice(0, LEASE_LABEL_MAX),
@@ -219,7 +229,7 @@ export class Executor {
     if (got.status !== "granted") {
       const busy =
         got.status === "timeout"
-          ? `busy: ${describeRequest({ threads, min_threads: minThreads, locks: resource.locks }, got.view.budget)} not free within ${resource.wait_timeout}s ` +
+          ? `busy: ${describeRequest({ threads, min_threads: minThreads, locks }, got.view.budget)} not free within ${resource.wait_timeout}s ` +
             `(held ${got.view.held}/${got.view.budget}, external ${got.view.external.toFixed(1)})`
           : ABORTED_WAIT;
       return {

@@ -17,6 +17,14 @@ import {
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
 import { withProgress, type ProgressSink } from "./progress.js";
 import { RESUME_TOOL, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
+import {
+  MARK_TARGETS,
+  formatPickSummary,
+  markQueue,
+  pickQueue,
+  type MarkTarget,
+  type PickResult,
+} from "./queue.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -217,6 +225,18 @@ function formatAdopted(status: StatusResult, how: "exec" | "rerun" | undefined):
 // under plan mode too. modify/create/delete/abort stay unannotated so they
 // keep their confirmation.
 const ENGINE_STATE_ONLY = { readOnlyHint: true } as const;
+
+/** queue_next's answer: the summary, then one block per admitted line with its free text. */
+export function formatQueueNext(r: PickResult, explain: boolean): string {
+  const lines = [formatPickSummary(r, explain)];
+  for (const a of r.admitted)
+    lines.push(
+      "",
+      `${r.dryRun ? "WOULD ADMIT" : "ADMITTED [>]"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}`,
+      a.text,
+    );
+  return lines.join("\n");
+}
 
 /** The slice of the SDK's request extra a progress heartbeat needs. */
 interface ToolExtra {
@@ -970,6 +990,76 @@ export function registerTools(
             },
           ],
         };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // 16. queue_next
+  server.registerTool(
+    "queue_next",
+    {
+      description:
+        "Admit the next lines of a task queue file (`batch_size:` header, `- [ ] ID | key: value | … | text |` lines): " +
+        "fills the window (batch_size minus the `[>]` lines) in file order with lines whose `after:` ids are all `[x]`, " +
+        "that carry no `⏸`, and whose `touches:` / `owner:` overlap no running or just-admitted line (no `touches:` = " +
+        "overlaps everything); marks each `[>]` under the queue's lock, so two calls never admit one line. Returns id, " +
+        "model, effort, repo (absolute) and text per admitted line. `batch_size: 0` = paused: nothing is admitted. " +
+        "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
+      inputSchema: z
+        .object({
+          file: z
+            .string()
+            .min(1)
+            .describe("The queue file (absolute, or relative to the server's cwd)"),
+          dry_run: z.boolean().optional().describe("Show what would be admitted; mark nothing"),
+          explain: z
+            .boolean()
+            .optional()
+            .describe("Add one line per pending line not admitted: why"),
+        })
+        .strict(),
+    },
+    async args => {
+      try {
+        const r = await pickQueue(args.file, { dryRun: args.dry_run === true });
+        return { content: [{ type: "text", text: formatQueueNext(r, args.explain === true) }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // 17. queue_mark
+  server.registerTool(
+    "queue_mark",
+    {
+      description:
+        "Change one line's mark in a task queue file under its lock: running `[ ]`→`[>]`, done `[>]`→`[x]`, " +
+        "failed `[>]`→`[!]`, released `[>]`→`[ ]` (nothing of the task was made). Refuses any other current mark. " +
+        "`note` is written right after the id (`- [x] ID | <note> | …`).",
+      inputSchema: z
+        .object({
+          file: z.string().min(1).describe("The queue file"),
+          id: z.string().min(1).describe("The task id"),
+          to: z
+            .enum(Object.keys(MARK_TARGETS) as [MarkTarget, ...MarkTarget[]])
+            .describe("running | done | failed | released"),
+          note: z.string().optional().describe("One line written after the id"),
+        })
+        .strict(),
+    },
+    async args => {
+      try {
+        const r = await markQueue(args.file, args.id, args.to, args.note);
+        return { content: [{ type: "text", text: `${r.id}: [${r.from}] → [${r.to}]` }] };
       } catch (err) {
         return {
           content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],

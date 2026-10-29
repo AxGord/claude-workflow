@@ -114,6 +114,7 @@ export class Engine {
     "github-init",
     "docs",
     "batch",
+    "batch-task",
   ]);
 
   private readonly _storage: Storage;

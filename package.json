@@ -12,7 +12,8 @@
   "type": "module",
   "main": "build/index.js",
   "bin": {
-    "wf-run": "build/wf-run.js"
+    "wf-run": "build/wf-run.js",
+    "wf-queue": "build/queue-cli.js"
   },
   "scripts": {
     "build": "tsc",
