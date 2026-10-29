@@ -5,9 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { Engine } from "./engine.js";
 import { Executor, bootTimeMs } from "./executor.js";
-import { isGroupAlive } from "./process.js";
 import { formatResume, registerTools } from "./tools.js";
-import { projectRoot } from "./pool.js";
+import { Pool, projectRoot } from "./pool.js";
+import type { PoolProbes } from "./pool.js";
+import { isGroupAlive, isPidAlive } from "./process.js";
 import { pickUpConversation } from "./takeover.js";
 import { InMemoryStorage, createTestLoader, cleanupDir, SIMPLE_WORKFLOW } from "./test-helpers.js";
 import type { DetachedRun, SessionState } from "./types.js";
@@ -38,7 +39,7 @@ describe("suspend / resume", () => {
     for (const d of dirs.splice(0)) cleanupDir(d);
   });
 
-  function mount(workflows: Record<string, object>, stateDir?: string) {
+  function mount(workflows: Record<string, object>, stateDir?: string, pool?: Pool) {
     const storage = new InMemoryStorage();
     const result = createTestLoader(workflows);
     dirs.push(result.dir);
@@ -46,17 +47,12 @@ describe("suspend / resume", () => {
     const engine = new Engine(
       storage,
       result.loader,
-      new Executor(undefined, runDir),
+      new Executor(pool, runDir),
       stateDir ? { stateDir } : {},
     );
     /** A second server over the same state: what `claude --resume` starts. */
     const restart = () =>
-      new Engine(
-        storage,
-        result.loader,
-        new Executor(undefined, runDir),
-        stateDir ? { stateDir } : {},
-      );
+      new Engine(storage, result.loader, new Executor(pool, runDir), stateDir ? { stateDir } : {});
     return { storage, engine, restart, loader: result.loader, runDir };
   }
 
@@ -130,7 +126,9 @@ describe("suspend / resume", () => {
     const root = await engine.start("simple");
     const child = await engine.start("simple", undefined, root.sessionId);
     await engine.linkAgent(child.sessionId, "agent-7");
-    await orphan(storage, [root.sessionId, child.sessionId]);
+    // a session the root's own agent runs below it: no agent to wake
+    const own = await engine.start("simple", undefined, root.sessionId);
+    await orphan(storage, [root.sessionId, child.sessionId, own.sessionId]);
     await engine.reapOrphanedSessions();
 
     const next = restart();
@@ -141,7 +139,9 @@ describe("suspend / resume", () => {
     expect(resumed.suspended_at).toBeUndefined();
     expect(resumed.context.claude_code_pid).toBe(process.ppid);
     expect(resumed.history.at(-1)!.event).toBe("resume");
-    expect(r.suspendedChildren.map(c => c.session_id)).toEqual([child.sessionId]);
+    expect(r.suspendedChildren.map(c => c.session_id).sort()).toEqual(
+      [child.sessionId, own.sessionId].sort(),
+    );
     expect(storage.read(child.sessionId)!.context.claude_code_pid).toBe(process.ppid);
     expect(storage.read(child.sessionId)!.suspended_at).toBeDefined();
 
@@ -150,6 +150,10 @@ describe("suspend / resume", () => {
     expect(text).toContain(
       `SendMessage({ to: "agent-7", message: "Continue: call mcp__plugin_workflow_wf__resume({ session_id: '${child.sessionId}' })`,
     );
+    expect(text).toContain(
+      `  ${own.sessionId} → simple @ start — no agent linked — yours, unless a sub-agent you spawned runs it (then link_agent + SendMessage) → mcp__plugin_workflow_wf__resume({ session_id: '${own.sessionId}' })`,
+    );
+    expect(text).not.toContain("<agent>");
 
     // the agent continues its own session
     await next.resume(child.sessionId);
@@ -285,6 +289,9 @@ describe("suspend / resume", () => {
     const { sessionId } = await m.engine.start("w");
     await expect(m.engine.transition(sessionId, "next")).rejects.toThrow(/Max transitions/);
     expect(m.storage.read(sessionId)!.running_exec).toBeUndefined();
+    // nothing left for a later owner to run again
+    expect(m.storage.read(sessionId)!.pending_action).toBeUndefined();
+    expect(m.engine.hasOrphanedExec(sessionId)).toBe(false);
     expect(fs.readdirSync(m.runDir)).toEqual([]);
   });
 
@@ -477,6 +484,290 @@ describe("suspend / resume", () => {
       expect(m.storage.read(sessionId)!.running_exec).toBeDefined();
       expect(m.engine.hasOrphanedExec(sessionId)).toBe(false);
       expect((await pending).currentStateName).toBe("green");
+    });
+
+    /** A pool of 2 threads with no load, held whole by another lease until `free()`. */
+    async function fullPool(): Promise<{ pool: Pool; free: () => Promise<void> }> {
+      const dir = tmp("wf-pool-");
+      fs.writeFileSync(
+        path.join(dir, "config.json"),
+        JSON.stringify({ budget: 2, load_threshold: 0 }),
+      );
+      const probes: PoolProbes = {
+        perfCores: () => 4,
+        loadavg: () => 0,
+        cpuTicks: () => ({ busy: 0, total: 0, cpus: 1 }),
+        isAlive: isPidAlive,
+        isGroupAlive,
+      };
+      const pool = new Pool(dir, probes);
+      const held = await pool.acquire({ threads: 2, label: "other" });
+      if (held.status !== "granted") throw new Error("pool not granted");
+      return { pool, free: () => held.lease.release() };
+    }
+
+    it("picked up by the hook while its exec waited for a pool lease (never spawned): the first status() runs the step again, once", async () => {
+      const work = tmp("wf-rerun-");
+      const counter = path.join(work, "runs");
+      const { pool, free } = await fullPool();
+      const m = mount(
+        {
+          w: {
+            ...gate(`echo x >> "${counter}"; echo done`),
+            states: {
+              ...gate("").states,
+              gate: {
+                ...gate(`echo x >> "${counter}"; echo done`).states.gate,
+                resource: { threads: "budget" },
+              },
+            },
+          },
+        },
+        undefined,
+        pool,
+      );
+      const { sessionId } = await m.engine.start("w");
+      await orphan(m.storage, [sessionId]);
+      const first = m.engine.transition(sessionId, "next").catch((e: Error) => e);
+      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.pending_action; i++)
+        await new Promise(r => setTimeout(r, 10));
+      expect(m.storage.read(sessionId)!.pending_action).toMatchObject({ frame: 0, state: "gate" });
+      expect(m.storage.read(sessionId)!.running_exec).toBeUndefined();
+      // SessionEnd suspends it, then the process (and its server, still waiting) is gone
+      await m.engine.suspend(sessionId);
+      m.engine.killSessionTree(sessionId);
+      expect((await first) as Error).toBeInstanceOf(Error);
+      expect(fs.existsSync(counter)).toBe(false);
+      expect(m.storage.read(sessionId)!.pending_action).toBeDefined();
+
+      const next = m.restart();
+      // before anyone takes it: the state says what it is, not "[sub_workflow: unknown]"
+      const before = next.getStatus(sessionId).prompt;
+      expect(before).toContain('[exec state "gate": begun by a server that is gone — resume()');
+      expect(before).not.toContain("unknown");
+
+      await pickUp(m, sessionId);
+      expect(next.orphanedStep(sessionId)).toBe("rerun");
+      await free();
+      const call = tools(next, m.storage, m.loader);
+      const r = await call("status", { session_id: sessionId });
+      expect(r.content[0].text).toContain("INTERRUPTED STEP RUN AGAIN");
+      expect(r.content[0].text).toContain("GREEN done");
+      const s = m.storage.read(sessionId)!;
+      expect(s.stack[0].current_state).toBe("green");
+      expect(s.pending_action).toBeUndefined();
+      expect(next.hasOrphanedExec(sessionId)).toBe(false);
+      const again = await call("status", { session_id: sessionId });
+      expect(again.content[0].text).not.toContain("RUN AGAIN");
+      expect(fs.readFileSync(counter, "utf8")).toBe("x\n");
+    });
+
+    it("picked up by the hook, an exec without resource that never spawned: transition() runs it first and is not taken", async () => {
+      const work = tmp("wf-rerun-");
+      const counter = path.join(work, "runs");
+      const m = mount({ w: gate(`echo x >> "${counter}"; exit 3`) });
+      const { sessionId } = await m.engine.start("w");
+      const s = m.storage.read(sessionId)!;
+      const at = new Date().toISOString();
+      await m.storage.write(sessionId, {
+        ...s,
+        stack: [{ ...s.stack[0], current_state: "gate" }],
+        pending_action: { frame: 0, state: "gate", at },
+        suspended_at: at,
+      });
+      await orphan(m.storage, [sessionId]);
+      await pickUp(m, sessionId);
+      const call = tools(m.restart(), m.storage, m.loader);
+      const r = await call("transition", { session_id: sessionId, transition: "done" });
+      expect(r.isError).toBe(true);
+      expect(r.content[0].text).toContain("INTERRUPTED STEP RUN AGAIN");
+      expect(r.content[0].text).toContain("RED 3");
+      expect(r.content[0].text).toContain('Transition "done" was NOT taken');
+      expect(m.storage.read(sessionId)!.stack[0].current_state).toBe("red");
+      expect(fs.readFileSync(counter, "utf8")).toBe("x\n");
+    });
+
+    it("a step waiting for its lease in this server, or begun by another live process, is no orphan", async () => {
+      const { pool, free } = await fullPool();
+      const m = mount(
+        {
+          w: {
+            ...gate("true"),
+            states: {
+              ...gate("").states,
+              gate: { ...gate("true").states.gate, resource: { threads: 1 } },
+            },
+          },
+        },
+        undefined,
+        pool,
+      );
+      const { sessionId } = await m.engine.start("w");
+      const pending = m.engine.transition(sessionId, "next");
+      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.pending_action; i++)
+        await new Promise(r => setTimeout(r, 10));
+      expect(m.storage.read(sessionId)!.pending_action).toBeDefined();
+      expect(m.engine.hasOrphanedExec(sessionId)).toBe(false);
+      expect(m.engine.getStatus(sessionId).prompt).toContain("running in this server");
+      // another live process owns it: not this server's to run
+      const other = m.restart();
+      const s = m.storage.read(sessionId)!;
+      await m.storage.write(sessionId, {
+        ...s,
+        context: { ...s.context, claude_code_pid: process.pid },
+      });
+      expect(other.hasOrphanedExec(sessionId)).toBe(false);
+      expect(other.getStatus(sessionId).prompt).toContain(`running in PID ${process.pid}`);
+      await m.storage.write(sessionId, s);
+      await free();
+      expect((await pending).currentStateName).toBe("green");
+      expect(m.storage.read(sessionId)!.pending_action).toBeUndefined();
+    });
+
+    it("Claude crashed, its old server lives on waiting for the lease: once the new owner reruns the step, the old one gives the lease back unused", async () => {
+      const work = tmp("wf-rerun-");
+      const counter = path.join(work, "runs");
+      const { pool, free } = await fullPool();
+      const cmd = `echo x >> "${counter}"; echo done`;
+      const m = mount(
+        {
+          w: {
+            ...gate(cmd),
+            states: {
+              ...gate("").states,
+              gate: { ...gate(cmd).states.gate, resource: { threads: "budget" } },
+            },
+          },
+        },
+        undefined,
+        pool,
+      );
+      const { sessionId } = await m.engine.start("w");
+      await orphan(m.storage, [sessionId]);
+      const first = m.engine.transition(sessionId, "next").catch((e: Error) => e);
+      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.pending_action; i++)
+        await new Promise(r => setTimeout(r, 10));
+      // no SessionEnd, no kill: only the hook's pick-up, then the new server's status
+      await pickUp(m, sessionId);
+      const call = tools(m.restart(), m.storage, m.loader);
+      const second = call("status", { session_id: sessionId });
+      await new Promise(r => setTimeout(r, 100));
+      await free();
+      const old = await first;
+      expect(old).toBeInstanceOf(Error);
+      expect((old as Error).message).toMatch(/no longer this server's to run/);
+      expect((await second).content[0].text).toContain("GREEN done");
+      await new Promise(r => setTimeout(r, 300));
+      expect(fs.readFileSync(counter, "utf8")).toBe("x\n");
+      expect(m.storage.read(sessionId)!.stack[0].current_state).toBe("green");
+    });
+
+    it("suspended while it waited for the lease: the grant is given back, the step is left to resume", async () => {
+      const work = tmp("wf-rerun-");
+      const counter = path.join(work, "runs");
+      const { pool, free } = await fullPool();
+      const cmd = `echo x >> "${counter}"`;
+      const m = mount(
+        {
+          w: {
+            ...gate(cmd),
+            states: {
+              ...gate("").states,
+              gate: { ...gate(cmd).states.gate, resource: { threads: 1 } },
+            },
+          },
+        },
+        undefined,
+        pool,
+      );
+      const { sessionId } = await m.engine.start("w");
+      const first = m.engine.transition(sessionId, "next").catch((e: Error) => e);
+      for (let i = 0; i < 200 && !m.storage.read(sessionId)!.pending_action; i++)
+        await new Promise(r => setTimeout(r, 10));
+      await m.engine.suspend(sessionId);
+      await free();
+      expect(((await first) as Error).message).toMatch(/no longer this server's to run/);
+      expect(fs.existsSync(counter)).toBe(false);
+      const s = m.storage.read(sessionId)!;
+      expect(s.running_exec).toBeUndefined();
+      expect(s.pending_action).toMatchObject({ frame: 0, state: "gate" });
+    });
+
+    it("a lease that timed out with no route for its exit 75 leaves nothing to run again", async () => {
+      const { pool, free } = await fullPool();
+      const m = mount(
+        {
+          w: {
+            initial: "start",
+            max_transitions: 1,
+            states: {
+              start: { prompt: "go", transitions: { next: "run" } },
+              run: {
+                type: "exec",
+                command: "true",
+                resource: { threads: 1, wait_timeout: 0.2 },
+                on_success: "end",
+                on_error: "end",
+              },
+              end: { terminal: true, outcome: "complete" },
+            },
+          },
+        },
+        undefined,
+        pool,
+      );
+      const { sessionId } = await m.engine.start("w");
+      await expect(m.engine.transition(sessionId, "next")).rejects.toThrow(/Max transitions/);
+      await free();
+      const s = m.storage.read(sessionId)!;
+      expect(s.running_exec).toBeUndefined();
+      expect(s.pending_action).toBeUndefined();
+      expect(m.engine.hasOrphanedExec(sessionId)).toBe(false);
+    });
+
+    for (const [why, change] of [
+      ["re-owned by another process", { context: { claude_code_pid: process.pid } }],
+      ["suspended", { suspended_at: "2026-10-29T00:00:00.000Z" }],
+    ] as const)
+      it(`a step that threw after its session was ${why} keeps its mark for the new owner`, async () => {
+        const storage = new InMemoryStorage();
+        class Throwing extends Executor {
+          override async execute(_s: unknown, _v: unknown, ctx?: { sessionId?: string }) {
+            const id = ctx!.sessionId!;
+            const cur = storage.read(id)!;
+            await storage.write(id, {
+              ...cur,
+              ...change,
+              context: { ...cur.context, ...("context" in change ? change.context : {}) },
+            });
+            throw new Error("boom");
+          }
+        }
+        const result = createTestLoader({ w: gate("true") });
+        dirs.push(result.dir);
+        const engine = new Engine(storage, result.loader, new Throwing(undefined, tmp("wf-runs-")));
+        const { sessionId } = await engine.start("w");
+        await expect(engine.transition(sessionId, "next")).rejects.toThrow("boom");
+        expect(storage.read(sessionId)!.pending_action).toMatchObject({ frame: 0, state: "gate" });
+      });
+
+    it("a step that threw in this live server leaves nothing to run again", async () => {
+      class Throwing extends Executor {
+        override execute(): never {
+          throw new Error("boom");
+        }
+      }
+      const storage = new InMemoryStorage();
+      const result = createTestLoader({ w: gate("true") });
+      dirs.push(result.dir);
+      const engine = new Engine(storage, result.loader, new Throwing(undefined, tmp("wf-runs-")));
+      const { sessionId } = await engine.start("w");
+      await expect(engine.transition(sessionId, "next")).rejects.toThrow("boom");
+      expect(storage.read(sessionId)!.pending_action).toBeUndefined();
+      expect(engine.hasOrphanedExec(sessionId)).toBe(false);
+      expect(engine.getStatus(sessionId).prompt).toContain(
+        `[exec state "gate": not running — its last run was not routed; resume({ session_id: "${sessionId}" }) runs it again]`,
+      );
     });
 
     it("neither process nor result (the machine rebooted): resume runs the step again", async () => {

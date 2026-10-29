@@ -4,8 +4,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Storage } from "./storage.js";
+import { bootTimeMs } from "./executor.js";
+import { killProcessGroup } from "./process.js";
 import { activeReport, pickupReport } from "./session-cli.js";
 import type { SessionState } from "./types.js";
+
+/** A live process group that stands for an exec still running. */
+function liveGroup(): number {
+  const child = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+  child.unref();
+  return child.pid!;
+}
 
 async function deadPid(): Promise<number> {
   const child = spawn("true");
@@ -32,8 +41,10 @@ function session(id: string, extra: Partial<SessionState> & { pid?: number }): S
 
 describe("session-cli (SessionStart hook)", () => {
   const dirs: string[] = [];
+  const groups: number[] = [];
   afterEach(() => {
     for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+    for (const g of groups.splice(0)) killProcessGroup(g, "SIGKILL");
   });
   const storage = () => {
     const d = fs.mkdtempSync(path.join(os.tmpdir(), "wf-cli-"));
@@ -72,19 +83,21 @@ describe("session-cli (SessionStart hook)", () => {
       "cccc3333",
       session("cccc3333", { suspended_at: AT, pid: dead, parent_session_id: "bbbb2222" }),
     );
-    // crash: never suspended, owner gone, same conversation
+    // crash: never suspended, owner gone, same conversation, its exec still running
+    const pgid = liveGroup();
+    groups.push(pgid);
     await st.write(
       "dddd4444",
       session("dddd4444", {
         claude_session_id: "conv-9",
         pid: dead,
         running_exec: {
-          pgid: 999_999,
+          pgid,
           out: "/x/o",
           err: "/x/e",
           rc: "/x/rc",
           started_at: AT,
-          boot_ms: 0,
+          boot_ms: bootTimeMs(),
           frame: 0,
           state: "s",
         },
@@ -170,6 +183,86 @@ describe("session-cli (SessionStart hook)", () => {
     expect(text).toContain("picked up: cccc3333");
     expect(text).not.toContain("bbbb2222");
     expect(text).not.toContain("dddd4444");
+  });
+
+  it("pickup: a session no agent drives under the conversation's own is the main agent's — no SendMessage; a killed exec and a step that never started are told apart from an exec in flight", async () => {
+    const st = storage();
+    const dead = await deadPid();
+    const susp = { suspended_at: AT, claude_session_id: "conv-9", pid: dead };
+    const exec = (state: string, pgid: number, boot_ms: number) => ({
+      pgid,
+      out: "/x/o",
+      err: "/x/e",
+      rc: "/x/rc",
+      started_at: AT,
+      boot_ms,
+      frame: 0,
+      state,
+    });
+    const at = (state: string) => ({
+      stack: [{ workflow: "w", current_state: state, state_visits: {}, total_transitions: 0 }],
+    });
+    // the dispatcher (root) runs a pipeline itself; the pipeline spawned a linked agent
+    await st.write("aaaa1111", session("aaaa1111", { ...susp, ...at("dispatch") }));
+    await st.write(
+      "bbbb2222",
+      session("bbbb2222", {
+        ...susp,
+        ...at("gate"),
+        parent_session_id: "aaaa1111",
+        pending_action: { frame: 0, state: "gate", at: AT },
+      }),
+    );
+    await st.write(
+      "cccc3333",
+      session("cccc3333", {
+        ...susp,
+        ...at("lint"),
+        parent_session_id: "bbbb2222",
+        running_exec: exec("lint", 999_999, 0),
+      }),
+    );
+    await st.write(
+      "dddd4444",
+      session("dddd4444", {
+        ...susp,
+        parent_session_id: "bbbb2222",
+        agent_id: "agent-7",
+      }),
+    );
+    // an unlinked session under the linked agent's: that agent's, not the main agent's
+    await st.write("eeee5555", session("eeee5555", { ...susp, parent_session_id: "dddd4444" }));
+    // a root stopped in an exec the restart killed
+    await st.write(
+      "ffff6666",
+      session("ffff6666", { ...susp, ...at("build"), running_exec: exec("build", 999_999, 0) }),
+    );
+
+    const text = await pickupReport(st, "conv-9", process.pid, AT);
+
+    const yours = (id: string) =>
+      `(then link_agent + SendMessage) → mcp__plugin_workflow_wf__status({ session_id: '${id}' })`;
+    expect(text).toContain(
+      "bbbb2222 → w @ gate [step interrupted before its exec started: gate — the session's next call runs it again] — no agent linked — yours, unless a sub-agent you spawned runs it " +
+        yours("bbbb2222"),
+    );
+    expect(text).toContain(
+      "cccc3333 → w @ lint [exec killed by the restart: lint — the session's next call runs the step again] — no agent linked — yours, unless a sub-agent you spawned runs it " +
+        yours("cccc3333"),
+    );
+    for (const id of ["bbbb2222", "cccc3333"]) {
+      expect(text).not.toContain(`'${id}' }) — your own session`);
+      expect(text).not.toContain(`→ ${id} →`);
+    }
+    expect(text).toContain("agent-7 → dddd4444 → w @ s");
+    expect(text).toContain(
+      "(not linked — find the agent by its task; link_agent records it) → eeee5555 → w @ s",
+    );
+    expect(text).not.toContain(yours("eeee5555"));
+    expect(text).toContain(
+      "picked up: ffff6666 @ w @ build\n    exec killed by the restart: build — the session's next call runs the step again\n",
+    );
+    expect(text).not.toContain("exec in flight");
   });
 
   it("active lists this process's active sessions as a tree, nothing else", async () => {

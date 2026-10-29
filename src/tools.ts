@@ -15,7 +15,7 @@ import {
   type SessionState,
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
-import { RESUME_TOOL, subAgentLines, where } from "./takeover.js";
+import { RESUME_TOOL, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -183,11 +183,14 @@ export function formatResume(result: ResumeResult): string {
     formatStatus(result.status, { showSessionId: true, forceFullPrompt: true }),
   ];
   const children = result.suspendedChildren;
+  const byId = new Map(children.map(s => [s.session_id, s]));
   if (children.length > 0) {
     parts.push(
       "",
-      "SUSPENDED SUB-AGENT SESSIONS — wake each agent (agent → session → state), with the message below it:",
-      ...subAgentLines(children, RESUME_TOOL, "  "),
+      "SUSPENDED SUB-AGENT SESSIONS — wake each agent (agent → session → state), with the message below it; one no agent drives is yours:",
+      ...subAgentLines(children, RESUME_TOOL, "  ", s =>
+        drivenByRootAgent(s, result.status.sessionId, byId),
+      ),
       "",
       "A session whose agent cannot be woken: abort({ session_id, force: true }).",
     );
@@ -195,10 +198,12 @@ export function formatResume(result: ResumeResult): string {
   return parts.join("\n");
 }
 
-/** A step a previous server left running, finished on this process's first call to its session. */
-function formatAdopted(status: StatusResult): string {
+/** A step a previous server began and never routed, finished on this process's first call to its session. */
+function formatAdopted(status: StatusResult, how: "exec" | "rerun" | undefined): string {
   return [
-    "EXEC IN FLIGHT TAKEN OVER — the step a previous server left running is finished and routed:",
+    how === "rerun"
+      ? "INTERRUPTED STEP RUN AGAIN — a previous server began this action state and is gone, its exec never started or left no result (e.g. it waited for a pool lease); it ran now and is routed:"
+      : "EXEC IN FLIGHT TAKEN OVER — the step a previous server left running is finished and routed:",
     formatStatus(status, { showSessionId: true, forceFullPrompt: true }),
   ].join("\n");
 }
@@ -364,9 +369,10 @@ export function registerTools(
       try {
         const sid = engine.resolveSessionId(args.session_id);
         // checked outside the queue first: status must not wait behind this server's own exec
-        if (args.key === undefined && engine.hasOrphanedExec(sid)) {
+        const how = args.key === undefined ? engine.orphanedStep(sid) : undefined;
+        if (how) {
           const adopted = await serialized(sid, () => engine.adoptOrphanedExec(sid));
-          if (adopted) return { content: [{ type: "text", text: formatAdopted(adopted) }] };
+          if (adopted) return { content: [{ type: "text", text: formatAdopted(adopted, how) }] };
         }
         const status = engine.getStatus(sid);
         if (args.key !== undefined)
@@ -436,9 +442,10 @@ export function registerTools(
           const sid = engine.resolveSessionId(args.session_id);
           engine.assertNotSuspended(sid);
           const warning = engine.assertOwnership(sid, args.force);
-          const adopted = await engine.adoptOrphanedExec(sid);
+          const how = engine.orphanedStep(sid);
+          const adopted = how ? await engine.adoptOrphanedExec(sid) : null;
           if (adopted) {
-            const text = `${warning ? warning + "\n\n" : ""}${formatAdopted(adopted)}\n\nTransition "${args.transition}" was NOT taken — the session moved on; choose from the state above.`;
+            const text = `${warning ? warning + "\n\n" : ""}${formatAdopted(adopted, how)}\n\nTransition "${args.transition}" was NOT taken — the session moved on; choose from the state above.`;
             return { content: [{ type: "text", text }], isError: true };
           }
           const status = await engine.transition(sid, args.transition, args.actor);

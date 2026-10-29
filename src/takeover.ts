@@ -4,6 +4,7 @@
 import type { Storage } from "./storage.js";
 import type { SessionState } from "./types.js";
 import { isPidAlive } from "./process.js";
+import { Executor } from "./executor.js";
 
 export const RESUME_TOOL = "mcp__plugin_workflow_wf__resume";
 export const STATUS_TOOL = "mcp__plugin_workflow_wf__status";
@@ -117,13 +118,66 @@ export async function pickUpConversation(
 }
 
 /**
- * Two lines per sub-agent session — agent → session → state —
- * and the `SendMessage` that wakes its agent to call `call` on its OWN session.
+ * The action step a session stopped in, when it stopped in one: an exec still
+ * running, one that finished while no server ran, one the restart killed, or a
+ * step whose exec never started (`pending_action`, e.g. waiting for a lease).
+ */
+export interface StepNote {
+  readonly fate: "running" | "finished" | "lost" | "unstarted";
+  readonly text: string;
+}
+
+export function stepNote(s: SessionState): StepNote | undefined {
+  const f = s.stack[s.active_frame];
+  const here = (at?: { frame: number; state: string }): boolean =>
+    at?.frame === s.active_frame && at.state === f?.current_state;
+  if (s.running_exec && here(s.running_exec)) {
+    const name = s.running_exec.state;
+    const fate = Executor.fate(s.running_exec);
+    const text = {
+      running: `exec in flight: ${name}`,
+      finished: `exec finished while no server ran: ${name} — the session's next call takes its result`,
+      lost: `exec killed by the restart: ${name} — the session's next call runs the step again`,
+    }[fate];
+    return { fate, text };
+  }
+  if (s.pending_action && here(s.pending_action))
+    return {
+      fate: "unstarted",
+      text: `step interrupted before its exec started: ${s.pending_action.state} — the session's next call runs it again`,
+    };
+  return undefined;
+}
+
+/**
+ * No agent is linked to `s` nor to any session between it and `rootId`: the
+ * conversation's own agent, which drives the root, drives it too. A session
+ * whose chain to the root is not in `byId` is not known to be.
+ */
+export function drivenByRootAgent(
+  s: SessionState,
+  rootId: string,
+  byId: ReadonlyMap<string, SessionState>,
+): boolean {
+  for (let cur: SessionState | undefined = s; cur; ) {
+    if (cur.agent_id) return false;
+    const parent: string | undefined = cur.parent_session_id;
+    if (parent === rootId) return true;
+    cur = parent ? byId.get(parent) : undefined;
+  }
+  return false;
+}
+
+/**
+ * Per session below a root: one the root's own agent drives (`yours`) — one
+ * line with the call to make on it; any other — agent → session → state, and
+ * the `SendMessage` that wakes its agent to call `call` on its OWN session.
  */
 export function subAgentLines(
   sessions: readonly SessionState[],
   call: typeof RESUME_TOOL | typeof STATUS_TOOL,
   indent: string,
+  yours: (s: SessionState) => boolean = () => false,
 ): string[] {
   const lines: string[] = [];
   const how =
@@ -131,9 +185,16 @@ export function subAgentLines(
       ? "your own session, NOT start()"
       : "your own session, picked up after a restart — NOT start(), NOT resume()";
   for (const c of sessions) {
+    const note = stepNote(c);
+    const step = note ? ` [${note.text}]` : "";
+    if (yours(c)) {
+      lines.push(
+        `${indent}${c.session_id} → ${where(c)}${step} — no agent linked — yours, unless a sub-agent you spawned runs it (then link_agent + SendMessage) → ${call}({ session_id: '${c.session_id}' })`,
+      );
+      continue;
+    }
     const agent = c.agent_id ?? "(not linked — find the agent by its task; link_agent records it)";
-    const exec = c.running_exec ? ` [exec in flight: ${c.running_exec.state}]` : "";
-    lines.push(`${indent}${agent} → ${c.session_id} → ${where(c)}${exec}`);
+    lines.push(`${indent}${agent} → ${c.session_id} → ${where(c)}${step}`);
     lines.push(
       `${indent}  SendMessage({ to: "${c.agent_id ?? "<agent>"}", message: "Continue: call ${call}({ session_id: '${c.session_id}' }) — ${how} — then carry on from the state it returns." })`,
     );

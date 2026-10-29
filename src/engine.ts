@@ -13,6 +13,7 @@ import type {
   PriorityLevel,
   DetachedRun,
   RunningExec,
+  PendingAction,
 } from "./types.js";
 import {
   MAX_STACK_DEPTH,
@@ -696,13 +697,23 @@ export class Engine {
   }
 
   /**
-   * The session is owned by this process and stopped in an action state whose
-   * foreground exec a previous server left running (`running_exec`) — the
-   * SessionStart hook of a resumed conversation hands sessions over without a
-   * server. Cheap: no lock, no exec.
+   * The session is owned by this process and stopped in an action state a
+   * previous server began and never routed — the SessionStart hook of a
+   * resumed conversation hands sessions over without a server. Cheap: no lock, no exec.
    */
   public hasOrphanedExec(sessionId: string): boolean {
-    return this._orphanedExec(this._storage.read(sessionId)) !== undefined;
+    return this.orphanedStep(sessionId) !== undefined;
+  }
+
+  /**
+   * What `adoptOrphanedExec` will do: `exec` — take over the exec a previous
+   * server left running or its recorded result; `rerun` — run the step again,
+   * its exec never started (`pending_action`) or is gone without a result.
+   */
+  public orphanedStep(sessionId: string): "exec" | "rerun" | undefined {
+    const found = this._orphanedExec(this._storage.read(sessionId));
+    if (!found) return undefined;
+    return found.run && Executor.fate(found.run) !== "lost" ? "exec" : "rerun";
   }
 
   /**
@@ -721,13 +732,15 @@ export class Engine {
 
   private _orphanedExec(
     session: SessionState | null,
-  ): { state: StateDefinition; run: RunningExec } | undefined {
-    const run = session?.running_exec;
-    if (!session || !run || session.stack.length === 0 || session.suspended_at) return undefined;
+  ): { state: StateDefinition; run?: RunningExec } | undefined {
+    if (!session || session.stack.length === 0 || session.suspended_at) return undefined;
     if (session.pending_pop || this._inFlight.has(session.session_id)) return undefined;
     if (session.context.claude_code_pid !== process.ppid) return undefined;
     const frame = session.stack[session.active_frame];
-    if (run.frame !== session.active_frame || run.state !== frame?.current_state) return undefined;
+    const here = (at?: { frame: number; state: string }): boolean =>
+      at?.frame === session.active_frame && at.state === frame?.current_state;
+    const run = here(session.running_exec) ? session.running_exec : undefined;
+    if (!run && !here(session.pending_action)) return undefined;
     const state = this._resolveState(session, frame.workflow, frame.current_state);
     return state && this._isActionState(state) ? { state, run } : undefined;
   }
@@ -999,8 +1012,21 @@ export class Engine {
     // Recorded in the session while it runs, so a server that exits mid-exec
     // leaves a resume what it needs to take the run over.
     let run: DetachedRun | undefined;
+    // A lease granted after the session left this server (suspended, picked up
+    // by another process) is given back: the new owner runs the step.
+    let refused = false;
     const execCtx: ExecContext = {
       ...this._execContext(session),
+      mayStart: () => {
+        const cur = this._storage.read(session.session_id);
+        const mine =
+          !!cur &&
+          cur.stack.length > 0 &&
+          !cur.suspended_at &&
+          cur.context.claude_code_pid === session.context.claude_code_pid;
+        if (!mine) refused = true;
+        return mine;
+      },
       onDetached: async detached => {
         run = detached;
         const record: RunningExec = { ...detached, frame: frameIndex, state: stateName };
@@ -1011,16 +1037,47 @@ export class Engine {
     };
     const own =
       adopt && adopt.frame === frameIndex && adopt.state === stateName ? adopt : undefined;
-    let result = own ? await this._executor.adopt(own, state, execCtx) : null;
-    if (own) run = own;
-    if (!result) {
-      if (own) Executor.discardRun(own);
-      if (this._aborting.has(session.session_id))
-        throw new Error(
-          `Session "${session.session_id}" ended while its action state ran (aborting)`,
-        );
-      result = await this._executor.execute(state, vars, execCtx);
+    // Recorded before the exec waits for a lease or spawns: a server gone before
+    // `running_exec` is written leaves its new owner the step to run again.
+    const mark = session.pending_action;
+    if (mark?.frame !== frameIndex || mark.state !== stateName) {
+      const pending: PendingAction = {
+        frame: frameIndex,
+        state: stateName,
+        at: new Date().toISOString(),
+      };
+      await this._storage.update(session.session_id, cur =>
+        cur && cur.stack.length > 0 ? { ...cur, pending_action: pending } : null,
+      );
     }
+    let result: ActionResult | null;
+    try {
+      result = own ? await this._executor.adopt(own, state, execCtx) : null;
+      if (own) run = own;
+      if (!result) {
+        if (own) Executor.discardRun(own);
+        if (this._aborting.has(session.session_id))
+          throw new Error(
+            `Session "${session.session_id}" ended while its action state ran (aborting)`,
+          );
+        result = await this._executor.execute(state, vars, execCtx);
+      }
+    } catch (err) {
+      // the step failed in this live server: nothing for a later owner to run again
+      await this._storage.update(session.session_id, cur =>
+        cur?.pending_action &&
+        !cur.suspended_at &&
+        cur.context.claude_code_pid === session.context.claude_code_pid
+          ? { ...cur, pending_action: undefined }
+          : null,
+      );
+      throw err;
+    }
+    // its aborted-wait result must not route: the session is another owner's now
+    if (refused)
+      throw new Error(
+        `Session "${session.session_id}" is no longer this server's to run: its step was not started; the owner that took it over runs it`,
+      );
 
     // An exec can run for seconds, and other writers land meanwhile: a
     // parent's abort cascade (writing the pre-exec copy back would resurrect
@@ -1081,7 +1138,9 @@ export class Engine {
     const unroutable = async (err: Error): Promise<never> => {
       if (run) Executor.discardRun(run);
       await this._storage.update(session.session_id, cur =>
-        cur?.running_exec ? { ...cur, running_exec: undefined } : null,
+        cur?.running_exec || cur?.pending_action
+          ? { ...cur, running_exec: undefined, pending_action: undefined }
+          : null,
       );
       throw err;
     };
@@ -1188,6 +1247,7 @@ export class Engine {
       last_action_result: result,
       background_pids: bgPids,
       running_exec: undefined,
+      pending_action: undefined,
     };
 
     await this._storage.write(session.session_id, updated);
@@ -1599,6 +1659,28 @@ export class Engine {
     return { ...state, transitions };
   }
 
+  /** What a session sitting in an action state is doing there: an action state has no prompt of its own. */
+  private _actionNote(session: SessionState, state: StateDefinition): string {
+    const frame = session.stack[session.active_frame];
+    const head = `[${state.type} state "${frame.current_state}"`;
+    if (this._inFlight.has(session.session_id))
+      return `${head}: running in this server — its result moves the session on]`;
+    const here = (at?: { frame: number; state: string }): boolean =>
+      at?.frame === session.active_frame && at.state === frame.current_state;
+    const owner = session.context.claude_code_pid;
+    if (here(session.running_exec) || here(session.pending_action)) {
+      if (
+        !session.suspended_at &&
+        typeof owner === "number" &&
+        owner !== process.ppid &&
+        Engine._isPidAlive(owner)
+      )
+        return `${head}: running in PID ${owner}]`;
+      return `${head}: begun by a server that is gone — ${session.suspended_at ? "resume()" : "status() / transition() of this session"} takes it over or runs it again]`;
+    }
+    return `${head}: not running — its last run was not routed; resume({ session_id: "${session.session_id}" }) runs it again]`;
+  }
+
   private _buildStatus(
     session: SessionState,
     taskOps?: TaskOp[],
@@ -1628,7 +1710,11 @@ export class Engine {
     const state = this._resolveState(session, frame.workflow, frame.current_state);
     const vars = this._buildTemplateVars(session);
     const rawPrompt =
-      actionPrompt ?? state?.prompt ?? `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`;
+      actionPrompt ??
+      state?.prompt ??
+      (this._isActionState(state)
+        ? this._actionNote(session, state!)
+        : `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`);
     let prompt = render(rawPrompt, vars);
 
     if (state?.include_workflows) {

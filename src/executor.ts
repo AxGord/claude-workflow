@@ -69,6 +69,8 @@ export interface ExecContext {
    * started; the run's files then belong to the caller (`discardRun`).
    */
   readonly onDetached?: (run: DetachedRun) => Promise<void>;
+  /** False once the session is no longer this server's to run: a granted lease is given back unused. */
+  readonly mayStart?: () => boolean;
 }
 
 /** This machine's boot time; a pgid recorded under another boot names some other process. */
@@ -197,7 +199,7 @@ export class Executor {
     }
     const wait_ms = got.waitMs;
     // An abort that landed while the grant was being written: give it back, do not run.
-    if (got.status === "granted" && ac.signal.aborted) {
+    if (got.status === "granted" && (ac.signal.aborted || ctx?.mayStart?.() === false)) {
       await got.lease.release();
       return {
         type: "exec",
@@ -660,6 +662,14 @@ export class Executor {
   /** The run started under this boot of the machine, so its pgid still names it. */
   static sameBoot(run: Pick<DetachedRun, "boot_ms">): boolean {
     return Math.abs(bootTimeMs() - run.boot_ms) < SAME_BOOT_TOLERANCE_MS;
+  }
+
+  /** What became of a detached run: still running, ended with its exit code written, or gone without one. */
+  static fate(run: Pick<DetachedRun, "pgid" | "rc" | "boot_ms">): "running" | "finished" | "lost" {
+    if (Executor._readExitCode(run.rc) !== undefined) return "finished";
+    if (Executor.sameBoot(run) && isGroupAlive(run.pgid)) return "running";
+    // it may have written its code between the two reads
+    return Executor._readExitCode(run.rc) !== undefined ? "finished" : "lost";
   }
 
   private static _readExitCode(file: string): number | undefined {

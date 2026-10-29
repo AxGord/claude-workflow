@@ -291,6 +291,19 @@ export interface SessionState {
   /** The Agent-tool id of the sub-agent driving this session (`link_agent`). */
   readonly agent_id?: string;
   readonly running_exec?: RunningExec;
+  /**
+   * The action state a server began and has not routed yet, written before its
+   * exec waits for a lease or spawns: left without a `running_exec` by a server
+   * that is gone, the step never started, and its new owner runs it again.
+   */
+  readonly pending_action?: PendingAction;
+}
+
+/** Where a session's unrouted action step is: its frame and state. */
+export interface PendingAction {
+  readonly frame: number;
+  readonly state: string;
+  readonly at: string;
 }
 
 export interface WorkflowOverrides {

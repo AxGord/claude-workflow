@@ -5,7 +5,14 @@
 // new process's server answers, and writes go through Storage's file locks.
 import { Storage } from "./storage.js";
 import type { SessionState } from "./types.js";
-import { STATUS_TOOL, pickUpConversation, subAgentLines, where } from "./takeover.js";
+import {
+  STATUS_TOOL,
+  drivenByRootAgent,
+  pickUpConversation,
+  stepNote,
+  subAgentLines,
+  where,
+} from "./takeover.js";
 
 function stackOf(s: SessionState): string {
   return s.stack.length > 1
@@ -44,15 +51,18 @@ export async function pickupReport(
 ): Promise<string> {
   const roots = await pickUpConversation(storage, claudeSessionId, pid, at);
   if (roots.length === 0) return "";
-  const children = childrenOf(storage.readAll().filter(s => s.stack?.length > 0));
+  const active = storage.readAll().filter(s => s.stack?.length > 0);
+  const children = childrenOf(active);
+  const byId = new Map(active.map(s => [s.session_id, s]));
   const lines = [
     "WORKFLOW SESSIONS PICKED UP — this conversation's previous process left them; this process owns them now. Do NOT call start() or resume():",
   ];
   for (const root of roots) {
     lines.push(`  picked up: ${root.session_id} @ ${where(root)}${stackOf(root)}`);
-    if (root.running_exec)
+    const note = stepNote(root);
+    if (note)
       lines.push(
-        `    exec in flight: ${root.running_exec.state} — the first status() / transition() of the session takes it over`,
+        `    ${note.text}${note.fate === "running" ? " — the first status() / transition() of the session takes it over" : ""}`,
       );
     // a descendant another live process runs was not handed over
     const subs = descendants(root.session_id, children).filter(
@@ -60,8 +70,10 @@ export async function pickupReport(
     );
     if (subs.length > 0) {
       lines.push(
-        "    sub-agent sessions continue as they are — wake each agent (only you can: SendMessage is your tool):",
-        ...subAgentLines(subs, STATUS_TOOL, "      "),
+        "    sessions below it continue as they are — wake each sub-agent (only you can: SendMessage is your tool); one no agent drives is yours:",
+        ...subAgentLines(subs, STATUS_TOOL, "      ", s =>
+          drivenByRootAgent(s, root.session_id, byId),
+        ),
       );
     }
   }
@@ -87,8 +99,10 @@ export function activeReport(storage: Storage, pid: number): string {
   const walk = (s: SessionState, depth: number): void => {
     const lead = depth === 0 ? "  " : `${"  ".repeat(depth + 1)}↳ `;
     const agent = s.agent_id ? ` [agent ${s.agent_id}]` : "";
-    const exec = s.running_exec ? ` [exec in flight: ${s.running_exec.state}]` : "";
-    lines.push(`${lead}${s.session_id}: ${where(s)}${stackOf(s)}${agent}${exec}`);
+    const note = stepNote(s);
+    lines.push(
+      `${lead}${s.session_id}: ${where(s)}${stackOf(s)}${agent}${note ? ` [${note.text}]` : ""}`,
+    );
     for (const c of children.get(s.session_id) ?? []) walk(c, depth + 1);
   };
   for (const s of active) if (!s.parent_session_id || !ids.has(s.parent_session_id)) walk(s, 0);

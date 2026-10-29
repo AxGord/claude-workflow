@@ -56,12 +56,6 @@
   {
     "file": "src/engine.ts",
     "rule": "@typescript-eslint/no-unused-vars",
-    "message": "'ActionResult' is defined but never used.",
-    "count": 1
-  },
-  {
-    "file": "src/engine.ts",
-    "rule": "@typescript-eslint/no-unused-vars",
     "message": "'parentWf' is assigned a value but never used.",
     "count": 1
   },
@@ -321,7 +315,7 @@
     "file": "src/tools.ts",
     "rule": "@typescript-eslint/require-await",
     "message": "Async arrow function has no 'await' expression.",
-    "count": 5
+    "count": 4
   },
   {
     "file": "src/tools.ts",
