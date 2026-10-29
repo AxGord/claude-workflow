@@ -44,6 +44,9 @@ function setup(): { repo: string; plugin: string; vars: Record<string, unknown> 
   const repo = path.join(root, "proj");
   fs.mkdirSync(repo);
   git(repo, "init", "-q", "-b", "main");
+  // The template's own `git merge --no-ff` commits too: a CI runner has no global identity.
+  git(repo, "config", "user.name", "t");
+  git(repo, "config", "user.email", "t@t");
   fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "init");
