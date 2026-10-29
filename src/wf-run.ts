@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // wf-run: run a heavy command under a lease from the machine-wide thread pool.
-//   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]
+//   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]
 //   wf-run --status
 // The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
 // and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
 // (a session exec's), and the run keeps WF_PRIORITY_LEVEL so `set_priority` can re-rank it.
+// --fail-open: a pool that cannot be used (unwritable dir, broken config) runs the command
+// without a lease (one stderr line) instead of failing it; busy is still a wait.
 import { spawn } from "node:child_process";
 import os from "node:os";
 import {
@@ -24,7 +26,7 @@ import {
 } from "./types.js";
 
 const USAGE =
-  "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] -- <cmd> [args…]\n" +
+  "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]\n" +
   "       wf-run --status";
 const EX_USAGE = 64;
 const EX_NOEXEC = 126;
@@ -47,12 +49,14 @@ interface Options {
   readonly waitTimeoutSec?: number;
   readonly label?: string;
   readonly efficiency: boolean;
+  readonly failOpen: boolean;
   readonly command: readonly string[];
 }
 
 function parseArgs(argv: readonly string[]): Options {
   let status = false;
   let efficiency = false;
+  let failOpen = false;
   // Default: 1 thread, none beside a --lock (a lock-only lease).
   let threads: ThreadCount | undefined;
   let minThreads: number | undefined;
@@ -97,6 +101,9 @@ function parseArgs(argv: readonly string[]): Options {
         break;
       case "--efficiency":
         efficiency = true;
+        break;
+      case "--fail-open":
+        failOpen = true;
         break;
       case "--threads": {
         const v = value(flag, inline);
@@ -147,6 +154,7 @@ function parseArgs(argv: readonly string[]): Options {
     waitTimeoutSec,
     label,
     efficiency,
+    failOpen,
     command,
   };
 }
@@ -248,16 +256,19 @@ async function main(argv: readonly string[]): Promise<number> {
     ac.abort();
   };
   for (const s of FORWARDED) process.on(s, onSignal);
-  const threads = efficient
-    ? 0
-    : opts.threads === RESOURCE_THREADS_BUDGET
-      ? pool.config().budget
-      : opts.threads;
-  // A max the budget clamps below the min still runs: the min clamps with it.
-  const minThreads =
-    efficient || opts.minThreads === undefined ? undefined : Math.min(opts.minThreads, threads);
-  const result = await pool
-    .acquire(
+  let threads = 0;
+  let minThreads: number | undefined;
+  let result: Awaited<ReturnType<Pool["acquire"]>>;
+  try {
+    threads = efficient
+      ? 0
+      : opts.threads === RESOURCE_THREADS_BUDGET
+        ? pool.config().budget
+        : opts.threads;
+    // A max the budget clamps below the min still runs: the min clamps with it.
+    minThreads =
+      efficient || opts.minThreads === undefined ? undefined : Math.min(opts.minThreads, threads);
+    result = await pool.acquire(
       {
         threads,
         minThreads,
@@ -277,10 +288,20 @@ async function main(argv: readonly string[]): Promise<number> {
         signal: ac.signal,
         onProgress: (self, view) => process.stderr.write(describeWait(self, view) + "\n"),
       },
-    )
-    .finally(() => {
-      for (const s of FORWARDED) process.off(s, onSignal);
-    });
+    );
+  } catch (err) {
+    if (!opts.failOpen) throw err;
+    // The pool, not the command, failed: run it unleased with the smallest share it asked for.
+    const share = efficient
+      ? undefined
+      : (opts.minThreads ?? (typeof opts.threads === "number" ? opts.threads : 1));
+    process.stderr.write(
+      `wf-run: pool unavailable (${(err as Error).message}) — running without a lease\n`,
+    );
+    return run(cmd, args, opts, share);
+  } finally {
+    for (const s of FORWARDED) process.off(s, onSignal);
+  }
 
   if (result.status !== "granted") {
     if (result.status === "aborted") return 128 + (caught ? os.constants.signals[caught] : 0);
@@ -291,11 +312,15 @@ async function main(argv: readonly string[]): Promise<number> {
     );
     return EX_TEMPFAIL;
   }
+  const { lease } = result;
+  // A SIGKILLed wf-run cannot release: the child's group keeps the lease alive while it runs.
   try {
-    // A SIGKILLed wf-run cannot release: the child's group keeps the lease alive while it runs.
-    return await run(cmd, args, opts, result.lease.threads, pgid => result.lease.attach(pgid));
+    return await run(cmd, args, opts, lease.threads, pgid => lease.attach(pgid));
   } finally {
-    await result.lease.release();
+    await lease.release().catch((err: unknown) => {
+      if (!opts.failOpen) throw err;
+      process.stderr.write(`wf-run: could not release the lease: ${(err as Error).message}\n`);
+    });
   }
 }
 
