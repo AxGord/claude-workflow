@@ -8,7 +8,7 @@
 #   wf_info  — the root session of THIS Claude Code instance (its MCP engine's sessions only, matched by
 #              context.claude_code_pid == the statusline's parent pid); alone it is drawn like any session,
 #              with children it is marked ◆ in bold.
-#   wf_lines — the other sessions, oldest first, three per line, at most six (five and "+N" past six).
+#   wf_lines — the other sessions, oldest first, three per line, at most nine (eight and "+N" past nine).
 # Bright cyan ⚙ = a leaf an agent or an engine step is working in; plain cyan ⚙ = waiting (on a child or idle).
 # Needs jq. STATUSLINE_PID overrides the parent pid (for testing).
 wf_info=""
@@ -50,10 +50,10 @@ if [ -d "$wf_state_dir" ]; then
   wf_n=0
   [ -n "$wf_rest" ] && wf_n=$(printf '%s\n' "$wf_rest" | wc -l | tr -d ' ')
   if [ "$wf_n" -gt 0 ]; then
-    wf_shown=6
-    [ "$wf_n" -gt 6 ] && wf_shown=5
+    wf_shown=9
+    [ "$wf_n" -gt 9 ] && wf_shown=8
     wf_items=$(printf '%s\n' "$wf_rest" | head -n "$wf_shown" | awk "$wf_paint")
-    [ "$wf_n" -gt 6 ] && wf_items="${wf_items}
+    [ "$wf_n" -gt 9 ] && wf_items="${wf_items}
 \\033[36m+$((wf_n - wf_shown)) workflows\\033[0m"
     wf_lines=$(printf '%s\n' "$wf_items" | awk '{ printf "%s%s", (NR == 1 ? "" : (NR % 3 == 1 ? "\\n" : "  ")), $0 }')
   fi

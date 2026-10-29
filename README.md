@@ -701,8 +701,8 @@ printf "%b\n" "<your line 1> ${wf_info}"          # the root session, inline
   `jq` pass over `~/.claude/workflow-state`.
 - `wf_info` — the root session. Alone it is drawn like any session; once it has children it is marked `◆` in
   bold.
-- `wf_lines` — the other sessions, oldest first, three per line, at most six (five and `+N workflows` past
-  six); each as `workflow[slice or task]:state`.
+- `wf_lines` — the other sessions, oldest first, three per line, at most nine (eight and `+N workflows`
+  past nine); each as `workflow[slice or task]:state`.
 - Bright cyan `⚙` — a leaf session an agent or an engine step is working in; plain cyan `⚙` — waiting (on a
   child, or idle).
 - `STATUSLINE_PID` / `WF_STATE_DIR` override the parent pid and the state directory (for testing).
