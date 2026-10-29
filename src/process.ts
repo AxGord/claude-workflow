@@ -1,3 +1,34 @@
+import { execFileSync } from "node:child_process";
+import os from "node:os";
+
+// Boot times read from uptime drift by clock adjustments: within this, two readings are one boot.
+const SAME_BOOT_TOLERANCE_MS = 60_000;
+
+/** This machine's boot time; a pgid recorded under another boot names some other process. */
+export function bootTimeMs(): number {
+  return Math.round(Date.now() - os.uptime() * 1000);
+}
+
+/** `bootMs` (a `bootTimeMs()` reading) is this boot of the machine. */
+export function sameBoot(bootMs: number): boolean {
+  return Math.abs(bootTimeMs() - bootMs) < SAME_BOOT_TOLERANCE_MS;
+}
+
+/** When the process started, as `ps -o lstart` prints it; undefined when it is gone or `ps` fails. */
+export function processStart(pid: number): string | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  try {
+    const out = execFileSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 2000,
+      env: { ...process.env, LC_ALL: "C" },
+    }).trim();
+    return out === "" ? undefined : out;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Signal a whole process group: every exec spawns detached (its own group),
  * so `sh -c` and everything it started die together. Falls back to the bare

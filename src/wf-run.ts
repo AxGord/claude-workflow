@@ -282,6 +282,8 @@ async function main(argv: readonly string[]): Promise<number> {
         label: opts.label ?? opts.command.join(" ").slice(0, LABEL_MAX),
         cwd: process.cwd(),
         sessionId: process.env.WF_SESSION_ID,
+        // a SIGKILLed wf-run cannot release: the reaper kills its detached child's group instead
+        ownsGroup: true,
       },
       {
         waitTimeoutMs: opts.waitTimeoutSec === undefined ? undefined : opts.waitTimeoutSec * 1000,
@@ -313,7 +315,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return EX_TEMPFAIL;
   }
   const { lease } = result;
-  // A SIGKILLed wf-run cannot release: the child's group keeps the lease alive while it runs.
+  // A SIGKILLed wf-run cannot release: the next pool pass kills the child's group, then frees the lease.
   try {
     return await run(cmd, args, opts, lease.threads, pgid => lease.attach(pgid));
   } finally {

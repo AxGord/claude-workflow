@@ -6,18 +6,25 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import {
+  ORPHAN_KILL_GRACE_MS,
   Pool,
   schedule,
   describeWait,
   formatEntry,
+  formatStatus,
+  poolStarvation,
   projectRoot,
+  starvationNotice,
+  systemProbes,
+  treeLoads,
+  type ProcSample,
   type CpuTicks,
   type PoolEntry,
   type PoolProbes,
   type PoolState,
 } from "./pool.js";
 import { registerTools } from "./tools.js";
-import { isGroupAlive, isPidAlive } from "./process.js";
+import { bootTimeMs, isGroupAlive, isPidAlive, processStart } from "./process.js";
 import { Executor } from "./executor.js";
 import { Engine } from "./engine.js";
 import { InMemoryStorage, createTestLoader, cleanupDir } from "./test-helpers.js";
@@ -48,7 +55,7 @@ const entry = (threads: number, extra: Partial<PoolEntry> = {}): PoolEntry => ({
   ...extra,
 });
 const alive = () => true;
-const cfg = { budget: 10, load_threshold: 0 };
+const cfg = { budget: 10, load_threshold: 0, starve_after: 900 };
 const ids = (es: readonly PoolEntry[]) => es.map(e => e.id);
 
 describe("schedule (one admission pass)", () => {
@@ -72,7 +79,7 @@ describe("schedule (one admission pass)", () => {
     expect(
       schedule(
         { leases: [held], waiting: [three] },
-        { budget: 10, load_threshold: 2 },
+        { budget: 10, load_threshold: 2, starve_after: 900 },
         9.5,
         alive,
         1,
@@ -81,7 +88,7 @@ describe("schedule (one admission pass)", () => {
     expect(
       schedule(
         { leases: [held], waiting: [three] },
-        { budget: 10, load_threshold: 3 },
+        { budget: 10, load_threshold: 3, starve_after: 900 },
         9.5,
         alive,
         1,
@@ -105,6 +112,95 @@ describe("schedule (one admission pass)", () => {
     expect(
       ids(schedule({ leases: [held], waiting: [entry(2)] }, cfg, 12, alive, 1).leases),
     ).toEqual([held.id]);
+  });
+
+  it("a lease's own process tree is not external: its busy children do not block admission; a lock-only lease's tree stays external", () => {
+    // the measured incident: holds 4, its tree runs ~12, load 13.77, threshold 2
+    const holder = entry(4);
+    const six = entry(6);
+    const conf = { budget: 10, load_threshold: 2, starve_after: 900 };
+    const blind = schedule({ leases: [holder], waiting: [six] }, conf, 13.77, alive, 1);
+    expect(blind.external).toBeCloseTo(7.77);
+    expect(ids(blind.leases)).toEqual([holder.id]);
+    const runs = { [holder.id]: 12 };
+    const v = schedule({ leases: [holder], waiting: [six] }, conf, 13.77, alive, 1, runs);
+    expect(v.external).toBe(0);
+    expect(ids(v.leases)).toEqual([holder.id, six.id]);
+    expect(v.last_grant).toBe(1);
+    // a tree below its threads still counts as its threads
+    const quiet = schedule({ leases: [holder], waiting: [] }, conf, 9, alive, 1, {
+      [holder.id]: 1,
+    });
+    expect(quiet.external).toBe(3);
+    // a lock-only lease takes no threads: what it runs is external load
+    const server = entry(0, { locks: ["port:3000"] });
+    const lockOnly = schedule({ leases: [holder, server], waiting: [] }, conf, 12, alive, 1, {
+      [server.id]: 6,
+    });
+    expect(lockOnly.external).toBe(6);
+  });
+
+  it("treeLoads: a lease's group members and their descendants, without another lease's group", () => {
+    const outer = entry(4, { pgid: 500 });
+    const inner = entry(2, { pgid: 600 });
+    const bare = entry(1);
+    const procs: ProcSample[] = [
+      { pid: 500, ppid: 1, pgid: 500, cpu: 0.1 },
+      // a child that left the group (setsid) still counts, through its parent
+      { pid: 510, ppid: 500, pgid: 510, cpu: 3 },
+      { pid: 511, ppid: 510, pgid: 510, cpu: 2 },
+      // a nested wf-run in the outer group, its child in a group of its own lease
+      { pid: 520, ppid: 500, pgid: 500, cpu: 0 },
+      { pid: 600, ppid: 520, pgid: 600, cpu: 1.5 },
+      { pid: 601, ppid: 600, pgid: 600, cpu: 1 },
+      // a reparented member of the outer group
+      { pid: 530, ppid: 1, pgid: 500, cpu: 4 },
+      { pid: 700, ppid: 1, pgid: 700, cpu: 9 },
+    ];
+    expect(treeLoads([outer, inner, bare], procs)).toEqual({
+      [outer.id]: 9.1,
+      [inner.id]: 2.5,
+    });
+  });
+
+  it("starvation: a waiter queued past starve_after and a pool that granted nothing that long are named with what blocks them", () => {
+    const conf = { budget: 10, load_threshold: 2, starve_after: 60 };
+    const holder = entry(4, { pid: 41, started: 0 });
+    const waiter = entry(7, { pid: 42, arrived: 1000, label: "w" });
+    const at = (now: number, lastGrant?: number) =>
+      schedule(
+        { leases: [holder], waiting: [waiter], ...(lastGrant ? { last_grant: lastGrant } : {}) },
+        conf,
+        13.77,
+        alive,
+        now,
+        { [holder.id]: 12.3 },
+      );
+    // 4 held + 7 > 10: it waits
+    const early = at(50_000);
+    expect(ids(early.waiting)).toEqual([waiter.id]);
+    expect(starvationNotice(waiter, early, 50_000)).toBeUndefined();
+    expect(poolStarvation(early, 50_000)).toBeUndefined();
+    expect(describeWait(waiter, early, 50_000)).not.toMatch(/STARVED/);
+    const late = at(1000 + 61 * 60_000);
+    const now = 1000 + 61 * 60_000;
+    expect(starvationNotice(waiter, late, now)).toBe(
+      "queued 1h01m for 7 threads (starve_after 1m): held 4/10, external 0.0; over-running: pid 41 holds 4, runs ~12, nothing granted for 1h01m",
+    );
+    expect(poolStarvation(late, now)).toBe(
+      "STARVED: nothing granted for 1h01m, 1 waiting (held 4/10, external 0.0; over-running: pid 41 holds 4, runs ~12)",
+    );
+    expect(describeWait(waiter, late, now)).toMatch(
+      /held 4\/10 by pid 41 \(4, runs ~12\), .* — STARVED: queued 1h01m \(starve_after 1m\)$/,
+    );
+    const status = formatStatus(late, "/pool", now);
+    expect(status.split("\n")[1]).toMatch(/^STARVED: nothing granted for 1h01m/);
+    expect(status).toMatch(/pid 41 {2}holds 4 threads, runs ~12 \(OVERRUN\) {2}prio 0/);
+    expect(status).toMatch(/pid 42 {2}wants 7 threads {2}prio 0 {2}since \S+ \(\d+s, STARVED\)/);
+    // a recent grant: the waiter is starved, the pool is not
+    const granted = at(now, now - 30_000);
+    expect(poolStarvation(granted, now)).toBeUndefined();
+    expect(starvationNotice(waiter, granted, now)).not.toMatch(/nothing granted/);
   });
 
   it("N > budget counts as the budget: waits for an empty pool, then runs alone", () => {
@@ -333,13 +429,23 @@ const readPool = (dir: string): PoolState =>
 describe("Pool", () => {
   it("default budget = performance cores − 2 (at least 1); config.json overrides; a bad key throws", () => {
     const dir = tmp("wf-pool-");
-    expect(new Pool(dir, fakeProbes()).config()).toEqual({ budget: 10, load_threshold: 2 });
+    expect(new Pool(dir, fakeProbes()).config()).toEqual({
+      budget: 10,
+      load_threshold: 2,
+      starve_after: 900,
+    });
     expect(new Pool(dir, { ...fakeProbes(), perfCores: () => 2 }).config().budget).toBe(1);
     fs.writeFileSync(
       path.join(dir, "config.json"),
-      JSON.stringify({ budget: 4, load_threshold: 0.5 }),
+      JSON.stringify({ budget: 4, load_threshold: 0.5, starve_after: 60 }),
     );
-    expect(new Pool(dir, fakeProbes()).config()).toEqual({ budget: 4, load_threshold: 0.5 });
+    expect(new Pool(dir, fakeProbes()).config()).toEqual({
+      budget: 4,
+      load_threshold: 0.5,
+      starve_after: 60,
+    });
+    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ starve_after: 0 }));
+    expect(() => new Pool(dir, fakeProbes()).config()).toThrow(/starve_after must be/);
     fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ budgte: 4 }));
     expect(() => new Pool(dir, fakeProbes()).config()).toThrow(/unknown key "budgte"/);
   });
@@ -424,6 +530,106 @@ describe("Pool", () => {
     if (lockOnly.status === "granted") await lockOnly.lease.release();
   });
 
+  it("a lease holder whose children run busy does not block admission by external; the over-running lease is flagged and logged once", async () => {
+    const dir = poolDir({ budget: 10, load_threshold: 2 });
+    // a group no real process has: only the injected process table knows its members
+    const pgid = 2_000_000_000;
+    let sampled = 0;
+    const probes: PoolProbes = {
+      ...fakeProbes(13.77),
+      processes: () => {
+        sampled++;
+        return [
+          { pid: pgid, ppid: 1, pgid, cpu: 0.2 },
+          ...Array.from({ length: 12 }, (_, i) => ({
+            pid: pgid + 1 + i,
+            ppid: pgid,
+            pgid,
+            cpu: 1,
+          })),
+        ];
+      },
+    };
+    const pool = new Pool(dir, probes);
+    const holder = await pool.acquire({ threads: 4, label: "arms check-apply" });
+    if (holder.status !== "granted") throw new Error("not granted");
+    await holder.lease.attach(pgid);
+    const waiter = await pool.acquire({ threads: 6, label: "next" }, { waitTimeoutMs: 2000 });
+    expect(waiter.status).toBe("granted");
+    const view = await pool.status();
+    expect(view.runs[holder.lease.entry.id]).toBe(12.2);
+    expect(view.external).toBe(0);
+    const text = formatStatus(view, dir);
+    expect(text).toMatch(/holds 4 threads, runs ~12 \(OVERRUN\) .* arms check-apply/);
+    expect(text).not.toMatch(/holds 6 threads, runs/);
+    await pool.status();
+    const log = fs.readFileSync(path.join(dir, "pool.log"), "utf8").trim().split("\n");
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatch(/overrun: pid \d+ holds 4 threads, runs ~12 — arms check-apply$/);
+    // the table is sampled at most once a second, not on every pass
+    expect(sampled).toBeLessThanOrEqual(2);
+    if (waiter.status === "granted") await waiter.lease.release();
+    await holder.lease.release();
+  });
+
+  it("the system process table names this process with its parent and group", () => {
+    const procs = systemProbes.processes!();
+    const me = procs.find(p => p.pid === process.pid);
+    expect(me).toMatchObject({ pid: process.pid, ppid: process.ppid });
+    expect(me!.cpu).toBeGreaterThanOrEqual(0);
+    expect(treeLoads([entry(1, { pgid: me!.pgid })], procs)).not.toEqual({});
+  });
+
+  it("the process table is read outside the pool lock; a failed read backs off instead of retrying every pass", async () => {
+    const dir = poolDir();
+    let calls = 0;
+    const lockedDuringSample: boolean[] = [];
+    const pool = new Pool(dir, {
+      ...fakeProbes(),
+      processes: () => {
+        calls++;
+        lockedDuringSample.push(fs.existsSync(path.join(dir, "pool.json.lock")));
+        throw new Error("ps hung");
+      },
+    });
+    const holder = await pool.acquire({ threads: 2 });
+    if (holder.status !== "granted") throw new Error("not granted");
+    await holder.lease.attach(2_000_000_001);
+    for (let i = 0; i < 3; i++) {
+      expect((await pool.status()).runs).toEqual({});
+      await new Promise(r => setTimeout(r, 400));
+    }
+    expect(calls).toBe(1);
+    expect(lockedDuringSample).toEqual([false]);
+    await holder.lease.release();
+  });
+
+  it("a waiter queued past starve_after is marked starved, logged once, and its wait line says so", async () => {
+    const dir = poolDir({ budget: 10, load_threshold: 0, starve_after: 0.2 });
+    const pool = new Pool(dir, fakeProbes());
+    const holder = await pool.acquire({ threads: 1, locks: ["sim"], label: "sim holder" });
+    const lines: string[] = [];
+    const r = await pool.acquire(
+      { threads: 1, locks: ["sim"], label: "starving" },
+      {
+        waitTimeoutMs: 700,
+        pollMs: 50,
+        progressMs: 100,
+        onProgress: (self, view) => lines.push(describeWait(self, view)),
+      },
+    );
+    expect(r.status).toBe("timeout");
+    expect(lines[0]).not.toMatch(/STARVED/);
+    expect(lines.at(-1)).toMatch(
+      /lock sim held by sim holder — STARVED: queued \d+s \(starve_after 0s\)$/,
+    );
+    const log = fs.readFileSync(path.join(dir, "pool.log"), "utf8").trim().split("\n");
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatch(/starved: pid \d+ queued \d+s for 1 threads \+ lock sim .* — starving$/);
+    if (holder.status === "granted") await holder.lease.release();
+    expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
+  });
+
   it("an abort signal withdraws a waiter", async () => {
     const dir = poolDir({ budget: 2, load_threshold: 0 });
     const pool = new Pool(dir, fakeProbes());
@@ -496,6 +702,61 @@ describe("Executor resource:", () => {
     expect(readPool(dir).waiting).toEqual([]);
     if (holder.status === "granted") await holder.lease.release();
   }, 10_000);
+
+  it("an exec whose lease wait passes starve_after reports it once to its session", async () => {
+    const dir = poolDir({ budget: 10, load_threshold: 0, starve_after: 0.2 });
+    const pool = new Pool(dir, fakeProbes());
+    const executor = new Executor(pool, undefined, 50);
+    const holder = await pool.acquire({ threads: 10, label: "everything" });
+    const notices: Array<string | undefined> = [];
+    const r = await executor.execute(
+      { type: "exec", command: "true", resource: { threads: 2, wait_timeout: 0.6 } },
+      {},
+      { sessionId: "s1", rootSessionId: "s1", onStarved: n => notices.push(n) },
+    );
+    expect(r.exit_code).toBe(75);
+    // starved once, then cleared when the wait gave up
+    expect(notices).toHaveLength(2);
+    expect(notices[1]).toBeUndefined();
+    expect(notices[0]).toMatch(
+      /^queued \d+s for 2 threads \(starve_after 0s\): held 10\/10, external 0\.0/,
+    );
+    if (holder.status === "granted") await holder.lease.release();
+  }, 10_000);
+
+  it("fanout shards share the session's starved mark: it clears only when no shard waits starved", async () => {
+    const dir = poolDir({ budget: 2, load_threshold: 0, starve_after: 0.2 });
+    const pool = new Pool(dir, fakeProbes());
+    const executor = new Executor(pool, undefined, 50);
+    const a = await pool.acquire({ threads: 1, label: "a" });
+    const b = await pool.acquire({ threads: 1, label: "b" });
+    const t0 = Date.now();
+    const events: Array<[string | undefined, number]> = [];
+    // past the first poll (1 s): both shards have seen themselves starved
+    setTimeout(() => {
+      if (a.status === "granted") void a.lease.release();
+    }, 1500);
+    setTimeout(() => {
+      if (b.status === "granted") void b.lease.release();
+    }, 2500);
+    const r = await executor.execute(
+      {
+        type: "exec",
+        command: "sleep 1.5",
+        fanout: { count: 2, threads_each: 1, max_parallel: 2 },
+      },
+      {},
+      {
+        sessionId: "s1",
+        rootSessionId: "s1",
+        onStarved: n => events.push([n, Date.now() - t0]),
+      },
+    );
+    expect(r.exit_code).toBe(0);
+    expect(events.map(e => e[0] === undefined)).toEqual([false, false, true]);
+    // the first grant (a released at 1.5 s) did not clear it: the second shard still waited
+    expect(events[2][1]).toBeGreaterThanOrEqual(2450);
+  }, 15_000);
 
   it("a lock name renders session values: the rendered name is the lock held", async () => {
     const dir = poolDir();
@@ -1273,16 +1534,17 @@ describe("wf-run CLI (real processes)", () => {
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
   }, 15_000);
 
-  it("a SIGKILLed wf-run keeps the lease while its child's group runs", async () => {
+  it("a SIGKILLed wf-run leaves no live child and no lease: the next pass kills its detached group, SIGKILL after the grace", async () => {
     const dir = poolDir(quiet);
     const ready = path.join(dir, "ready");
+    // the child ignores SIGTERM: only the escalation ends it
     const { child, done } = wfRun(dir, [
       "--threads",
       "4",
       "--",
       process.execPath,
       "-e",
-      `require("fs").writeFileSync(${JSON.stringify(ready)},String(process.pid));setInterval(()=>{},1000)`,
+      `process.on("SIGTERM",()=>{});require("fs").writeFileSync(${JSON.stringify(ready)},String(process.pid));setInterval(()=>{},1000)`,
     ]);
     for (let i = 0; i < 200 && !fs.existsSync(ready); i++)
       await new Promise(r => setTimeout(r, 25));
@@ -1290,21 +1552,95 @@ describe("wf-run CLI (real processes)", () => {
     groups.push(grandchild);
     for (let i = 0; i < 100 && readPool(dir).leases[0]?.pgid === undefined; i++)
       await new Promise(r => setTimeout(r, 20));
-    expect(readPool(dir).leases[0].pgid).toBe(grandchild);
+    expect(readPool(dir).leases[0]).toMatchObject({ pgid: grandchild, owns_group: true });
     // the grandchild holds the stdio pipes open: wait for the exit, not the close
     const exited = new Promise(r => child.on("exit", r));
     child.kill("SIGKILL");
     await exited;
     void done;
     const pool = new Pool(dir, fakeProbes());
-    try {
-      expect((await pool.status()).leases.map(l => l.threads)).toEqual([4]);
-    } finally {
-      process.kill(-grandchild, "SIGKILL");
-    }
+    // first pass: SIGTERM, the lease lives while the group does
+    expect((await pool.status()).leases.map(l => l.threads)).toEqual([4]);
+    const orphaned = readPool(dir).leases[0].orphaned!;
+    expect(orphaned).toBeGreaterThan(0);
+    await new Promise(r => setTimeout(r, 100));
+    expect(isGroupAlive(grandchild)).toBe(true);
+    expect((await pool.status()).leases).toHaveLength(1);
+    // past the grace: SIGKILL
+    const state = readPool(dir);
+    fs.writeFileSync(
+      path.join(dir, "pool.json"),
+      JSON.stringify({
+        ...state,
+        leases: [{ ...state.leases[0], orphaned: orphaned - ORPHAN_KILL_GRACE_MS }],
+      }),
+    );
+    await pool.status();
     for (let i = 0; i < 100 && isGroupAlive(grandchild); i++)
       await new Promise(r => setTimeout(r, 20));
+    expect(isGroupAlive(grandchild)).toBe(false);
     expect((await pool.status()).leases).toEqual([]);
+    expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
+    expect(fs.readFileSync(path.join(dir, "pool.log"), "utf8")).toMatch(
+      new RegExp(`orphan: pid ${child.pid} is dead, SIGTERM its group ${grandchild} — `),
+    );
+  }, 15_000);
+
+  it("an orphaned wf-run lease whose group is not the recorded one — another boot, another leader — is dropped and nothing is signalled", async () => {
+    const dir = poolDir(quiet);
+    const gone = spawn(process.execPath, ["-e", ""]);
+    await new Promise(r => gone.on("exit", r));
+    const unrelated = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    groups.push(unrelated.pid!);
+    const orphan = (extra: Partial<PoolEntry>): PoolEntry => ({
+      ...entry(3, { pid: gone.pid!, pgid: unrelated.pid!, owns_group: true }),
+      started: 1,
+      ...extra,
+    });
+    const pool = new Pool(dir, { ...fakeProbes(), processStart });
+    for (const lease of [
+      orphan({ boot_ms: bootTimeMs() - 86_400_000 }),
+      orphan({}),
+      orphan({ boot_ms: bootTimeMs(), pgid_start: "Thu Jan  1 00:00:00 1970" }),
+    ]) {
+      fs.writeFileSync(
+        path.join(dir, "pool.json"),
+        JSON.stringify({ leases: [lease], waiting: [] }),
+      );
+      expect((await pool.status()).leases).toEqual([]);
+      await new Promise(r => setTimeout(r, 50));
+      expect(isGroupAlive(unrelated.pid!)).toBe(true);
+    }
+    expect(fs.readFileSync(path.join(dir, "pool.log"), "utf8")).toMatch(
+      /its group \d+ is another process's now — lease dropped, nothing signalled/,
+    );
+    // the recorded leader still leads it: that group is the leased one and is signalled
+    fs.writeFileSync(
+      path.join(dir, "pool.json"),
+      JSON.stringify({
+        leases: [orphan({ boot_ms: bootTimeMs(), pgid_start: processStart(unrelated.pid!) })],
+        waiting: [],
+      }),
+    );
+    expect((await pool.status()).leases).toHaveLength(1);
+    for (let i = 0; i < 100 && isGroupAlive(unrelated.pid!); i++)
+      await new Promise(r => setTimeout(r, 20));
+    expect(isGroupAlive(unrelated.pid!)).toBe(false);
+  }, 15_000);
+
+  it("an exec lease (not owning its group) keeps the lease while the group runs after its server died", async () => {
+    const dir = poolDir(quiet);
+    const gone = spawn(process.execPath, ["-e", ""]);
+    await new Promise(r => gone.on("exit", r));
+    const runner = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    groups.push(runner.pid!);
+    const lease: PoolEntry = { ...entry(3, { pid: gone.pid!, pgid: runner.pid! }), started: 1 };
+    fs.writeFileSync(path.join(dir, "pool.json"), JSON.stringify({ leases: [lease], waiting: [] }));
+    const pool = new Pool(dir, fakeProbes());
+    expect((await pool.status()).leases.map(l => l.threads)).toEqual([3]);
+    await new Promise(r => setTimeout(r, 100));
+    expect(isGroupAlive(runner.pid!)).toBe(true);
+    expect(readPool(dir).leases[0].orphaned).toBeUndefined();
   }, 15_000);
 
   it("--threads MIN-MAX takes the free threads at once; --wait-full waits for the max until its window ends", async () => {

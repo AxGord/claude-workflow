@@ -1021,10 +1021,44 @@ export class Engine {
     // A lease granted after the session left this server (suspended, picked up
     // by another process) is given back: the new owner runs the step.
     let refused = false;
-    const phaseSink: { set?: (phase: ExecPhase) => void } = {};
+    const phaseSink: {
+      set?: (phase: ExecPhase) => void;
+      note?: (note: string | undefined) => void;
+    } = {};
+    // A starved pool wait is written on the session (its ancestors' status and transition
+    // list it) until no wait of the step is starved any more, and cleared when the step
+    // starts and ends — a mark a crashed server left behind never outlives the next step.
+    let starvedWrite: Promise<unknown> | undefined;
+    const clearStarved = (): Promise<unknown> =>
+      this._storage
+        .update(session.session_id, cur =>
+          cur?.pool_starved ? { ...cur, pool_starved: undefined } : null,
+        )
+        .catch(() => undefined);
+    const marked = (): boolean => {
+      try {
+        return !!this._storage.read(session.session_id)?.pool_starved;
+      } catch {
+        return false;
+      }
+    };
     const execCtx: ExecContext = {
       ...this._execContext(session),
       onPhase: phase => phaseSink.set?.(phase),
+      onStarved: note => {
+        phaseSink.note?.(note);
+        const record = note !== undefined ? { since: new Date().toISOString(), note } : undefined;
+        const write = (): Promise<unknown> =>
+          record
+            ? this._storage
+                .update(session.session_id, cur =>
+                  cur && cur.stack.length > 0 ? { ...cur, pool_starved: record } : null,
+                )
+                .catch(() => undefined)
+            : clearStarved();
+        // ast-grep-ignore: then-without-catch -- the write catches its own failure
+        starvedWrite = starvedWrite ? starvedWrite.then(write) : write();
+      },
       mayStart: () => {
         const cur = this._storage.read(session.session_id);
         const mine =
@@ -1062,6 +1096,8 @@ export class Engine {
     // tells the waiting tool call's client the exec is alive (only when it asked for progress)
     const beat = startHeartbeat(currentProgress(), stateName);
     phaseSink.set = beat.setPhase;
+    phaseSink.note = beat.setNote;
+    if (marked()) await clearStarved();
     try {
       result = own ? await this._executor.adopt(own, state, execCtx) : null;
       if (own) run = own;
@@ -1085,6 +1121,8 @@ export class Engine {
       throw err;
     } finally {
       beat.stop();
+      if (starvedWrite) await starvedWrite;
+      if (starvedWrite || marked()) await clearStarved();
     }
     // its aborted-wait result must not route: the session is another owner's now
     if (refused)

@@ -16,7 +16,7 @@ import {
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
 import { withProgress, type ProgressSink } from "./progress.js";
-import { RESUME_TOOL, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
+import { RESUME_TOOL, activeSubtree, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
 import {
   MARK_TARGETS,
   addQueueLine,
@@ -28,6 +28,27 @@ import {
   type MarkTarget,
   type PickResult,
 } from "./queue.js";
+
+/**
+ * The sessions of `sessionId`'s active sub-tree (itself included) whose exec
+ * waits for a pool lease past the pool's `starve_after`: what a parent sees at
+ * its next `status` / `transition`, while the starved child's own call is blocked.
+ */
+export function starvationLines(storage: Storage, sessionId: string): string[] {
+  const lines: string[] = [];
+  try {
+    for (const id of activeSubtree(storage, sessionId)) {
+      const s = storage.read(id);
+      if (!s?.pool_starved || s.stack.length === 0) continue;
+      lines.push(
+        `POOL STARVED: session ${id} (${where(s)}) waits for a pool lease since ${s.pool_starved.since} — ${s.pool_starved.note}. pool_status shows the pool.`,
+      );
+    }
+  } catch {
+    // a notice never fails the call it rides on
+  }
+  return lines;
+}
 
 interface FormatOptions {
   readonly showSessionId: boolean;
@@ -451,7 +472,9 @@ export function registerTools(
 
         const contextLines = formatContext(status.context);
         const suspendedAt = storage.read(sid)?.suspended_at;
+        const starved = starvationLines(storage, sid);
         const text = [
+          ...(starved.length > 0 ? [...starved, ""] : []),
           ...(suspendedAt
             ? [
                 `SUSPENDED since ${suspendedAt} — call resume({ session_id: "${sid}" }) to continue it.`,
@@ -512,7 +535,11 @@ export function registerTools(
           const status = await withProgress(progress, () =>
             engine.transition(sid, args.transition, args.actor),
           );
-          const text = (warning ? warning + "\n\n" : "") + formatStatus(status);
+          const starved = starvationLines(storage, sid);
+          const text =
+            (warning ? warning + "\n\n" : "") +
+            formatStatus(status) +
+            (starved.length > 0 ? `\n\n${starved.join("\n")}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {
@@ -780,11 +807,15 @@ export function registerTools(
         const depth = s.stack.length > 1 ? ` [depth: ${s.stack.length}]` : "";
         const parent = s.parent_session_id ? ` [child of ${s.parent_session_id}]` : "";
         const suspended = isActive && s.suspended_at ? ` [suspended since ${s.suspended_at}]` : "";
+        const starved =
+          isActive && s.pool_starved
+            ? ` [POOL STARVED since ${s.pool_starved.since}: ${s.pool_starved.note}]`
+            : "";
         const pidInfo =
           args.all && s.context.claude_code_pid !== undefined
             ? ` [pid: ${s.context.claude_code_pid}${s.context.claude_code_pid === pid ? " ★" : ""}]`
             : "";
-        return `  ${s.session_id}: ${stateInfo}${depth}${parent}${suspended}${pidInfo} (updated: ${s.updated_at})`;
+        return `  ${s.session_id}: ${stateInfo}${depth}${parent}${suspended}${starved}${pidInfo} (updated: ${s.updated_at})`;
       };
 
       const active = sessions.filter(s => s.stack.length > 0);
@@ -877,6 +908,7 @@ export function registerTools(
       description:
         "The machine-wide thread pool, as `wf-run --status` shows it: budget and load, then one line per lease " +
         "and per waiter (in admission order) — pid, threads/locks held or wanted, priority and level, since when, project, session, step, label. " +
+        "Flags a lease whose processes run well above its threads (`runs ~N (OVERRUN)`), a waiter queued past `starve_after` (`STARVED`) and a pool that granted nothing that long. " +
         "Runs one admission pass (reaps dead entries, may grant a waiting lease).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z.object({}).strict(),

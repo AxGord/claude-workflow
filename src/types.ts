@@ -297,6 +297,8 @@ export interface SessionState {
    * that is gone, the step never started, and its new owner runs it again.
    */
   readonly pending_action?: PendingAction;
+  /** Set while the step's exec waits for a pool lease past the pool's `starve_after`: since when, and why. */
+  readonly pool_starved?: { readonly since: string; readonly note: string };
 }
 
 /** Where a session's unrouted action step is: its frame and state. */

@@ -31,14 +31,23 @@ export function currentProgress(): ProgressSink | undefined {
 export function startHeartbeat(
   sink: ProgressSink | undefined,
   state: string,
-): { setPhase: (phase: ExecPhase) => void; stop: () => void } {
-  if (!sink) return { setPhase: () => undefined, stop: () => undefined };
+): {
+  setPhase: (phase: ExecPhase) => void;
+  setNote: (note: string | undefined) => void;
+  stop: () => void;
+} {
+  if (!sink) return { setPhase: () => undefined, setNote: () => undefined, stop: () => undefined };
   let phase: ExecPhase = "run";
+  let note: string | undefined;
   const t0 = Date.now();
   const timer = setInterval(() => {
     const s = Math.round((Date.now() - t0) / 1000);
     try {
-      sink(phase === "lease" ? `waiting for pool lease (${s}s)` : `running ${state} (${s}s)`);
+      sink(
+        phase === "lease"
+          ? `waiting for pool lease (${s}s)${note ? ` — STARVED: ${note}` : ""}`
+          : `running ${state} (${s}s)`,
+      );
     } catch {
       // a dead transport must not fail the exec
     }
@@ -47,6 +56,9 @@ export function startHeartbeat(
   return {
     setPhase: p => {
       phase = p;
+    },
+    setNote: n => {
+      note = n;
     },
     stop: () => clearInterval(timer),
   };

@@ -7,8 +7,15 @@ import { fileURLToPath } from "node:url";
 import type { StateDefinition, ActionResult, ShardResult, DetachedRun } from "./types.js";
 import { DEFAULT_PRIORITY_LEVEL, RESOURCE_THREADS_BUDGET, type PriorityLevel } from "./types.js";
 import { render } from "./template.js";
-import { isGroupAlive, killProcessGroup } from "./process.js";
-import { EX_TEMPFAIL, Pool, describeRequest, levelPriority, resolvePoolDir } from "./pool.js";
+import { bootTimeMs, isGroupAlive, killProcessGroup, sameBoot } from "./process.js";
+import {
+  EX_TEMPFAIL,
+  Pool,
+  describeRequest,
+  levelPriority,
+  resolvePoolDir,
+  starvationNotice,
+} from "./pool.js";
 import type { AcquireResult } from "./pool.js";
 import type { ExecPhase } from "./progress.js";
 
@@ -37,7 +44,8 @@ const ADOPT_POLL_MS = 200;
 // how often a timed-out group is checked for its death
 const REAP_POLL_MS = 50;
 // two boot-time readings closer than this are the same boot (clock adjustments)
-const SAME_BOOT_TOLERANCE_MS = 60_000;
+// A starved wait is noticed within this long of crossing the pool's `starve_after`.
+const STARVE_CHECK_MS = 10_000;
 const NO_EXIT_CODE = "Process ended without writing its exit code (killed)";
 // Runs the command ($1) in a child shell and writes its exit code to $2 when
 // it ends, so a run whose server died still leaves its result behind.
@@ -74,14 +82,14 @@ export interface ExecContext {
   readonly mayStart?: () => boolean;
   /** Reports whether the exec is queued for a pool lease or running (progress heartbeat). */
   readonly onPhase?: (phase: ExecPhase) => void;
+  /**
+   * The exec's pool wait passed the pool's `starve_after` (what it waits for and what blocks it),
+   * or — `undefined` — no wait of it is starved any more (granted, or given up).
+   */
+  readonly onStarved?: (notice: string | undefined) => void;
 }
 
-/** This machine's boot time; a pgid recorded under another boot names some other process. */
-export function bootTimeMs(): number {
-  return Math.round(Date.now() - os.uptime() * 1000);
-}
-
-export { killProcessGroup };
+export { bootTimeMs, killProcessGroup };
 
 function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
   if (s.length <= limit) return s;
@@ -101,12 +109,17 @@ export class Executor {
   /** Where foreground execs write their output and exit code. */
   readonly runDir: string;
 
+  /** How often a lease wait checks whether it is starved (`ExecContext.onStarved`). */
+  readonly starveCheckMs: number;
+
   constructor(
     pool: Pool = new Pool(resolvePoolDir()),
     runDir: string = path.join(os.tmpdir(), "wf-exec"),
+    starveCheckMs: number = STARVE_CHECK_MS,
   ) {
     this.pool = pool;
     this.runDir = runDir;
+    this.starveCheckMs = starveCheckMs;
   }
 
   async execute(
@@ -183,6 +196,7 @@ export class Executor {
     if (!waits) this._waiting.set(sessionId, (waits = new Set()));
     waits.add(ac);
     let got: AcquireResult;
+    let starved: string | undefined;
     ctx?.onPhase?.("lease");
     try {
       got = await this.pool.acquire(
@@ -204,12 +218,19 @@ export class Executor {
           waitTimeoutMs:
             resource.wait_timeout === undefined ? undefined : resource.wait_timeout * 1000,
           signal: ac.signal,
+          progressMs: this.starveCheckMs,
+          onProgress: (self, view) => {
+            if (starved) return;
+            starved = starvationNotice(self, view, Date.now());
+            if (starved) ctx?.onStarved?.(shard ? `[${shard.id}] ${starved}` : starved);
+          },
         },
       );
     } finally {
       waits.delete(ac);
       if (waits.size === 0 && this._waiting.get(sessionId) === waits)
         this._waiting.delete(sessionId);
+      if (starved) ctx?.onStarved?.(undefined);
     }
     const wait_ms = got.waitMs;
     ctx?.onPhase?.("run");
@@ -315,6 +336,21 @@ export class Executor {
     }
 
     const sessionId = ctx?.sessionId ?? "";
+    // Shards share the session: it is starved while ANY shard's wait is (the latest notice shown).
+    const starvedShards = new Map<number, string>();
+    const report = ctx?.onStarved;
+    const shardCtx = (i: number): ExecContext | undefined =>
+      ctx && report
+        ? {
+            ...ctx,
+            onStarved: notice => {
+              if (notice !== undefined) {
+                starvedShards.set(i, notice);
+                report(notice);
+              } else if (starvedShards.delete(i) && starvedShards.size === 0) report(undefined);
+            },
+          }
+        : ctx;
     const ac = new AbortController();
     let mine = this._fanouts.get(sessionId);
     if (!mine) this._fanouts.set(sessionId, (mine = new Set()));
@@ -326,7 +362,7 @@ export class Executor {
       while (next < shards.length && !ac.signal.aborted) {
         const i = next++;
         const started = performance.now();
-        const r = await this._execLeased(run, vars, ctx, shards[i]);
+        const r = await this._execLeased(run, vars, shardCtx(i), shards[i]);
         const wait_ms = r.wait_ms ?? 0;
         results[i] = {
           shard: shards[i].id,
@@ -676,7 +712,7 @@ export class Executor {
 
   /** The run started under this boot of the machine, so its pgid still names it. */
   static sameBoot(run: Pick<DetachedRun, "boot_ms">): boolean {
-    return Math.abs(bootTimeMs() - run.boot_ms) < SAME_BOOT_TOLERANCE_MS;
+    return sameBoot(run.boot_ms);
   }
 
   /** What became of a detached run: still running, ended with its exit code written, or gone without one. */

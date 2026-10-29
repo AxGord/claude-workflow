@@ -10,13 +10,31 @@ import os from "node:os";
 import path from "node:path";
 import lockfile from "proper-lockfile";
 import { LOCK_NAME_PATTERN, LOCK_STALE_MS, PRIORITY_LEVELS, type PriorityLevel } from "./types.js";
-import { isGroupAlive, isPidAlive } from "./process.js";
+import {
+  bootTimeMs,
+  isGroupAlive,
+  isPidAlive,
+  killProcessGroup,
+  processStart,
+  sameBoot,
+} from "./process.js";
 
 /** EX_TEMPFAIL: no lease within the wait timeout ("busy"). */
 export const EX_TEMPFAIL = 75;
 
 const POOL_FILE = "pool.json";
 const CONFIG_FILE = "config.json";
+// One line per orphan reaped, over-running lease and starved waiter; rotated past LOG_MAX_BYTES.
+const LOG_FILE = "pool.log";
+const LOG_MAX_BYTES = 1 << 20;
+// A waiter queued this long (or a pool that granted nothing this long) is starved (config `starve_after`, seconds).
+const DEFAULT_STARVE_AFTER_SEC = 900;
+// An orphaned group that survives its SIGTERM this long gets SIGKILL.
+export const ORPHAN_KILL_GRACE_MS = 3000;
+// The process table is sampled at most this often per pool (a `ps` per pass of every waiter is wasted work),
+// outside the pool lock; after a failed sample (`ps` hung or broke) none is tried for PROCESS_BACKOFF_MS.
+const PROCESS_SAMPLE_MS = 1000;
+const PROCESS_BACKOFF_MS = 30_000;
 // Cores left to light work (shells, editors, the agents themselves); light
 // load up to the same amount is noise, not external heavy work.
 const RESERVED_CORES = 2;
@@ -47,6 +65,37 @@ export interface PoolProbes {
   cpuTicks(): CpuTicks;
   isAlive(pid: number): boolean;
   isGroupAlive(pgid: number): boolean;
+  /** The process table (`ps`); throws when it cannot be read. Absent: no lease's own load is measured. */
+  processes?(): readonly ProcSample[];
+  /** When a process started (`ps -o lstart`), undefined when gone. Absent: a reaped group's leader is not re-identified. */
+  processStart?(pid: number): string | undefined;
+}
+
+/** One process of the table: who it is, whose child, which group, how busy. */
+export interface ProcSample {
+  readonly pid: number;
+  readonly ppid: number;
+  readonly pgid: number;
+  /** Busy cpus: 1 = one core (the kernel's recent average on macOS, the lifetime average on Linux). */
+  readonly cpu: number;
+}
+
+function readProcesses(): readonly ProcSample[] {
+  const out = execFileSync("ps", ["-A", "-o", "pid=,ppid=,pgid=,%cpu="], {
+    encoding: "utf8",
+    timeout: 2000,
+    maxBuffer: 16 << 20,
+    env: { ...process.env, LC_ALL: "C" },
+  });
+  const procs: ProcSample[] = [];
+  for (const line of out.split("\n")) {
+    const f = line.trim().split(/\s+/);
+    if (f.length < 4) continue;
+    const [pid, ppid, pgid] = f.slice(0, 3).map(Number);
+    const cpu = Number(f[3].replace(",", ".")) / 100;
+    if ([pid, ppid, pgid, cpu].every(Number.isFinite)) procs.push({ pid, ppid, pgid, cpu });
+  }
+  return procs;
 }
 
 function readCpuTicks(): CpuTicks {
@@ -84,6 +133,8 @@ export const systemProbes: PoolProbes = {
   cpuTicks: readCpuTicks,
   isAlive: isPidAlive,
   isGroupAlive,
+  processes: readProcesses,
+  processStart,
 };
 
 /**
@@ -98,6 +149,8 @@ export function resolvePoolDir(env: NodeJS.ProcessEnv = process.env): string {
 export interface PoolConfig {
   readonly budget: number;
   readonly load_threshold: number;
+  /** Seconds: a waiter queued this long, or a pool with waiters that granted nothing this long, is starved. */
+  readonly starve_after: number;
 }
 
 /** A lease (granted, `started` set) or a waiter (queued since `arrived`). */
@@ -126,22 +179,42 @@ export interface PoolEntry {
   readonly started?: number;
   /** The leased command's process group: the lease lives while `pid` OR this group does. */
   readonly pgid?: number;
+  /** The boot the group was recorded under (`bootTimeMs`): under another boot `pgid` names some other group. */
+  readonly boot_ms?: number;
+  /** When the group's leader started (`ps -o lstart`): a different leader under that pgid is not the leased group. */
+  readonly pgid_start?: string;
   /** Named locks, held exclusively machine-wide for the lease's life; granted together with the threads. */
   readonly locks?: readonly string[];
+  /**
+   * The leased group dies with `pid` (a `wf-run` lease): once `pid` is dead the
+   * reaper kills the group and frees the lease. An exec's group outlives its
+   * server instead — a resumed session adopts the run.
+   */
+  readonly owns_group?: true;
+  /** When the reaper first signalled the orphaned group (SIGKILL follows after ORPHAN_KILL_GRACE_MS). */
+  readonly orphaned?: number;
+  /** When the lease's process tree was first seen running well above its threads (logged once). */
+  readonly overrun?: number;
+  /** When the waiter was first seen starved (logged once). */
+  readonly starved?: number;
 }
 
 export interface PoolState {
   readonly leases: readonly PoolEntry[];
   readonly waiting: readonly PoolEntry[];
+  /** The last grant (ms since epoch): a pool with waiters and no grant for `starve_after` is starved. */
+  readonly last_grant?: number;
 }
 
 /** The pool after one admission pass. */
 export interface PoolView extends PoolState, PoolConfig {
   readonly load: number;
-  /** Load not taken through the pool, measured before this pass's grants. */
+  /** Load not taken through the pool, measured before this pass's grants: a lease's own process tree is not external. */
   readonly external: number;
   /** Threads leased after this pass's grants. */
   readonly held: number;
+  /** Busy cpus of each measured lease's process tree, by lease id. */
+  readonly runs: Readonly<Record<string, number>>;
 }
 
 /** A request larger than the budget counts as the whole budget: it waits for an empty machine. */
@@ -219,6 +292,12 @@ export function levelPriority(level: PriorityLevel, stepPriority = 0): number {
  * window, or for its min after it — it closes the threads to everyone behind
  * it like any waiter: what the window waits for is the threads being freed,
  * and a later task taking them would defeat it.
+ *
+ * `runs` (busy cpus of a lease's own process tree): a lease with threads
+ * accounts for the larger of its threads and its tree, so a lease whose
+ * command runs more processes than it leased is not external load that
+ * blocks every waiter (`overruns` flags it instead). A lock-only lease takes
+ * no threads: its tree stays external.
  */
 export function schedule(
   state: PoolState,
@@ -226,11 +305,17 @@ export function schedule(
   load: number,
   isLive: (entry: PoolEntry) => boolean,
   now: number,
+  runs: Readonly<Record<string, number>> = {},
 ): PoolView {
   const leases = state.leases.filter(isLive);
   const waiting = state.waiting.filter(isLive).sort(byQueueOrder);
   let held = leases.reduce((sum, e) => sum + effectiveThreads(e, config.budget), 0);
-  const external = Math.max(0, load - held - config.load_threshold);
+  const own = leases.reduce((sum, e) => {
+    const n = effectiveThreads(e, config.budget);
+    return sum + (n > 0 ? Math.max(n, runs[e.id] ?? 0) : 0);
+  }, 0);
+  const external = Math.max(0, load - own - config.load_threshold);
+  let lastGrant = state.last_grant;
   const locked = new Set(leases.flatMap(e => e.locks ?? []));
   const claimed = new Set<string>();
   const still: PoolEntry[] = [];
@@ -250,8 +335,10 @@ export function schedule(
       const { full_until: _window, ...granted } = w;
       const asked =
         w.min_threads !== undefined || n !== w.threads ? { asked_threads: w.threads } : {};
-      leases.push({ ...granted, threads: n, started: now, ...asked });
+      // a waiter's starved mark is not the lease's (undefined: never written)
+      leases.push({ ...granted, threads: n, started: now, ...asked, starved: undefined });
       held += n;
+      lastGrant = now;
       for (const l of locks) locked.add(l);
       continue;
     }
@@ -259,7 +346,126 @@ export function schedule(
     for (const l of locks) claimed.add(l);
     if (locksFree) threadsClosed = true;
   }
-  return { ...config, load, external, held, leases, waiting: still };
+  return {
+    ...config,
+    load,
+    external,
+    held,
+    leases,
+    waiting: still,
+    ...(lastGrant !== undefined ? { last_grant: lastGrant } : {}),
+    runs,
+  };
+}
+
+/**
+ * Busy cpus of each lease's process tree: the members of its group and their
+ * descendants, without the group of another lease (a `wf-run` nested in a
+ * leased exec counts once, as its own lease). A lease with no group, or whose
+ * group has no member in the table, is not measured.
+ */
+export function treeLoads(
+  leases: readonly PoolEntry[],
+  procs: readonly ProcSample[],
+): Record<string, number> {
+  const children = new Map<number, ProcSample[]>();
+  const members = new Map<number, ProcSample[]>();
+  const add = (m: Map<number, ProcSample[]>, k: number, p: ProcSample): void => {
+    const list = m.get(k);
+    if (list) list.push(p);
+    else m.set(k, [p]);
+  };
+  for (const p of procs) {
+    add(children, p.ppid, p);
+    add(members, p.pgid, p);
+  }
+  const groups = new Set(leases.flatMap(e => (e.pgid !== undefined ? [e.pgid] : [])));
+  const runs: Record<string, number> = {};
+  for (const e of leases) {
+    if (e.pgid === undefined || !members.has(e.pgid)) continue;
+    const seen = new Set<number>();
+    const stack = [...members.get(e.pgid)!];
+    let cpu = 0;
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      if (seen.has(p.pid) || (p.pgid !== e.pgid && groups.has(p.pgid))) continue;
+      seen.add(p.pid);
+      cpu += p.cpu;
+      stack.push(...(children.get(p.pid) ?? []));
+    }
+    runs[e.id] = Math.round(cpu * 10) / 10;
+  }
+  return runs;
+}
+
+/** A lease's tree runs well above its threads: at least max(2, threads/2) cpus over them. A lock-only lease never. */
+export function overruns(lease: PoolEntry, view: Pick<PoolView, "budget" | "runs">): boolean {
+  const n = effectiveThreads(lease, view.budget);
+  const runs = view.runs[lease.id];
+  return n > 0 && runs !== undefined && runs - n >= Math.max(2, n / 2);
+}
+
+/** `45s`, `17m`, `2h10m`. */
+export function formatDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** A waiter queued for `starve_after` or longer. */
+export function isStarved(
+  e: PoolEntry,
+  view: Pick<PoolView, "starve_after">,
+  now: number,
+): boolean {
+  return e.started === undefined && now - e.arrived >= view.starve_after * 1000;
+}
+
+/** Since when a pool with waiters has granted nothing (the later of its last grant and its oldest waiter's arrival). */
+function idleSince(view: PoolView): number | undefined {
+  if (view.waiting.length === 0) return undefined;
+  const oldest = Math.min(...view.waiting.map(e => e.arrived));
+  return Math.max(view.last_grant ?? 0, oldest);
+}
+
+/** What keeps the pool from granting: the threads held and the external load, the over-running leases. */
+function blockers(view: PoolView): string {
+  const over = view.leases
+    .filter(e => overruns(e, view))
+    .map(
+      e =>
+        `pid ${e.pid} holds ${effectiveThreads(e, view.budget)}, runs ~${Math.round(view.runs[e.id])}`,
+    );
+  return (
+    `held ${view.held}/${view.budget}, external ${view.external.toFixed(1)}` +
+    (over.length > 0 ? `; over-running: ${over.join(", ")}` : "")
+  );
+}
+
+/** The pool-wide starvation line, or undefined: waiters and no grant for `starve_after`. */
+export function poolStarvation(view: PoolView, now: number): string | undefined {
+  const since = idleSince(view);
+  if (since === undefined || now - since < view.starve_after * 1000) return undefined;
+  return `STARVED: nothing granted for ${formatDuration(now - since)}, ${view.waiting.length} waiting (${blockers(view)})`;
+}
+
+/**
+ * The notice a starved waiter reports (its exec to the session, `wf-run` to
+ * stderr), or undefined while it is not starved.
+ */
+export function starvationNotice(self: PoolEntry, view: PoolView, now: number): string | undefined {
+  if (!isStarved(self, view, now)) return undefined;
+  const ahead = view.waiting.findIndex(e => e.id === self.id);
+  const idle = idleSince(view);
+  return (
+    `queued ${formatDuration(now - self.arrived)} for ${describeRequest(self, view.budget)} (starve_after ${formatDuration(view.starve_after * 1000)}): ` +
+    `${blockers(view)}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}` +
+    (idle !== undefined && now - idle >= view.starve_after * 1000
+      ? `, nothing granted for ${formatDuration(now - idle)}`
+      : "")
+  );
 }
 
 export interface LeaseRequest {
@@ -282,6 +488,8 @@ export interface LeaseRequest {
   readonly sessionId?: string;
   /** The process whose death frees the lease. Default: this process. */
   readonly pid?: number;
+  /** The group attached later dies with `pid`: once `pid` is dead the reaper kills it (a `wf-run` lease). */
+  readonly ownsGroup?: boolean;
 }
 
 export interface AcquireOptions {
@@ -331,7 +539,11 @@ function readState(raw: string, fp: string): PoolState {
   if (raw.trim() === "") return { leases: [], waiting: [] };
   try {
     const parsed = JSON.parse(raw) as Partial<PoolState>;
-    return { leases: parsed.leases ?? [], waiting: parsed.waiting ?? [] };
+    return {
+      leases: parsed.leases ?? [],
+      waiting: parsed.waiting ?? [],
+      ...(typeof parsed.last_grant === "number" ? { last_grant: parsed.last_grant } : {}),
+    };
   } catch {
     console.error(`wf-pool: ${fp} is not valid JSON — starting from an empty pool`);
     return { leases: [], waiting: [] };
@@ -343,13 +555,15 @@ export class Pool {
   private readonly _probes: PoolProbes;
   private _ticks: CpuTicks | undefined;
   private _measuredLoad: number | undefined;
+  private _procs: { readonly at: number; readonly list: readonly ProcSample[] } | undefined;
+  private _procsFailedAt: number | undefined;
 
   constructor(dir: string, probes: PoolProbes = systemProbes) {
     this.dir = dir;
     this._probes = probes;
   }
 
-  /** `config.json` (optional): `budget` (default: performance cores − 2, at least 1), `load_threshold`. */
+  /** `config.json` (optional): `budget` (default: performance cores − 2, at least 1), `load_threshold`, `starve_after` (seconds, default 900). */
   config(): PoolConfig {
     const fp = path.join(this.dir, CONFIG_FILE);
     const raw: unknown = fs.existsSync(fp) ? JSON.parse(fs.readFileSync(fp, "utf8")) : {};
@@ -357,17 +571,20 @@ export class Pool {
       throw new Error(`${fp}: expected a JSON object`);
     const obj = raw as Record<string, unknown>;
     for (const key of Object.keys(obj))
-      if (key !== "budget" && key !== "load_threshold")
+      if (key !== "budget" && key !== "load_threshold" && key !== "starve_after")
         throw new Error(`${fp}: unknown key "${key}"`);
-    const { budget, load_threshold: threshold } = obj;
+    const { budget, load_threshold: threshold, starve_after: starve } = obj;
     if (budget !== undefined && !(Number.isInteger(budget) && (budget as number) > 0))
       throw new Error(`${fp}: budget must be a positive integer`);
     if (threshold !== undefined && !(typeof threshold === "number" && threshold >= 0))
       throw new Error(`${fp}: load_threshold must be a non-negative number`);
+    if (starve !== undefined && !(typeof starve === "number" && starve > 0))
+      throw new Error(`${fp}: starve_after must be a positive number of seconds`);
     return {
       budget:
         (budget as number | undefined) ?? Math.max(1, this._probes.perfCores() - RESERVED_CORES),
-      load_threshold: (threshold as number | undefined) ?? RESERVED_CORES,
+      load_threshold: threshold ?? RESERVED_CORES,
+      starve_after: (starve as number | undefined) ?? DEFAULT_STARVE_AFTER_SEC,
     };
   }
 
@@ -415,6 +632,7 @@ export class Pool {
       session_id: req.sessionId ?? "",
       arrived,
       ...(locks.length > 0 ? { locks } : {}),
+      ...(req.ownsGroup ? { owns_group: true as const } : {}),
     };
     const progressMs = opts.progressMs ?? DEFAULT_PROGRESS_MS;
     let lastProgress: number | undefined;
@@ -465,9 +683,12 @@ export class Pool {
       entry,
       threads: effectiveThreads(entry, view.budget),
       attach: async pgid => {
+        // read outside the pool lock: a slow `ps` must not hold every waiter
+        const start = this._probes.processStart?.(pgid);
+        const group = { pgid, boot_ms: bootTimeMs(), ...(start ? { pgid_start: start } : {}) };
         await this._update(state => ({
-          leases: state.leases.map(e => (e.id === self.id ? { ...e, pgid } : e)),
-          waiting: state.waiting,
+          ...state,
+          leases: state.leases.map(e => (e.id === self.id ? { ...e, ...group } : e)),
         }));
       },
       release: async () => {
@@ -489,6 +710,7 @@ export class Pool {
       const granted = state.leases.some(e => e.id === self.id);
       const keep = granted && why === "timeout";
       return {
+        ...state,
         leases: keep ? state.leases : state.leases.filter(e => e.id !== self.id),
         waiting: state.waiting.filter(e => e.id !== self.id),
       };
@@ -505,7 +727,7 @@ export class Pool {
   async reprioritize(sessionIds: ReadonlySet<string>, level: PriorityLevel): Promise<number> {
     let moved = 0;
     await this._update(state => ({
-      leases: state.leases,
+      ...state,
       waiting: state.waiting.map(e => {
         if (!e.level || e.level === level || !sessionIds.has(e.session_id)) return e;
         moved++;
@@ -528,6 +750,7 @@ export class Pool {
 
   private _remove(id: string): Promise<PoolView> {
     return this._update(state => ({
+      ...state,
       leases: state.leases.filter(e => e.id !== id),
       waiting: state.waiting.filter(e => e.id !== id),
     }));
@@ -540,7 +763,7 @@ export class Pool {
         !self ||
         state.leases.some(e => e.id === self.id) ||
         state.waiting.some(e => e.id === self.id);
-      return known ? state : { leases: state.leases, waiting: [...state.waiting, self] };
+      return known ? state : { ...state, waiting: [...state.waiting, self] };
     });
   }
 
@@ -563,24 +786,140 @@ export class Pool {
     return this._measuredLoad ?? this._probes.loadavg();
   }
 
+  /**
+   * A `wf-run` lease whose `wf-run` is dead (SIGKILLed: it could not release)
+   * while its detached group still runs: SIGTERM the group, SIGKILL it once it
+   * outlives the grace. The lease lives until the group is gone. A group
+   * recorded under another boot, or whose leader is another process than the
+   * one recorded (the pgid was reused), is not the leased one: the lease is
+   * dropped and nothing is signalled.
+   */
+  private _reapOrphans(state: PoolState, now: number): PoolState {
+    let changed = false;
+    const leases: PoolEntry[] = [];
+    for (const e of state.leases) {
+      if (!e.owns_group || e.pgid === undefined || this._probes.isAlive(e.pid)) {
+        leases.push(e);
+        continue;
+      }
+      if (e.boot_ms === undefined || !sameBoot(e.boot_ms)) {
+        changed = true;
+        continue;
+      }
+      if (!this._probes.isGroupAlive(e.pgid)) {
+        leases.push(e);
+        continue;
+      }
+      if (e.orphaned === undefined) {
+        // checked once, before the first signal; a gone leader leaves members of the same group
+        const leader = e.pgid_start !== undefined ? this._probes.processStart?.(e.pgid) : undefined;
+        changed = true;
+        if (leader !== undefined && leader !== e.pgid_start) {
+          this._log(
+            now,
+            `orphan: pid ${e.pid} is dead, its group ${e.pgid} is another process's now — lease dropped, nothing signalled`,
+          );
+          continue;
+        }
+        killProcessGroup(e.pgid, "SIGTERM");
+        this._log(
+          now,
+          `orphan: pid ${e.pid} is dead, SIGTERM its group ${e.pgid} — ${e.label || "-"}`,
+        );
+        leases.push({ ...e, orphaned: now });
+        continue;
+      }
+      if (now - e.orphaned >= ORPHAN_KILL_GRACE_MS) killProcessGroup(e.pgid, "SIGKILL");
+      leases.push(e);
+    }
+    return changed ? { ...state, leases } : state;
+  }
+
+  /**
+   * Refresh the process table, OUTSIDE the pool lock, when some lease has a
+   * group (`raw`: pool.json read without the lock) and the last sample is
+   * PROCESS_SAMPLE_MS old; a failed sample backs off PROCESS_BACKOFF_MS.
+   */
+  private _sampleProcesses(raw: string, now: number): void {
+    if (!this._probes.processes || !raw.includes('"pgid"')) return;
+    if (this._procs && now - this._procs.at < PROCESS_SAMPLE_MS && now >= this._procs.at) return;
+    if (this._procsFailedAt !== undefined && now - this._procsFailedAt < PROCESS_BACKOFF_MS) return;
+    try {
+      this._procs = { at: now, list: this._probes.processes() };
+      this._procsFailedAt = undefined;
+    } catch {
+      this._procs = undefined;
+      this._procsFailedAt = now;
+    }
+  }
+
+  /** The process trees of the leases with a group, from the last sample (none recent: unmeasured). */
+  private _runs(leases: readonly PoolEntry[], now: number): Record<string, number> {
+    if (!this._procs || now - this._procs.at > PROCESS_BACKOFF_MS) return {};
+    return treeLoads(leases, this._procs.list);
+  }
+
+  /** Mark (and log once) the leases newly over-running and the waiters newly starved. */
+  private _mark(view: PoolView, now: number): PoolView {
+    const leases = view.leases.map(e => {
+      if (e.overrun !== undefined || !overruns(e, view)) return e;
+      this._log(
+        now,
+        `overrun: pid ${e.pid} holds ${effectiveThreads(e, view.budget)} threads, runs ~${Math.round(view.runs[e.id])} — ${e.label || "-"}`,
+      );
+      return { ...e, overrun: now };
+    });
+    const waiting = view.waiting.map(e => {
+      if (e.starved !== undefined || !isStarved(e, view, now)) return e;
+      this._log(now, `starved: pid ${e.pid} ${starvationNotice(e, view, now)} — ${e.label || "-"}`);
+      return { ...e, starved: now };
+    });
+    return { ...view, leases, waiting };
+  }
+
+  /** One line to `pool.log`; a log that cannot be written is not the pool's failure. */
+  private _log(now: number, line: string): void {
+    const fp = path.join(this.dir, LOG_FILE);
+    try {
+      if (fs.existsSync(fp) && fs.statSync(fp).size > LOG_MAX_BYTES) fs.renameSync(fp, `${fp}.1`);
+      fs.appendFileSync(fp, `${new Date(now).toISOString()} ${line}\n`);
+    } catch {
+      /* best effort */
+    }
+  }
+
   /** Under the pool lock: apply `change`, run an admission pass, write the result. */
   private async _update(change: (state: PoolState) => PoolState): Promise<PoolView> {
     fs.mkdirSync(this.dir, { recursive: true });
     const fp = path.join(this.dir, POOL_FILE);
     if (!fs.existsSync(fp)) fs.writeFileSync(fp, "", { flag: "a" });
+    this._sampleProcesses(fs.readFileSync(fp, "utf8"), Date.now());
     const release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: POOL_LOCK_RETRIES });
     try {
       const raw = fs.readFileSync(fp, "utf8");
       const live = (e: PoolEntry): boolean =>
-        this._probes.isAlive(e.pid) || (e.pgid !== undefined && this._probes.isGroupAlive(e.pgid));
-      const view = schedule(
-        change(readState(raw, fp)),
-        this.config(),
-        this._load(),
-        live,
-        Date.now(),
+        this._probes.isAlive(e.pid) ||
+        (e.pgid !== undefined &&
+          (e.boot_ms === undefined || sameBoot(e.boot_ms)) &&
+          this._probes.isGroupAlive(e.pgid));
+      const now = Date.now();
+      const state = this._reapOrphans(change(readState(raw, fp)), now);
+      const view = this._mark(
+        schedule(state, this.config(), this._load(), live, now, this._runs(state.leases, now)),
+        now,
       );
-      const next = JSON.stringify({ leases: view.leases, waiting: view.waiting }, null, 2);
+      const next = JSON.stringify(
+        {
+          leases: view.leases,
+          waiting: view.waiting,
+          // only a waiter can starve: with none, the next one's wait counts from its arrival
+          ...(view.last_grant !== undefined && view.waiting.length > 0
+            ? { last_grant: view.last_grant }
+            : {}),
+        },
+        null,
+        2,
+      );
       // An unchanged pool is not rewritten: every rewrite wakes every waiter.
       if (next !== raw) {
         const tmp = `${fp}.${process.pid}.tmp`;
@@ -594,22 +933,33 @@ export class Pool {
   }
 }
 
-function holder(e: PoolEntry, budget: number): string {
-  return `${e.label || `pid ${e.pid}`} (${effectiveThreads(e, budget)})`;
+function holder(e: PoolEntry, view: PoolView): string {
+  const runs = overruns(e, view) ? `, runs ~${Math.round(view.runs[e.id])}` : "";
+  return `${e.label || `pid ${e.pid}`} (${effectiveThreads(e, view.budget)}${runs})`;
 }
 
 /** The line a waiter prints when it starts waiting and every progress interval. */
-export function describeWait(self: PoolEntry, view: PoolView): string {
+export function describeWait(self: PoolEntry, view: PoolView, now: number = Date.now()): string {
   const ahead = view.waiting.findIndex(e => e.id === self.id);
-  const holders = view.leases.map(e => holder(e, view.budget)).join(", ") || "nobody";
+  const holders = view.leases.map(e => holder(e, view)).join(", ") || "nobody";
+  const starved = isStarved(self, view, now)
+    ? ` — STARVED: queued ${formatDuration(now - self.arrived)} (starve_after ${formatDuration(view.starve_after * 1000)})`
+    : "";
   const lockHolders = (self.locks ?? []).flatMap(l => {
     const h = view.leases.find(e => e.locks?.includes(l));
     return h ? [`, lock ${l} held by ${h.label || `pid ${h.pid}`}`] : [];
   });
   return (
     `wf-run: waiting for ${describeRequest(self, view.budget)} — held ${view.held}/${view.budget} by ${holders}, ` +
-    `external ${view.external.toFixed(1)}${lockHolders.join("")}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}`
+    `external ${view.external.toFixed(1)}${lockHolders.join("")}${ahead > 0 ? `, ${ahead} ahead in queue` : ""}${starved}`
   );
+}
+
+/** What `formatEntry` flags: a lease's tree running well above its threads, a starved waiter. */
+export interface EntryMarks {
+  /** The busy cpus of an over-running lease's tree. */
+  readonly runs?: number;
+  readonly starved?: boolean;
 }
 
 /** One row per lease or waiter: who (project, session, step), what (threads, locks, priority), since when. */
@@ -618,6 +968,7 @@ export function formatEntry(
   budget: number,
   now: number = Date.now(),
   home: string = os.homedir(),
+  marks: EntryMarks = {},
 ): string {
   const since = e.started ?? e.arrived;
   let what: string;
@@ -629,26 +980,34 @@ export function formatEntry(
         ? ""
         : ` (asked ${e.min_threads !== undefined ? `${e.min_threads}-` : ""}${e.asked_threads})`;
     what = `holds ${[...(e.threads > 0 ? [`${e.threads} threads${asked}`] : []), ...(e.locks ?? []).map(l => `lock ${l}`)].join(" + ")}`;
+    if (marks.runs !== undefined) what += `, runs ~${Math.round(marks.runs)} (OVERRUN)`;
   }
   const project = e.project ?? e.cwd;
   const shown =
     project === home || project.startsWith(`${home}/`) ? `~${project.slice(home.length)}` : project;
   const clock = new Date(since).toTimeString().slice(0, 8);
   return (
-    `  pid ${e.pid}  ${what}  prio ${e.priority}${e.level ? ` ${e.level}` : ""}  since ${clock} (${Math.round((now - since) / 1000)}s)` +
+    `  pid ${e.pid}  ${what}  prio ${e.priority}${e.level ? ` ${e.level}` : ""}  since ${clock} (${Math.round((now - since) / 1000)}s${marks.starved ? ", STARVED" : ""})` +
     `  ${shown}${e.session_id ? `  session ${e.session_id}` : ""}${e.step ? `  step ${e.step}` : ""}  ${e.label || "-"}`
   );
 }
 
 /** `wf-run --status` and the `pool_status` tool. */
 export function formatStatus(view: PoolView, dir: string, now: number = Date.now()): string {
+  const starved = poolStarvation(view, now);
+  const home = os.homedir();
   return [
     `pool ${dir}: budget ${view.budget}, held ${view.held}, load ${view.load.toFixed(2)} ` +
       `(external ${view.external.toFixed(1)}, threshold ${view.load_threshold})`,
+    ...(starved ? [starved] : []),
     `locks held: ${view.leases.flatMap(e => e.locks ?? []).join(", ") || "none"}`,
     `leases (${view.leases.length}):`,
-    ...view.leases.map(e => formatEntry(e, view.budget, now)),
+    ...view.leases.map(e =>
+      formatEntry(e, view.budget, now, home, overruns(e, view) ? { runs: view.runs[e.id] } : {}),
+    ),
     `waiting (${view.waiting.length}, in admission order):`,
-    ...view.waiting.map(e => formatEntry(e, view.budget, now)),
+    ...view.waiting.map(e =>
+      formatEntry(e, view.budget, now, home, { starved: isStarved(e, view, now) }),
+    ),
   ].join("\n");
 }
