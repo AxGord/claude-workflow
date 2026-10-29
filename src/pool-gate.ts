@@ -13,11 +13,18 @@ const THREADS_VAR = "$WF_THREADS";
 export interface GateRule {
   /** Leading words of the command (`npx vitest run`), or `/regex/flags` over the command text. */
   readonly match: string;
+  /**
+   * Conditions on the segment's leading `NAME=value` assignments: `true` = set (any value),
+   * `false` = not set, `"/regex/flags"` = set and its value matches.
+   */
+  readonly env?: Readonly<Record<string, EnvCondition>>;
   readonly threads?: ThreadSpec;
   /** How the command learns its share: a flag template with `$WF_THREADS`, or `env:NAME`. */
   readonly pass?: string;
   readonly deny?: string;
 }
+
+export type EnvCondition = boolean | string;
 
 export interface ThreadSpec {
   readonly min: number;
@@ -90,11 +97,12 @@ export function parseConfig(text: string): GateConfig {
 
 function parseRule(r: unknown, at: string): GateRule {
   if (!isObject(r)) throw new Error(`${at}: expected an object`);
-  const { match, threads, pass, deny } = r;
+  const { match, env, threads, pass, deny } = r;
   if (typeof match !== "string" || match.trim() === "")
     throw new Error(`${at}: \`match\` must be a non-empty string`);
   if (regexOf(match) === null && match.startsWith("/"))
     throw new Error(`${at}: \`match\` "${match}" is not a valid /regex/`);
+  if (env !== undefined) parseEnv(env, at);
   if (deny !== undefined && (typeof deny !== "string" || deny === ""))
     throw new Error(`${at}: \`deny\` must be a reason`);
   if (pass !== undefined) {
@@ -106,10 +114,23 @@ function parseRule(r: unknown, at: string): GateRule {
     throw new Error(`${at}: exactly one of \`threads\` and \`deny\``);
   return {
     match,
+    ...(env === undefined ? {} : { env: env as Record<string, EnvCondition> }),
     ...(threads === undefined ? {} : { threads: parseThreads(threads, at) }),
     ...(pass === undefined ? {} : { pass }),
     ...(deny === undefined ? {} : { deny }),
   };
+}
+
+function parseEnv(env: unknown, at: string): void {
+  if (!isObject(env))
+    throw new Error(`${at}: \`env\` must be an object of NAME: true | false | "/regex/"`);
+  for (const [name, cond] of Object.entries(env)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name))
+      throw new Error(`${at}: \`env\` key "${name}" is not a variable name`);
+    if (typeof cond === "boolean") continue;
+    if (typeof cond !== "string" || regexOf(cond) === null)
+      throw new Error(`${at}: \`env.${name}\` must be true, false or a valid "/regex/"`);
+  }
 }
 
 function parseThreads(v: unknown, at: string): ThreadSpec {
@@ -321,16 +342,26 @@ const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
 const basename = (w: string): string => w.slice(w.lastIndexOf("/") + 1);
 
-/** The words naming the command and its arguments: leading assignments and keywords dropped. */
-function commandWords(seg: Segment): readonly Word[] {
+interface Command {
+  /** The words naming the command and its arguments: leading assignments and keywords dropped. */
+  readonly words: readonly Word[];
+  /** The `NAME=value` assignments among the dropped words (`A=1 env B=2 cmd` → A, B). */
+  readonly env: ReadonlyMap<string, string>;
+}
+
+function commandOf(seg: Segment): Command {
+  const env = new Map<string, string>();
   let k = 0;
-  while (
-    k < seg.words.length &&
-    (ASSIGNMENT.test(seg.words[k].value) || TRANSPARENT.has(seg.words[k].value))
-  )
-    k++;
+  for (; k < seg.words.length; k++) {
+    const v = seg.words[k].value;
+    if (ASSIGNMENT.test(v)) env.set(v.slice(0, v.indexOf("=")), v.slice(v.indexOf("=") + 1));
+    else if (!TRANSPARENT.has(v)) break;
+  }
   const words = seg.words.slice(k);
-  return words.length > 0 && words[words.length - 1].value === "}" ? words.slice(0, -1) : words;
+  return {
+    words: words.length > 0 && words[words.length - 1].value === "}" ? words.slice(0, -1) : words,
+    env,
+  };
 }
 
 /** The leading `NAME=value` assignments of a segment. */
@@ -344,6 +375,16 @@ function assignments(seg: Segment): Map<string, string> {
   return out;
 }
 
+function envHolds(rule: GateRule, env: ReadonlyMap<string, string>): boolean {
+  for (const [name, cond] of Object.entries(rule.env ?? {})) {
+    const value = env.get(name);
+    if (cond === true || cond === false) {
+      if ((value !== undefined) !== cond) return false;
+    } else if (value === undefined || !regexOf(cond)!.test(value)) return false;
+  }
+  return true;
+}
+
 interface Hit {
   readonly rule: GateRule;
   readonly words: readonly Word[];
@@ -351,8 +392,9 @@ interface Hit {
   readonly flagAt: number;
 }
 
-function matchRule(rule: GateRule, words: readonly Word[], command: string): Hit | undefined {
-  if (words.length === 0) return undefined;
+function matchRule(rule: GateRule, cmd: Command, command: string): Hit | undefined {
+  const { words } = cmd;
+  if (words.length === 0 || !envHolds(rule, cmd.env)) return undefined;
   const re = regexOf(rule.match);
   if (re) {
     const end = words[words.length - 1].end;
@@ -414,9 +456,11 @@ function combine(specs: readonly ThreadSpec[]): string {
 
 /**
  * What the hook does with `command`. Order: no config → pass; `WF_POOL_BYPASS=1` up front →
- * pass with a note; not plain enough to edit → pass; a `deny` rule hit → deny; no heavy hit,
- * a lease already held (`WF_THREADS`), a `wf-run` or a wrapper inside, a background `&` →
- * pass; else the whole command under one wf-run with the largest share any hit asks, its
+ * pass with a note; not plain enough to edit → pass; per segment, a `wf-run` or wrapper
+ * call is never matched against the rules (its command is under a lease already — no `deny`
+ * either), any other segment's first hit is taken and a `deny` hit refuses the whole command;
+ * no heavy hit, a lease already held (`WF_THREADS`), a `wf-run` or a wrapper inside, a
+ * background `&` → pass; else the whole command under one wf-run with the largest share any hit asks, its
  * body through `opts.rewrite` when given.
  */
 export function decide(
@@ -438,10 +482,13 @@ export function decide(
   const hits: Hit[] = [];
   let leased = false;
   for (const seg of segments) {
-    const words = commandWords(seg);
-    if (isWfRun(words) || isWrapper(words, config.wrappers)) leased = true;
+    const cmd = commandOf(seg);
+    if (isWfRun(cmd.words) || isWrapper(cmd.words, config.wrappers)) {
+      leased = true;
+      continue;
+    }
     let hit: Hit | undefined;
-    for (const rule of config.rules) if ((hit = matchRule(rule, words, command))) break;
+    for (const rule of config.rules) if ((hit = matchRule(rule, cmd, command))) break;
     if (hit?.rule.deny !== undefined)
       return { kind: "deny", reason: `pool-gate: ${hit.rule.deny}` };
     if (hit) hits.push(hit);

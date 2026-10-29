@@ -179,6 +179,65 @@ describe("pool-gate decide", () => {
   for (const [name, command, want] of table)
     it(name, () => expect(decide(command, config, opts)).toEqual(want));
 
+  describe("env conditions on leading assignments", () => {
+    const envConfig = parseConfig(
+      JSON.stringify({
+        rules: [
+          { match: "node bin/test.js", env: { APQ_TEST: "/^unit\\./" }, threads: 1 },
+          { match: "node bin/test.js", env: { APQ_TEST: true }, threads: 2 },
+          { match: "node bin/test.js", env: { APQ_TEST: false }, threads: 8 },
+          { match: "/^node bin/dev.js shard/", env: { FAST: false, CI: true }, threads: 4 },
+        ],
+      }),
+    );
+    const cases: [string, string, string | null][] = [
+      ["regex on the value", "APQ_TEST=unit.check. node bin/test.js", "1"],
+      ["set, regex fails → next rule (any value)", "APQ_TEST=corpus node bin/test.js", "2"],
+      ["an empty value is set", "APQ_TEST= node bin/test.js", "2"],
+      ["not set → the `false` rule", "node bin/test.js", "8"],
+      ["assignments after `env` count", "env APQ_TEST=x node bin/test.js", "2"],
+      ["quotes are removed before the regex", "APQ_TEST='unit.a' node bin/test.js", "1"],
+      ["another segment's assignment does not count", "APQ_TEST=x true && node bin/test.js", "8"],
+      ["all conditions must hold", "CI=1 node bin/dev.js shard -n 4", "4"],
+      ["a `false` condition fails", "CI=1 FAST=1 node bin/dev.js shard -n 4", null],
+      ["a `true` condition fails", "node bin/dev.js shard -n 4", null],
+    ];
+    for (const [name, command, threads] of cases)
+      it(name, () =>
+        expect(decide(command, envConfig, opts)).toEqual(
+          threads === null
+            ? { kind: "pass" }
+            : { kind: "wrap", command: wrapped(threads, command) },
+        ),
+      );
+  });
+
+  describe("deny vs. a command already under a lease", () => {
+    const denyConfig = parseConfig(
+      JSON.stringify({
+        rules: [
+          { match: "/vitest(?! run)/", deny: "watch mode" },
+          { match: "make", threads: 2 },
+        ],
+        wrappers: ["golf-run.sh"],
+      }),
+    );
+    const deny = { kind: "deny", reason: "pool-gate: watch mode" };
+    const cases: [string, string, object][] = [
+      ["a bare hit is refused", "npx vitest", deny],
+      ["inside wf-run: not matched, deny included", "wf-run --threads 2 -- npx vitest", PASS],
+      [
+        "the gate's own wrapped form is left alone",
+        wrapped("2", "npx vitest --ui", "npx vitest --ui"),
+        PASS,
+      ],
+      ["a wrapper's arguments are not matched", "sh golf-run.sh npx vitest", PASS],
+      ["another segment beside a wf-run is still refused", "wf-run -- make && npx vitest", deny],
+    ];
+    for (const [name, command, want] of cases)
+      it(name, () => expect(decide(command, denyConfig, opts)).toEqual(want));
+  });
+
   it("no config → passes silently", () => {
     expect(decide("haxe b.hxml", undefined, opts)).toEqual({ kind: "pass" });
   });
@@ -272,6 +331,13 @@ describe("pool-gate parseConfig", () => {
     ["rules[0]: `threads` min exceeds max", { rules: [{ match: "x", threads: "8-2" }] }],
     ["rules[0]: `pass` is `env:NAME`", { rules: [{ match: "x", threads: 1, pass: "-j4" }] }],
     ["is not a valid /regex/", { rules: [{ match: "/(/", threads: 1 }] }],
+    ["rules[0]: `env` must be an object", { rules: [{ match: "x", threads: 1, env: ["A"] }] }],
+    ['rules[0]: `env` key "1A"', { rules: [{ match: "x", threads: 1, env: { "1A": true } }] }],
+    [
+      "rules[0]: `env.A` must be true, false or a valid",
+      { rules: [{ match: "x", threads: 1, env: { A: "plain" } }] },
+    ],
+    ["`env.A` must be", { rules: [{ match: "x", threads: 1, env: { A: "/(/" } }] }],
     ["`wrappers` must be a list", { rules: [], wrappers: "golf-run.sh" }],
   ];
   for (const [msg, cfg] of bad)
