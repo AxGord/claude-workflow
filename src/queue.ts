@@ -1,7 +1,8 @@
 // A task queue in a Markdown file, shared by every project: the header (up to `## Tasks`) holds
 // `batch_size: N` (the window; `0` = paused, a `# comment` on the same line says why) and other
 // `key: value` lines; each task is `- [m] ID | key: value | … | free text |`. The file is the only
-// truth: a pick re-reads it under a lock beside it and changes nothing but `[m]` marks.
+// truth: a pick re-reads it under a lock beside it and changes nothing but `[m]` marks; the line
+// and header writes (`addQueueLine`, `editQueueLine`, `setQueueWindow`) take the same lock.
 //
 // Admission (`planPick`, pure): free = batch_size minus the `[>]` lines; a `[ ]` line in file
 // order is admitted when its model is not `—` (parent-run), no `⏸` stands in its metadata or its
@@ -398,27 +399,302 @@ export interface MarkResult {
   readonly to: string;
 }
 
-/** One line's mark under the lock, only from the mark `to` expects; `note` lands right after the id. */
+// A note is one free-text field: a `|`, a leading `key:` or a `⏸` would rewrite the line's metadata.
+function checkNote(note: string | undefined): void {
+  if (note !== undefined && /[\n\r|⏸]|^\s*[a-z]+:/.test(note))
+    throw new QueueError("a note is one line without `|`, `⏸` or a leading `key:`");
+}
+
+/**
+ * One line's mark under the lock, only from the mark `to` expects; `note` lands right after the id.
+ * `retry` (with `running` only) restarts a failed line: `[!]`→`[>]`.
+ */
 export async function markQueue(
   file: string,
   id: string,
   to: MarkTarget,
   note?: string,
+  opts: { readonly retry?: boolean } = {},
 ): Promise<MarkResult> {
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
-  // A note is one free-text field: a `|`, a leading `key:` or a `⏸` would rewrite the line's metadata.
-  if (note !== undefined && /[\n\r|⏸]|^\s*[a-z]+:/.test(note))
-    throw new QueueError("a note is one line without `|`, `⏸` or a leading `key:`");
-  const { from, to: mark } = MARK_TARGETS[to];
+  checkNote(note);
+  if (opts.retry === true && to !== "running")
+    throw new QueueError("retry restarts a failed line: it goes with `running` only");
+  const { from, to: mark } = opts.retry === true ? { from: "!", to: ">" } : MARK_TARGETS[to];
   return withQueueLock(file, () =>
     replanning(file, () => {
       const queue = readQueue(file);
-      const line = queue.lines.find(l => l.id === id);
-      if (!line) throw new QueueError(`no line ${id} in ${queue.file}`);
-      if (line.mark !== from) throw new QueueError(`${id} is [${line.mark}], expected [${from}]`);
+      const line = lineOf(queue, id);
+      if (line.mark !== from) {
+        const hint =
+          line.mark === "!" && to === "running" ? " (retry: true restarts a failed line)" : "";
+        throw new QueueError(`${id} is [${line.mark}], expected [${from}]${hint}`);
+      }
       const rows = [...queue.rows];
       setMark(rows, line, mark, note?.trim() || undefined);
       return writeRows(queue, rows) ? { id, from, to: mark } : false;
+    }),
+  );
+}
+
+function lineOf(queue: Queue, id: string): QueueLine {
+  const line = queue.lines.find(l => l.id === id);
+  if (!line) throw new QueueError(`no line ${id} in ${queue.file}`);
+  return line;
+}
+
+/** A task row cut into its fields so that a rewrite keeps every untouched byte. */
+interface RowFields {
+  readonly mark: string;
+  readonly id: string;
+  /** The whitespace after the first ` |`. */
+  readonly lead: string;
+  readonly fields: string[];
+  /** The line's closing ` |` (with what follows it), or "". */
+  readonly closer: string;
+}
+
+function splitRow(row: string): RowFields {
+  const m = LINE_RE.exec(row);
+  if (!m) throw new QueueError(`not a task line: "${row}"`);
+  const body = m[3];
+  if (body === undefined || body.trim() === "")
+    return { mark: m[1], id: m[2], lead: " ", fields: [], closer: body === undefined ? "" : " |" };
+  const lead = /^\s*/.exec(body)?.[0] ?? "";
+  const fields = body.slice(lead.length).split(" | ");
+  const last = fields[fields.length - 1];
+  const close = /\s*\|\s*$/.exec(last);
+  let closer = "";
+  if (close) {
+    closer = close[0];
+    fields[fields.length - 1] = last.slice(0, close.index);
+    if (fields[fields.length - 1].trim() === "") fields.pop();
+  }
+  return { mark: m[1], id: m[2], lead, fields, closer };
+}
+
+function joinRow(r: RowFields): string {
+  const head = `- [${r.mark}] ${r.id}`;
+  return r.fields.length === 0 ? head : `${head} |${r.lead}${r.fields.join(" | ")}${r.closer}`;
+}
+
+/** The field's metadata key (`touches: a` → `touches`), the same test parseLine makes. */
+function metaKey(field: string): string | null {
+  const km = /^([a-z]+):/.exec(field.trim());
+  return km && META_KEYS.has(km[1]) ? km[1] : null;
+}
+
+/** The `after:` ids that pick would wait on as unknown (`X?`). */
+function unknownAfterIds(after: string, byId: ReadonlyMap<string, QueueLine>): string[] {
+  const unknown: string[] = [];
+  for (const tok of stripParens(after).match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g) ?? [])
+    if (!byId.has(tok) && /^[A-Z]/.test(tok) && /\d/.test(tok)) unknown.push(tok);
+  return unknown;
+}
+
+/** A dependency path from `id` back to itself through `after:` ids, or null. */
+function afterCycle(queue: Queue, id: string): string[] | null {
+  const byId = new Map(queue.lines.map(l => [l.id, l]));
+  const deps = (l: QueueLine): string[] =>
+    (stripParens(l.meta.after ?? "").match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g) ?? []).filter(
+      t => byId.has(t),
+    );
+  const seen = new Set<string>();
+  const walk = (cur: string, trail: string[]): string[] | null => {
+    for (const d of deps(byId.get(cur) as QueueLine)) {
+      if (d === id) return [...trail, d];
+      if (seen.has(d)) continue;
+      seen.add(d);
+      const found = walk(d, [...trail, d]);
+      if (found) return found;
+    }
+    return null;
+  };
+  return walk(id, [id]);
+}
+
+/**
+ * Checks the fields `keys` of `line` (every metadata field when `keys` is undefined) as a pick
+ * would read them in `queue` (which holds the line): `after:` names only lines of the queue and
+ * closes no cycle, `workflow:` is one word, `repo:` resolves.
+ */
+function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>): void {
+  const has = (k: string): boolean =>
+    (keys === undefined || keys.has(k)) && line.meta[k] !== undefined;
+  if (has("after")) {
+    const byId = new Map(queue.lines.map(l => [l.id, l]));
+    const unknown = unknownAfterIds(line.meta.after, byId);
+    if (unknown.length > 0)
+      throw new QueueError(`${line.id}: after: ${unknown.join(", ")} — no such line in the queue`);
+    const cycle = afterCycle(queue, line.id);
+    if (cycle) throw new QueueError(`${line.id}: after: closes a cycle ${cycle.join(" → ")}`);
+  }
+  if (has("workflow") && workflowOf(line) === null)
+    throw new QueueError(`${line.id}: workflow: "${line.meta.workflow}" is not a workflow name`);
+  if (has("repo") && resolveRepo(queue, line) === null)
+    throw new QueueError(`${line.id}: repo: "${line.meta.repo}" resolves to no directory`);
+}
+
+/** The rows written, read back by the parser a pick uses; the line `id` as it now reads. */
+function reparse(
+  queue: Queue,
+  rows: readonly string[],
+  id: string,
+): { queue: Queue; line: QueueLine } {
+  const next = parseQueue(rows.join("\n"), queue.file);
+  const lines = next.lines.filter(l => l.id === id);
+  if (lines.length !== 1)
+    throw new QueueError(`${id}: the written line does not read back as one line`);
+  return { queue: next, line: lines[0] };
+}
+
+export interface AddResult {
+  readonly id: string;
+  /** 1-based line number of the new line in the file. */
+  readonly lineNo: number;
+}
+
+/**
+ * A new `[ ]` line under the lock: after the line `after`, before the line `before`, or after the
+ * last task line. `line` is `- [ ] ID | key: value | … | text |` or the same without `- [ ] `. The
+ * line must read as pick reads it: a unique id, one row, each `key:` field a known key at most
+ * once, `after:` naming only lines of the queue (and no cycle), a one-word `workflow:`, a `repo:`
+ * that resolves.
+ */
+export async function addQueueLine(
+  file: string,
+  line: string,
+  pos: { readonly after?: string; readonly before?: string } = {},
+): Promise<AddResult> {
+  if (/[\n\r]/.test(line)) throw new QueueError("a queue line is one row");
+  const row = line.trim().startsWith("- [") ? line.trim() : `- [ ] ${line.trim()}`;
+  const r = splitRow(row);
+  if (r.mark !== " ") throw new QueueError(`a new line is [ ], not [${r.mark}]`);
+  if (!ID_RE.test(r.id)) throw new QueueError(`refused task id "${r.id}"`);
+  const seenKeys = new Set<string>();
+  for (const f of r.fields) {
+    const k = metaKey(f);
+    if (k !== null) {
+      if (seenKeys.has(k))
+        throw new QueueError(`${r.id}: ${k}: given twice (a pick reads the first)`);
+      seenKeys.add(k);
+      continue;
+    }
+    const km = /^([a-z_]+):(?!\/)/.exec(f.trim());
+    if (km && f.length < PROSE_MIN)
+      throw new QueueError(
+        `${r.id}: unknown field "${km[1]}:" (keys: ${[...META_KEYS].join(", ")}) — a pick would read it as text`,
+      );
+  }
+  if (pos.after !== undefined && pos.before !== undefined)
+    throw new QueueError("after_id and before_id exclude each other");
+  return withQueueLock(file, () =>
+    replanning(file, () => {
+      const queue = readQueue(file);
+      if (queue.lines.some(l => l.id === r.id))
+        throw new QueueError(`${r.id} is already in ${queue.file}`);
+      let at: number;
+      if (pos.after !== undefined) at = lineOf(queue, pos.after).index + 1;
+      else if (pos.before !== undefined) at = lineOf(queue, pos.before).index;
+      else {
+        const last = queue.lines[queue.lines.length - 1];
+        at = last ? last.index + 1 : queue.rows.findIndex(x => x.trim() === "## Tasks") + 1;
+      }
+      const rows = [...queue.rows];
+      rows.splice(at, 0, joinRow(r));
+      const next = reparse(queue, rows, r.id);
+      checkFields(next.queue, next.line);
+      return writeRows(queue, rows) ? { id: r.id, lineNo: at + 1 } : false;
+    }),
+  );
+}
+
+export interface EditResult {
+  readonly id: string;
+  /** The line as written. */
+  readonly line: string;
+}
+
+/**
+ * Sets metadata fields of one line under the lock (`""` removes the field) and/or appends a note
+ * as its last field; the mark is `queue_mark`'s. A set field keeps its place (a duplicate of its
+ * key goes); a new one goes after the line's last metadata field. The fields set must read as a
+ * pick reads them (see addQueueLine).
+ */
+export async function editQueueLine(
+  file: string,
+  id: string,
+  set: Readonly<Record<string, string>>,
+  appendNote?: string,
+): Promise<EditResult> {
+  if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
+  for (const [k, v] of Object.entries(set)) {
+    if (!META_KEYS.has(k))
+      throw new QueueError(`unknown field "${k}" (keys: ${[...META_KEYS].join(", ")})`);
+    if (/[\n\r|]/.test(v)) throw new QueueError(`${k}: a value is one line without \`|\``);
+  }
+  checkNote(appendNote);
+  const note = appendNote?.trim() || undefined;
+  if (Object.keys(set).length === 0 && note === undefined)
+    throw new QueueError("nothing to edit: give fields to set or a note");
+  return withQueueLock(file, () =>
+    replanning(file, () => {
+      const queue = readQueue(file);
+      const r = splitRow(queue.rows[lineOf(queue, id).index]);
+      for (const [k, raw] of Object.entries(set)) {
+        const v = raw.trim();
+        const at = r.fields.findIndex(f => metaKey(f) === k);
+        const kept = r.fields.filter((f, i) => i === at || metaKey(f) !== k);
+        r.fields.splice(0, r.fields.length, ...kept);
+        if (at >= 0) {
+          const i = r.fields.findIndex(f => metaKey(f) === k);
+          if (v === "") r.fields.splice(i, 1);
+          else r.fields[i] = `${k}: ${v}`;
+        } else if (v !== "") {
+          let last = -1;
+          r.fields.forEach((f, i) => {
+            if (metaKey(f) !== null) last = i;
+          });
+          r.fields.splice(last + 1, 0, `${k}: ${v}`);
+        }
+      }
+      if (note !== undefined) r.fields.push(note);
+      const rows = [...queue.rows];
+      const written = joinRow(r);
+      rows[lineOf(queue, id).index] = written;
+      const next = reparse(queue, rows, id);
+      checkFields(next.queue, next.line, new Set(Object.keys(set)));
+      return writeRows(queue, rows) ? { id, line: written } : false;
+    }),
+  );
+}
+
+export interface HeaderResult {
+  readonly from: number;
+  readonly to: number;
+  readonly reason: string;
+}
+
+/** The header's `batch_size: N  # reason` under the lock: the window, `0` = the pause. */
+export async function setQueueWindow(
+  file: string,
+  batchSize: number,
+  reason: string,
+): Promise<HeaderResult> {
+  if (!Number.isInteger(batchSize) || batchSize < 0)
+    throw new QueueError(`batch_size is a whole number ≥ 0, not ${batchSize}`);
+  const why = reason.trim();
+  if (why === "" || /[\n\r]/.test(why)) throw new QueueError("the reason is one non-empty line");
+  return withQueueLock(file, () =>
+    replanning(file, () => {
+      const queue = readQueue(file);
+      const at = queue.rows.findIndex(x => HEADER_RE.exec(x)?.[1] === "batch_size");
+      const rows = [...queue.rows];
+      rows[at] = `batch_size: ${batchSize}  # ${why}`;
+      const next = parseQueue(rows.join("\n"), queue.file);
+      if (next.batchSize !== batchSize)
+        throw new QueueError("the batch_size line does not read back");
+      return writeRows(queue, rows) ? { from: queue.batchSize, to: batchSize, reason: why } : false;
     }),
   );
 }

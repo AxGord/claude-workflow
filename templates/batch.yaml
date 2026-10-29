@@ -74,7 +74,11 @@ states:
 
       Marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed. Only the
       engine changes marks: `queue_next` / `queue_mark` (exec: `wf-queue`),
-      under the queue's lock. The queue FILE is the source of truth — it
+      under the queue's lock. Once the run is live, change the queue through
+      the same lock: `queue_add` (new line, checked as a pick reads it),
+      `queue_edit` (a line's fields, a note), `queue_header` (window / pause
+      with its reason), `queue_mark` with `retry: true` (a `[!]` line again)
+      — a script or sed edit can drop a mark an exec writes at that moment. The queue FILE is the source of truth — it
       survives context compression and session restarts.
     transitions:
       ready: pick
@@ -109,8 +113,8 @@ states:
     prompt: |-
       The queue is paused (`batch_size: 0`) and none of its tasks runs:
       {{stderr}}
-      Tell the user the pause and its reason (the comment above). When they lift it (`batch_size: N` in
-      {{context.queue_file}}) → `retry`; to end the run now → `report`.
+      Tell the user the pause and its reason (the comment above). When they lift it (`queue_header({file:
+      "{{context.queue_file}}", batch_size: N, reason})`, or their own edit) → `retry`; to end the run now → `report`.
     transitions:
       retry: pick
       report: report

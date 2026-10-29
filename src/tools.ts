@@ -19,9 +19,12 @@ import { withProgress, type ProgressSink } from "./progress.js";
 import { RESUME_TOOL, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
 import {
   MARK_TARGETS,
+  addQueueLine,
+  editQueueLine,
   formatPickSummary,
   markQueue,
   pickQueue,
+  setQueueWindow,
   type MarkTarget,
   type PickResult,
 } from "./queue.js";
@@ -1053,8 +1056,9 @@ export function registerTools(
     "queue_mark",
     {
       description:
-        "Change one line's mark in a task queue file under its lock: running `[ ]`→`[>]`, done `[>]`→`[x]`, " +
-        "failed `[>]`→`[!]`, released `[>]`→`[ ]` (nothing of the task was made). Refuses any other current mark. " +
+        "Change one line's mark in a task queue file under its lock: running `[ ]`→`[>]` (with `retry: true`: " +
+        "`[!]`→`[>]`, a failed line run again), done `[>]`→`[x]`, failed `[>]`→`[!]`, released `[>]`→`[ ]` " +
+        "(nothing of the task was made). Refuses any other current mark. " +
         "`note` is written right after the id (`- [x] ID | <note> | …`).",
       inputSchema: z
         .object({
@@ -1064,19 +1068,120 @@ export function registerTools(
             .enum(Object.keys(MARK_TARGETS) as [MarkTarget, ...MarkTarget[]])
             .describe("running | done | failed | released"),
           note: z.string().optional().describe("One line written after the id"),
+          retry: z
+            .boolean()
+            .optional()
+            .describe("With `to: running`: restart a failed `[!]` line (`[!]`→`[>]`)"),
         })
         .strict(),
     },
     async args => {
       try {
-        const r = await markQueue(args.file, args.id, args.to, args.note);
+        const r = await markQueue(args.file, args.id, args.to, args.note, {
+          retry: args.retry === true,
+        });
         return { content: [{ type: "text", text: `${r.id}: [${r.from}] → [${r.to}]` }] };
       } catch (err) {
-        return {
-          content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],
-          isError: true,
-        };
+        return queueError(err);
       }
     },
   );
+
+  // 18. queue_add
+  server.registerTool(
+    "queue_add",
+    {
+      description:
+        "Add a pending line to a task queue file under its lock (the lock queue_next / queue_mark take, so no mark " +
+        "is lost to a concurrent write): `line` is `- [ ] ID | key: value | … | text |` (or the same without `- [ ] `). " +
+        "Refused unless it reads as a pick reads it: a new id, one row, each `key:` field a known key " +
+        "(model, effort, after, touches, owner, repo, workflow) at most once, every id in `after:` a line of the queue " +
+        "(no cycle), a one-word `workflow:`, a `repo:` that resolves. Goes after `after_id`, before `before_id`, " +
+        "else after the last task line.",
+      inputSchema: z
+        .object({
+          file: z.string().min(1).describe("The queue file"),
+          line: z.string().min(1).describe("The new line"),
+          after_id: z.string().min(1).optional().describe("Insert right after this line"),
+          before_id: z.string().min(1).optional().describe("Insert right before this line"),
+        })
+        .strict(),
+    },
+    async args => {
+      try {
+        const r = await addQueueLine(args.file, args.line, {
+          after: args.after_id,
+          before: args.before_id,
+        });
+        return { content: [{ type: "text", text: `${r.id}: added at line ${r.lineNo}` }] };
+      } catch (err) {
+        return queueError(err);
+      }
+    },
+  );
+
+  // 19. queue_edit
+  server.registerTool(
+    "queue_edit",
+    {
+      description:
+        "Change one queue line's metadata fields under the queue's lock: `set: { field: value }` " +
+        '(model, effort, after, touches, owner, repo, workflow; `""` removes the field) and/or `append_note` ' +
+        "(one free-text field added at the end; no `|`, `⏸` or leading `key:`). The mark is queue_mark's. " +
+        "A set field keeps its place; values are checked as queue_add checks them. Returns the line as written.",
+      inputSchema: z
+        .object({
+          file: z.string().min(1).describe("The queue file"),
+          id: z.string().min(1).describe("The task id"),
+          set: z
+            .record(z.string())
+            .optional()
+            .describe("Fields to set; an empty value removes one"),
+          append_note: z.string().optional().describe("A note appended as the line's last field"),
+        })
+        .strict(),
+    },
+    async args => {
+      try {
+        const r = await editQueueLine(args.file, args.id, args.set ?? {}, args.append_note);
+        return { content: [{ type: "text", text: r.line }] };
+      } catch (err) {
+        return queueError(err);
+      }
+    },
+  );
+
+  // 20. queue_header
+  server.registerTool(
+    "queue_header",
+    {
+      description:
+        "Set a task queue's window under its lock: the header line becomes `batch_size: N  # <reason>`. " +
+        "`0` is the pause (running tasks finish, nothing new is admitted). The reason is required.",
+      inputSchema: z
+        .object({
+          file: z.string().min(1).describe("The queue file"),
+          batch_size: z.number().int().min(0).describe("The window; 0 = paused"),
+          reason: z.string().min(1).describe("Why — written as the line's comment"),
+        })
+        .strict(),
+    },
+    async args => {
+      try {
+        const r = await setQueueWindow(args.file, args.batch_size, args.reason);
+        return {
+          content: [{ type: "text", text: `batch_size ${r.from} → ${r.to}  # ${r.reason}` }],
+        };
+      } catch (err) {
+        return queueError(err);
+      }
+    },
+  );
+}
+
+function queueError(err: unknown): { content: { type: "text"; text: string }[]; isError: true } {
+  return {
+    content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],
+    isError: true,
+  };
 }

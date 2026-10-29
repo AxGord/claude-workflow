@@ -431,7 +431,7 @@ states with contract names; bundled, each keeps the old behaviour (the agent doe
 `coding` and `bug-fix` verify through `testing`, so one heir of `testing` serves both. Give every
 heavy step `on_timeout:` and a state of its own for it.
 
-### Task queue — `batch`, `queue_next`, `wf-queue`
+### Task queue — `batch`, `queue_next`, `queue_add`, `wf-queue`
 
 A long run of tasks is a queue FILE the engine admits from — one format for every project:
 
@@ -473,14 +473,30 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the comm
 - `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, workflow, text);
   `explain` adds why each other pending line waits (`window full` lines fold into one summary line;
   `explain: "all"` lists every line).
-- `queue_mark({ file, id, to, note? })` — `running` `[ ]`→`[>]`, `done` `[>]`→`[x]`, `failed`
+- `queue_mark({ file, id, to, note?, retry? })` — `running` `[ ]`→`[>]` (with `retry: true`
+  `[!]`→`[>]`: a failed line runs again), `done` `[>]`→`[x]`, `failed`
   `[>]`→`[!]`, `released` `[>]`→`[ ]`; any other current mark is refused; `note` is written after the id
   (one line without `|`, `⏸` or a leading `key:`). A write lands only while the file still reads as
   the pick read it — a hand edit in between makes it plan again, never lost.
+- `queue_add({ file, line, after_id? | before_id? })` — a new `[ ]` line (`- [ ] ID | key: value | … |`,
+  the `- [ ] ` may be left out) after / before a line, else after the last task line. Refused unless a
+  pick reads it as meant: a new id, one row, each `key:` field a known key at most once (a typo like
+  `toches:` would be read as text), every id in `after:` a line of the queue and no cycle (prose
+  beside the ids stays a manual condition), a one-word `workflow:`, a `repo:` that resolves.
+- `queue_edit({ file, id, set?: { field: value }, append_note? })` — metadata fields of one line
+  (`""` removes one; a set field keeps its place), and/or a note appended as its last field; checked
+  as `queue_add` checks them; the mark stays `queue_mark`'s.
+- `queue_header({ file, batch_size, reason })` — the window: `batch_size: N  # <reason>` (`0` pauses;
+  the reason is required).
+- All of them write under the same lock and re-plan on a changed file, so an edit never drops a mark
+  an exec made at the same moment — add and change lines through them, not by editing the file with a
+  script while a run is live.
 - From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" <file> [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
   bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow` (`-` = no `workflow:`) per admitted line and the summary on stderr; exit 0
   admitted, 10 none but `[>]` lines run, 11 none and nothing runs (done), 12 none, nothing runs and
-  `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]`, `--header <key>`.
+  `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]` (`--running <ID>
+  --retry`: `[!]`→`[>]`), `--header <key>`, `--add <LINE> [--after ID|--before ID]`, `--edit <ID>
+  [--set key=value]… [--append-note T]` (`key=` removes), `--batch-size <N> --reason T`.
 
 The bundled `batch` drives a queue: `plan_queue` (write or resume it; context `queue_file`,
 `task_workflow`) → `pick` (exec, routes on the exit code: `dispatch` / `collect` / `cross_check` /
@@ -630,7 +646,10 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
 | `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) | `session_id`, `agent_id` |
 | `queue_next` | Admit the next lines of a task queue file and mark them `[>]` (§ Task queue) | `file`, `dry_run`, `explain` |
-| `queue_mark` | Move one queue line's mark (`running` / `done` / `failed` / `released`) | `file`, `id`, `to`, `note` |
+| `queue_mark` | Move one queue line's mark (`running` / `done` / `failed` / `released`; `retry` restarts a `[!]` line) | `file`, `id`, `to`, `note`, `retry` |
+| `queue_add` | Add a pending line to a queue, checked as a pick reads it | `file`, `line`, `after_id`, `before_id` |
+| `queue_edit` | Set / remove a queue line's metadata fields, append a note | `file`, `id`, `set`, `append_note` |
+| `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason | `file`, `batch_size`, `reason` |
 
 ## Dashboard
 

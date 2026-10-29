@@ -222,6 +222,9 @@ describe("registerTools annotations", () => {
       "set_priority",
       "queue_next",
       "queue_mark",
+      "queue_add",
+      "queue_edit",
+      "queue_header",
     ];
     expect([...annotations.keys()].sort()).toEqual([...readOnly, ...confirmed].sort());
     for (const name of readOnly) expect(annotations.get(name)).toEqual({ readOnlyHint: true });
