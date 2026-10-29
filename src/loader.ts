@@ -75,6 +75,8 @@ export class Loader {
   private readonly _globalDir: string;
   private readonly _projectDir: string | null;
   private _workflows: Map<string, WorkflowDefinition> = new Map();
+  /** The names whose loaded definition is the project tier's own file. */
+  private _projectNames: ReadonlySet<string> = new Set();
   private _globalWatcher: fs.FSWatcher | null = null;
   private _projectWatcher: fs.FSWatcher | null = null;
 
@@ -97,6 +99,33 @@ export class Loader {
 
   public names(): string[] {
     return Array.from(this._workflows.keys());
+  }
+
+  /** The project tier's directory (`<project>/.claude/workflows`), null when there is none. */
+  public get projectDir(): string | null {
+    return this._projectDir;
+  }
+
+  public get globalDir(): string {
+    return this._globalDir;
+  }
+
+  /** The workflows the project tier defines itself (not those it only inherits from below). */
+  public projectWorkflows(): Map<string, WorkflowDefinition> {
+    const own = new Map<string, WorkflowDefinition>();
+    for (const name of this._projectNames) {
+      const wf = this._workflows.get(name);
+      if (wf) own.set(name, wf);
+    }
+    return own;
+  }
+
+  /**
+   * The same bundled and global tiers under another project's existing workflow directory: what a
+   * session started in that project sees. Loaded once, not watched.
+   */
+  public forProject(projectDir: string): Loader {
+    return new Loader(this._bundledDir, this._globalDir, projectDir);
   }
 
   /** Directory where create saves new YAML files */
@@ -179,6 +208,8 @@ export class Loader {
     if (this._projectDir) tiers.push(this._loadDir(this._projectDir));
 
     const next = new Map<string, WorkflowDefinition>();
+    const own = new Set<string>();
+    const projectTier = this._projectDir ? tiers.length - 1 : -1;
     const names = new Set(tiers.flatMap(t => [...t.keys()]));
     for (const name of names) {
       // A file that fails falls back to the same name one tier down, like a
@@ -196,6 +227,7 @@ export class Loader {
           const errors = this._validate(merged);
           if (errors.length === 0) {
             next.set(name, merged);
+            if (found.tier === projectTier) own.add(name);
             break;
           }
           console.error(`Validation errors in ${found.entry.file}: ${errors.join("; ")}`);
@@ -205,6 +237,7 @@ export class Loader {
       }
     }
     this._workflows = next;
+    this._projectNames = own;
   }
 
   /** The highest tier at or below `maxTier` that defines `name`. */

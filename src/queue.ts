@@ -7,7 +7,9 @@
 // order is admitted when its model is not `—` (parent-run), no `⏸` stands in its metadata or its
 // `after:`, every `after:` id is `[x]`, its `repo:` resolves, and it overlaps neither a `[>]` line
 // nor a line admitted earlier in the same pick (`touches:` path prefixes on a `/` boundary,
-// `owner:` equal or a `.`-prefix; a line without `touches:` overlaps everything).
+// `owner:` equal or a `.`-prefix; a line without `touches:` overlaps everything). A `workflow:`
+// field names the line's own task workflow (the dispatcher's default otherwise); a name that is not
+// one word keeps the line out.
 import fs from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
@@ -31,7 +33,7 @@ export const MARK_TARGETS = {
 export type MarkTarget = keyof typeof MARK_TARGETS;
 
 const LINE_RE = /^- \[(.)\] (\S+)(?: \|(.*))?$/;
-const META_KEYS = new Set(["model", "effort", "after", "touches", "owner", "repo"]);
+const META_KEYS = new Set(["model", "effort", "after", "touches", "owner", "repo", "workflow"]);
 // A field this long is the line's prose; `⏸` inside prose is a mention, not a pause.
 const PROSE_MIN = 160;
 const ID_RE = /^[A-Za-z0-9._-]+$/;
@@ -73,6 +75,8 @@ export interface AdmittedTask {
   readonly effort: string;
   /** Absolute path of the repo the task works in. */
   readonly repo: string;
+  /** The line's `workflow:` — its task workflow; absent = the dispatcher's own (`task_workflow`). */
+  readonly workflow?: string;
   readonly text: string;
 }
 
@@ -159,6 +163,13 @@ function touchesOf(line: QueueLine): string[] | null {
     .map(p => p.trim().split(/\s+/)[0] ?? "")
     .map(p => p.replace(/^\.\//, "").replace(/\/+$/, ""))
     .filter(p => p !== "" && p !== "—" && p !== "-");
+}
+
+/** The line's `workflow:`: undefined when absent or `—`; null when it is not a workflow name. */
+function workflowOf(line: QueueLine): string | undefined | null {
+  const v = line.meta.workflow?.trim();
+  if (!v || v === "-" || v === "—") return undefined;
+  return ID_RE.test(v) ? v : null;
 }
 
 function ownerOf(line: QueueLine): string | null {
@@ -250,6 +261,8 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
       else {
         repo = resolveRepo(queue, l);
         if (repo === null) why = `repo: "${l.meta.repo}" resolves to no directory`;
+        else if (workflowOf(l) === null)
+          why = `workflow: "${l.meta.workflow}" is not a workflow name`;
       }
       if (why === null) {
         for (const t of taken) {
@@ -262,11 +275,13 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
       }
     }
     if (why === null && repo !== null) {
+      const workflow = workflowOf(l) ?? undefined;
       admitted.push({
         id: l.id,
         model: l.meta.model ?? "opus",
         effort: l.meta.effort ?? "-",
         repo,
+        ...(workflow ? { workflow } : {}),
         text: l.text,
       });
       taken.push(l);
@@ -457,7 +472,7 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
   return out.join("\n");
 }
 
-/** `ID\tmodel\teffort\trepo` — one admitted line as the exec form prints it. */
+/** `ID\tmodel\teffort\trepo\tworkflow` — one admitted line as the exec form prints it (`-` = no `workflow:`). */
 export function formatTask(a: AdmittedTask): string {
-  return [a.id, a.model, a.effort, a.repo].join("\t");
+  return [a.id, a.model, a.effort, a.repo, a.workflow ?? "-"].join("\t");
 }

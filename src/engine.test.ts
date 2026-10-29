@@ -1214,3 +1214,110 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
     expect((await engine.transition(sessionId, "rerun")).prompt).toBe("now 0: prev=3\n");
   });
 });
+
+describe("Engine: a session started in another project", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const d of roots.splice(0)) cleanupDir(d);
+  });
+  function tmpDir(): string {
+    const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wf-proj-")));
+    roots.push(d);
+    return d;
+  }
+  function writeWorkflows(dir: string, workflows: Record<string, object>): void {
+    const src = createFixtureDir(workflows);
+    roots.push(src);
+    fs.cpSync(src, dir, { recursive: true });
+  }
+  /** A git project (a `.git` dir) under a fresh temp root, with `workflows` in its `.claude/workflows/`. */
+  function project(name: string, workflows?: Record<string, object>): string {
+    const proj = path.join(tmpDir(), name);
+    fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
+    if (workflows) writeWorkflows(path.join(proj, ".claude", "workflows"), workflows);
+    return proj;
+  }
+  const flow = (prompt: string) => ({
+    initial: "a",
+    states: { a: { prompt, transitions: { go: "end" } }, end: { terminal: true } },
+  });
+  /** A server over global `simple` + `shared` and its own project's `server-only` + `shared`. */
+  function server(globalDir?: string) {
+    const global = globalDir ?? tmpDir();
+    writeWorkflows(global, { simple: SIMPLE_WORKFLOW, shared: flow("GLOBAL") });
+    const serverProject = project("server", {
+      "server-only": flow("SERVER-ONLY"),
+      shared: flow("SERVER"),
+    });
+    const loader = new Loader(null, global, path.join(serverProject, ".claude", "workflows"));
+    const storage = new InMemoryStorage();
+    return { loader, storage, engine: new Engine(storage, loader, new Executor()) };
+  }
+
+  it("sees that project's own workflows over the server's, also from a subdir or a worktree; the server's stay visible", async () => {
+    const { engine } = server();
+    const other = project("other", { mine: MULTI_STATE_WORKFLOW, shared: flow("OTHER") });
+    const sub = path.join(other, "src");
+    fs.mkdirSync(sub);
+    const wt = path.join(path.dirname(other), "wt");
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${other}/.git/worktrees/wt\n`);
+
+    await expect(engine.start("mine", undefined, "p0")).rejects.toThrow("not found");
+    expect((await engine.start("shared", undefined, "p0")).prompt).toBe("SERVER");
+    for (const cwd of [other, sub, wt]) {
+      const s = await engine.start("mine", undefined, "p0", cwd);
+      expect((await engine.transition(s.sessionId, "go_b")).currentStateName).toBe("b");
+      expect((await engine.start("shared", undefined, "p0", cwd)).prompt).toBe("OTHER");
+    }
+    // a name only the server's project or the global tier has is still found from there
+    expect((await engine.start("server-only", undefined, "p0", other)).prompt).toBe("SERVER-ONLY");
+    expect((await engine.start("simple", undefined, "p0", other)).currentWorkflow).toBe("simple");
+
+    // a project without workflows of its own sees the server's, and gets no directory made
+    const bare = project("bare");
+    expect((await engine.start("shared", undefined, "p0", bare)).prompt).toBe("SERVER");
+    await expect(engine.start("mine", undefined, "p0", bare)).rejects.toThrow("not found");
+    expect(fs.existsSync(path.join(bare, ".claude"))).toBe(false);
+  });
+
+  it("a cwd whose .claude/workflows is the global dir (the home dir) is no project of its own", async () => {
+    const home = tmpDir();
+    const { engine } = server(path.join(home, ".claude", "workflows"));
+    expect((await engine.start("shared", undefined, "p0", home)).prompt).toBe("SERVER");
+    expect((await engine.start("server-only", undefined, "p0", home)).prompt).toBe("SERVER-ONLY");
+  });
+
+  it("a server holding no snapshot of the session (resume, a taken-over exec, a plain call) uses the session's project", async () => {
+    const { loader, storage, engine } = server();
+    const other = project("other", {
+      shared: {
+        initial: "a",
+        states: {
+          a: { prompt: "OTHER", transitions: { go: "end", run: "gate" } },
+          gate: { type: "exec", command: "echo other-gate", on_success: "end", on_error: "end" },
+          end: { terminal: true, prompt: "OTHER END" },
+        },
+      },
+    });
+    const restart = () => new Engine(storage, loader, new Executor());
+
+    const resumed = await engine.start("shared", undefined, "p0", other);
+    await engine.suspend(resumed.sessionId);
+    expect((await restart().resume(resumed.sessionId)).status.prompt).toBe("OTHER");
+
+    const orphan = await engine.start("shared", undefined, "p1", other);
+    const s = storage.read(orphan.sessionId)!;
+    const at = new Date().toISOString();
+    await storage.write(orphan.sessionId, {
+      ...s,
+      stack: [{ ...s.stack[0], current_state: "gate" }],
+      pending_action: { frame: 0, state: "gate", at },
+    });
+    const adopted = await restart().adoptOrphanedExec(orphan.sessionId);
+    expect(adopted?.prompt).toContain("OTHER END");
+
+    const plain = await engine.start("shared", undefined, "p2", other);
+    expect((await restart().transition(plain.sessionId, "go")).prompt).toContain("OTHER END");
+  });
+});

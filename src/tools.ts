@@ -232,7 +232,8 @@ export function formatQueueNext(r: PickResult, explain: boolean | "all"): string
   for (const a of r.admitted)
     lines.push(
       "",
-      `${r.dryRun ? "WOULD ADMIT" : "ADMITTED [>]"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}`,
+      `${r.dryRun ? "WOULD ADMIT" : "ADMITTED [>]"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}` +
+        (a.workflow ? ` | workflow: ${a.workflow}` : ""),
       a.text,
     );
   return lines.join("\n");
@@ -1008,7 +1009,7 @@ export function registerTools(
         "fills the window (batch_size minus the `[>]` lines) in file order with lines whose `after:` ids are all `[x]`, " +
         "that carry no `⏸`, and whose `touches:` / `owner:` overlap no running or just-admitted line (no `touches:` = " +
         "overlaps everything); marks each `[>]` under the queue's lock, so two calls never admit one line. Returns id, " +
-        "model, effort, repo (absolute) and text per admitted line. `batch_size: 0` = paused: nothing is admitted. " +
+        "model, effort, repo (absolute), workflow (the line's `workflow:`, when set) and text per admitted line. `batch_size: 0` = paused: nothing is admitted. " +
         "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
       inputSchema: z
         .object({

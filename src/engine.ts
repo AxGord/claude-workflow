@@ -253,11 +253,12 @@ export class Engine {
     do {
       sessionId = randomBytes(4).toString("hex");
     } while (this._storage.read(sessionId));
-    const wf = this._loader.get(workflowName);
+    const workflows = this._workflowsAt(cwd);
+    const wf = workflows.get(workflowName);
     if (!wf) throw new Error(`Workflow "${workflowName}" not found`);
 
     // Snapshot all workflows for this session
-    this._snapshots.set(sessionId, this._loader.getAll());
+    this._snapshots.set(sessionId, workflows);
 
     const now = new Date().toISOString();
     const frame: StackFrame = {
@@ -684,7 +685,8 @@ export class Engine {
     );
     const resumed = this._storage.read(sessionId)!;
     // the old server's snapshot died with it: the session continues on the workflows loaded now
-    if (!this._snapshots.has(sessionId)) this._snapshots.set(sessionId, this._loader.getAll());
+    if (!this._snapshots.has(sessionId))
+      this._snapshots.set(sessionId, this._workflowsAt(Engine._cwdOf(resumed)));
     const suspendedChildren = activeSubtree(this._storage, sessionId)
       .slice(1)
       .map(id => this._storage.read(id))
@@ -729,7 +731,8 @@ export class Engine {
     const session = this._storage.read(sessionId);
     const found = this._orphanedExec(session);
     if (!found) return null;
-    if (!this._snapshots.has(sessionId)) this._snapshots.set(sessionId, this._loader.getAll());
+    if (!this._snapshots.has(sessionId))
+      this._snapshots.set(sessionId, this._workflowsAt(Engine._cwdOf(session!)));
     return this._executeActionState(session!, found.state, [], 0, found.run);
   }
 
@@ -1608,11 +1611,45 @@ export class Engine {
   }
 
   private _getWorkflow(sessionId: string, name: string): WorkflowDefinition {
-    // Try snapshot first, fallback to loader
-    const snapshot = this._snapshots.get(sessionId);
+    // Try snapshot first, fallback to loader. No snapshot (a session this server neither started nor
+    // resumed) and a project of its own: that project's workflows become its snapshot.
+    let snapshot = this._snapshots.get(sessionId);
+    if (!snapshot) {
+      const session = this._storage.read(sessionId);
+      const own = session ? this._projectLoaderAt(Engine._cwdOf(session)) : undefined;
+      if (own) this._snapshots.set(sessionId, (snapshot = this._overlay(own)));
+    }
     const wf = snapshot?.get(name) ?? this._loader.get(name);
     if (!wf) throw new Error(`Workflow "${name}" not found`);
     return wf;
+  }
+
+  /**
+   * The workflows a session started in `cwd` sees: the server's, with the workflows the project of
+   * `cwd` defines itself laid over them by name — when that project (a worktree counts as its main
+   * checkout) has a `.claude/workflows/` that is neither the server's project tier nor its global one.
+   */
+  private _workflowsAt(cwd: string | undefined): Map<string, WorkflowDefinition> {
+    const own = this._projectLoaderAt(cwd);
+    return own ? this._overlay(own) : this._loader.getAll();
+  }
+
+  private _overlay(own: Loader): Map<string, WorkflowDefinition> {
+    const all = this._loader.getAll();
+    for (const [name, wf] of own.projectWorkflows()) all.set(name, wf);
+    return all;
+  }
+
+  /** The loader of `cwd`'s project when it has workflows of its own the server does not load. */
+  private _projectLoaderAt(cwd: string | undefined): Loader | undefined {
+    if (cwd === undefined) return undefined;
+    const dir = path.join(projectRoot(cwd), ".claude", "workflows");
+    if (dir === this._loader.projectDir || dir === this._loader.globalDir) return undefined;
+    return fs.existsSync(dir) ? this._loader.forProject(dir) : undefined;
+  }
+
+  private static _cwdOf(session: SessionState): string | undefined {
+    return typeof session.context.cwd === "string" ? session.context.cwd : undefined;
   }
 
   private _resolveState(

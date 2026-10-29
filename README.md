@@ -381,6 +381,12 @@ Workflows load from three sources in ascending priority — later tiers override
 
 A project workflow named `coding` overrides the bundled `coding` template. Same-name global workflows sit in between.
 
+The project tier is the server's cwd. A session started with `start({ cwd })` in ANOTHER project that has
+its own `.claude/workflows/` (a worktree counts as its main checkout; the home dir, whose
+`.claude/workflows` is the global tier, is none) sees the workflows that project defines itself laid by
+name over the server's — a name only the server has is still found: a dispatcher in one repo can run a task by the
+procedure another repo defines (a queue line's `repo:` + `workflow:`).
+
 ### `extends:` — inherit a workflow
 
 ```yaml
@@ -454,13 +460,16 @@ minus the `[>]` lines) in file order with the `[ ]` lines that:
   other on a `/` boundary, `owner:` names when equal or one is a `.`-prefix; a line WITHOUT
   `touches:` overlaps everything (it runs alone);
 - name a `repo:` that resolves (absolute path; a name = the `base:` repo of that basename, else the
-  directory of that name beside the queue's project; none = the queue's project).
+  directory of that name beside the queue's project; none = the queue's project);
+- name, in `workflow:` if any, one word: the line's own task workflow (default: the dispatcher's
+  `task_workflow`). It is started with the line's repo as `cwd`, so it may live in that repo's
+  `.claude/workflows/` — one queue can mix tasks of several repos, each run by its repo's procedure.
 
 Each admitted line is marked `[>]` under the queue's lock (`<file>.lock`, an atomic mkdir), so two
 picks — two tools, two processes — never admit one line. `batch_size: 0` is the pause: nothing new is
 admitted, running tasks finish; the pick answers `window 0 — paused: <the comment>`.
 
-- `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, text);
+- `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, workflow, text);
   `explain` adds why each other pending line waits (`window full` lines fold into one summary line;
   `explain: "all"` lists every line).
 - `queue_mark({ file, id, to, note? })` — `running` `[ ]`→`[>]`, `done` `[>]`→`[x]`, `failed`
@@ -468,7 +477,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the comm
   (one line without `|`, `⏸` or a leading `key:`). A write lands only while the file still reads as
   the pick read it — a hand edit in between makes it plan again, never lost.
 - From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" <file> [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
-  bin) prints `ID<TAB>model<TAB>effort<TAB>repo` per admitted line and the summary on stderr; exit 0
+  bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow` (`-` = no `workflow:`) per admitted line and the summary on stderr; exit 0
   admitted, 10 none but `[>]` lines run, 11 none and nothing runs (done), 12 none, nothing runs and
   `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]`, `--header <key>`.
 
@@ -695,7 +704,10 @@ npm run build    # tsc → compiles src/ to build/
 npm run dev      # tsc --watch
 npm start        # node build/index.js
 npm test         # vitest run
-npm run check    # tsc --noEmit + format:check + lint + scan + vitest (the pre-commit gate)
+npm run check    # tsc --noEmit + format:check + lint + scan + vitest + check:ci (the pre-commit gate)
+npm run check:ci # the suite as CI runs it (scripts/check-ci.sh): env -i, an empty HOME, no system git
+                 # config, TMPDIR inside it, git user.useConfigOnly (no guessed identity), TZ America/St_Johns (CHECK_CI_TZ),
+                 # LANG=C — plus CI's package.json / plugin.json version check
 npm run lint     # typescript-eslint (type-checked); fails only on findings absent from eslint-baseline.json
 npm run lint:baseline  # re-record eslint-baseline.json (after fixing findings, to ratchet down)
 npm run format:check   # biome format check (formatter only; part of check)

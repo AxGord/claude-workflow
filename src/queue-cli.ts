@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // wf-queue: the exec form of queue_next / queue_mark (src/queue.ts), for a workflow's exec states.
-//   wf-queue <queue.md> [--dry-run] [--explain|--explain-all]   pick: stdout one `ID\tmodel\teffort\trepo` per admitted line
+//   wf-queue <queue.md> [--dry-run] [--explain|--explain-all]   pick: stdout one `ID\tmodel\teffort\trepo\tworkflow` per admitted line
 //                                                 (marked `[>]`), the summary on stderr; --explain folds
 //                                                 "window full" lines into one, --explain-all lists all
 //   wf-queue <queue.md> --done|--failed|--release|--running <ID> [--note TEXT]

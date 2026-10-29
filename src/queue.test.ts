@@ -162,6 +162,31 @@ describe("queue repo:", () => {
   });
 });
 
+describe("queue workflow:", () => {
+  it("names the line's own task workflow; absent or `—` = none; a name that is not one word keeps the line out", () => {
+    const r = plan(
+      [
+        "- [ ] A | workflow: engine-task | touches: a | Do A. |",
+        "- [ ] B | workflow: — | touches: b",
+        "- [ ] C | touches: c",
+        "- [ ] D | workflow: two words | touches: d",
+      ].join("\n"),
+      "batch_size: 4",
+    );
+    expect(r.admitted.map(a => [a.id, a.workflow])).toEqual([
+      ["A", "engine-task"],
+      ["B", undefined],
+      ["C", undefined],
+    ]);
+    expect(r.admitted[0].text).toBe("Do A.");
+    expect(r.reasons).toEqual([{ id: "D", why: 'workflow: "two words" is not a workflow name' }]);
+    const text = formatQueueNext({ ...r, dryRun: true }, false);
+    expect(text).toContain("WOULD ADMIT A | model: opus | effort: - | repo: ");
+    expect(text).toMatch(/WOULD ADMIT A \|.*\| workflow: engine-task\n/);
+    expect(text).not.toMatch(/WOULD ADMIT C \|.*workflow/);
+  });
+});
+
 describe("queue pause (batch_size: 0)", () => {
   it("admits nothing; 12 when nothing runs, 10 while a line still runs; the comment is shown", () => {
     const header = "batch_size: 0  # пауза: машина занята, было 4";
@@ -294,17 +319,20 @@ describe("wf-queue CLI", () => {
 
   it("prints the admitted lines, routes by exit code, marks and reads the header", async () => {
     const file = queueFile(
-      `- [ ] A | model: haiku | touches: a\n- [ ] B | after: A | touches: b`,
+      `- [ ] A | model: haiku | touches: a\n- [ ] B | after: A | workflow: engine-task | touches: b`,
       "batch_size: 2\nland_test: npm test",
     );
+    const repo = path.resolve(file, "../../..");
     const first = await cli(file, "--explain");
     expect(first.code).toBe(0);
-    expect(first.out).toBe(`A\thaiku\t-\t${path.resolve(file, "../../..")}\n`);
+    expect(first.out).toBe(`A\thaiku\t-\t${repo}\t-\n`);
     expect(first.err).toContain("B: after: A[ ]");
     expect((await cli(file)).code).toBe(10);
     expect((await cli(file, "--done", "A")).out).toBe("A: [>] → [x]\n");
     expect((await cli(file, "--header", "land_test")).out).toBe("npm test");
-    expect((await cli(file)).code).toBe(0);
+    const second = await cli(file);
+    expect(second.code).toBe(0);
+    expect(second.out).toBe(`B\topus\t-\t${repo}\tengine-task\n`);
     await cli(file, "--failed", "B");
     expect((await cli(file)).code).toBe(11);
     expect((await cli(file, "--bogus")).code).toBe(2);

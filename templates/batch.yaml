@@ -56,6 +56,8 @@ states:
          - `repo:` — another repo (absolute path, or a name: the `base:` repo
            of that name, else the directory beside this project); default
            this project.
+         - `workflow:` — the line's own task workflow (e.g. the heir of
+           `batch-task` its repo defines); default this run's `task_workflow`.
          - `⏸` in a field — the line is skipped until the mark is removed.
          Each task runs in its OWN worktree (`<repo>/../.wt/<repo-name>/<ID>`,
          branch `batch/<ID>`) and lands by `git merge --no-ff` + `land_test`,
@@ -115,13 +117,13 @@ states:
 
   dispatch:
     prompt: |-
-      The pick admitted (and marked `[>]` in {{context.queue_file}}) one line per free slot, `ID model effort repo`:
+      The pick admitted (and marked `[>]` in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow`:
       {{stdout}}
       {{stderr}}
 
       For EACH admitted line, one task session:
-      1. `start({workflow: "{{context.task_workflow}}", parent_session_id: "{{session_id}}", cwd: "<its repo>"})`
-         → session P. Drive P by its prompts, passing session_id P in every call (its `claim` names what to
+      1. `start({workflow: <its workflow column; `-` → "{{context.task_workflow}}">, parent_session_id:
+         "{{session_id}}", cwd: "<its repo>"})` → session P (the repo's own workflows are found from that cwd). Drive P by its prompts, passing session_id P in every call (its `claim` names what to
          record, its exec steps make the worktree before any agent starts).
       2. context_set `tasks` on THIS session ({{session_id}}): one `ID=P` per running task session (all of
          them, not only the new ones) — after a context compression `status({session_id: "{{session_id}}",
