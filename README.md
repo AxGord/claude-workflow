@@ -430,12 +430,13 @@ picks — two tools, two processes — never admit one line. `batch_size: 0` is 
 admitted, running tasks finish; the pick answers `window 0 — paused: <the comment>`.
 
 - `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, text);
-  `explain` adds why each other pending line waits.
+  `explain` adds why each other pending line waits (`window full` lines fold into one summary line;
+  `explain: "all"` lists every line).
 - `queue_mark({ file, id, to, note? })` — `running` `[ ]`→`[>]`, `done` `[>]`→`[x]`, `failed`
   `[>]`→`[!]`, `released` `[>]`→`[ ]`; any other current mark is refused; `note` is written after the id
   (one line without `|`, `⏸` or a leading `key:`). A write lands only while the file still reads as
   the pick read it — a hand edit in between makes it plan again, never lost.
-- From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" <file> [--dry-run] [--explain]` (also the `wf-queue`
+- From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" <file> [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
   bin) prints `ID<TAB>model<TAB>effort<TAB>repo` per admitted line and the summary on stderr; exit 0
   admitted, 10 none but `[>]` lines run, 11 none and nothing runs (done), 12 none, nothing runs and
   `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]`, `--header <key>`.

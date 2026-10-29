@@ -227,7 +227,7 @@ function formatAdopted(status: StatusResult, how: "exec" | "rerun" | undefined):
 const ENGINE_STATE_ONLY = { readOnlyHint: true } as const;
 
 /** queue_next's answer: the summary, then one block per admitted line with its free text. */
-export function formatQueueNext(r: PickResult, explain: boolean): string {
+export function formatQueueNext(r: PickResult, explain: boolean | "all"): string {
   const lines = [formatPickSummary(r, explain)];
   for (const a of r.admitted)
     lines.push(
@@ -1018,16 +1018,26 @@ export function registerTools(
             .describe("The queue file (absolute, or relative to the server's cwd)"),
           dry_run: z.boolean().optional().describe("Show what would be admitted; mark nothing"),
           explain: z
-            .boolean()
+            .union([z.boolean(), z.literal("all")])
             .optional()
-            .describe("Add one line per pending line not admitted: why"),
+            .describe(
+              "Why pending lines wait: substantive reasons by name, `window full` folded into one line; " +
+                '"all" = one line per pending line',
+            ),
         })
         .strict(),
     },
     async args => {
       try {
         const r = await pickQueue(args.file, { dryRun: args.dry_run === true });
-        return { content: [{ type: "text", text: formatQueueNext(r, args.explain === true) }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text: formatQueueNext(r, args.explain === "all" ? "all" : args.explain === true),
+            },
+          ],
+        };
       } catch (err) {
         return {
           content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],

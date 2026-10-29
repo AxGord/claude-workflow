@@ -408,8 +408,35 @@ export async function markQueue(
   );
 }
 
-/** The pick's summary: counts, a pause, why nothing was admitted, and (with `explain`) why each pending line waits. */
-export function formatPickSummary(r: PickResult, explain: boolean): string {
+// Reasons that say nothing about a line itself: with `explain` they fold into one summary line each.
+const BLANK_WHY: ReadonlySet<string> = new Set(["window full", "paused (batch_size 0)"]);
+const BLANK_NAMES = 5;
+
+/**
+ * The `--explain` lines: a line with a substantive reason (`after:`, `overlaps`, `⏸`, …) by name in
+ * file order, then one line per blank reason (`N lines: window full — first: A, B …`). `all` = one
+ * line per pending line.
+ */
+export function explainLines(reasons: PickResult["reasons"], mode: boolean | "all"): string[] {
+  if (mode === false) return [];
+  if (mode === "all") return reasons.map(x => `  ${x.id}: ${x.why}`);
+  const out = reasons.filter(x => !BLANK_WHY.has(x.why)).map(x => `  ${x.id}: ${x.why}`);
+  for (const why of BLANK_WHY) {
+    const ids = reasons.filter(x => x.why === why).map(x => x.id);
+    if (ids.length === 0) continue;
+    if (ids.length === 1) out.push(`  ${ids[0]}: ${why}`);
+    else {
+      const more = ids.length > BLANK_NAMES ? " …" : "";
+      out.push(
+        `  ${ids.length} lines: ${why} — first: ${ids.slice(0, BLANK_NAMES).join(", ")}${more}`,
+      );
+    }
+  }
+  return out;
+}
+
+/** The pick's summary: counts, a pause, why nothing was admitted, and (with `explain`) why pending lines wait. */
+export function formatPickSummary(r: PickResult, explain: boolean | "all"): string {
   const out: string[] = [];
   const running = r.running.length > 0 ? ` (${r.running.join(", ")})` : "";
   out.push(
@@ -426,7 +453,7 @@ export function formatPickSummary(r: PickResult, explain: boolean): string {
           ? "nothing admitted and nothing runs: paused"
           : "nothing admitted and nothing runs: the queue is done (what stays pending is blocked)",
     );
-  if (explain) for (const x of r.reasons) out.push(`  ${x.id}: ${x.why}`);
+  out.push(...explainLines(r.reasons, explain));
   return out.join("\n");
 }
 

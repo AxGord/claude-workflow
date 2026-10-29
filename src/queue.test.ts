@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { markQueue, parseQueue, pickQueue, planPick, readQueue } from "./queue.js";
+import { explainLines, markQueue, parseQueue, pickQueue, planPick, readQueue } from "./queue.js";
 import { formatQueueNext } from "./tools.js";
 
 const dirs: string[] = [];
@@ -308,5 +308,43 @@ describe("wf-queue CLI", () => {
     await cli(file, "--failed", "B");
     expect((await cli(file)).code).toBe(11);
     expect((await cli(file, "--bogus")).code).toBe(2);
+  });
+});
+
+describe("explainLines", () => {
+  const full = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `W${i}`, why: "window full" }));
+  const content = [
+    { id: "A", why: "after: X[>]" },
+    { id: "B", why: "overlaps X (touches a ~ a)" },
+  ];
+  const cases: [string, Parameters<typeof explainLines>[0], boolean | "all", string[]][] = [
+    ["off", [...content, ...full(3)], false, []],
+    [
+      "mixed: content first, then folded",
+      [full(1)[0], content[0], ...full(7).slice(1), content[1]],
+      true,
+      [
+        "  A: after: X[>]",
+        "  B: overlaps X (touches a ~ a)",
+        "  7 lines: window full — first: W0, W1, W2, W3, W4 …",
+      ],
+    ],
+    ["one blank stays by name", [...full(1)], true, ["  W0: window full"]],
+    [
+      "five blanks, no ellipsis",
+      full(5),
+      true,
+      ["  5 lines: window full — first: W0, W1, W2, W3, W4"],
+    ],
+    [
+      "all keeps file order",
+      [full(1)[0], content[0]],
+      "all",
+      ["  W0: window full", "  A: after: X[>]"],
+    ],
+  ];
+  it.each(cases)("%s", (_n, reasons, mode, expected) => {
+    expect(explainLines(reasons, mode)).toEqual(expected);
   });
 });
