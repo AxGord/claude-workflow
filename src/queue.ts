@@ -7,10 +7,13 @@
 // Admission (`planPick`, pure): free = batch_size minus the `[>]` lines; a `[ ]` line in file
 // order is admitted when its model is not `—` (parent-run), no `⏸` stands in its metadata or its
 // `after:`, every `after:` id is `[x]`, its `repo:` resolves, and it overlaps neither a `[>]` line
-// nor a line admitted earlier in the same pick (`touches:` path prefixes on a `/` boundary,
-// `owner:` equal or a `.`-prefix; a line without `touches:` overlaps everything). A `workflow:`
-// field names the line's own task workflow (the dispatcher's default otherwise); a name that is not
-// one word keeps the line out.
+// nor a line admitted earlier in the same pick (`touches:` path prefixes on a `/` boundary, compared
+// only between lines of one repo, where a line without `touches:` overlaps every line; `owner:`
+// equal or a `.`-prefix, across repos; `exclusive:` overlaps every line of every repo). The header's
+// `overlap: files` narrows `touches:` to its FILE entries (a regular file under the line's repo, or
+// a path that does not exist whose last segment holds a `.`): a directory or glob entry is a hint
+// that conflicts with nothing. A bad `overlap:` refuses the pick only; marks and edits still work. A `workflow:` field names the line's own task workflow (the
+// dispatcher's default otherwise); a name that is not one word keeps the line out.
 import fs from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
@@ -34,7 +37,19 @@ export const MARK_TARGETS = {
 export type MarkTarget = keyof typeof MARK_TARGETS;
 
 const LINE_RE = /^- \[(.)\] (\S+)(?: \|(.*))?$/;
-const META_KEYS = new Set(["model", "effort", "after", "touches", "owner", "repo", "workflow"]);
+const META_KEYS = new Set([
+  "model",
+  "effort",
+  "after",
+  "touches",
+  "owner",
+  "repo",
+  "workflow",
+  "exclusive",
+]);
+/** The header's `overlap:` values; `paths` (the default) = every `touches:` entry is a path prefix. */
+const OVERLAP_MODES = ["paths", "files"] as const;
+export type OverlapMode = (typeof OVERLAP_MODES)[number];
 // A field this long is the line's prose; `⏸` inside prose is a mention, not a pause.
 const PROSE_MIN = 160;
 const ID_RE = /^[A-Za-z0-9._-]+$/;
@@ -68,6 +83,10 @@ export interface Queue {
   readonly header: Readonly<Record<string, string>>;
   /** The `base:` lines' repo paths (`base: <abs-path>=<sha>`). */
   readonly baseRepos: readonly string[];
+  /** The header's `overlap:` (`paths` when absent or not a mode): how `touches:` entries conflict. */
+  readonly overlap: OverlapMode;
+  /** Why the header's `overlap:` is not a mode: a pick refuses the queue, other operations go on. */
+  readonly overlapError?: string;
 }
 
 export interface AdmittedTask {
@@ -152,8 +171,24 @@ export function parseQueue(text: string, file: string): Queue {
     const l = parseLine(rows[i], i);
     if (l) lines.push(l);
   }
+  const ov = (header.overlap ?? "paths").replace(/\s*#.*$/, "").trim();
+  const known = (OVERLAP_MODES as readonly string[]).includes(ov);
+  const overlap: OverlapMode = known ? (ov as OverlapMode) : "paths";
+  const overlapError = known
+    ? undefined
+    : `${file}: overlap: "${ov}" is not one of ${OVERLAP_MODES.join(", ")}`;
   const batchComment = bs[2]?.trim() || undefined;
-  return { file, rows, lines, batchSize: Number(bs[1]), batchComment, header, baseRepos };
+  return {
+    file,
+    rows,
+    lines,
+    batchSize: Number(bs[1]),
+    batchComment,
+    header,
+    baseRepos,
+    overlap,
+    ...(overlapError ? { overlapError } : {}),
+  };
 }
 
 function touchesOf(line: QueueLine): string[] | null {
@@ -180,16 +215,64 @@ function ownerOf(line: QueueLine): string | null {
   return o === "" || o === "—" ? null : o;
 }
 
+/** `exclusive:` with any value but an empty one or `—`: the line overlaps every other line. */
+function exclusiveOf(line: QueueLine): boolean {
+  const v = line.meta.exclusive?.trim();
+  return v !== undefined && v !== "" && v !== "-" && v !== "—";
+}
+
 const pathOverlap = (a: string, b: string): boolean =>
   a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 const ownerOverlap = (a: string, b: string): boolean =>
   a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+/**
+ * A `touches:` entry that names one file: no glob, and a regular file under `repo` — or, when it
+ * does not exist there (yet), its last segment holds a `.` (`Makefile` counts only once it exists).
+ */
+function isFileEntry(p: string, repo: string | null): boolean {
+  if (/[*?[\]{}]/.test(p)) return false;
+  if (repo !== null) {
+    try {
+      return fs.statSync(path.resolve(repo, p)).isFile();
+    } catch {
+      /* not there: judged by its name */
+    }
+  }
+  return (p.split("/").pop() ?? "").includes(".");
+}
 
-function conflict(a: QueueLine, b: QueueLine): string | null {
-  const ta = touchesOf(a);
-  const tb = touchesOf(b);
-  if (ta === null || tb === null) return "no touches:";
-  for (const x of ta) for (const y of tb) if (pathOverlap(x, y)) return `touches ${x} ~ ${y}`;
+/** A line's repo as compared across lines: the resolved path, through symlinks when it exists. */
+function repoKey(repo: string | null): string | null {
+  if (repo === null) return null;
+  try {
+    return fs.realpathSync(repo);
+  } catch {
+    return repo;
+  }
+}
+
+/**
+ * Why `a` and `b` may not run together, or null. `repoA`/`repoB` are their repo keys: `touches:`
+ * (and its absence) compares only within one repo (a null key, a repo that resolves nowhere, counts
+ * as the same); `exclusive:` and `owner:` compare across repos.
+ */
+function conflict(
+  a: QueueLine,
+  b: QueueLine,
+  mode: OverlapMode,
+  repoA: string | null,
+  repoB: string | null,
+): string | null {
+  if (exclusiveOf(a)) return `exclusive ${a.id}`;
+  if (exclusiveOf(b)) return `exclusive ${b.id}`;
+  if (repoA === null || repoB === null || repoA === repoB) {
+    const ta = touchesOf(a);
+    const tb = touchesOf(b);
+    if (ta === null || tb === null) return "no touches:";
+    const fa = mode === "files" ? ta.filter(p => isFileEntry(p, repoA)) : ta;
+    const fb = mode === "files" ? tb.filter(p => isFileEntry(p, repoB)) : tb;
+    for (const x of fa) for (const y of fb) if (pathOverlap(x, y)) return `touches ${x} ~ ${y}`;
+  }
   const oa = ownerOf(a);
   const ob = ownerOf(b);
   if (oa !== null && ob !== null && ownerOverlap(oa, ob)) return `owner ${oa}`;
@@ -240,14 +323,18 @@ export function resolveRepo(queue: Queue, line: QueueLine): string | null {
   return null;
 }
 
-/** The admission pass over a parsed queue; writes nothing. */
+/** The admission pass over a parsed queue; writes nothing. A bad `overlap:` header is refused. */
 export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
+  if (queue.overlapError !== undefined) throw new QueueError(queue.overlapError);
   const byId = new Map(queue.lines.map(l => [l.id, l]));
   const running = queue.lines.filter(l => l.mark === ">");
   const taken: QueueLine[] = [...running];
   const admitted: AdmittedTask[] = [];
   const reasons: { id: string; why: string }[] = [];
   const free = queue.batchSize - running.length;
+  const repoKeys = new Map<QueueLine, string | null>(
+    running.map(l => [l, repoKey(resolveRepo(queue, l))]),
+  );
   for (const l of queue.lines) {
     if (l.mark !== " ") continue;
     let why: string | null = null;
@@ -266,8 +353,9 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
           why = `workflow: "${l.meta.workflow}" is not a workflow name`;
       }
       if (why === null) {
+        const key = repoKey(repo);
         for (const t of taken) {
-          const c = conflict(l, t);
+          const c = conflict(l, t, queue.overlap, key, repoKeys.get(t) ?? null);
           if (c !== null) {
             why = `overlaps ${t.id} (${c})`;
             break;
@@ -286,6 +374,7 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
         text: l.text,
       });
       taken.push(l);
+      repoKeys.set(l, repoKey(repo));
     } else reasons.push({ id: l.id, why: why ?? "?" });
   }
   const code: PickCode =

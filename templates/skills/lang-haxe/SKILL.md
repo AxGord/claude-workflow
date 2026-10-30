@@ -29,7 +29,7 @@ section whose title matches) when the situation in its line is the one in front 
 - **An Anonymous Structure Type Picks Its Separator From Whether Fields Carry `var` / `final`**
 - **Braces Around a Lone `if` in an `else` Can Be Load-Bearing for a Following `else`**
 - **`using` + New Methods = Silent Name Hijacking**
-- **Metadata String Arguments Are Subject to String Interpolation**
+- **Metadata String Arguments: an Unbalanced `${` Breaks the Read**
 - **Adding Enum Ctor: Grep Sister Ctor Literal Across Project**
 - **`override` Keyword Detection Misses Abstract-Method Implementations**
 - **Instance Field Initializers Run in REVERSE Declaration Order**

@@ -48,10 +48,15 @@ states:
            non-trivial code/judgement, sonnet/high for code from a detailed
            plan, sonnet/medium for routine review, haiku/low for runners.
            `model: —` = a line the parent does itself (never admitted).
-         - `touches:` — the paths (prefixes) the task edits. Two lines whose
-           paths overlap never run together; a line WITHOUT `touches:` runs
-           alone. `owner:` — one name (`typer`, `typer.flow`): lines of one
-           owner run one at a time.
+         - `touches:` — the paths (prefixes) the task edits. Two lines of one
+           repo whose paths overlap never run together; a line WITHOUT
+           `touches:` runs alone in its repo. With `overlap: files` in the
+           header only FILE entries (an existing file, or a new path like
+           `src/x/Foo.hx`) conflict, on the same file; a directory or glob
+           entry is a hint. `owner:` — one
+           name (`typer`, `typer.flow`): lines of one owner run one at a
+           time. `exclusive: yes` — the line runs alone (mass moves, renames,
+           reformats).
          - `after:` — ids that must be `[x]` first.
          - `repo:` — another repo (absolute path, or a name: the `base:` repo
            of that name, else the directory beside this project); default

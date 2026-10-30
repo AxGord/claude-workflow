@@ -20,7 +20,7 @@ const config: GateConfig = parseConfig(
       { match: "/^turbo run (build|test)\\b/", threads: 6, pass: "--concurrency=$WF_THREADS" },
       { match: "make", threads: 3, pass: "-j $WF_THREADS" },
     ],
-    wrappers: ["golf-run.sh", "tm-run.sh"],
+    wrappers: ["build-run.sh", "app-run.sh"],
   }),
 );
 
@@ -172,8 +172,8 @@ describe("pool-gate decide", () => {
     ["no match", "git status && ls", PASS],
     ["already under wf-run", "/plug/scripts/wf-run --threads 2 -- haxe b.hxml", PASS],
     ["wf-run in a later segment", "cd a && wf-run --threads 2 -- make", PASS],
-    ["a wrapper takes its own lease", "./tools/golf-run.sh test", PASS],
-    ["a wrapper through a shell", "bash tm-run.sh && make", PASS],
+    ["a wrapper takes its own lease", "./tools/build-run.sh test", PASS],
+    ["a wrapper through a shell", "bash app-run.sh && make", PASS],
     ["a word that only starts like a rule", "haxelib install x", PASS],
   ];
   for (const [name, command, want] of table)
@@ -219,7 +219,7 @@ describe("pool-gate decide", () => {
           { match: "/vitest(?! run)/", deny: "watch mode" },
           { match: "make", threads: 2 },
         ],
-        wrappers: ["golf-run.sh"],
+        wrappers: ["build-run.sh"],
       }),
     );
     const deny = { kind: "deny", reason: "pool-gate: watch mode" };
@@ -231,7 +231,7 @@ describe("pool-gate decide", () => {
         wrapped("2", "npx vitest --ui", "npx vitest --ui"),
         PASS,
       ],
-      ["a wrapper's arguments are not matched", "sh golf-run.sh npx vitest", PASS],
+      ["a wrapper's arguments are not matched", "sh build-run.sh npx vitest", PASS],
       ["another segment beside a wf-run is still refused", "wf-run -- make && npx vitest", deny],
     ];
     for (const [name, command, want] of cases)
@@ -338,7 +338,7 @@ describe("pool-gate parseConfig", () => {
       { rules: [{ match: "x", threads: 1, env: { A: "plain" } }] },
     ],
     ["`env.A` must be", { rules: [{ match: "x", threads: 1, env: { A: "/(/" } }] }],
-    ["`wrappers` must be a list", { rules: [], wrappers: "golf-run.sh" }],
+    ["`wrappers` must be a list", { rules: [], wrappers: "build-run.sh" }],
   ];
   for (const [msg, cfg] of bad)
     it(`refuses: ${msg}`, () => expect(() => parseConfig(JSON.stringify(cfg))).toThrow(msg));

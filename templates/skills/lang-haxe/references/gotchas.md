@@ -639,28 +639,21 @@ import Globals.flash_utils_getQualifiedClassName as getQualifiedClassName;
 
 **Rule:** Before adding any static method to a class that has global `using`, check if the method name conflicts with existing imports. Use `@:noUsing` on utility methods not meant as extensions.
 
-## Metadata String Arguments Are Subject to String Interpolation
+## Metadata String Arguments: an Unbalanced `${` Breaks the Read
 
-`@:meta('value')` arguments are parsed as normal Haxe expressions. Single-quoted strings in metadata follow interpolation rules — `$` triggers interpolation just like in regular code.
+A macro reads a single-quoted metadata argument RAW (Haxe 4.3.7, measured): `@:lit('$$')` reaches `ExprTools.getValue` as `$$`, `'x${y}z'` as `x${y}z`, and `haxe.rtti.Meta` keeps `$$` too — hxcpp's `@:buildXml('${cpp_src}')` relies on this. Interpolation happens only when a spliced meta expression is TYPED. The trap is the lexer: an UNBALANCED `${` inside a single-quoted string opens an interpolation and swallows the source up to the next `}`.
 
 ```haxe
-// WRONG — '${' triggers interpolation, produces wrong/broken value
+// WRONG — '${' swallows everything to the next '}': reads as CString("${')\n@:trail('}")
 @:lead('${') @:trail('}')
 Block(expr:HxExpr);
 
-// WRONG — '$$' is escaped dollar, produces "$" not "$$"
-@:lit('$$')
-Dollar;
-
-// RIGHT — double-quoted strings have no interpolation
+// RIGHT — double quotes never interpolate
 @:lead("${") @:trail("}")
 Block(expr:HxExpr);
-
-@:lit("$$")
-Dollar;
 ```
 
-**Rule:** Always use double-quoted strings for metadata arguments containing `$`. This applies to all `@:` metadata, not just specific tags.
+**Rule:** In metadata, double-quote any string with an unbalanced `${`; a balanced `${…}` or `$$` in single quotes reaches a macro unchanged.
 
 ## Adding Enum Ctor: Grep Sister Ctor Literal Across Project
 

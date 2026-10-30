@@ -252,7 +252,7 @@ Agents do not call `wf-run` themselves. The plugin's PreToolUse(Bash) hook (`hoo
     { "match": "haxe", "threads": 4, "pass": "env:HXCPP_COMPILE_THREADS" },
     { "match": "make", "threads": "2-6", "pass": "-j $WF_THREADS" }
   ],
-  "wrappers": ["golf-run.sh", "tm-run.sh"]
+  "wrappers": ["build-run.sh", "app-run.sh"]
 }
 ```
 
@@ -442,6 +442,7 @@ A long run of tasks is a queue FILE the engine admits from — one format for ev
 batch_size: 3                       # the window; `batch_size: 0  # pause: <why>, was 3` pauses
 base: /abs/repo=<sha>
 land_test: npm test                 # run after each merge (batch-task's default land)
+overlap: files                      # optional: only FILE entries of `touches:` conflict (default `paths`)
 ## Tasks
 - [ ] T1 | model: opus | effort: high | touches: src/engine | <self-contained brief> |
 - [ ] T2 | model: sonnet | after: T1 | touches: src/a, docs | owner: typer | repo: other-repo | <brief> |
@@ -460,8 +461,16 @@ minus the `[>]` lines) in file order with the `[ ]` lines that:
 - have every `after:` id `[x]` (an id-like token that names no line, or prose beside the ids, is a
   condition for a human: never admitted);
 - overlap no running and no just-admitted line: `touches:` paths overlap when one is a prefix of the
-  other on a `/` boundary, `owner:` names when equal or one is a `.`-prefix; a line WITHOUT
-  `touches:` overlaps everything (it runs alone);
+  other on a `/` boundary — compared only between lines whose `repo:` resolves to the same repository,
+  where a line WITHOUT `touches:` overlaps every line (it runs alone in its repo); `owner:` names
+  overlap when equal or one is a `.`-prefix, across repos too; a line with `exclusive: <any>` overlaps
+  every line of every repo (a mass move, a rename, a tree reformat; `exclusive: —` is not exclusive).
+  The header's `overlap: files` narrows `touches:`: only an entry naming a FILE conflicts, with the
+  same file in another line — a FILE is no glob and a regular file under the line's repo (`Makefile`,
+  `bin/hxq`), or, when the path does not exist yet, one whose last segment holds a `.`
+  (`src/x/Foo.hx`, `.gitattributes`); a directory or glob entry (`src/query`, `src/format/Doc*`) is a
+  hint and conflicts with nothing. `overlap: paths` (the default) keeps every entry a path prefix; any
+  other value refuses the pick (exit 2) while marks, edits and `queue_header` still work;
 - name a `repo:` that resolves (absolute path; a name = the `base:` repo of that basename, else the
   directory of that name beside the queue's project; none = the queue's project);
 - name, in `workflow:` if any, one word: the line's own task workflow (default: the dispatcher's

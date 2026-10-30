@@ -172,6 +172,201 @@ describe("queue repo:", () => {
   });
 });
 
+describe("queue overlap: files, exclusive:, repos", () => {
+  const T = "touches: ";
+  const FILES = "batch_size: 5\noverlap: files";
+  // [name, queue body, header, admitted ids]
+  const cases: [string, string, string, string[]][] = [
+    [
+      "default (no overlap:) is paths: a directory entry still blocks what lies under it",
+      `- [>] R | ${T}src/q\n- [ ] A | ${T}src/q/Foo.hx\n- [ ] B | ${T}src/q/sub\n- [ ] C | ${T}src/z`,
+      "batch_size: 5",
+      ["C"],
+    ],
+    [
+      "overlap: paths reads as the default",
+      `- [>] R | ${T}src/q\n- [ ] A | ${T}src/q/Foo.hx\n- [ ] B | ${T}src/z`,
+      "batch_size: 5\noverlap: paths",
+      ["B"],
+    ],
+    [
+      "files: a directory entry is a hint and conflicts with nothing",
+      `- [>] R | ${T}src/q\n- [ ] A | ${T}src/q/Foo.hx\n- [ ] B | ${T}src\n- [ ] C | ${T}src/q, docs`,
+      FILES,
+      ["A", "B", "C"],
+    ],
+    [
+      "files: a glob entry is a hint even when its last segment holds a dot",
+      `- [>] R | ${T}src/f/Doc*, src/*.hx\n- [ ] A | ${T}src/f/Doc.hx\n- [ ] B | ${T}src/x.hx`,
+      FILES,
+      ["A", "B"],
+    ],
+    [
+      "files: the same file conflicts (dotfiles and root files are files), another file does not",
+      `- [>] R | ${T}src/q/Foo.hx, .gitattributes\n- [ ] A | ${T}src/q/Foo.hx\n- [ ] B | ${T}./.gitattributes\n- [ ] C | ${T}src/q/Bar.hx, hxformat.json`,
+      FILES,
+      ["C"],
+    ],
+    [
+      "files: a line admitted earlier in the same pick blocks the next on one file",
+      `- [ ] A | ${T}hxformat.json, src\n- [ ] B | ${T}hxformat.json\n- [ ] C | ${T}src/c.hx`,
+      FILES,
+      ["A", "C"],
+    ],
+    [
+      "files: owner: still conflicts with disjoint touches",
+      `- [>] R | ${T}src/a | owner: typer\n- [ ] A | ${T}src/a | owner: typer.flow\n- [ ] B | ${T}src/a | owner: writer`,
+      FILES,
+      ["B"],
+    ],
+    [
+      "files: a line without touches: still overlaps everything",
+      `- [>] R | ${T}src/a\n- [ ] A | model: opus\n- [ ] B | ${T}src/b`,
+      FILES,
+      ["B"],
+    ],
+    [
+      "exclusive: a running exclusive line blocks every line (files mode)",
+      `- [>] R | ${T}src/a | exclusive: yes\n- [ ] A | ${T}docs/x.md`,
+      FILES,
+      [],
+    ],
+    [
+      "exclusive: waits for every running line and blocks the lines after it (paths mode)",
+      `- [>] R | ${T}a\n- [ ] A | ${T}b | exclusive: rename\n- [ ] B | ${T}c`,
+      "batch_size: 5",
+      ["B"],
+    ],
+    [
+      "exclusive: admitted alone, then nothing joins it in the same pick",
+      `- [ ] A | ${T}a | exclusive: yes\n- [ ] B | ${T}b`,
+      FILES,
+      ["A"],
+    ],
+    [
+      "exclusive: — (or empty) is not exclusive",
+      `- [>] R | ${T}a\n- [ ] A | ${T}b | exclusive: —`,
+      FILES,
+      ["A"],
+    ],
+  ];
+  it.each(cases)("%s", (_name, body, header, expected) => {
+    expect(admittedIds(body, header)).toEqual(expected);
+  });
+
+  it("the reasons name an exclusive line and a file overlap", () => {
+    const r = plan(
+      `- [>] R | ${T}a.ts | exclusive: yes\n- [ ] A | ${T}b`,
+      "batch_size: 3\noverlap: files",
+    );
+    expect(r.reasons).toEqual([{ id: "A", why: "overlaps R (exclusive R)" }]);
+    const f = plan(`- [>] R | ${T}src/a.ts, src\n- [ ] A | ${T}src/a.ts`, FILES);
+    expect(f.reasons).toEqual([{ id: "A", why: "overlaps R (touches src/a.ts ~ src/a.ts)" }]);
+    const text = formatQueueNext({ ...r, dryRun: true }, true);
+    expect(text).toContain("A: overlaps R (exclusive R)");
+  });
+
+  it.each(["paths", "files"])(
+    "%s: touches: compare only within one repo; owner: compares across repos",
+    mode => {
+      const file = queueFile(
+        [
+          "- [>] R | repo: /abs/engine | touches: src/queue.ts",
+          "- [ ] A | touches: src",
+          "- [ ] B | repo: /abs/engine | touches: src/queue.ts",
+          "- [ ] C | repo: /abs/other | touches: src/queue.ts | owner: q",
+          "- [ ] D | repo: /abs/third | touches: x | owner: q.admit",
+        ].join("\n"),
+        `batch_size: 5\noverlap: ${mode}`,
+      );
+      const r = planPick(readQueue(file));
+      expect(r.admitted.map(a => a.id)).toEqual(["A", "C"]);
+      expect(r.reasons).toEqual([
+        { id: "B", why: "overlaps R (touches src/queue.ts ~ src/queue.ts)" },
+        { id: "D", why: "overlaps C (owner q.admit)" },
+      ]);
+    },
+  );
+
+  it("one repo spelled two ways (absent repo: and its absolute path) is still one repo", () => {
+    const file = queueFile(`- [ ] A | touches: src/a.ts`, "batch_size: 3");
+    const proj = path.resolve(path.dirname(file), "..", "..");
+    fs.appendFileSync(file, `- [ ] B | repo: ${proj} | touches: src/a.ts\n`);
+    const r = planPick(readQueue(file));
+    expect(r.admitted.map(a => a.id)).toEqual(["A"]);
+    expect(r.reasons).toEqual([{ id: "B", why: "overlaps A (touches src/a.ts ~ src/a.ts)" }]);
+  });
+
+  it("an overlap: value that is neither paths nor files refuses the pick only; a # comment is allowed", async () => {
+    const bad = parseQueue("# x\nbatch_size: 1\noverlap: file\n## Tasks\n", "q");
+    expect(bad.overlap).toBe("paths");
+    expect(() => planPick(bad)).toThrow(/overlap: "file" is not one of paths, files/);
+    expect(parseQueue("# x\nbatch_size: 1\noverlap: files  # why\n## Tasks\n", "q").overlap).toBe(
+      "files",
+    );
+    expect(parseQueue("# x\nbatch_size: 1\n## Tasks\n", "q").overlap).toBe("paths");
+    // The running lines are not stranded: marks, edits and the pause still go through the engine.
+    const file = queueFile(
+      `- [>] R | touches: a\n- [ ] A | touches: b`,
+      "batch_size: 2\noverlap: file",
+    );
+    await expect(pickQueue(file)).rejects.toThrow(/overlap: "file"/);
+    await expect(pickQueue(file, { dryRun: true })).rejects.toThrow(/overlap: "file"/);
+    await markQueue(file, "R", "done", "landed");
+    await editQueueLine(file, "A", { exclusive: "yes" });
+    await setQueueWindow(file, 0, "typo in the header");
+    expect(marks(file)).toEqual({ R: "x", A: " " });
+    expect(readQueue(file).batchSize).toBe(0);
+  });
+
+  it("files: an existing dotless file is a file; a missing dotless path or an existing dotted directory is a hint", () => {
+    const file = queueFile(
+      [
+        "- [>] R | touches: Makefile, bin/hxq, lib.d",
+        "- [ ] A | touches: Makefile",
+        "- [ ] B | touches: bin/hxq",
+        "- [ ] C | touches: lib.d",
+      ].join("\n"),
+      "batch_size: 5\noverlap: files",
+    );
+    const proj = path.resolve(path.dirname(file), "..", "..");
+    fs.writeFileSync(path.join(proj, "Makefile"), "all:\n");
+    fs.mkdirSync(path.join(proj, "lib.d"));
+    const r = planPick(readQueue(file));
+    expect(r.admitted.map(a => a.id)).toEqual(["B", "C"]);
+    expect(r.reasons).toEqual([{ id: "A", why: "overlaps R (touches Makefile ~ Makefile)" }]);
+    // Once it exists, a dotless path is a file too.
+    fs.mkdirSync(path.join(proj, "bin"));
+    fs.writeFileSync(path.join(proj, "bin", "hxq"), "");
+    expect(planPick(readQueue(file)).admitted.map(a => a.id)).toEqual(["C"]);
+  });
+
+  it("a line without touches: overlaps only its own repo; exclusive: and owner: reach every repo", () => {
+    const r = plan(
+      [
+        "- [>] R | repo: /abs/engine | touches: src/queue.ts",
+        "- [ ] A | model: opus",
+        "- [ ] B | repo: /abs/engine | model: opus",
+        "- [ ] C | repo: /abs/other | touches: x | exclusive: yes",
+      ].join("\n"),
+      "batch_size: 5",
+    );
+    expect(r.admitted.map(a => a.id)).toEqual(["A"]);
+    expect(r.reasons).toEqual([
+      { id: "B", why: "overlaps R (no touches:)" },
+      { id: "C", why: "overlaps R (exclusive C)" },
+    ]);
+  });
+
+  it("queue_add and queue_edit take exclusive: as a field", async () => {
+    const file = queueFile(`- [ ] A | touches: a`);
+    await addQueueLine(file, "B | touches: b | exclusive: yes | Move the tree.");
+    expect(readQueue(file).lines.find(l => l.id === "B")?.meta.exclusive).toBe("yes");
+    await editQueueLine(file, "A", { exclusive: "rename" });
+    expect(readQueue(file).lines.find(l => l.id === "A")?.meta.exclusive).toBe("rename");
+  });
+});
+
 describe("queue workflow:", () => {
   it("names the line's own task workflow; absent or `—` = none; a name that is not one word keeps the line out", () => {
     const r = plan(

@@ -1042,8 +1042,9 @@ export function registerTools(
       description:
         "Admit the next lines of a task queue file (`batch_size:` header, `- [ ] ID | key: value | … | text |` lines): " +
         "fills the window (batch_size minus the `[>]` lines) in file order with lines whose `after:` ids are all `[x]`, " +
-        "that carry no `⏸`, and whose `touches:` / `owner:` overlap no running or just-admitted line (no `touches:` = " +
-        "overlaps everything); marks each `[>]` under the queue's lock, so two calls never admit one line. Returns id, " +
+        "that carry no `⏸`, and whose `touches:` / `owner:` overlap no running or just-admitted line (`touches:` within " +
+        "one repo only, where no `touches:` = overlaps every line; an `exclusive:` = overlaps every line of every repo; " +
+        "header `overlap: files` = only file entries conflict, a directory or glob is a hint); marks each `[>]` under the queue's lock, so two calls never admit one line. Returns id, " +
         "model, effort, repo (absolute), workflow (the line's `workflow:`, when set) and text per admitted line. `batch_size: 0` = paused: nothing is admitted. " +
         "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
       inputSchema: z
@@ -1127,7 +1128,7 @@ export function registerTools(
         "Add a pending line to a task queue file under its lock (the lock queue_next / queue_mark take, so no mark " +
         "is lost to a concurrent write): `line` is `- [ ] ID | key: value | … | text |` (or the same without `- [ ] `). " +
         "Refused unless it reads as a pick reads it: a new id, one row, each `key:` field a known key " +
-        "(model, effort, after, touches, owner, repo, workflow) at most once, every id in `after:` a line of the queue " +
+        "(model, effort, after, touches, owner, repo, workflow, exclusive) at most once, every id in `after:` a line of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves. Goes after `after_id`, before `before_id`, " +
         "else after the last task line.",
       inputSchema: z
@@ -1158,7 +1159,7 @@ export function registerTools(
     {
       description:
         "Change one queue line's metadata fields under the queue's lock: `set: { field: value }` " +
-        '(model, effort, after, touches, owner, repo, workflow; `""` removes the field) and/or `append_note` ' +
+        '(model, effort, after, touches, owner, repo, workflow, exclusive; `""` removes the field) and/or `append_note` ' +
         "(one free-text field added at the end; no `|`, `⏸` or leading `key:`). The mark is queue_mark's. " +
         "A set field keeps its place; values are checked as queue_add checks them. Returns the line as written.",
       inputSchema: z
