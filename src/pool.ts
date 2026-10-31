@@ -197,6 +197,10 @@ export interface PoolEntry {
   readonly overrun?: number;
   /** When the waiter was first seen starved (logged once). */
   readonly starved?: number;
+  /** The p90 run time (ms) of the step from the ledger: what backfill trusts. Absent: unknown, never backfilled by time. */
+  readonly est_ms?: number;
+  /** A lease granted ahead of a waiting head (backfill): that head's id. */
+  readonly backfill_for?: string;
 }
 
 export interface PoolState {
@@ -204,6 +208,8 @@ export interface PoolState {
   readonly waiting: readonly PoolEntry[];
   /** The last grant (ms since epoch): a pool with waiters and no grant for `starve_after` is starved. */
   readonly last_grant?: number;
+  /** A head nothing is backfilled past any more: a lease backfilled ahead of it ran past twice its estimate. */
+  readonly backfill_off?: string;
 }
 
 /** The pool after one admission pass. */
@@ -280,9 +286,15 @@ export function levelPriority(level: PriorityLevel, stepPriority = 0): number {
  * (`held + N <= budget` and, unless the pool is empty, also
  * `held + N + external <= budget` — external load never blocks an empty pool:
  * a head of N >= budget would otherwise wait forever on background load) AND
- * none of its locks is held or wanted by an earlier waiter. Nothing overtakes
- * a waiter on what it waits for: once one fits by locks but not by threads,
- * no later waiter takes threads; a lock is handed out in queue order. A waiter
+ * none of its locks is held or wanted by an earlier waiter. A lock is handed
+ * out in queue order. The first waiter that fits by locks but not by threads
+ * is the head: a later waiter takes threads ahead of it (backfill) only when
+ * its estimate (`est_ms`) ends before the threads the head waits for are
+ * expected free (`headAt`), so it cannot delay the head. No estimate on either
+ * side: strict order. (Threads "left over after the head's min" do not exist
+ * now: a head blocked by threads has less room than it needs.) A lease
+ * backfilled past a head that runs twice its estimate stops backfill past
+ * that head (`backfill_off`). A waiter
  * blocked only by a held lock claims no threads, so a long-held lock does not
  * stall the rest of the queue; holding nothing while waiting, nobody deadlocks.
  *
@@ -319,7 +331,16 @@ export function schedule(
   const locked = new Set(leases.flatMap(e => e.locks ?? []));
   const claimed = new Set<string>();
   const still: PoolEntry[] = [];
-  let threadsClosed = false;
+  // the head is the first waiter that fits by locks but not by threads
+  let head: Reservation | undefined;
+  let backfillOff = waiting.some(w => w.id === state.backfill_off) ? state.backfill_off : undefined;
+  // The threads a waiter takes out of `avail`: its max, else (window over) all of `avail` down to its min.
+  const fit = (w: PoolEntry, avail: number): number | undefined => {
+    const max = effectiveThreads(w, config.budget);
+    if (avail >= max) return max;
+    if (now >= (w.full_until ?? 0) && avail >= minThreads(w, config.budget)) return avail;
+    return undefined;
+  };
   for (const w of waiting) {
     const locks = w.locks ?? [];
     const max = effectiveThreads(w, config.budget);
@@ -328,15 +349,23 @@ export function schedule(
     const room = held === 0 ? config.budget : Math.floor(config.budget - held - external);
     let n: number | undefined;
     if (max === 0) n = 0;
-    else if (!threadsClosed && room >= max) n = max;
-    else if (!threadsClosed && now >= (w.full_until ?? 0) && room >= minThreads(w, config.budget))
-      n = room;
+    else if (!head) n = fit(w, room);
+    else if (head.at !== undefined && w.est_ms !== undefined && now + w.est_ms <= head.at)
+      n = fit(w, room);
     if (locksFree && n !== undefined) {
       const { full_until: _window, ...granted } = w;
       const asked =
         w.min_threads !== undefined || n !== w.threads ? { asked_threads: w.threads } : {};
+      const backfill = head && n > 0 ? { backfill_for: head.id } : {};
       // a waiter's starved mark is not the lease's (undefined: never written)
-      leases.push({ ...granted, threads: n, started: now, ...asked, starved: undefined });
+      leases.push({
+        ...granted,
+        threads: n,
+        started: now,
+        ...asked,
+        ...backfill,
+        starved: undefined,
+      });
       held += n;
       lastGrant = now;
       for (const l of locks) locked.add(l);
@@ -344,7 +373,24 @@ export function schedule(
     }
     still.push(w);
     for (const l of locks) claimed.add(l);
-    if (locksFree) threadsClosed = true;
+    if (locksFree && !head) {
+      // A lease backfilled past this head that ran twice its estimate: estimates are not trusted for it any more.
+      if (
+        leases.some(
+          e =>
+            e.backfill_for === w.id &&
+            e.est_ms !== undefined &&
+            e.started !== undefined &&
+            now - e.started > 2 * e.est_ms,
+        )
+      )
+        backfillOff = w.id;
+      // inside its wait_full window a flexible head waits for its max
+      const need = now < (w.full_until ?? 0) ? max : minThreads(w, config.budget);
+      const at =
+        backfillOff === w.id ? undefined : headAt(leases, need, config.budget, external, runs, now);
+      head = { id: w.id, ...(at !== undefined ? { at } : {}) };
+    }
   }
   return {
     ...config,
@@ -354,8 +400,48 @@ export function schedule(
     leases,
     waiting: still,
     ...(lastGrant !== undefined ? { last_grant: lastGrant } : {}),
+    ...(backfillOff !== undefined ? { backfill_off: backfillOff } : {}),
     runs,
   };
+}
+
+/** The head's reservation in one admission pass. */
+interface Reservation {
+  readonly id: string;
+  /** When the threads the head waits for are expected free; absent: unknown, nothing passes it. */
+  readonly at?: number;
+}
+
+/**
+ * When `need` threads are expected free: the leases end in the order of their
+ * estimated ends (start + `est_ms`) until the room fits. A lease with no
+ * estimate, past its estimate or over-running ends at an unknown time: if the
+ * room needs it, the answer is undefined.
+ */
+function headAt(
+  leases: readonly PoolEntry[],
+  need: number,
+  budget: number,
+  external: number,
+  runs: Readonly<Record<string, number>>,
+  now: number,
+): number | undefined {
+  const ends = leases
+    .map(e => {
+      const n = effectiveThreads(e, budget);
+      const end =
+        e.est_ms !== undefined && e.started !== undefined ? e.started + e.est_ms : Infinity;
+      return { n, end: end > now && !overruns(e, { budget, runs }) ? end : Infinity };
+    })
+    .filter(e => e.n > 0)
+    .sort((a, b) => a.end - b.end);
+  let held = ends.reduce((sum, e) => sum + e.n, 0);
+  for (const { n, end } of ends) {
+    if (end === Infinity) return undefined;
+    held -= n;
+    if ((held === 0 ? budget : Math.floor(budget - held - external)) >= need) return end;
+  }
+  return undefined;
 }
 
 /**
@@ -490,6 +576,8 @@ export interface LeaseRequest {
   readonly pid?: number;
   /** The group attached later dies with `pid`: once `pid` is dead the reaper kills it (a `wf-run` lease). */
   readonly ownsGroup?: boolean;
+  /** The run's expected time (ms, a p90): lets the pool backfill it ahead of a waiting head. */
+  readonly estMs?: number;
 }
 
 export interface AcquireOptions {
@@ -543,6 +631,7 @@ function readState(raw: string, fp: string): PoolState {
       leases: parsed.leases ?? [],
       waiting: parsed.waiting ?? [],
       ...(typeof parsed.last_grant === "number" ? { last_grant: parsed.last_grant } : {}),
+      ...(typeof parsed.backfill_off === "string" ? { backfill_off: parsed.backfill_off } : {}),
     };
   } catch {
     console.error(`wf-pool: ${fp} is not valid JSON — starting from an empty pool`);
@@ -633,6 +722,7 @@ export class Pool {
       arrived,
       ...(locks.length > 0 ? { locks } : {}),
       ...(req.ownsGroup ? { owns_group: true as const } : {}),
+      ...(req.estMs !== undefined && req.estMs > 0 ? { est_ms: req.estMs } : {}),
     };
     const progressMs = opts.progressMs ?? DEFAULT_PROGRESS_MS;
     let lastProgress: number | undefined;
@@ -877,6 +967,23 @@ export class Pool {
     return { ...view, leases, waiting };
   }
 
+  /** Log the leases this pass backfilled ahead of a head, and a head newly closed to backfill. */
+  private _logBackfill(before: PoolState, view: PoolView, now: number): void {
+    const known = new Set(before.leases.map(e => e.id));
+    for (const e of view.leases)
+      if (e.backfill_for !== undefined && !known.has(e.id))
+        this._log(
+          now,
+          `backfill: pid ${e.pid} takes ${e.threads} threads ahead of ${e.backfill_for}` +
+            `${e.est_ms !== undefined ? ` (est ${formatDuration(e.est_ms)})` : ""} — ${e.label || "-"}`,
+        );
+    if (view.backfill_off !== undefined && view.backfill_off !== before.backfill_off)
+      this._log(
+        now,
+        `backfill off: a lease backfilled ahead of ${view.backfill_off} ran past twice its estimate — nothing passes it any more`,
+      );
+  }
+
   /** One line to `pool.log`; a log that cannot be written is not the pool's failure. */
   private _log(now: number, line: string): void {
     const fp = path.join(this.dir, LOG_FILE);
@@ -908,6 +1015,7 @@ export class Pool {
         schedule(state, this.config(), this._load(), live, now, this._runs(state.leases, now)),
         now,
       );
+      this._logBackfill(state, view, now);
       const next = JSON.stringify(
         {
           leases: view.leases,
@@ -916,6 +1024,7 @@ export class Pool {
           ...(view.last_grant !== undefined && view.waiting.length > 0
             ? { last_grant: view.last_grant }
             : {}),
+          ...(view.backfill_off !== undefined ? { backfill_off: view.backfill_off } : {}),
         },
         null,
         2,

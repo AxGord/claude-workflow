@@ -73,6 +73,8 @@ export interface ExecContext {
   readonly project?: string;
   /** The running step, `workflow/state`. */
   readonly step?: string;
+  /** The step's expected run time (ms) on `threads` threads, from past runs; undefined: unknown. */
+  readonly estimate?: (threads: number) => number | undefined;
   /**
    * A plain or leased foreground exec reports its detached run here once it
    * started; the run's files then belong to the caller (`discardRun`).
@@ -213,6 +215,8 @@ export class Executor {
           project: ctx?.project,
           step: ctx?.step,
           sessionId,
+          // a flexible request's threads are not known before the grant, a shard's run is not its step's
+          estMs: flexible || shard || threads === 0 ? undefined : ctx?.estimate?.(threads),
         },
         {
           waitTimeoutMs:

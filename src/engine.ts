@@ -24,7 +24,8 @@ import {
   PriorityLevelSchema,
 } from "./types.js";
 import { projectRoot } from "./pool.js";
-import type { Storage } from "./storage.js";
+import { LEDGER_FILE, type Storage } from "./storage.js";
+import { Estimates } from "./estimate.js";
 import type { Loader } from "./loader.js";
 import type { ExecContext } from "./executor.js";
 import type { ExecPhase } from "./progress.js";
@@ -129,6 +130,8 @@ export class Engine {
   // is this server's own, never one to take over.
   private readonly _inFlight = new Set<string>();
   private readonly _options: EngineOptions;
+  // The ledger's run times, re-read by its appended tail.
+  private _estimates: Estimates | undefined;
 
   constructor(storage: Storage, loader: Loader, executor: Executor, options: EngineOptions = {}) {
     this._storage = storage;
@@ -1044,6 +1047,7 @@ export class Engine {
     };
     const execCtx: ExecContext = {
       ...this._execContext(session),
+      ...this._estimate(session, state),
       onPhase: phase => phaseSink.set?.(phase),
       onStarved: note => {
         phaseSink.note?.(note);
@@ -1613,6 +1617,18 @@ export class Engine {
     } catch (err) {
       console.error(`Ledger append failed for ${session.session_id}:`, err);
     }
+  }
+
+  /** The ledger's estimate of a leased step's run, read by the requester (never under the pool lock). */
+  private _estimate(session: SessionState, state: StateDefinition): Pick<ExecContext, "estimate"> {
+    const stateDir = this._options.stateDir;
+    if (!stateDir || !state.resource || state.fanout) return {};
+    const frame = session.stack[session.active_frame];
+    const cwd = typeof session.context.cwd === "string" ? session.context.cwd : process.cwd();
+    const key = `${projectRoot(cwd)}|${frame.workflow}|${frame.current_state}`;
+    this._estimates ??= new Estimates(path.join(stateDir, LEDGER_FILE));
+    const estimates = this._estimates;
+    return { estimate: threads => estimates.lookup(key, threads) };
   }
 
   private _execContext(session: SessionState): ExecContext {

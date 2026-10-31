@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // wf-run: run a heavy command under a lease from the machine-wide thread pool.
-//   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]
+//   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]
 //   wf-run --status
 // The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
 // and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
@@ -26,7 +26,7 @@ import {
 } from "./types.js";
 
 const USAGE =
-  "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]\n" +
+  "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]\n" +
   "       wf-run --status";
 const EX_USAGE = 64;
 const EX_NOEXEC = 126;
@@ -47,6 +47,8 @@ interface Options {
   /** The session level the priority came with (only when it came from WF_PRIORITY). */
   readonly level?: PriorityLevel;
   readonly waitTimeoutSec?: number;
+  /** The run's expected time: the pool may start it ahead of a waiting head it cannot delay. */
+  readonly estSec?: number;
   readonly label?: string;
   readonly efficiency: boolean;
   readonly failOpen: boolean;
@@ -64,6 +66,7 @@ function parseArgs(argv: readonly string[]): Options {
   const locks: string[] = [];
   let priority: number | undefined;
   let waitTimeoutSec: number | undefined;
+  let estSec: number | undefined;
   let label: string | undefined;
   let i = 0;
   const value = (flag: string, inline: string | undefined): string => {
@@ -133,6 +136,10 @@ function parseArgs(argv: readonly string[]): Options {
       case "--wait-timeout":
         waitTimeoutSec = seconds(flag, value(flag, inline));
         break;
+      case "--est":
+        estSec = seconds(flag, value(flag, inline));
+        if (estSec === 0) throw new Error(`${flag}: expected seconds > 0`);
+        break;
       default:
         throw new Error(`unknown option ${flag}`);
     }
@@ -152,6 +159,7 @@ function parseArgs(argv: readonly string[]): Options {
     priority: priority ?? inherited?.priority ?? 0,
     level: inherited?.level,
     waitTimeoutSec,
+    estSec,
     label,
     efficiency,
     failOpen,
@@ -284,6 +292,7 @@ async function main(argv: readonly string[]): Promise<number> {
         sessionId: process.env.WF_SESSION_ID,
         // a SIGKILLed wf-run cannot release: the reaper kills its detached child's group instead
         ownsGroup: true,
+        ...(opts.estSec !== undefined ? { estMs: opts.estSec * 1000 } : {}),
       },
       {
         waitTimeoutMs: opts.waitTimeoutSec === undefined ? undefined : opts.waitTimeoutSec * 1000,
