@@ -894,9 +894,13 @@ export class Engine {
   /** status()'s LINKED AGENTS block of a session: its children's agents linked at its current state. */
   public linkedAgentLines(sessionId: string): string[] {
     const s = this._storage.read(sessionId);
-    if (!s || s.stack.length === 0) return [];
-    const children = this._storage.readAll().filter(c => c.parent_session_id === sessionId);
-    return linkedAgentLines(s, children);
+    if (!s || s.stack.length === 0 || !this._declaresDriver(s)) return [];
+    try {
+      const children = this._storage.readAll().filter(c => c.parent_session_id === sessionId);
+      return linkedAgentLines(s, children);
+    } catch {
+      return [];
+    }
   }
 
   /** Suspended sessions, oldest first: those whose cwd lies in `projectRootPath` (its git root), or all. */

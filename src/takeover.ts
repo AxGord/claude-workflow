@@ -179,8 +179,13 @@ export function earlierVisitNote(
 ): string | undefined {
   const now = parent && parent.stack.length > 0 ? currentStep(parent) : undefined;
   const standing = now && linkStanding(s, now);
-  if (!now || !standing || standing === "current") return undefined;
-  return `linked at its parent's ${now.state} visit ${s.agent_step!.visit}, the parent is now at visit ${now.visit}: an earlier visit's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
+  if (!now || !s.agent_id || !s.agent_step) return undefined;
+  if (!standing) {
+    const at = s.agent_step;
+    return `linked at its parent's ${at.state} visit ${at.visit}, the parent is now at ${now.state}: an earlier step's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
+  }
+  if (standing === "current") return undefined;
+  return `linked at its parent's ${now.state} visit ${s.agent_step.visit}, the parent is now at visit ${now.visit}: an earlier visit's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
 }
 
 /**

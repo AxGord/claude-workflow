@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { currentStep, linkStanding, linkedAgentLines } from "./agent-link.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
@@ -200,6 +200,45 @@ describe("agent links (engine)", () => {
     expect(text).not.toContain("worker1");
   });
 
+  it("a restart in the fix state: a review session left running is an earlier step's, not woken", async () => {
+    const m = mount();
+    const { storage, engine } = m;
+    const p = (await engine.start("task")).sessionId;
+    await engine.transition(p, "review");
+    const r1 = (await engine.start("child", undefined, p)).sessionId;
+    await engine.linkAgent(r1, "rev1");
+    await engine.transition(p, "fix");
+    const dead = spawn("true");
+    await new Promise(r => dead.on("exit", r));
+    for (const id of [p, r1]) {
+      const cur = storage.read(id)!;
+      await storage.write(id, {
+        ...cur,
+        claude_session_id: "conv",
+        context: { ...cur.context, claude_code_pid: dead.pid! },
+      });
+    }
+    await engine.reapOrphanedSessions();
+    const text = formatResume(await m.restart().resume(p));
+    expect(text).toContain("an earlier step's agent — not woken");
+    expect(text).not.toContain(`SendMessage({ to: "rev1"`);
+  });
+
+  it("linkedAgentLines: a parent without driver: skips the scan; a failing read is soft", async () => {
+    const m = mount();
+    {
+      const d = (await m.engine.start("loop")).sessionId;
+      const spy = vi.spyOn(m.storage, "readAll");
+      expect(m.engine.linkedAgentLines(d)).toEqual([]);
+      expect(spy).not.toHaveBeenCalled();
+      const p = (await m.engine.start("task")).sessionId;
+      spy.mockImplementation(() => {
+        throw new Error("boom");
+      });
+      expect(m.engine.linkedAgentLines(p)).toEqual([]);
+    }
+  });
+
   /** A dispatcher at `dispatch` visit 2, its visit-1 driver's session still running, then a restart. */
   async function dispatcherLoop(m: ReturnType<typeof mount>) {
     const { storage, engine } = m;
@@ -225,6 +264,29 @@ describe("agent links (engine)", () => {
     await engine.reapOrphanedSessions();
     return { d, c1, c2 };
   }
+
+  it("a parent without driver: a child linked at an earlier state is still woken after a restart", async () => {
+    const m = mount();
+    const { storage, engine } = m;
+    const d = (await engine.start("loop")).sessionId;
+    const c1 = (await engine.start("child", undefined, d)).sessionId;
+    await engine.linkAgent(c1, "drv1");
+    await engine.transition(d, "dispatched");
+    const dead = spawn("true");
+    await new Promise(r => dead.on("exit", r));
+    for (const id of [d, c1]) {
+      const cur = storage.read(id)!;
+      await storage.write(id, {
+        ...cur,
+        claude_session_id: "conv",
+        context: { ...cur.context, claude_code_pid: dead.pid! },
+      });
+    }
+    await engine.reapOrphanedSessions();
+    const text = formatResume(await m.restart().resume(d));
+    expect(text).toContain(`SendMessage({ to: "drv1"`);
+    expect(text).not.toContain("earlier step's agent");
+  });
 
   it("a parent without driver: is never visit-scoped — a restart in its loop wakes every agent, none offered abort", async () => {
     const m = mount();

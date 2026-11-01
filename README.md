@@ -644,7 +644,7 @@ driver:
   that SendMessages the same worker calls `link_agent` again, which re-records the step. After a
   restart, `resume`'s and the SessionStart pickup's sub-agent lines name such an earlier visit's agent
   (`… — linked at its parent's review visit 1, the parent is now at visit 2: an earlier visit's agent —
-  not woken; abort(…) once it is not needed`) with no wake `SendMessage`.
+  not woken; abort(…) once it is not needed`) with no wake `SendMessage`; so is one linked at another step of the parent than its current one (`… the parent is now at fix: an earlier step's agent — not woken …`).
   `driver:` on a workflow whose initial state is not a prompt state fails the load.
 - Bookkeeping is an exec: `mark_done` marks the line `[x]` with the landed sha and, when the queue
   header names `record_file:` (relative = beside the queue; the value is taken whole — no `# comment`), appends one line from the context —

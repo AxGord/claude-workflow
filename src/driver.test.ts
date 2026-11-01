@@ -97,17 +97,14 @@ describe("driver (pure)", () => {
     expect(flat).toContain(
       "that status lists P's LINKED AGENTS of its current state — the engine marks each `current` (linked at this visit) or not; only a `current` one is this visit's agent",
     );
-    // the probe is barred, the prompt's own fix-round SendMessage and re-link are not
+    // the probe is barred, the prompt's own steps and re-link are not; nothing names a batch-task state
     expect(flat).toContain(
-      "its own steps still apply (a fix round's SendMessage of the cause to worker_agent, then its link_agent, included) — but never ask an earlier visit's agent where it stands, nor take it as this visit's",
-    );
-    // a gone agent: the tree at work, the review file's verdict at review, else a fresh agent
-    expect(flat).toContain(
-      "gone → at work, check the tree (its commit on the task's branch and a clean worktree → the prompt's verify step)",
+      "its own steps still apply (any SendMessage to an earlier agent and its link_agent included) — but never ask an earlier visit's agent where it stands, nor take it as this visit's",
     );
     expect(flat).toContain(
-      "at review, a <wt>.log/review.md newer than the branch's last commit holding a VERDICT line → route by that verdict; else a fresh agent on the session it is linked to, then link_agent it",
+      "gone → check the tree for the work its step leaves behind and, when the step's own instructions say how to verify it, follow them; else a fresh agent on the session it is linked to, then link_agent it",
     );
+    expect(flat).not.toMatch(/worker_agent|review\.md|VERDICT|task's branch/);
     // no context key carries the visit
     expect(flat).not.toMatch(/visit marker|worker_visit|review_visit/);
   });
