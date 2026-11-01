@@ -104,6 +104,69 @@ describe("batch-task default extension points", () => {
     expect(dirty.exit_code).toBe(3);
     expect(git(repo, "rev-parse", "HEAD")).toBe(head);
   });
+  it("review_scope classes the task's branch by the plugin's review-class.sh: tests/docs only = light, else code", async () => {
+    const { repo, plugin, vars } = setup();
+    const real = path.resolve(TEMPLATES, "..");
+    const ex = new Executor();
+    const wt = (await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo })).stdout;
+    const scope = () => ex.execute(state("review_scope", "", real), vars, { cwd: repo });
+    const empty = await scope();
+    expect([empty.exit_code, empty.stdout.trim()]).toEqual([0, "code"]);
+    expect(empty.stderr).toContain("changes nothing");
+    fs.mkdirSync(path.join(wt, "test"));
+    fs.writeFileSync(path.join(wt, "test", "a.test.ts"), "t\n");
+    fs.writeFileSync(path.join(wt, "NOTES.md"), "n\n");
+    git(wt, "add", ".");
+    git(wt, "commit", "-qm", "tests and docs");
+    const light = await scope();
+    expect([light.exit_code, light.stdout.trim()]).toEqual([0, "light"]);
+    fs.writeFileSync(path.join(wt, "main.ts"), "m\n");
+    git(wt, "add", ".");
+    git(wt, "commit", "-qm", "code");
+    // main moved on meanwhile: only the branch's side since the merge base counts
+    fs.writeFileSync(path.join(repo, "other.ts"), "o\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-qm", "main moved");
+    const code = await scope();
+    expect([code.exit_code, code.stdout.trim()]).toEqual([0, "code"]);
+    expect(code.stderr).toContain("main.ts");
+    expect(code.stderr).not.toContain("other.ts");
+  });
+
+  it("review-class.sh: a nested docs/ or spec/ package and a .txt build file are code; root docs, tests anywhere, *.md are light", () => {
+    const { repo } = setup();
+    const script = path.resolve(TEMPLATES, "..", "scripts", "review-class.sh");
+    const cases: [string, string][] = [
+      ["docs/guide.md", "light"],
+      ["docs/api.html", "light"],
+      ["src/tests/a.ts", "light"],
+      ["src/__tests__/b.ts", "light"],
+      ["src/x.test.ts", "light"],
+      ["src/FooTest.hx", "light"],
+      ["CHANGELOG", "light"],
+      ["CMakeLists.txt", "code"],
+      ["requirements.txt", "code"],
+      ["src/doc/Printer.x", "code"],
+      ["src/spec/Typer.x", "code"],
+      ["src/check/common/docs/Rule.hx", "code"],
+    ];
+    for (const [file, want] of cases) {
+      const branch = `c${cases.findIndex(c => c[0] === file)}`;
+      git(repo, "checkout", "-q", "-b", branch, "main");
+      fs.mkdirSync(path.join(repo, path.dirname(file)), { recursive: true });
+      fs.writeFileSync(path.join(repo, file), "x\n");
+      git(repo, "add", ".");
+      git(repo, "commit", "-qm", file);
+      git(repo, "checkout", "-q", "main");
+      const got = execFileSync("sh", [script, "main", branch], {
+        cwd: repo,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      expect([file, got]).toEqual([file, want]);
+    }
+  });
+
   it("a red land_test keeps an edit made meanwhile; a HEAD moved during the test is never reset (4)", async () => {
     const { repo, plugin, vars } = setup();
     const ex = new Executor();

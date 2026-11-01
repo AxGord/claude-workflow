@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // wf-queue: the exec form of queue_next / queue_mark (src/queue.ts), for a workflow's exec states.
-//   wf-queue <queue.md> [--dry-run] [--explain|--explain-all]   pick: stdout one `ID\tmodel\teffort\trepo\tworkflow` per admitted line
+//   wf-queue <queue.md> [--dry-run] [--explain|--explain-all]   pick: stdout one `ID\tmodel\teffort\trepo\tworkflow\tdifficulty` per admitted line
 //                                                 (marked `[>]`), the summary on stderr; --explain folds
 //                                                 "window full" lines into one, --explain-all lists all
 //   wf-queue <queue.md> --done|--failed|--release|--running <ID> [--note TEXT]
-//   wf-queue <queue.md> --running <ID> --retry [--note TEXT]   a failed line again: `[!]`→`[>]`
+//   wf-queue <queue.md> --running <ID> --retry [--note TEXT]   a failed line again: `[!]`→`[>]`, its difficulty: +1 (≤10)
 //   wf-queue <queue.md> --header <key>            the header's value of <key> (empty when absent)
 //   wf-queue <queue.md> --add <LINE> [--after <ID>|--before <ID>]       queue_add
 //   wf-queue <queue.md> --edit <ID> [--set key=value]… [--append-note TEXT]   queue_edit (`key=` removes)
@@ -16,6 +16,7 @@ import {
   QueueError,
   addQueueLine,
   editQueueLine,
+  formatMark,
   formatPickSummary,
   formatTask,
   markQueue,
@@ -66,7 +67,7 @@ async function main(args: string[]): Promise<number> {
     const r = await markQueue(file, id, MARKS[op], o.get("--note")?.[0], {
       retry: o.has("--retry"),
     });
-    process.stdout.write(`${r.id}: [${r.from}] → [${r.to}]\n`);
+    process.stdout.write(`${formatMark(r)}\n`);
     return 0;
   }
   if (op === "--header") {

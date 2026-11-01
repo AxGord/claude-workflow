@@ -6,6 +6,8 @@ import {
   addQueueLine,
   editQueueLine,
   explainLines,
+  formatMark,
+  formatTask,
   markQueue,
   parseQueue,
   pickQueue,
@@ -392,6 +394,51 @@ describe("queue workflow:", () => {
   });
 });
 
+describe("queue difficulty:", () => {
+  it("carries 1..10 to the pick (exec column, queue_next text); `-` = none; anything else keeps the line out", () => {
+    const r = plan(
+      [
+        "- [ ] A | difficulty: 7 | touches: a | Do A. |",
+        "- [ ] B | difficulty: - | touches: b",
+        "- [ ] C | touches: c",
+        "- [ ] D | difficulty: 11 | touches: d",
+        "- [ ] E | difficulty: hard | touches: e",
+      ].join("\n"),
+      "batch_size: 5",
+    );
+    expect(r.admitted.map(a => [a.id, a.difficulty])).toEqual([
+      ["A", 7],
+      ["B", undefined],
+      ["C", undefined],
+    ]);
+    expect(r.reasons).toEqual([
+      { id: "D", why: 'difficulty "11" is not a whole number 1..10' },
+      { id: "E", why: 'difficulty "hard" is not a whole number 1..10' },
+    ]);
+    expect(formatTask(r.admitted[0])).toBe(`A\topus\t-\t${r.admitted[0].repo}\t-\t7`);
+    expect(formatTask(r.admitted[2])).toMatch(/\t-\t-$/);
+    const text = formatQueueNext({ ...r, dryRun: true }, false);
+    expect(text).toMatch(/WOULD ADMIT A \|.*\| difficulty: 7\n/);
+    expect(text).not.toMatch(/WOULD ADMIT C \|.*difficulty/);
+  });
+
+  it("queue_add and queue_edit accept 1..10 and refuse anything else", async () => {
+    const file = queueFile("- [ ] A | touches: a");
+    await addQueueLine(file, "B | difficulty: 3 | touches: b");
+    await expect(addQueueLine(file, "C | difficulty: 0 | touches: c")).rejects.toThrow(
+      'C: difficulty "0" is not a whole number 1..10',
+    );
+    await editQueueLine(file, "A", { difficulty: "10" });
+    await expect(editQueueLine(file, "A", { difficulty: "2.5" })).rejects.toThrow(
+      'A: difficulty "2.5" is not a whole number 1..10',
+    );
+    expect(taskRows(file)).toEqual([
+      "- [ ] A | touches: a | difficulty: 10",
+      "- [ ] B | difficulty: 3 | touches: b",
+    ]);
+  });
+});
+
 describe("queue pause (batch_size: 0)", () => {
   it("admits nothing; 12 when nothing runs, 10 while a line still runs; the comment is shown", () => {
     const header = "batch_size: 0  # пауза: машина занята, было 4";
@@ -666,6 +713,40 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     });
     expect(taskRows(file)[0]).toBe("- [>] A | retry 2 | failed once | touches: a");
   });
+
+  it("mark retry raises the line's difficulty: by one, capped at 10; a line without one is unchanged", async () => {
+    const file = queueFile(
+      [
+        "- [!] A | difficulty: 4 | touches: a | Do A. |",
+        "- [!] B | touches: b | difficulty: 10",
+        "- [!] C | difficulty: - | touches: c",
+        "- [!] D | touches: d",
+        "- [>] E | difficulty: 2 | touches: e",
+      ].join("\n"),
+      "batch_size: 5",
+    );
+    const a = await markQueue(file, "A", "running", "retry 1", { retry: true });
+    expect(a).toEqual({ id: "A", from: "!", to: ">", difficulty: { from: 4, to: 5 } });
+    expect(formatMark(a)).toBe("A: [!] → [>] (difficulty 4 → 5)");
+    const b = await markQueue(file, "B", "running", undefined, { retry: true });
+    expect(b.difficulty).toEqual({ from: 10, to: 10 });
+    expect(formatMark(b)).toBe("B: [!] → [>] (difficulty 10: already the cap)");
+    for (const id of ["C", "D"]) {
+      const r = await markQueue(file, id, "running", undefined, { retry: true });
+      expect(r.difficulty).toBeUndefined();
+      expect(formatMark(r)).toBe(`${id}: [!] → [>]`);
+    }
+    // only a retry raises it
+    await markQueue(file, "E", "done");
+    expect(taskRows(file)).toEqual([
+      "- [>] A | retry 1 | difficulty: 5 | touches: a | Do A. |",
+      "- [>] B | touches: b | difficulty: 10",
+      "- [>] C | difficulty: - | touches: c",
+      "- [>] D | touches: d",
+      "- [x] E | difficulty: 2 | touches: e",
+    ]);
+    expect(planPick(readQueue(file)).running).toEqual(["A", "B", "C", "D"]);
+  });
 });
 
 describe("wf-queue CLI", () => {
@@ -698,14 +779,14 @@ describe("wf-queue CLI", () => {
     const repo = path.resolve(file, "../../..");
     const first = await cli(file, "--explain");
     expect(first.code).toBe(0);
-    expect(first.out).toBe(`A\thaiku\t-\t${repo}\t-\n`);
+    expect(first.out).toBe(`A\thaiku\t-\t${repo}\t-\t-\n`);
     expect(first.err).toContain("B: after: A[ ]");
     expect((await cli(file)).code).toBe(10);
     expect((await cli(file, "--done", "A")).out).toBe("A: [>] → [x]\n");
     expect((await cli(file, "--header", "land_test")).out).toBe("npm test");
     const second = await cli(file);
     expect(second.code).toBe(0);
-    expect(second.out).toBe(`B\topus\t-\t${repo}\tengine-task\n`);
+    expect(second.out).toBe(`B\topus\t-\t${repo}\tengine-task\t-\n`);
     await cli(file, "--failed", "B");
     expect((await cli(file)).code).toBe(11);
     expect((await cli(file, "--bogus")).code).toBe(2);
@@ -727,6 +808,11 @@ describe("wf-queue CLI", () => {
     expect((await cli(file, "--batch-size", "1")).code).toBe(2);
     expect((await cli(file, "--running", "A")).code).toBe(2);
     expect((await cli(file, "--running", "A", "--retry")).out).toBe("A: [!] → [>]\n");
+    await cli(file, "--failed", "A");
+    expect((await cli(file, "--edit", "A", "--set", "difficulty=6")).code).toBe(0);
+    expect((await cli(file, "--running", "A", "--retry")).out).toBe(
+      "A: [!] → [>] (difficulty 6 → 7)\n",
+    );
     expect((await cli(file, "--done", "A", "--retry")).code).toBe(2);
     expect(marks(file)).toEqual({ B: " ", A: ">" });
   });

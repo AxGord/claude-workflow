@@ -21,6 +21,7 @@ import {
   MARK_TARGETS,
   addQueueLine,
   editQueueLine,
+  formatMark,
   formatPickSummary,
   markQueue,
   pickQueue,
@@ -257,7 +258,8 @@ export function formatQueueNext(r: PickResult, explain: boolean | "all"): string
     lines.push(
       "",
       `${r.dryRun ? "WOULD ADMIT" : "ADMITTED [>]"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}` +
-        (a.workflow ? ` | workflow: ${a.workflow}` : ""),
+        (a.workflow ? ` | workflow: ${a.workflow}` : "") +
+        (a.difficulty !== undefined ? ` | difficulty: ${a.difficulty}` : ""),
       a.text,
     );
   return lines.join("\n");
@@ -465,6 +467,7 @@ export function registerTools(
             return `  [${h.frame}] [auto] ${h.from} --${detailStr}--> ${h.to} at ${h.at}`;
           if (h.event === "skill_gate")
             return `  [${h.frame}] [auto] ${h.from} --skills--> ${h.to} at ${h.at}`;
+          if (h.event === "model") return `  [${h.frame}] model_table: ${h.detail} at ${h.at}`;
           if (h.event)
             return `  [${h.frame}] ${h.event}${h.workflow ? ` (${h.workflow})` : ""}${actorStr} at ${h.at}`;
           return `  [${h.frame}] ${h.from} --${h.via}--> ${h.to}${detailStr}${actorStr} at ${h.at}`;
@@ -576,8 +579,11 @@ export function registerTools(
           const sid = engine.resolveSessionId(args.session_id);
           engine.assertNotSuspended(sid);
           const warning = engine.assertOwnership(sid, args.force);
-          await engine.setContext(sid, args.key, args.value, args.actor);
-          const text = (warning ? warning + "\n" : "") + `Context "${args.key}" set successfully.`;
+          const derived = await engine.setContext(sid, args.key, args.value, args.actor);
+          const text =
+            (warning ? warning + "\n" : "") +
+            `Context "${args.key}" set successfully.` +
+            (derived ? `\nmodel_table: ${derived}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {
@@ -1045,7 +1051,8 @@ export function registerTools(
         "that carry no `⏸`, and whose `touches:` / `owner:` overlap no running or just-admitted line (`touches:` within " +
         "one repo only, where no `touches:` = overlaps every line; an `exclusive:` = overlaps every line of every repo; " +
         "header `overlap: files` = only file entries conflict, a directory or glob is a hint); marks each `[>]` under the queue's lock, so two calls never admit one line. Returns id, " +
-        "model, effort, repo (absolute), workflow (the line's `workflow:`, when set) and text per admitted line. `batch_size: 0` = paused: nothing is admitted. " +
+        "model, effort, repo (absolute), workflow (the line's `workflow:`, when set), difficulty (the line's `difficulty:` 1..10, when set: " +
+        "the task workflow's model_table maps it to model/effort) and text per admitted line. `batch_size: 0` = paused: nothing is admitted. " +
         "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
       inputSchema: z
         .object({
@@ -1090,7 +1097,7 @@ export function registerTools(
     {
       description:
         "Change one line's mark in a task queue file under its lock: running `[ ]`→`[>]` (with `retry: true`: " +
-        "`[!]`→`[>]`, a failed line run again), done `[>]`→`[x]`, failed `[>]`→`[!]`, released `[>]`→`[ ]` " +
+        "`[!]`→`[>]`, a failed line run again; its `difficulty: N` becomes N+1, at most 10, so the new session starts a row up), done `[>]`→`[x]`, failed `[>]`→`[!]`, released `[>]`→`[ ]` " +
         "(nothing of the task was made). Refuses any other current mark. " +
         "`note` is written right after the id (`- [x] ID | <note> | …`).",
       inputSchema: z
@@ -1104,7 +1111,9 @@ export function registerTools(
           retry: z
             .boolean()
             .optional()
-            .describe("With `to: running`: restart a failed `[!]` line (`[!]`→`[>]`)"),
+            .describe(
+              "With `to: running`: restart a failed `[!]` line (`[!]`→`[>]`); its `difficulty:` is raised by one (≤10)",
+            ),
         })
         .strict(),
     },
@@ -1113,7 +1122,7 @@ export function registerTools(
         const r = await markQueue(args.file, args.id, args.to, args.note, {
           retry: args.retry === true,
         });
-        return { content: [{ type: "text", text: `${r.id}: [${r.from}] → [${r.to}]` }] };
+        return { content: [{ type: "text", text: formatMark(r) }] };
       } catch (err) {
         return queueError(err);
       }
@@ -1128,8 +1137,8 @@ export function registerTools(
         "Add a pending line to a task queue file under its lock (the lock queue_next / queue_mark take, so no mark " +
         "is lost to a concurrent write): `line` is `- [ ] ID | key: value | … | text |` (or the same without `- [ ] `). " +
         "Refused unless it reads as a pick reads it: a new id, one row, each `key:` field a known key " +
-        "(model, effort, after, touches, owner, repo, workflow, exclusive) at most once, every id in `after:` a line of the queue " +
-        "(no cycle), a one-word `workflow:`, a `repo:` that resolves. Goes after `after_id`, before `before_id`, " +
+        "(model, effort, after, touches, owner, repo, workflow, exclusive, difficulty) at most once, every id in `after:` a line of the queue " +
+        "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10. Goes after `after_id`, before `before_id`, " +
         "else after the last task line.",
       inputSchema: z
         .object({
@@ -1159,7 +1168,7 @@ export function registerTools(
     {
       description:
         "Change one queue line's metadata fields under the queue's lock: `set: { field: value }` " +
-        '(model, effort, after, touches, owner, repo, workflow, exclusive; `""` removes the field) and/or `append_note` ' +
+        '(model, effort, after, touches, owner, repo, workflow, exclusive, difficulty; `""` removes the field) and/or `append_note` ' +
         "(one free-text field added at the end; no `|`, `⏸` or leading `key:`). The mark is queue_mark's. " +
         "A set field keeps its place; values are checked as queue_add checks them. Returns the line as written.",
       inputSchema: z

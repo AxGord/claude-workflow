@@ -12,7 +12,11 @@ import {
   StateDefinitionSchema,
   ResourceObjectSchema,
   FanoutObjectSchema,
+  ModelTableObjectSchema,
+  ModelRowObjectSchema,
+  ModelChoiceObjectSchema,
 } from "./types.js";
+import { modelTableErrors } from "./model-table.js";
 
 /** A parsed workflow file of one load tier (bundled, global, project). */
 interface TierEntry {
@@ -39,9 +43,14 @@ function nearest(key: string, known: readonly string[]): string {
   return best;
 }
 
-/** The keys a schema object at `issuePath` accepts (workflow, state, or a state's retry). */
+/** The keys a schema object at `issuePath` accepts (workflow, state, a state's retry, the model table). */
 function knownKeysAt(issuePath: readonly (string | number)[]): readonly string[] {
   if (issuePath.length === 0) return Object.keys(WorkflowFileObjectSchema.shape);
+  if (issuePath[0] === "model_table") {
+    if (issuePath[1] === "rows") return Object.keys(ModelRowObjectSchema.shape);
+    if (issuePath[1] === "review") return Object.keys(ModelChoiceObjectSchema.shape);
+    return Object.keys(ModelTableObjectSchema.shape);
+  }
   if (issuePath[2] === "retry") return ["max", "interval"];
   if (issuePath[2] === "resource") return Object.keys(ResourceObjectSchema.shape);
   if (issuePath[2] === "fanout") return Object.keys(FanoutObjectSchema.shape);
@@ -61,7 +70,9 @@ export function describeSchemaError(file: string, err: ZodError): string {
       const where =
         issue.path[0] === "states" && issue.path[1] !== undefined
           ? `state "${issue.path[1]}"${issue.path.length > 2 ? ` (${issue.path.slice(2).join(".")})` : ""}`
-          : "workflow";
+          : issue.path.length > 0
+            ? issue.path.join(".")
+            : "workflow";
       const known = knownKeysAt(issue.path);
       return issue.keys
         .map(k => `${file}: ${where}: unknown key "${k}" — did you mean "${nearest(k, known)}"?`)
@@ -289,6 +300,7 @@ export class Loader {
       description: own.description ?? base.description,
       initial: own.initial ?? base.initial,
       max_transitions: own.max_transitions ?? base.max_transitions,
+      model_table: own.model_table ?? base.model_table,
       states: { ...base.states, ...own.states },
     };
   }
@@ -325,6 +337,7 @@ export class Loader {
 
     const hasTerminal = Object.values(wf.states).some(s => s.terminal);
     if (!hasTerminal) errors.push("no terminal state defined");
+    if (wf.model_table) errors.push(...modelTableErrors(wf.model_table, stateNames));
 
     for (const [name, state] of Object.entries(wf.states)) {
       const isAction = state.type === "exec" || state.type === "fetch";

@@ -1,7 +1,26 @@
 name: batch-task
-description: "One task of a `batch` queue — a child session the batch dispatcher drives: claim → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
+description: "One task of a `batch` queue — a child session the batch dispatcher drives: claim (the line's difficulty → model/effort by model_table) → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → review_scope [exec: the diff's class → the reviewer's model] → review (one reviewer agent; FIXES → work) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
 initial: claim
 max_transitions: 60
+
+# The line's `difficulty:` (1..10) → the agents' model and effort: context_set `difficulty` and the
+# engine writes `model` / `effort` (and `model_step`, `escalations`). Each `escalate` entry moves the
+# task one row up once its state's visits reach the number: `work: 3` = the second fix round.
+# `review_class` (the review_scope exec: `light` = tests/docs only, else `code`) → `review_model` /
+# `review_effort`; a class without an entry takes the task's own model and effort. A heir sets its own
+# table whole (`model_table:` in the heir replaces this one).
+model_table:
+  rows:
+    - { upto: 2, model: haiku, effort: low }
+    - { upto: 4, model: sonnet, effort: medium }
+    - { upto: 6, model: sonnet, effort: high }
+    - { upto: 8, model: opus, effort: high }
+    - { upto: 10, model: opus, effort: xhigh }
+  escalate:
+    work: 3
+  review:
+    light: { model: sonnet, effort: medium }
+    code: { model: opus, effort: high }
 
 # Extension points (a heir replaces a state whole and keeps its routes):
 #   project_prepare — stdout = the worktree path alone (→ context.wt); on_success: work, on_error: prepare_failed
@@ -14,7 +33,9 @@ states:
       marked the line `[>]`. context_set on THIS session (session_id {{session_id}}), each its own call:
         task       — the line's ID
         queue_file — the queue's absolute path (the dispatcher's `queue_file`)
-        model, effort — the line's columns (effort `-` → task-delegation's table)
+        difficulty — the line's difficulty column, when it is not `-`: the engine then sets `model` and
+                     `effort` from this workflow's model_table (its reply names them) — do not set them yourself
+        model, effort — ONLY when the line has no difficulty: its columns (effort `-` → task-delegation's table)
       Then transition `prepare` (an exec: the worktree is made before any agent starts).
     transitions:
       prepare: project_prepare
@@ -66,8 +87,8 @@ states:
       First visit — start the worker's session yourself, then hand it to the agent:
       1. `start({workflow: "subagent", parent_session_id: "{{session_id}}", cwd: "{{context.wt}}"})` → W;
          context_set `worker_session` = W.
-      2. Spawn ONE worker: Agent, model {{context.model}}, effort {{context.effort}}, `run_in_background: true`,
-         prompt:
+      2. Spawn ONE worker: Agent, model {{context.model}}, effort {{context.effort}}, `run_in_background: true`;
+         context_set `worker_model` = "{{context.model}}/{{context.effort}}". Prompt:
 
            You are the worker of task {{context.task}}. Your brief is its line in {{context.queue_file}}
            (read it there; it is self-contained). Your workflow session is W, already started — do NOT call
@@ -77,14 +98,59 @@ states:
            the on-disk state first — work already applied is reconciled, not done twice.
 
       3. `link_agent({session_id: W, agent_id: <its id>})`; context_set `worker_agent`.
-      A later visit (a fix round) — SendMessage `{{context.worker_agent}}` with the cause, verbatim.
-      Then END your turn on this task. On the worker's notification verify ON-TREE (artifacts outrank the
-      report): `git -C {{context.cwd}} log --oneline HEAD..batch/{{context.task}}` shows its commit and
-      `git -C {{context.wt}} status --porcelain` is empty → `land`; the worker is stuck, or the work is wrong
-      and another round would not help → `blocked`.
+      A later visit (a fix round, the cause from the review or the land) — the model now is
+      {{context.model}}/{{context.effort}}, the worker runs {{context.worker_model}}:
+      - the same → SendMessage `{{context.worker_agent}}` with the cause, verbatim;
+      - different (the engine escalated the task) → steps 1–3 again: a fresh worker on the new model, its
+        prompt above plus "a fix round of a previous worker's branch: <the cause verbatim>".
+      Then END your turn on this task. On the worker's notification: context_set `tokens_worker` = the
+      value already set ({{context.tokens_worker}}, empty = 0) PLUS this agent's tokens from its notification's
+      usage line. Verify ON-TREE (artifacts outrank the report): `git -C {{context.cwd}} log --oneline
+      HEAD..batch/{{context.task}}` shows its commit and `git -C {{context.wt}} status --porcelain` is empty
+      → `review`; the worker is stuck, or the work is wrong and another round would not help → `blocked`.
+    transitions:
+      review: review_scope
+      blocked: blocked
+
+  review_scope:
+    type: exec
+    # The reviewer by the actual diff: stdout `light` (tests/docs only) or `code` → context.review_class,
+    # which the model_table maps to review_model / review_effort. Never fails a task: doubt is `code`.
+    command: 'sh "$WF_PLUGIN_ROOT/scripts/review-class.sh" HEAD "batch/$TASK"'
+    env:
+      TASK: "{{context.task}}"
+    timeout: 60000
+    context_set:
+      review_class: "{{stdout}}"
+    on_success: review
+    on_error: review
+
+  review:
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      {{stderr}}
+      Review {{visits.review}} of 3 of {{context.task}} (branch `batch/{{context.task}}`, worktree {{context.wt}}).
+      1. `start({workflow: "file-review", parent_session_id: "{{session_id}}", cwd: "{{context.wt}}"})` → R;
+         context_set `review_session` = R.
+      2. Spawn ONE reviewer: Agent, model {{context.review_model}}, effort {{context.review_effort}} (both
+         empty → {{context.model}}, {{context.effort}}), `run_in_background: true`, prompt:
+
+           You review task {{context.task}} of {{context.queue_file}}, read-only: its line is the brief, the
+           change is `git -C {{context.cwd}} diff HEAD...batch/{{context.task}}` (scope `diff`, your batch =
+           every file it touches). Your workflow session is R, already started — do NOT call start(): first
+           `status({session_id: "R"})`, then follow it to its terminal, passing session_id R in every call.
+           Answer with ONE line: `VERDICT MERGE|FIXES|REJECT <the reasons; for FIXES the full fix list>`.
+
+      3. `link_agent({session_id: R, agent_id: <its id>})`. END your turn on this task.
+      On its notification: context_set `tokens_review` = the value already set ({{context.tokens_review}},
+      empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the fix
+      list is the worker's cause, verbatim); REJECT → `reject`. The context_set first, the transition after
+      it returned.
     transitions:
       land: project_land
-      blocked: blocked
+      fix: work
+      reject: blocked
 
   project_land:
     type: exec

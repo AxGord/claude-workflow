@@ -13,11 +13,14 @@
 // `overlap: files` narrows `touches:` to its FILE entries (a regular file under the line's repo, or
 // a path that does not exist whose last segment holds a `.`): a directory or glob entry is a hint
 // that conflicts with nothing. A bad `overlap:` refuses the pick only; marks and edits still work. A `workflow:` field names the line's own task workflow (the
-// dispatcher's default otherwise); a name that is not one word keeps the line out.
+// dispatcher's default otherwise); a name that is not one word keeps the line out. `difficulty:` (1..10)
+// is what a task workflow's `model_table` maps to model/effort; one outside 1..10 keeps the line out.
 import fs from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
 import { projectRoot } from "./pool.js";
+import { difficultyError, parseDifficulty } from "./model-table.js";
+import { DIFFICULTY_MAX } from "./types.js";
 
 export const QUEUE_EXIT = {
   ADMITTED: 0,
@@ -46,6 +49,7 @@ const META_KEYS = new Set([
   "repo",
   "workflow",
   "exclusive",
+  "difficulty",
 ]);
 /** The header's `overlap:` values; `paths` (the default) = every `touches:` entry is a path prefix. */
 const OVERLAP_MODES = ["paths", "files"] as const;
@@ -97,6 +101,8 @@ export interface AdmittedTask {
   readonly repo: string;
   /** The line's `workflow:` — its task workflow; absent = the dispatcher's own (`task_workflow`). */
   readonly workflow?: string;
+  /** The line's `difficulty:` (1..10): the task workflow's `model_table` maps it to model/effort. */
+  readonly difficulty?: number;
   readonly text: string;
 }
 
@@ -199,6 +205,13 @@ function touchesOf(line: QueueLine): string[] | null {
     .map(p => p.trim().split(/\s+/)[0] ?? "")
     .map(p => p.replace(/^\.\//, "").replace(/\/+$/, ""))
     .filter(p => p !== "" && p !== "—" && p !== "-");
+}
+
+/** The line's `difficulty:`: undefined when absent or `-`/`—`; null when it is not 1..10. */
+function difficultyOf(line: QueueLine): number | undefined | null {
+  const v = line.meta.difficulty?.trim();
+  if (!v || v === "-" || v === "—") return undefined;
+  return parseDifficulty(v);
 }
 
 /** The line's `workflow:`: undefined when absent or `—`; null when it is not a workflow name. */
@@ -351,6 +364,7 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
         if (repo === null) why = `repo: "${l.meta.repo}" resolves to no directory`;
         else if (workflowOf(l) === null)
           why = `workflow: "${l.meta.workflow}" is not a workflow name`;
+        else if (difficultyOf(l) === null) why = difficultyError(l.meta.difficulty);
       }
       if (why === null) {
         const key = repoKey(repo);
@@ -365,12 +379,14 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
     }
     if (why === null && repo !== null) {
       const workflow = workflowOf(l) ?? undefined;
+      const difficulty = difficultyOf(l) ?? undefined;
       admitted.push({
         id: l.id,
         model: l.meta.model ?? "opus",
         effort: l.meta.effort ?? "-",
         repo,
         ...(workflow ? { workflow } : {}),
+        ...(difficulty !== undefined ? { difficulty } : {}),
         text: l.text,
       });
       taken.push(l);
@@ -486,6 +502,19 @@ export interface MarkResult {
   readonly id: string;
   readonly from: string;
   readonly to: string;
+  /** A retry of a line with `difficulty:`: the value it had and the one written (+1, at most 10). */
+  readonly difficulty?: { readonly from: number; readonly to: number };
+}
+
+/** The answer of a mark: `ID: [!] → [>]`, plus the difficulty a retry raised. */
+export function formatMark(r: MarkResult): string {
+  const d = r.difficulty;
+  const bump = !d
+    ? ""
+    : d.to > d.from
+      ? ` (difficulty ${d.from} → ${d.to})`
+      : ` (difficulty ${d.to}: already the cap)`;
+  return `${r.id}: [${r.from}] → [${r.to}]${bump}`;
 }
 
 // A note is one free-text field: a `|`, a leading `key:` or a `⏸` would rewrite the line's metadata.
@@ -496,7 +525,8 @@ function checkNote(note: string | undefined): void {
 
 /**
  * One line's mark under the lock, only from the mark `to` expects; `note` lands right after the id.
- * `retry` (with `running` only) restarts a failed line: `[!]`→`[>]`.
+ * `retry` (with `running` only) restarts a failed line: `[!]`→`[>]`, and raises its `difficulty:`
+ * by one (at most 10) in the line itself — the retried task's session starts a row up.
  */
 export async function markQueue(
   file: string,
@@ -521,7 +551,18 @@ export async function markQueue(
       }
       const rows = [...queue.rows];
       setMark(rows, line, mark, note?.trim() || undefined);
-      return writeRows(queue, rows) ? { id, from, to: mark } : false;
+      const was = opts.retry === true ? difficultyOf(line) : undefined;
+      let difficulty: MarkResult["difficulty"];
+      if (typeof was === "number") {
+        difficulty = { from: was, to: Math.min(was + 1, DIFFICULTY_MAX) };
+        const r = splitRow(rows[line.index]);
+        const at = r.fields.findIndex(f => metaKey(f) === "difficulty");
+        r.fields[at] = `difficulty: ${difficulty.to}`;
+        rows[line.index] = joinRow(r);
+      }
+      return writeRows(queue, rows)
+        ? { id, from, to: mark, ...(difficulty ? { difficulty } : {}) }
+        : false;
     }),
   );
 }
@@ -605,7 +646,7 @@ function afterCycle(queue: Queue, id: string): string[] | null {
 /**
  * Checks the fields `keys` of `line` (every metadata field when `keys` is undefined) as a pick
  * would read them in `queue` (which holds the line): `after:` names only lines of the queue and
- * closes no cycle, `workflow:` is one word, `repo:` resolves.
+ * closes no cycle, `workflow:` is one word, `repo:` resolves, `difficulty:` is 1..10.
  */
 function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>): void {
   const has = (k: string): boolean =>
@@ -622,6 +663,8 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
     throw new QueueError(`${line.id}: workflow: "${line.meta.workflow}" is not a workflow name`);
   if (has("repo") && resolveRepo(queue, line) === null)
     throw new QueueError(`${line.id}: repo: "${line.meta.repo}" resolves to no directory`);
+  if (has("difficulty") && difficultyOf(line) === null)
+    throw new QueueError(`${line.id}: ${difficultyError(line.meta.difficulty)}`);
 }
 
 /** The rows written, read back by the parser a pick uses; the line `id` as it now reads. */
@@ -648,7 +691,7 @@ export interface AddResult {
  * last task line. `line` is `- [ ] ID | key: value | … | text |` or the same without `- [ ] `. The
  * line must read as pick reads it: a unique id, one row, each `key:` field a known key at most
  * once, `after:` naming only lines of the queue (and no cycle), a one-word `workflow:`, a `repo:`
- * that resolves.
+ * that resolves, a `difficulty:` of 1..10.
  */
 export async function addQueueLine(
   file: string,
@@ -837,7 +880,10 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
   return out.join("\n");
 }
 
-/** `ID\tmodel\teffort\trepo\tworkflow` — one admitted line as the exec form prints it (`-` = no `workflow:`). */
+/**
+ * `ID\tmodel\teffort\trepo\tworkflow\tdifficulty` — one admitted line as the exec form prints it
+ * (`-` = no `workflow:` / `difficulty:`).
+ */
 export function formatTask(a: AdmittedTask): string {
-  return [a.id, a.model, a.effort, a.repo, a.workflow ?? "-"].join("\t");
+  return [a.id, a.model, a.effort, a.repo, a.workflow ?? "-", a.difficulty ?? "-"].join("\t");
 }

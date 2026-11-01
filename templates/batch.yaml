@@ -34,7 +34,7 @@ states:
          base: <repo-abs-path>=<sha>
          land_test: <the project's test command, run after each merge; omit for none>
          ## Tasks
-         - [ ] T1 | model: opus | effort: high | touches: src/a, docs | <self-contained task prompt> |
+         - [ ] T1 | difficulty: 7 | touches: src/a, docs | <self-contained task prompt> |
          - [ ] T2 | model: sonnet | effort: high | after: T1 | touches: src/b | repo: other-repo | <prompt> |
          ```
          Keep the queue file out of git (untracked + ignored, e.g. `.claude/batch/`
@@ -44,9 +44,16 @@ states:
          stash create` (snapshots a dirty tree without touching it) or `git -C
          <repo> rev-parse HEAD` when that prints nothing (clean tree).
          Line fields (`key: value`, any order; the rest is the task's text):
-         - `model` / `effort` — per task-delegation's table: opus/high for
-           non-trivial code/judgement, sonnet/high for code from a detailed
-           plan, sonnet/medium for routine review, haiku/low for runners.
+         - `difficulty:` — 1..10, how hard the task is: the task workflow's
+           `model_table` maps it to the worker's model/effort (bundled
+           `batch-task`: 1–2 haiku/low … 9–10 opus/xhigh) and moves it one
+           row up on a second fix round. Prefer it to `model`/`effort`: the
+           ledger keeps difficulty, model, effort and tokens per task, so the
+           table can be tuned from data.
+         - `model` / `effort` — a line without `difficulty:`, per
+           task-delegation's table: opus/high for non-trivial
+           code/judgement, sonnet/high for code from a detailed plan,
+           sonnet/medium for routine review, haiku/low for runners.
            `model: —` = a line the parent does itself (never admitted).
          - `touches:` — the paths (prefixes) the task edits. Two lines of one
            repo whose paths overlap never run together; a line WITHOUT
@@ -82,7 +89,8 @@ states:
       under the queue's lock. Once the run is live, change the queue through
       the same lock: `queue_add` (new line, checked as a pick reads it),
       `queue_edit` (a line's fields, a note), `queue_header` (window / pause
-      with its reason), `queue_mark` with `retry: true` (a `[!]` line again)
+      with its reason), `queue_mark` with `retry: true` (a `[!]` line again;
+      its `difficulty:` goes up by one, so the re-run starts a model row up)
       — a script or sed edit can drop a mark an exec writes at that moment. The queue FILE is the source of truth — it
       survives context compression and session restarts.
     transitions:
@@ -126,7 +134,7 @@ states:
 
   dispatch:
     prompt: |-
-      The pick admitted (and marked `[>]` in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow`:
+      The pick admitted (and marked `[>]` in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow difficulty`:
       {{stdout}}
       {{stderr}}
 
@@ -168,10 +176,12 @@ states:
   cross_check:
     max_visits: 3
     prompt: |
-      All workers finished. This is the run's ONE fresh-eyes review.
-      Workers do NOT review themselves (a sub-agent's coding/bug-fix
-      review stops at lint + its own intent re-read — the spawner owns
-      the independent review), so nothing below is a re-review.
+      All workers finished. A `batch-task` reviewed each task alone
+      before its land; this is the run's fresh-eyes review of the WHOLE
+      (a task workflow without its own review — a project heir — gets
+      its only review here). Workers do NOT review themselves (a
+      sub-agent's coding/bug-fix review stops at lint + its own intent
+      re-read — the spawner owns the independent review).
 
       1. The run's diff, per `base:` repo: `git -C <repo> diff <sha> --stat`
          (a `review_base:` line from a previous visit → diff from it

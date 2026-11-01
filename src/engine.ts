@@ -32,6 +32,7 @@ import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
+import { MODEL_KEYS, applyModelTable, difficultyError, parseDifficulty } from "./model-table.js";
 import { render } from "./template.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver } from "./takeover.js";
@@ -394,14 +395,14 @@ export class Engine {
         }
       : {};
 
-    let updated: SessionState = {
+    let updated: SessionState = this._withModel({
       ...session,
       ...skillUpdate,
       stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
       updated_at: now,
       history: [...session.history, historyEntry],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
-    };
+    });
 
     await this._storage.write(sessionId, updated);
 
@@ -776,17 +777,27 @@ export class Engine {
       .sort((a, b) => a.suspended_at!.localeCompare(b.suspended_at!));
   }
 
+  /**
+   * Set one context key. Under a `model_table` a `difficulty` outside 1..10 is refused, and the
+   * keys it derives are written with it; the answer is that derivation's note, if any.
+   */
   public async setContext(
     sessionId: string,
     key: string,
     value: unknown,
     actor?: string,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
+    if (
+      key === MODEL_KEYS.difficulty &&
+      parseDifficulty(value) === null &&
+      this._modelTableOf(session) !== null
+    )
+      throw new Error(`${difficultyError(value)} (the workflow's model_table maps it)`);
 
     const now = new Date().toISOString();
-    const updated: SessionState = {
+    const set: SessionState = {
       ...session,
       context: { ...session.context, [key]: value },
       updated_at: now,
@@ -795,8 +806,52 @@ export class Engine {
         { frame: session.active_frame, event: "context_set", at: now, actor },
       ],
     };
+    const updated = this._withModel(set, new Set([key]));
 
     await this._storage.write(sessionId, updated);
+    return updated === set ? undefined : updated.history[updated.history.length - 1].detail;
+  }
+
+  /** The `model_table` the session runs under — the nearest frame's workflow down the stack that declares one — and that frame's visits. */
+  private _modelTableOf(session: SessionState): {
+    table: NonNullable<WorkflowDefinition["model_table"]>;
+    visits: Record<string, number>;
+  } | null {
+    for (let i = Math.min(session.active_frame, session.stack.length - 1); i >= 0; i--) {
+      const frame = session.stack[i];
+      let table: WorkflowDefinition["model_table"];
+      try {
+        table = this._getWorkflow(session.session_id, frame.workflow).model_table;
+      } catch {
+        continue; // a frame whose workflow is gone has no table; the move itself reports it
+      }
+      if (table) return { table, visits: frame.state_visits };
+    }
+    return null;
+  }
+
+  /**
+   * `session` with what its `model_table` derives from this write (`changed` = the context keys it
+   * set; an entered state may move the row up), plus a `model` history line; the same object when
+   * nothing changes.
+   */
+  private _withModel(
+    session: SessionState,
+    changed: ReadonlySet<string> = new Set(),
+  ): SessionState {
+    if (session.stack.length === 0) return session;
+    const found = this._modelTableOf(session);
+    if (!found) return session;
+    const r = applyModelTable(session.context, found.table, found.visits, changed);
+    if (!r) return session;
+    return {
+      ...session,
+      context: r.context,
+      history: [
+        ...session.history,
+        { frame: session.active_frame, event: "model", detail: r.note, at: session.updated_at },
+      ],
+    };
   }
 
   private _isActionState(state: StateDefinition | undefined): boolean {
@@ -895,13 +950,13 @@ export class Engine {
     const globalKey = `${frame.workflow}:${targetStateName}`;
     const prevGlobal = session.global_state_visits ?? {};
 
-    let updated: SessionState = {
+    let updated: SessionState = this._withModel({
       ...session,
       stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
       updated_at: now,
       history: [...session.history, historyEntry],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
-    };
+    });
 
     await this._storage.write(session.session_id, updated);
 
@@ -1279,6 +1334,7 @@ export class Engine {
     // Auto context_set from action state definition (rendered with action result vars).
     // Based on the re-read copy: a context_set that landed during the exec survives.
     let ctx = current.context;
+    const setKeys = new Set(result.success ? Object.keys(state.context_set ?? {}) : []);
     if (result.success && state.context_set) {
       const renderVars = { ...vars, ...result };
       const entries = Object.entries(state.context_set).map(
@@ -1287,23 +1343,26 @@ export class Engine {
       ctx = { ...ctx, ...Object.fromEntries(entries) };
     }
 
-    let updated: SessionState = {
-      ...session,
-      context: ctx,
-      // set_priority runs outside the session's queue: the level written during the exec wins.
-      ...(current.priority ? { priority: current.priority } : {}),
-      // so do link_agent and the conversation id a resume stamps
-      agent_id: current.agent_id,
-      claude_session_id: current.claude_session_id,
-      stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
-      updated_at: now,
-      history: [...session.history, historyEntry],
-      global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
-      last_action_result: result,
-      background_pids: bgPids,
-      running_exec: undefined,
-      pending_action: undefined,
-    };
+    let updated: SessionState = this._withModel(
+      {
+        ...session,
+        context: ctx,
+        // set_priority runs outside the session's queue: the level written during the exec wins.
+        ...(current.priority ? { priority: current.priority } : {}),
+        // so do link_agent and the conversation id a resume stamps
+        agent_id: current.agent_id,
+        claude_session_id: current.claude_session_id,
+        stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
+        updated_at: now,
+        history: [...session.history, historyEntry],
+        global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
+        last_action_result: result,
+        background_pids: bgPids,
+        running_exec: undefined,
+        pending_action: undefined,
+      },
+      setKeys,
+    );
 
     await this._storage.write(session.session_id, updated);
     if (run) Executor.discardRun(run);
@@ -1497,7 +1556,7 @@ export class Engine {
 
     const globalKey = `${parentFrame.workflow}:${nextStateName}`;
     const prevGlobal = session.global_state_visits ?? {};
-    const updated: SessionState = {
+    const updated: SessionState = this._withModel({
       ...session,
       stack: newStack,
       active_frame: parentIdx,
@@ -1514,7 +1573,7 @@ export class Engine {
         },
       ],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
-    };
+    });
 
     await this._storage.write(session.session_id, updated);
 

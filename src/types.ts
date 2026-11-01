@@ -77,6 +77,43 @@ export const FanoutSchema = FanoutObjectSchema.refine(
   { message: "fanout needs exactly one of count, items_command" },
 );
 
+/** A task's difficulty as a queue line's `difficulty:` and a session's `context.difficulty` carry it. */
+export const DIFFICULTY_MIN = 1;
+export const DIFFICULTY_MAX = 10;
+
+/** The Agent tool's effort levels: a row naming another is a typo. */
+export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+
+/** One model choice: what an Agent call of that step takes. */
+export const ModelChoiceObjectSchema = z
+  .object({ model: z.string().min(1), effort: EffortSchema })
+  .strict();
+
+/** A `model_table` row: the difficulties up to `upto` (after the previous row's) take this model and effort. */
+export const ModelRowObjectSchema = z
+  .object({
+    upto: z.number().int().min(DIFFICULTY_MIN).max(DIFFICULTY_MAX),
+    model: z.string().min(1),
+    effort: EffortSchema,
+  })
+  .strict();
+
+/**
+ * A task workflow's `model_table:` (the loader names the nearest key for a typo): `rows` map
+ * `context.difficulty` to `model` / `effort` (ascending `upto`, the last row's 10); each `escalate`
+ * entry (`state: N`) moves one row up once that state's visits reach N; `review` maps the
+ * `context.review_class` an exec measured from the diff to the reviewer's model and effort.
+ */
+export const ModelTableObjectSchema = z
+  .object({
+    rows: z.array(ModelRowObjectSchema).nonempty(),
+    escalate: z.record(z.number().int().positive()).optional(),
+    review: z.record(ModelChoiceObjectSchema).optional(),
+  })
+  .strict();
+
+export type ModelTable = z.infer<typeof ModelTableObjectSchema>;
+
 // Single source of truth for state fields. Tool schemas derive from this.
 // To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
 export const StateDefinitionSchema = z
@@ -151,6 +188,7 @@ export const WorkflowDefinitionSchema = z
     description: z.string().optional(),
     initial: z.string().min(1),
     max_transitions: z.number().int().positive().optional().default(50),
+    model_table: ModelTableObjectSchema.optional(),
     states: z.record(StateDefinitionSchema),
   })
   .strict();
@@ -160,7 +198,7 @@ export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 /**
  * A workflow YAML file as written. With `extends: <workflow>` it is a heir:
  * the base's states plus its own (a state of the same name replaces the
- * base's whole), and `initial` / `max_transitions` / `description` from the
+ * base's whole), and `initial` / `max_transitions` / `description` / `model_table` from the
  * heir where it sets them. Without `extends`, `initial` and `states` are required.
  */
 export const WorkflowFileObjectSchema = z
@@ -170,6 +208,7 @@ export const WorkflowFileObjectSchema = z
     extends: z.string().min(1).optional(),
     initial: z.string().min(1).optional(),
     max_transitions: z.number().int().positive().optional(),
+    model_table: ModelTableObjectSchema.optional(),
     states: z.record(StateDefinitionSchema).optional(),
   })
   .strict();

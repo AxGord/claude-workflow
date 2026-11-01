@@ -1,4 +1,5 @@
 import type { SessionState, ShardResult } from "./types.js";
+import { MODEL_KEYS, parseDifficulty } from "./model-table.js";
 
 /**
  * The root of a session's parent chain. Sessions record `root_session_id` at
@@ -40,6 +41,49 @@ export interface LedgerEntry {
   readonly exec_ms_total: number;
   readonly wait_ms_total: number;
   readonly execs: LedgerExec[];
+  /** The task's `difficulty` (1..10), as its context held it at the end. */
+  readonly difficulty?: number;
+  /** The model and effort the task ended on (a `model_table` writes them; an agent may set them itself). */
+  readonly model?: string;
+  readonly effort?: string;
+  /** Rows the `model_table` moved the task up past its difficulty's own. */
+  readonly escalations?: number;
+  readonly review_model?: string;
+  readonly review_effort?: string;
+  /** The context's `tokens` (→ `total`) and `tokens_<role>` (→ `<role>`) that read as whole numbers. */
+  readonly tokens?: Readonly<Record<string, number>>;
+}
+
+const TOKENS_KEY = /^tokens(?:_([a-z0-9_]+))?$/;
+
+/** A whole number ≥ 0 given as a number or its decimal string; else undefined. */
+function count(v: unknown): number | undefined {
+  const s = typeof v === "number" ? String(v) : typeof v === "string" ? v.trim() : "";
+  return /^\d+$/.test(s) ? Number(s) : undefined;
+}
+
+const text = (v: unknown): string | undefined =>
+  typeof v === "string" && v.trim() !== "" ? v.trim() : undefined;
+
+/** What a task's context says about the agents that did it: what a `model_table` is tuned from. */
+function agentFields(context: Readonly<Record<string, unknown>>): Partial<LedgerEntry> {
+  const K = MODEL_KEYS;
+  const tokens: Record<string, number> = {};
+  for (const [k, v] of Object.entries(context)) {
+    const m = TOKENS_KEY.exec(k);
+    const n = m ? count(v) : undefined;
+    if (m && n !== undefined) tokens[m[1] ?? "total"] = n;
+  }
+  const fields = {
+    difficulty: parseDifficulty(context[K.difficulty]) ?? undefined,
+    model: text(context[K.model]),
+    effort: text(context[K.effort]),
+    escalations: count(context[K.escalations]),
+    review_model: text(context[K.reviewModel]),
+    review_effort: text(context[K.reviewEffort]),
+    tokens: Object.keys(tokens).length > 0 ? tokens : undefined,
+  };
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
 }
 
 /**
@@ -70,5 +114,6 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
     exec_ms_total: execs.reduce((sum, e) => sum + e.duration_ms, 0),
     wait_ms_total: execs.reduce((sum, e) => sum + (e.wait_ms ?? 0), 0),
     execs,
+    ...agentFields(session.context),
   };
 }

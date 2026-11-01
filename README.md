@@ -366,11 +366,11 @@ The route applies to every move into the state — an agent `transition`, an act
 
 ### Strict schema
 
-An unknown key in a workflow, a state, a `retry:`, `resource:` or `fanout:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.
+An unknown key in a workflow, a state, a `retry:`, `resource:`, `fanout:` or `model_table:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.
 
 ### Ledger
 
-Every session end (complete, fail, abort, cascade, expiry of a suspended session) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
+Every session end (complete, fail, abort, cascade, expiry of a suspended session) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. From the session's context it also records `difficulty`, `model`, `effort`, `escalations`, `review_model`, `review_effort` and `tokens` (`tokens` → `total`, `tokens_<role>` → `<role>`, whole numbers only) when set — what a `model_table` is tuned from. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
 
 ## Three-Tier Loading
 
@@ -444,7 +444,7 @@ base: /abs/repo=<sha>
 land_test: npm test                 # run after each merge (batch-task's default land)
 overlap: files                      # optional: only FILE entries of `touches:` conflict (default `paths`)
 ## Tasks
-- [ ] T1 | model: opus | effort: high | touches: src/engine | <self-contained brief> |
+- [ ] T1 | difficulty: 7 | touches: src/engine | <self-contained brief> |
 - [ ] T2 | model: sonnet | after: T1 | touches: src/a, docs | owner: typer | repo: other-repo | <brief> |
 ```
 
@@ -475,17 +475,20 @@ minus the `[>]` lines) in file order with the `[ ]` lines that:
   directory of that name beside the queue's project; none = the queue's project);
 - name, in `workflow:` if any, one word: the line's own task workflow (default: the dispatcher's
   `task_workflow`). It is started with the line's repo as `cwd`, so it may live in that repo's
-  `.claude/workflows/` — one queue can mix tasks of several repos, each run by its repo's procedure.
+  `.claude/workflows/` — one queue can mix tasks of several repos, each run by its repo's procedure;
+- carry, in `difficulty:` if any, a whole number 1..10 (`-` = none): what the task workflow's
+  `model_table` turns into the agents' model and effort (below).
 
 Each admitted line is marked `[>]` under the queue's lock (`<file>.lock`, an atomic mkdir), so two
 picks — two tools, two processes — never admit one line. `batch_size: 0` is the pause: nothing new is
 admitted, running tasks finish; the pick answers `window 0 — paused: <the comment>`.
 
-- `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, workflow, text);
+- `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, workflow, difficulty, text);
   `explain` adds why each other pending line waits (`window full` lines fold into one summary line;
   `explain: "all"` lists every line).
 - `queue_mark({ file, id, to, note?, retry? })` — `running` `[ ]`→`[>]` (with `retry: true`
-  `[!]`→`[>]`: a failed line runs again), `done` `[>]`→`[x]`, `failed`
+  `[!]`→`[>]`: a failed line runs again, and its `difficulty: N` becomes `N+1`, at most 10 — the
+  answer says `(difficulty 4 → 5)`), `done` `[>]`→`[x]`, `failed`
   `[>]`→`[!]`, `released` `[>]`→`[ ]`; any other current mark is refused; `note` is written after the id
   (one line without `|`, `⏸` or a leading `key:`). A write lands only while the file still reads as
   the pick read it — a hand edit in between makes it plan again, never lost.
@@ -493,7 +496,8 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the comm
   the `- [ ] ` may be left out) after / before a line, else after the last task line. Refused unless a
   pick reads it as meant: a new id, one row, each `key:` field a known key at most once (a typo like
   `toches:` would be read as text), every id in `after:` a line of the queue and no cycle (prose
-  beside the ids stays a manual condition), a one-word `workflow:`, a `repo:` that resolves.
+  beside the ids stays a manual condition), a one-word `workflow:`, a `repo:` that resolves, a
+  `difficulty:` of 1..10.
 - `queue_edit({ file, id, set?: { field: value }, append_note? })` — metadata fields of one line
   (`""` removes one; a set field keeps its place), and/or a note appended as its last field; checked
   as `queue_add` checks them; the mark stays `queue_mark`'s.
@@ -503,10 +507,10 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the comm
   an exec made at the same moment — add and change lines through them, not by editing the file with a
   script while a run is live.
 - From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" <file> [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
-  bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow` (`-` = no `workflow:`) per admitted line and the summary on stderr; exit 0
+  bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty` (`-` = no `workflow:` / `difficulty:`) per admitted line and the summary on stderr; exit 0
   admitted, 10 none but `[>]` lines run, 11 none and nothing runs (done), 12 none, nothing runs and
   `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]` (`--running <ID>
-  --retry`: `[!]`→`[>]`), `--header <key>`, `--add <LINE> [--after ID|--before ID]`, `--edit <ID>
+  --retry`: `[!]`→`[>]`, `difficulty:` +1), `--header <key>`, `--add <LINE> [--after ID|--before ID]`, `--edit <ID>
   [--set key=value]… [--append-note T]` (`key=` removes), `--batch-size <N> --reason T`.
 
 The bundled `batch` drives a queue: `plan_queue` (write or resume it; context `queue_file`,
@@ -514,10 +518,60 @@ The bundled `batch` drives a queue: `plan_queue` (write or resume it; context `q
 `paused`) → `dispatch` starts one child session per admitted line in its repo → `collect` advances them
 on agent notifications and re-picks on every freed slot → one `cross_check` of the combined diff. The
 child is `batch-task`: `claim` → `project_prepare` (worktree) → `work` (one worker agent, its session
-linked) → `project_land` (merge + `land_test` under the repo's land lock) → `mark_done` → `cleanup`.
+linked) → `review_scope` (exec: the diff's class) → `review` (one reviewer agent; FIXES → `work`) →
+`project_land` (merge + `land_test` under the repo's land lock) → `mark_done` → `cleanup`.
 A project with its own procedure is a heir: `extends: batch` with `plan_queue` as an exec that sets
 `queue_file` and `task_workflow` (`context_set:`), and a task workflow of its own or `extends:
 batch-task` overriding `project_prepare` / `project_land`.
+
+#### Difficulty → model and effort (`model_table:`)
+
+A task workflow may declare which agent does a task of a given difficulty:
+
+```yaml
+model_table:
+  rows:                                  # ascending `upto`; the last row's is 10
+    - { upto: 2, model: haiku, effort: low }
+    - { upto: 6, model: sonnet, effort: high }
+    - { upto: 10, model: opus, effort: high }
+  escalate:                              # one row up per entry whose state's visits reach N
+    work: 3                              # the 3rd work = the second fix round
+  review:                                # the reviewer by the diff's class (`review_class`)
+    light: { model: sonnet, effort: medium }
+```
+
+- `context_set` of `difficulty` (the claim sets the queue line's) makes the engine write `model`,
+  `effort`, `model_step` (the row, 1-based) and `escalations` into the session's context; the
+  `context_set` answer names them (`model_table: difficulty 5 → sonnet/high (row 2 of 3)`), and a
+  `model` line goes into the history. Under a table a `difficulty` outside 1..10 is refused.
+- On every move into a state (a transition, an action's route, a skill gate, a pop) the row is
+  recomputed: the difficulty's own row plus one per `escalate` entry whose state has been visited at
+  least N times in that frame, capped by the last row. A move rewrites `model` / `effort` only when
+  the row changed, so a value an agent set itself stays until then.
+- `review_class` set (by an exec's `context_set`, e.g. `scripts/review-class.sh <base> <tip>`: `light`
+  when every changed path is a test or a doc — `docs/` / `specs/` at the repo root, `tests/` /
+  `__tests__/` anywhere, `*.md` / `.rst` / `.adoc`, `*.test.*` / `*Test.*`, CHANGELOG / LICENSE /
+  README; a nested `docs/` package or a `.txt` build file is code — else `code`; doubt is `code`;
+  `REVIEW_LIGHT_PATHS` overrides the regex) writes `review_model` /
+  `review_effort`: the class's `review` entry, else the task's own model and effort.
+- Escalation is per session: fix rounds, and a blocked re-entry within one session — a workflow
+  whose `blocked` state routes back to work declares `escalate: { blocked: 1 }` (its first entry
+  already moves the row up for the work that follows). No hidden state crosses sessions: in the
+  bundled `batch-task`, `blocked` ends the session (`[!]`), and the retry that re-runs the line
+  (`queue_mark` `retry: true`, `wf-queue --running <ID> --retry`) raises its `difficulty:` by one in
+  the line itself (at most 10), so the new session starts a row up — the blocked re-entry's step,
+  visible in the queue. A line without `difficulty:` is retried unchanged.
+- The table is the nearest one down the session's stack, so a sub-workflow without one runs under
+  its caller's; a heir inherits its base's table unless it sets its own whole. Rows out of order, a
+  last row short of 10, an `escalate` state that does not exist or an unknown effort (`low`,
+  `medium`, `high`, `xhigh`, `max`) fail the load.
+
+The bundled `batch-task` maps 1–2 haiku/low, 3–4 sonnet/medium, 5–6 sonnet/high, 7–8 opus/high,
+9–10 opus/xhigh, escalates on the third `work` (the second fix round: the driver then spawns a fresh
+worker on the new model instead of messaging the old one), and reviews `light` diffs with
+sonnet/medium, `code` with opus/high. A line without `difficulty:` keeps its `model:` / `effort:`
+columns. The driver writes the agents' tokens to `tokens_worker` / `tokens_review`; the ledger keeps
+them with the difficulty, model and effort, so the table is tuned from data.
 
 ### When a project should have its own workflow
 
@@ -572,7 +626,7 @@ itself is different.
 | `file-review` | Per-file deep review — spawned by code-review for each file |
 | `lint-review` | Trivial-diff review — engine-run lint, act on findings, one intent re-read |
 | `batch` | Long-running task queue: the engine admits lines into the window (`after:` / `touches:` / `owner:` / pause), one `batch-task` child per task, one fresh-eyes review of the combined diff |
-| `batch-task` | One queued task: worktree → worker → merge + `land_test` under the repo's land lock → mark done → cleanup |
+| `batch-task` | One queued task: difficulty → model/effort (`model_table`) → worktree → worker → reviewer chosen by the diff → merge + `land_test` under the repo's land lock → mark done → cleanup |
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 
