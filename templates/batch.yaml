@@ -179,7 +179,11 @@ states:
         from `work` `blocked`, from `land_failed` `close` (each leads to `blocked`); then in `blocked`
         `queue_mark` to `failed` with note "<your one-line reason>" and transition `close` (`stop` only when
         you say so). Then decide whether to `queue_add` a follow-up line; anything that needs the user → tell the user, keep the slot. Never take over the task's work.
-      - a worker or reviewer whose spawner is a driver → ignore it; its driver handles it.
+      - a worker or reviewer whose spawner is a driver → its driver handles it: ignore it while the driver
+        runs. After a restart the line may reach you instead: relay it by SendMessage to the driver linked
+        to P. Only when that SendMessage fails (the driver is gone), re-spawn from `driver_call` and send
+        the line to the new driver; a driver that stays silent is the stale sweep's (below). Never both,
+        never drop it.
       A task session you drive yourself (no driver): find it (the agent is linked to a session whose parent
       is P; `sessions` shows `[agent …]`), read `status(P)` and advance P by its prompt (session_id P). A
       transition into P's exec steps (the land waits for the repo's land lock) may outlive the call and

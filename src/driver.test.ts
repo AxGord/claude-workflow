@@ -161,6 +161,18 @@ describe("batch-task links (template text)", () => {
     expect(collect).toContain("`queue_add` line, a memory note, or nothing");
   });
 
+  it("a driver messaged after its last line resumes from status, and collect relays an orphaned line", () => {
+    const md = fs.readFileSync(resolveDriverRef("task-driver", "/"), "utf8").replace(/\s+/g, " ");
+    expect(md).toContain("## Resumed after your last line");
+    expect(md).toContain('never answer "my run already ended"');
+    expect(md).toContain("A relayed worker or reviewer line IS that agent's answer");
+    const collect = new Loader(TEMPLATES, tmp(), null)
+      .get("batch")!
+      .states.collect.prompt.replace(/\s+/g, " ");
+    expect(collect).toContain("relay it by SendMessage to the driver linked to P");
+    expect(collect).toContain("Never both, never drop it.");
+  });
+
   it("the driver asks a decider for design choices and reports decided=", () => {
     const md = fs.readFileSync(resolveDriverRef("task-driver", "/"), "utf8").replace(/\s+/g, " ");
     expect(md).toContain("Design choices — ask the DECIDER, not the parent");

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- engine (ENG-DRIVER-RESUME): a driver messaged after its last line is not finished. `task-driver.md` gains "Resumed after your last line": `status` on P once and continue (a relayed worker/reviewer line is that agent's answer; never "my run already ended"). Bundled `batch` `collect` relays an orphaned worker/reviewer line after a restart to the driver linked to P, re-spawning from `driver_call` only if that fails. Test: the shipped texts.
+
 - engine (ENG-SKILL-SYNC-2): (1) the engine-task land keeps the pre-merge sha in `<git-common-dir>/land-before-<task>` (removed on a taken-back merge and after the sync), so a retry after `land_failed` (merge already on master) syncs the live skills from it instead of from a no-op `before == merged`. (2) `sync-live-skills.sh`'s "left alone" WARNING now names the next step: the `rsync` command that takes the bundled copy, or adding the name to `.skillsyncignore`. `engine-task.yaml` is git-ignored: installed by the parent.
 
 - engine (ENG-DECIDER): design choices no longer go to the parent. `templates/drivers/task-driver.md` gains "Design choices — ask the DECIDER": on a FIXES with `design=yes` (or a further allowed FIXES) the driver spawns one fresh opus/high decider that reads review/handoff/report, the task line and the project memory index (context key `memory_index`, optional, never hardcoded), appends `decisions.md` in `<wt>.log`, and answers `DECIDED file=…` or `ESCALATE reason=…` (scope change, project-wide rule, user-visible behaviour, contradicts a user decision -> NEEDS-PARENT). The driver's last line gains `decided=<file>`; bundled `batch` `collect` tells the parent to audit it; `batch-task`'s review route mentions the decisions file. Test: the shipped texts.

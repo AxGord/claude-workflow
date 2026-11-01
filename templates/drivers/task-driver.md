@@ -89,6 +89,14 @@ review.md "Notes (non-blocking)". One short phrase each, with the file it came f
 Read only those sections, never the whole files: `sed -n '/^## <heading>/,/^## /p' <file>` prints one
 section's items; skip a section whose body is `none`.
 
+## Resumed after your last line
+The parent may message you after you replied (a relayed worker/reviewer line, a decision). Your run is NOT
+over: P still holds the step. Call `status` on P once and continue from it — never answer "my run already
+ended" or ask the parent to spawn another driver. A relayed worker or reviewer line IS that agent's
+answer: route it as the current prompt says, without asking the agent where it stands and without
+waiting again. Tokens come from that agent's later notification, else 0. If `status` shows P has
+ended, reply with your last line again.
+
 ## Last message
 ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=<phrase (file)>; <phrase (file)>|none`,
 `CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released`), or the NEEDS-PARENT line.

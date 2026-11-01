@@ -617,7 +617,7 @@ driver:
 - `start({ …, context: { task, queue_file, difficulty } })` starts the session with those context keys
   (`difficulty` goes through the `model_table`, outside 1..10 refused; `cwd` / `claude_code_pid` are
   the engine's), so the dispatcher spends no calls on the claim's bookkeeping.
-- The shipped `task-driver` instructions: one `status` at the start, after that every transition
+- The shipped `task-driver` instructions (a message after its last line means P still holds the step: `status` on P once and continue): one `status` at the start, after that every transition
   reply is the next prompt; spawn the prompts' agents exactly as written and wait for their
   notification; hand back with one line `NEEDS-PARENT task=… session=… reason=… see=<file>` on a
   REJECT, a FIXES with `design=yes` whose decider answered `ESCALATE` (the driver first spawns a fresh opus decider that reads review/handoff/report, the task line and the memory index named by context key `memory_index` (optional: the dispatcher `context_set`s it and passes it into each task start beside `queue_file`), appends `decisions.md` in `<wt>.log` and answers `DECIDED file=…`), the third FIXES (or the Nth by context key `max_fixes`) with or without a decider, a BLOCKED worker, a failed land or any open
@@ -652,7 +652,7 @@ driver:
   worker=… review=… | report: <log dir>/report.md`.
 - Bundled `batch`: `dispatch` starts each task with its context and spawns the DRIVER block as given;
   `collect` routes on the drivers' one-line answers (a worker or reviewer under a driver is the
-  driver's). A task workflow without `driver:` is still driven by the dispatcher itself.
+  driver's; after a restart an orphaned line is relayed to that P's driver). A task workflow without `driver:` is still driven by the dispatcher itself.
 
 ### When a project should have its own workflow
 
