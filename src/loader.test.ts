@@ -294,6 +294,35 @@ describe("Loader strict schema", () => {
     expect(errors).toContain('state "f" resource is for exec states');
   });
 
+  it("stale_after: seconds ≥ 0 on a prompt or action state, never on a terminal or sub_workflow one", () => {
+    const wf = (states: object) => ({ initial: "a", states });
+    const { loader, errors } = loadWithErrors({
+      ok: wf({
+        a: { prompt: "go", stale_after: 7200, transitions: { next: "x" } },
+        x: { type: "exec", command: "true", stale_after: 0, on_success: "e", on_error: "e" },
+        e: { terminal: true },
+      }),
+      negative: wf({
+        a: { prompt: "go", stale_after: -1, transitions: { e: "e" } },
+        e: { terminal: true },
+      }),
+      terminal: wf({
+        a: { prompt: "go", transitions: { e: "e" } },
+        e: { terminal: true, stale_after: 60 },
+      }),
+      sub: wf({
+        a: { sub_workflow: "ok", on_complete: "e", stale_after: 60 },
+        e: { terminal: true },
+      }),
+    });
+    expect(loader.get("ok")!.states.a.stale_after).toBe(7200);
+    expect(loader.get("ok")!.states.x.stale_after).toBe(0);
+    for (const name of ["negative", "terminal", "sub"]) expect(loader.get(name)).toBeUndefined();
+    expect(errors).toMatch(/states\.a\.stale_after: Number must be greater than or equal to 0/);
+    expect(errors).toContain('state "e" stale_after is never read on a terminal state');
+    expect(errors).toContain('state "a" stale_after is never read on a sub_workflow state');
+  });
+
   it("resource: threads { min, max } with wait_full; wait_full only beside it", () => {
     const exec = (resource: object) => ({
       initial: "r",

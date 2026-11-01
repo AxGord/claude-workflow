@@ -328,6 +328,78 @@ describe("Engine: fanout history and on_timeout", () => {
     expect(line.execs[0].shards).toEqual(action.shards);
   }, 20_000);
 
+  it("the first granted shard lease records run_at on pending_action: a running fanout's stall clock", async () => {
+    const { engine, storage } = engineWith({
+      f: {
+        initial: "run",
+        states: {
+          run: {
+            type: "exec",
+            command: "sleep 0.6",
+            fanout: { count: 2, threads_each: 1 },
+            on_success: "ok",
+            on_error: "ok",
+          },
+          ok: { terminal: true },
+        },
+      },
+    });
+    const started = engine.start("f");
+    let runAt: string | undefined;
+    for (let i = 0; i < 100 && runAt === undefined; i++) {
+      await new Promise(r => setTimeout(r, 20));
+      const s = storage.readAll()[0];
+      runAt = s?.pending_action?.run_at;
+    }
+    expect(runAt).toBeDefined();
+    const s = storage.readAll()[0];
+    expect(engine.staleness(s, new Set(), Date.parse(runAt!) + 1000)).toBeUndefined();
+    const late = Date.parse(runAt!) + (14400 + 1) * 1000;
+    expect(engine.staleness({ ...s, updated_at: s.started_at }, new Set(), late)?.since).toBe(
+      runAt,
+    );
+    await started;
+    expect(storage.readAll()[0].pending_action).toBeUndefined();
+  }, 20_000);
+
+  it("a step run again drops the old run_at: its own first lease stamps a new one", async () => {
+    const { engine, storage } = engineWith({
+      f: {
+        initial: "p",
+        states: {
+          p: { prompt: "p", transitions: { go: "run" } },
+          run: {
+            type: "exec",
+            command: "sleep 0.6",
+            fanout: { count: 1, threads_each: 1 },
+            on_success: "ok",
+            on_error: "ok",
+          },
+          ok: { terminal: true },
+        },
+      },
+    });
+    const { sessionId } = await engine.start("f");
+    const old = "2026-01-01T00:00:00.000Z";
+    const s = storage.read(sessionId)!;
+    await storage.write(sessionId, {
+      ...s,
+      stack: [{ ...s.stack[0], current_state: "run" }],
+      pending_action: { frame: 0, state: "run", at: old, run_at: old },
+    });
+    expect(engine.orphanedStep(sessionId)).toBe("rerun");
+    const rerun = engine.adoptOrphanedExec(sessionId);
+    let runAt: string | undefined = old;
+    for (let i = 0; i < 100 && (runAt === old || runAt === undefined); i++) {
+      await new Promise(r => setTimeout(r, 20));
+      runAt = storage.read(sessionId)!.pending_action?.run_at;
+    }
+    expect(runAt).toBeDefined();
+    expect(Date.parse(runAt!)).toBeGreaterThan(Date.parse(old));
+    await rerun;
+    expect(storage.read(sessionId)!.pending_action).toBeUndefined();
+  }, 20_000);
+
   it("on_timeout routes an exec killed by its timeout apart from an ordinary failure", async () => {
     const flow = (command: string) => ({
       initial: "gate",

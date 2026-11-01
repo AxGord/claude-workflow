@@ -339,7 +339,7 @@ route), no `locks`, no step `priority` (the session level only).
 
 ### Template variables
 
-All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited), `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`), `{{session_id}}` and `{{parent_session_id}}` (empty at the root). After action execution, result variables are also available:
+All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited), `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`), `{{session_id}}` and `{{parent_session_id}}` (empty at the root), `{{stale_sessions}}` (one `STALE:` line per stale session below this one — § Stall detection — or `none`; computed only when a template names it). After action execution, result variables are also available:
 
 | Source | Variables |
 |--------|-----------|
@@ -363,6 +363,21 @@ fix:
 ```
 
 The route applies to every move into the state — an agent `transition`, an action state's `on_success`/`on_error`/`cases`, a skill gate's auto-transition; a pop's `on_complete`/`on_fail` does not check `max_visits`. Chained routes are followed (an exhausted `escalate` with its own route goes on), a cycle is an error, and the history entry's `detail` names the exhausted states. A rerouted action move shows the routed-to state's own prompt, not the action's `success_prompt`/`error_prompt` (written for the default target); the result stays readable there as `{{stdout}}`/`{{exit_code}}`. `on_exhausted` without `max_visits`, or to an unknown state, fails the load. `{{visits.<state>}}` counts visits in the active frame, so the routed-to state can say how many tries ran.
+
+### Stall detection — `stale_after`
+
+A session whose state saw no engine call (no `transition`, `context_set`, … — any write) for longer than the state's `stale_after` seconds is **STALE**: its agent may be dead or stuck. Unset, the state's type decides: a prompt state 1800 s (its agent calls the engine as it works), an `exec` / `fetch` 3600 s, a heavy exec (`resource:` or `fanout:`) 14400 s — an exec's default is never below its own `timeout` + 300 s, before which the timeout bounds it. `stale_after: 0` = never (a state that waits for the user); on a terminal or `sub_workflow` state it is a load error (never read). Never stale: an ended or suspended session (suspension is its own mark), a session with an active child (it waits for its children, each judged on its own), and a `resource:` / `fanout:` exec waiting for its pool lease (before its run began, or marked `pool_starved`) while the process that owns the session is alive — the pool's wait, reported as `POOL STARVED`; a dead owner's wait counts. The clock runs from the session's last write, or from the start of the state's run when that is later (`running_exec`, else `pending_action.run_at`, written when the step's first lease is granted — a `fanout:` has no `running_exec`), so a takeover, resume or `context_set` during a run resets it. A fetch or a light exec is timed from its last write.
+
+- `sessions` marks one `[STALE: no engine call for 47m (since …), past its state's stale_after 30m]`.
+- `status` of a session lists the STALE sessions below it on top (the session itself is its parent's `status` and `sessions`' to show) (`STALE: session <id> (<workflow @ state>, child of <parent>, agent <agent id>) — …`) with what to do once: SendMessage the agent; no answer → abort the session, or let a new agent continue it from `status` — the session holds the step, so a restart loses nothing. `transition` appends the same lines. A line the answer's prompt already renders (`{{stale_sessions}}`) is not repeated; a revisit's digest renders no prompt, so there they come back as the notice. A step run again (resume, an interrupted lease wait) drops its old `run_at`: its own first lease starts its clock.
+- The bundled `batch` `collect` prompt lists the run's stale sessions (`{{stale_sessions}}`), so the dispatcher messages or restarts a stuck driver/worker; its `paused` state (waits for the user) is `stale_after: 0`.
+
+```yaml
+work:
+  prompt: "Implement the change"       # a long single step: give it longer than the 30-min default
+  stale_after: 7200
+  transitions: { done: review }
+```
 
 ### Strict schema
 
@@ -704,7 +719,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `create` | Create new workflow definition (saves YAML) | `name`, `definition`, `scope` |
 | `delete` | Delete a workflow definition | `name`, `scope` |
 | `abort` | Abort workflow, pop all stack frames | `session_id` |
-| `sessions` | List all sessions (active first) | — |
+| `sessions` | List all sessions (active first); `[STALE: …]` marks one whose state saw no engine call past its `stale_after` | `all` |
 | `set_priority` | Set the priority level of a session and its descendants; re-rank their waiting pool entries (no preemption) | `session_id`, `level` |
 | `pool_status` | The machine-wide pool: one line per lease and waiter (as `wf-run --status`) | — |
 | `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
@@ -814,6 +829,7 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/queue.ts` | Task queue files: parse, admission (`after:` / `touches:` / `owner:` / pause), `[.]` marks under the queue's lock |
 | `src/queue-cli.ts` | The `wf-queue` CLI over `queue.ts` (exec form of `queue_next` / `queue_mark`) |
 | `src/process.ts` | Process-group kill and pid liveness |
+| `src/stale.ts` | Stall detection: a state's `stale_after` (type defaults) and whether a session is STALE |
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |

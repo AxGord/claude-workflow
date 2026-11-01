@@ -124,6 +124,21 @@ workflows share the server process — their first delivery may be a digest;
 the status() hint is the recovery, but don't rely on it for load-bearing
 one-shot instructions).
 
+**stale_after** (per state, seconds; `0` = never): a session whose state saw no engine call
+(any write) for longer is STALE — its agent may be dead or stuck. Unset, by type: prompt 1800,
+exec/fetch 3600, a `resource:`/`fanout:` exec 14400; an exec's default is never below its own
+`timeout` + 300. A load error on a terminal or `sub_workflow` state (never read). Never STALE: an
+ended or suspended session, one with an active child (it waits; each child is judged alone), a
+`resource:`/`fanout:` exec waiting for its pool lease (no run yet, or `pool_starved`) while its
+owner process lives. Clock = the later of the last write and the run's start (`running_exec`, else
+`pending_action.run_at`), so a takeover / resume / `context_set` during a run resets it. Marks:
+`sessions` → `[STALE: no engine call for 47m (since …), past its state's stale_after 30m]`;
+`status` → the STALE sessions BELOW it on top (`STALE: session <id> (<wf @ state>, child of <p>,
+agent <a>) — …`) plus one what-to-do line (SendMessage the agent; no answer → abort, or a new agent
+continues from `status` — the session holds the step); `transition` appends them. Give a long
+single-step prompt state (one agent turn of an hour) its own `stale_after`; a state waiting for the
+user `stale_after: 0` (bundled `batch` `paused`).
+
 ### Routing Modes
 
 **Simple** — binary success/error:
@@ -153,6 +168,7 @@ Available in ALL prompts (not just action states):
 - `{{context.<key>}}` — any context value set via context_set
 - `{{visits.<state>}}` — visit count of `<state>` in the ACTIVE stack frame (empty if never visited) — route on "did the fix loop run?" without an agent turn
 - `{{root_workflow}}` — workflow at the stack root (`subagent` = running as a spawned sub-agent)
+- `{{stale_sessions}}` — one `STALE:` line per stale session below this one, or `none` (computed only when a template names it; also in `success_prompt` / `error_prompt` / `context_set`) — bundled `batch` `collect` lists the run's stuck agents with it; a `status` whose prompt renders it shows no second copy on top
 
 After exec/fetch, also available:
 - `{{stdout}}`, `{{stderr}}`, `{{exit_code}}` — exec results

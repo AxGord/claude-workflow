@@ -123,6 +123,8 @@ states:
       stop: report
 
   paused:
+    # waits for the user, not for an agent
+    stale_after: 0
     prompt: |-
       The queue is paused (`batch_size: 0`) and none of its tasks runs:
       {{stderr}}
@@ -160,6 +162,14 @@ states:
       and finish in the background — move other tasks meanwhile.
       Resumed after a restart: every task session P is YOURS — `resume` each; the sessions the resume
       lists are their agents' (SendMessage exactly as it prints).
+
+      Stale sessions of this run — no engine call past their state's `stale_after` (`status({session_id:
+      "{{session_id}}"})` lists them anew):
+      {{stale_sessions}}
+      A stale session with an agent → SendMessage that agent asking where it stands; no answer, or the
+      agent is gone → spawn a fresh agent on the SAME session with the first one's prompt (it continues
+      from `status`: the session holds the step) and `link_agent` it. A stale task session P without an
+      agent is yours: `status(P)` and advance it.
 
       Route this session:
       - a task session reached its terminal (`done` / `closed` / `released`) → update `tasks`, then

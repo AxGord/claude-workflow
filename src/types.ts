@@ -141,6 +141,10 @@ export const StateDefinitionSchema = z
     // agent's context already holds it; status() always returns the full text)
     digest_on_repeat: z.boolean().optional(),
 
+    // seconds the state may go with no engine call before `sessions` / `status` mark the session
+    // STALE (0 = never); unset = the state type's default (`STALE_AFTER_DEFAULTS` in stale.ts)
+    stale_after: z.number().int().nonnegative().optional(),
+
     // Action state fields
     type: z.enum(["prompt", "exec", "fetch"]).optional(),
 
@@ -345,6 +349,8 @@ export interface PendingAction {
   readonly frame: number;
   readonly state: string;
   readonly at: string;
+  /** When a `resource:` / `fanout:` exec's run began (its first lease granted): its stall clock starts there. */
+  readonly run_at?: string;
 }
 
 export interface WorkflowOverrides {

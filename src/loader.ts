@@ -413,6 +413,11 @@ export class Loader {
           errors.push(`state "${name}" resource, fanout and on_timeout are for exec states`);
       }
 
+      if (state.stale_after !== undefined && (state.terminal || state.sub_workflow))
+        errors.push(
+          `state "${name}" stale_after is never read on a ${state.terminal ? "terminal" : "sub_workflow"} state`,
+        );
+
       // terminal + transitions is allowed: "soft terminal" — considered complete
       // but can be re-entered via transitions (useful for top-level confirmation loops)
     }

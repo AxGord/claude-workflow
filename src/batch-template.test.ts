@@ -191,3 +191,11 @@ describe("batch-task default extension points", () => {
     expect(git(repo, "log", "-1", "--format=%s", "HEAD~1")).toMatch(/^Merge branch 'batch\/T1'/);
   });
 });
+
+describe("bundled batch: stale tasks", () => {
+  it("collect lists the run's stale sessions; paused waits for the user and is never stale", () => {
+    const batch = new Loader(TEMPLATES, tmp(), null).get("batch")!;
+    expect(batch.states.collect.prompt).toContain("{{stale_sessions}}");
+    expect(batch.states.paused.stale_after).toBe(0);
+  });
+});

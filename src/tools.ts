@@ -16,6 +16,7 @@ import {
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
 import { withProgress, type ProgressSink } from "./progress.js";
+import { activeParents, staleNote } from "./stale.js";
 import { RESUME_TOOL, activeSubtree, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
 import {
   MARK_TARGETS,
@@ -49,6 +50,33 @@ export function starvationLines(storage: Storage, sessionId: string): string[] {
     // a notice never fails the call it rides on
   }
   return lines;
+}
+
+/**
+ * The STALE sessions below `sessionId` (`Engine.staleLines`), with what to do about them once: what a
+ * parent sees at its next `status` / `transition`. The session itself is its parent's to see, and `sessions`'.
+ */
+export function staleNotice(engine: Engine, sessionId: string): string[] {
+  try {
+    const lines = engine.staleLines(sessionId, true);
+    if (lines.length === 0) return [];
+    return [
+      ...lines,
+      "A STALE session's agent may be dead or stuck: SendMessage it; no answer → abort its session, or have a new agent continue it from status (the session holds the step).",
+    ];
+  } catch {
+    // a notice never fails the call it rides on
+    return [];
+  }
+}
+
+/**
+ * `staleNotice` unless `body` already shows every line of it — a prompt that renders
+ * `{{stale_sessions}}` (a revisit's digest does not render it, so the notice comes back there).
+ */
+function unshownStale(engine: Engine, sessionId: string, body: string): string[] {
+  const notice = staleNotice(engine, sessionId);
+  return notice.slice(0, -1).every(line => body.includes(line)) ? [] : notice;
 }
 
 interface FormatOptions {
@@ -476,15 +504,18 @@ export function registerTools(
         const contextLines = formatContext(status.context);
         const suspendedAt = storage.read(sid)?.suspended_at;
         const starved = starvationLines(storage, sid);
+        const body = formatStatus(status, { showSessionId: true, forceFullPrompt: true });
+        const stale = unshownStale(engine, sid, body);
         const text = [
           ...(starved.length > 0 ? [...starved, ""] : []),
+          ...(stale.length > 0 ? [...stale, ""] : []),
           ...(suspendedAt
             ? [
                 `SUSPENDED since ${suspendedAt} — call resume({ session_id: "${sid}" }) to continue it.`,
                 "",
               ]
             : []),
-          formatStatus(status, { showSessionId: true, forceFullPrompt: true }),
+          body,
           ...(contextLines.length > 0 ? ["", ...contextLines] : []),
           "",
           "RECENT HISTORY:",
@@ -538,11 +569,12 @@ export function registerTools(
           const status = await withProgress(progress, () =>
             engine.transition(sid, args.transition, args.actor),
           );
-          const starved = starvationLines(storage, sid);
+          const body = formatStatus(status);
+          const notices = [...starvationLines(storage, sid), ...unshownStale(engine, sid, body)];
           const text =
             (warning ? warning + "\n\n" : "") +
-            formatStatus(status) +
-            (starved.length > 0 ? `\n\n${starved.join("\n")}` : "");
+            body +
+            (notices.length > 0 ? `\n\n${notices.join("\n")}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {
@@ -782,7 +814,8 @@ export function registerTools(
   server.registerTool(
     "sessions",
     {
-      description: "List all workflow sessions (active shown first, recent inactive limited to 3).",
+      description:
+        "List all workflow sessions (active shown first, recent inactive limited to 3). [STALE] marks an active session whose state saw no engine call for longer than its stale_after (its agent may be dead or stuck).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
@@ -804,6 +837,8 @@ export function registerTools(
         return { content: [{ type: "text", text: `No sessions found.${hint}` }] };
       }
 
+      const now = Date.now();
+      const parents = activeParents(allSessions);
       const formatSession = (s: SessionState): string => {
         const isActive = s.stack.length > 0;
         const frame = isActive ? s.stack[s.active_frame] : null;
@@ -817,11 +852,13 @@ export function registerTools(
           isActive && s.pool_starved
             ? ` [POOL STARVED since ${s.pool_starved.since}: ${s.pool_starved.note}]`
             : "";
+        const st = isActive ? engine.staleness(s, parents, now) : undefined;
+        const stale = st ? ` [STALE: ${staleNote(st)}]` : "";
         const pidInfo =
           args.all && s.context.claude_code_pid !== undefined
             ? ` [pid: ${s.context.claude_code_pid}${s.context.claude_code_pid === pid ? " ★" : ""}]`
             : "";
-        return `  ${s.session_id}: ${stateInfo}${depth}${parent}${suspended}${starved}${pidInfo} (updated: ${s.updated_at})`;
+        return `  ${s.session_id}: ${stateInfo}${depth}${parent}${suspended}${starved}${stale}${pidInfo} (updated: ${s.updated_at})`;
       };
 
       const active = sessions.filter(s => s.stack.length > 0);

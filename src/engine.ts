@@ -35,7 +35,16 @@ import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { MODEL_KEYS, applyModelTable, difficultyError, parseDifficulty } from "./model-table.js";
 import { render } from "./template.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
-import { activeSubtree, takeOver } from "./takeover.js";
+import { activeSubtree, takeOver, where } from "./takeover.js";
+import { activeParents, staleNote, staleness, type Staleness } from "./stale.js";
+
+/** Template vars with an action's result laid over them; the lazy getters (`stale_sessions`) carried along. */
+function withResult(vars: Record<string, unknown>, result: ActionResult): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...vars, ...result };
+  for (const [key, d] of Object.entries(Object.getOwnPropertyDescriptors(vars)))
+    if (!d.enumerable) Object.defineProperty(merged, key, d);
+  return merged;
+}
 
 function stripOptionalPrefix(s: string): string {
   return s.replace(/^\?/, "");
@@ -559,6 +568,53 @@ export class Engine {
   }
 
   /**
+   * Whether `session` is STALE at `now` (`stale.ts`), its state resolved as `status` resolves it — a
+   * workflow no longer loadable counts as a prompt state. `parents`: `activeParents` of the sessions.
+   */
+  public staleness(
+    session: SessionState,
+    parents: ReadonlySet<string>,
+    now: number = Date.now(),
+  ): Staleness | undefined {
+    if (session.stack.length === 0) return undefined;
+    const frame = session.stack[session.active_frame];
+    let state: StateDefinition | undefined;
+    try {
+      state = this._resolveState(session, frame.workflow, frame.current_state);
+    } catch {
+      state = undefined;
+    }
+    const pid = session.context.claude_code_pid;
+    const alive = typeof pid === "number" && Engine._isPidAlive(pid);
+    return staleness(session, state, parents, now, alive);
+  }
+
+  /**
+   * One `STALE:` line per STALE session of `sessionId`'s active sub-tree, parents first — the
+   * session itself too unless `descendantsOnly`.
+   */
+  public staleLines(
+    sessionId: string,
+    descendantsOnly = false,
+    now: number = Date.now(),
+  ): string[] {
+    const tree = activeSubtree(this._storage, sessionId)
+      .slice(descendantsOnly ? 1 : 0)
+      .map(id => this._storage.read(id))
+      .filter((s): s is SessionState => !!s && s.stack.length > 0);
+    const parents = activeParents(tree);
+    const lines: string[] = [];
+    for (const s of tree) {
+      const st = this.staleness(s, parents, now);
+      if (!st) continue;
+      const of = s.parent_session_id ? `, child of ${s.parent_session_id}` : "";
+      const agent = s.agent_id ? `, agent ${s.agent_id}` : "";
+      lines.push(`STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}`);
+    }
+    return lines;
+  }
+
+  /**
    * Retry a deferred pop. Called by Modifier after overlays change,
    * in case on_complete/on_fail was added to the parent state.
    * Returns the new status if pop succeeded, or null if still pending.
@@ -1022,6 +1078,10 @@ export class Engine {
       visits: session.stack[session.active_frame].state_visits,
       root_workflow: session.stack[0].workflow,
     };
+    // read only by a template that names it: it walks the session's sub-tree
+    Object.defineProperty(vars, "stale_sessions", {
+      get: () => this.staleLines(session.session_id, true).join("\n") || "none",
+    });
     const ar = session.last_action_result;
     if (ar) {
       if (ar.stdout !== undefined) vars.stdout = ar.stdout;
@@ -1087,6 +1147,7 @@ export class Engine {
     // list it) until no wait of the step is starved any more, and cleared when the step
     // starts and ends — a mark a crashed server left behind never outlives the next step.
     let starvedWrite: Promise<unknown> | undefined;
+    let runAtWrite: Promise<unknown> | undefined;
     const clearStarved = (): Promise<unknown> =>
       this._storage
         .update(session.session_id, cur =>
@@ -1103,7 +1164,21 @@ export class Engine {
     const execCtx: ExecContext = {
       ...this._execContext(session),
       ...this._estimate(session, state),
-      onPhase: phase => phaseSink.set?.(phase),
+      onPhase: phase => {
+        phaseSink.set?.(phase);
+        // the first granted lease starts the step's run: its stall clock counts from here
+        if (phase !== "run" || runAtWrite) return;
+        const runAt = new Date().toISOString();
+        runAtWrite = this._storage
+          .update(session.session_id, cur =>
+            cur?.pending_action?.frame === frameIndex &&
+            cur.pending_action.state === stateName &&
+            cur.pending_action.run_at === undefined
+              ? { ...cur, pending_action: { ...cur.pending_action, run_at: runAt } }
+              : null,
+          )
+          .catch(() => undefined);
+      },
       onStarved: note => {
         phaseSink.note?.(note);
         const record = note !== undefined ? { since: new Date().toISOString(), note } : undefined;
@@ -1150,6 +1225,14 @@ export class Engine {
       await this._storage.update(session.session_id, cur =>
         cur && cur.stack.length > 0 ? { ...cur, pending_action: pending } : null,
       );
+    } else if (mark.run_at !== undefined && !own) {
+      // a step run again waits for its own lease: its clock starts at that lease, not the old run's
+      await this._storage.update(session.session_id, cur => {
+        const p = cur?.pending_action;
+        if (!cur || cur.stack.length === 0 || p?.frame !== frameIndex || p.state !== stateName)
+          return null;
+        return { ...cur, pending_action: { frame: p.frame, state: p.state, at: p.at } };
+      });
     }
     let result: ActionResult | null;
     // tells the waiting tool call's client the exec is alive (only when it asked for progress)
@@ -1180,6 +1263,7 @@ export class Engine {
       throw err;
     } finally {
       beat.stop();
+      if (runAtWrite) await runAtWrite;
       if (starvedWrite) await starvedWrite;
       if (starvedWrite || marked()) await clearStarved();
     }
@@ -1292,7 +1376,7 @@ export class Engine {
         ? state.success_prompt
         : state.error_prompt;
     const actionPrompt = promptTemplate
-      ? render(promptTemplate, { ...vars, ...result })
+      ? render(promptTemplate, withResult(vars, result))
       : undefined;
 
     const updatedFrame: StackFrame = {
@@ -1336,7 +1420,7 @@ export class Engine {
     let ctx = current.context;
     const setKeys = new Set(result.success ? Object.keys(state.context_set ?? {}) : []);
     if (result.success && state.context_set) {
-      const renderVars = { ...vars, ...result };
+      const renderVars = withResult(vars, result);
       const entries = Object.entries(state.context_set).map(
         ([k, v]) => [k, render(v, renderVars)] as const,
       );
