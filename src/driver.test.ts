@@ -161,6 +161,30 @@ describe("batch-task links (template text)", () => {
     expect(collect).toContain("`queue_add` line, a memory note, or nothing");
   });
 
+  it("the driver asks a decider for design choices and reports decided=", () => {
+    const md = fs.readFileSync(resolveDriverRef("task-driver", "/"), "utf8").replace(/\s+/g, " ");
+    expect(md).toContain("Design choices — ask the DECIDER, not the parent");
+    expect(md).toContain("model opus, effort high");
+    expect(md).toContain("`DECIDED file=<wt>.log/decisions.md`");
+    expect(md).toContain("`ESCALATE reason=<short>`");
+    expect(md).toContain("P's context key `memory_index`");
+    expect(md).toContain("the decider answered ESCALATE");
+    expect(md).toContain("a THIRD FIXES verdict (the Nth when P's context key `max_fixes` is N)");
+    expect(md).toContain("` decided=<file>`");
+    expect(md).not.toContain("/.claude/projects/");
+    const collect = new Loader(TEMPLATES, tmp(), null)
+      .get("batch")!
+      .states.collect.prompt.replace(/\s+/g, " ");
+    expect(collect).toContain("`decided=<file>` means a decider answered");
+    const bt =
+      JSON.stringify(def().states) +
+      JSON.stringify(new Loader(TEMPLATES, tmp(), null).get("batch")!.states);
+    expect(bt).toContain("memory_index");
+    expect(JSON.stringify(def().states.claim)).toContain("memory_index");
+    expect(md).toContain("the decider's decisions");
+    expect(def().states.review.prompt.replace(/\s+/g, " ")).toContain("decisions.md whole");
+  });
+
   it("the shipped task-driver instructions take only a current linked agent as this visit's", () => {
     const md = fs.readFileSync(resolveDriverRef("task-driver", "/"), "utf8").replace(/\s+/g, " ");
     expect(md).toContain(

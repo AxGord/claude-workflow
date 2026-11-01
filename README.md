@@ -620,9 +620,9 @@ driver:
 - The shipped `task-driver` instructions: one `status` at the start, after that every transition
   reply is the next prompt; spawn the prompts' agents exactly as written and wait for their
   notification; hand back with one line `NEEDS-PARENT task=… session=… reason=… see=<file>` on a
-  REJECT, a FIXES with `design=yes`, a third FIXES, a BLOCKED worker, a failed land or any open
+  REJECT, a FIXES with `design=yes` whose decider answered `ESCALATE` (the driver first spawns a fresh opus decider that reads review/handoff/report, the task line and the memory index named by context key `memory_index` (optional: the dispatcher `context_set`s it and passes it into each task start beside `queue_file`), appends `decisions.md` in `<wt>.log` and answers `DECIDED file=…`), the third FIXES (or the Nth by context key `max_fixes`) with or without a decider, a BLOCKED worker, a failed land or any open
   choice; finish with `LANDED <sha> task=… tokens worker=… review=… rounds=… lessons=<phrase (file)>; …|none`
-  (or `CLOSED … lessons=…`): up to two follow-ups COPIED, not judged, from the agents' files.
+  (or `CLOSED … lessons=…`): up to two follow-ups COPIED, not judged, from the agents' files; a decided choice appends ` decided=<file>` for the dispatcher to audit.
 - Agents' outputs are files: in bundled `batch-task` the worker writes `report.md` (and `handoff.md`
   when it stops unfinished), the reviewer `review.md`, in the task's log dir `<worktree>.log` (beside
   the worktree, kept after cleanup), and each answers with ONE line naming its file (`DONE <sha>

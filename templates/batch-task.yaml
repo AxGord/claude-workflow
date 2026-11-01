@@ -49,6 +49,7 @@ states:
       driven task needs none of the queue line):
         task       — the line's ID
         queue_file — the queue's absolute path (the dispatcher's `queue_file`)
+        memory_index — the project's memory index path, when the dispatcher has one ({{context.memory_index}}; optional)
         difficulty — the line's difficulty column, when it is not `-`: the engine then sets `model` and
                      `effort` from this workflow's model_table (its reply names them) — do not set them yourself
         model, effort — ONLY when the line has no difficulty: its columns (effort `-` → task-delegation's table)
@@ -175,7 +176,7 @@ states:
          END your turn on this task.
       On its notification: context_set `tokens_review` = the value already set ({{context.tokens_review}},
       empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the
-      worker's cause = the verdict line + "read {{context.wt}}.log/review.md whole"); REJECT → `reject`. The context_set first, the transition after
+      worker's cause = the verdict line + "read {{context.wt}}.log/review.md whole"; with design=yes the driver first asks its decider, see its instructions, and adds "read {{context.wt}}.log/decisions.md whole"); REJECT → `reject`. The context_set first, the transition after
       it returned.
     transitions:
       land: project_land

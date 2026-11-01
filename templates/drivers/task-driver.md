@@ -44,9 +44,29 @@ With a current agent, never start a new W/R session or agent at once:
    linked to (it continues from `status`), `link_agent` it, update `worker_agent` at `work` — never a
    second `start`.
 
+## Design choices — ask the DECIDER, not the parent
+Round cap: a THIRD FIXES verdict (the Nth when P's context key `max_fixes` is N) is never fixed — hand back at once, decider or not. On an earlier FIXES with `design=yes`: spawn ONE decider —
+Agent, model opus, effort high, `run_in_background: false`, prompt exactly (fill `<wt>`, `<ID>`, `<queue_file>`
+from P's context; `<memory_index>` = P's context key `memory_index`, else omit that file from the list):
+
+    You decide the open design choice(s) of task <ID>, read-only. Read whole: <wt>.log/review.md,
+    <wt>.log/handoff.md and <wt>.log/report.md (whichever exist), the task's line in <queue_file>
+    (`grep -n '<ID>'`), and the project memory index <memory_index> (open only the topic files that bear on
+    the choice). Decide each choice from the project's standing principles and earlier decisions; probe the
+    code in <wt> if a fact decides it. Append to <wt>.log/decisions.md one block per choice:
+    `## <choice>` / `decision:` / `why:` (at most 3 lines, naming the principle or memory it follows).
+    Your LAST message is ONE line: `DECIDED file=<wt>.log/decisions.md` — or `ESCALATE reason=<short>` when
+    the choice changes the task's scope, sets a project-wide rule, changes behaviour the user sees, or
+    contradicts a decision the user made; then decide nothing.
+
+`DECIDED` -> route the fix as the prompt says, the worker's cause = the review line plus "read
+<wt>.log/decisions.md whole — the decider's decisions"; keep driving, and remember the file for `decided=`
+(last message). `ESCALATE` -> hand back (below) with its reason.
+
 ## Stop and hand back — reply with ONE line, then stop
 `NEEDS-PARENT task=<ID> session=<P> reason=<short> see=<file or state>` when:
-- the review verdict is REJECT, or FIXES with `design=yes`, or a third FIXES;
+- the review verdict is REJECT; the decider answered ESCALATE; the round cap is reached (a third FIXES, or the
+  Nth by context `max_fixes`);
 - the worker ended BLOCKED;
 - the land failed (the session is in `land_failed`, `prepare_failed` or `cleanup_failed`);
 - a prompt mentions asking the user, or leaves a choice open;
@@ -72,3 +92,4 @@ section's items; skip a section whose body is `none`.
 ## Last message
 ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=<phrase (file)>; <phrase (file)>|none`,
 `CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released`), or the NEEDS-PARENT line.
+When a decider answered `DECIDED`, the line gains a last field ` decided=<file>` (the decisions.md path).

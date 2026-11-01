@@ -85,6 +85,8 @@ states:
          path and never re-resolve a name from their own repo) and
          `context_set(key: "task_workflow", value: "batch-task")` (a project
          with its own heir of `batch-task` names it here).
+      Optional: `context_set(key: "memory_index", value: "<absolute path>")` — the project's memory index
+      file; task drivers hand it to their decider (skip it when the project has none).
       4. → transition `ready`.
 
       Marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed. Only the
@@ -146,7 +148,8 @@ states:
       For EACH admitted line, one task session:
       1. `start({workflow: <its workflow column; `-` → "{{context.task_workflow}}">, parent_session_id:
          "{{session_id}}", cwd: "<its repo>", context: {task: "<ID>", queue_file: "{{context.queue_file}}",
-         difficulty: "<its difficulty column>"}})` — for a line whose difficulty is `-` pass instead
+         difficulty: "<its difficulty column>"}}; add `memory_index: "{{context.memory_index}}"` to
+         that context when it is not empty)` — for a line whose difficulty is `-` pass instead
          `model: "<its model column>", effort: "<its effort column>"` (a `-` column: leave that key out) → session P (the repo's own
          workflows are found from that cwd).
       2. A task workflow with a `driver:` (bundled `batch-task`) — `start`'s answer ends with a DRIVER block:
@@ -168,6 +171,8 @@ states:
       Woken by a DRIVER's one line (the task's bookkeeping — `[x]`, the record line — is already done):
       - `LANDED <sha> task=<ID> …` / `CLOSED task=<ID> …` → the task session ended: route below. Their `lessons=<phrase (file)>; …|none` tail is
         the agents' own follow-ups, copied: turn each into a `queue_add` line, a memory note, or nothing.
+        A trailing `decided=<file>` means a decider answered design choices without you: audit that file
+        (`## <choice>` / `decision:` / `why:` blocks) and overrule a wrong one with a `queue_add` line.
       - `NEEDS-PARENT task=<ID> session=<P> reason=… see=<file>` → read only the named file. A design choice
         or a decision the prompt left open → SendMessage the driver your decision and tell it to continue;
         a rejected or blocked task → SendMessage the driver its exact path: from `review` transition `reject`,
