@@ -457,6 +457,7 @@ A long run of tasks is a queue FILE the engine admits from — one format for ev
 batch_size: 3                       # the window; `batch_size: 0  # pause: <why>, was 3` pauses
 base: /abs/repo=<sha>
 land_test: npm test                 # run after each merge (batch-task's default land)
+record_file: records.md
 overlap: files                      # optional: only FILE entries of `touches:` conflict (default `paths`)
 ## Tasks
 - [ ] T1 | difficulty: 7 | touches: src/engine | <self-contained brief> |
@@ -588,6 +589,49 @@ sonnet/medium, `code` with opus/high. A line without `difficulty:` keeps its `mo
 columns. The driver writes the agents' tokens to `tokens_worker` / `tokens_review`; the ledger keeps
 them with the difficulty, model and effort, so the table is tuned from data.
 
+#### The task's driver (`driver:`)
+
+A task workflow may name the cheap agent that runs its session for the dispatcher, so the dispatcher's
+own (long, expensive) context spends a few calls per task instead of every transition:
+
+```yaml
+driver:
+  model: haiku
+  effort: low
+  prompt_ref: task-driver      # a bare name = shipped templates/drivers/<name>.md; else a path
+                               # (absolute, ~/…, or relative to the session's cwd)
+```
+
+- `start` of a session of such a workflow ends its answer with a DRIVER block: the exact Agent call
+  (model, effort, `run_in_background: true`, the prompt filled with the session id, `context.task`,
+  `context.queue_file` — the session's own, else its parent's — and the instructions' path), then
+  the `link_agent` to make. A missing instructions file is named there as a WARNING; a bare name that
+  is no shipped driver fails the load. A heir inherits `driver:` unless it sets its own whole.
+- `start({ …, context: { task, queue_file, difficulty } })` starts the session with those context keys
+  (`difficulty` goes through the `model_table`, outside 1..10 refused; `cwd` / `claude_code_pid` are
+  the engine's), so the dispatcher spends no calls on the claim's bookkeeping.
+- The shipped `task-driver` instructions: one `status` at the start, after that every transition
+  reply is the next prompt; spawn the prompts' agents exactly as written and wait for their
+  notification; hand back with one line `NEEDS-PARENT task=… session=… reason=… see=<file>` on a
+  REJECT, a FIXES with `design=yes`, a third FIXES, a BLOCKED worker, a failed land or any open
+  choice; finish with `LANDED <sha> task=… tokens worker=… review=… rounds=…` (or `CLOSED …`).
+- Agents' outputs are files: in bundled `batch-task` the worker writes `report.md` (and `handoff.md`
+  when it stops unfinished), the reviewer `review.md`, in the task's log dir `<worktree>.log` (beside
+  the worktree, kept after cleanup), and each answers with ONE line naming its file (`DONE <sha>
+  report=…`, `BLOCKED …`, `VERDICT MERGE|FIXES|REJECT … review=… design=yes|no`); a fix round sends
+  that line plus "read <file> whole", never the text. The spawn prompts also say once that a
+  transition reply IS the next prompt — never `status` after it.
+- The rendered call is also kept in P's context as `driver_call`: after a restart or compaction
+  `status({session_id: P, key: "driver_call"})` re-spawns the driver (bundled `batch` `collect` says so).
+  `driver:` on a workflow whose initial state is not a prompt state fails the load.
+- Bookkeeping is an exec: `mark_done` marks the line `[x]` with the landed sha and, when the queue
+  header names `record_file:` (relative = beside the queue; the value is taken whole — no `# comment`), appends one line from the context —
+  `- <date> <ID> landed <sha> | difficulty: … | model: …/… | review: …/… | rounds: N | tokens:
+  worker=… review=… | report: <log dir>/report.md`.
+- Bundled `batch`: `dispatch` starts each task with its context and spawns the DRIVER block as given;
+  `collect` routes on the drivers' one-line answers (a worker or reviewer under a driver is the
+  driver's). A task workflow without `driver:` is still driven by the dispatcher itself.
+
 ### When a project should have its own workflow
 
 The bundled workflows fit simple projects and one-off tasks: the agent itself runs whatever build and
@@ -641,7 +685,7 @@ itself is different.
 | `file-review` | Per-file deep review — spawned by code-review for each file |
 | `lint-review` | Trivial-diff review — engine-run lint, act on findings, one intent re-read |
 | `batch` | Long-running task queue: the engine admits lines into the window (`after:` / `touches:` / `owner:` / pause), one `batch-task` child per task, one fresh-eyes review of the combined diff |
-| `batch-task` | One queued task: difficulty → model/effort (`model_table`) → worktree → worker → reviewer chosen by the diff → merge + `land_test` under the repo's land lock → mark done → cleanup |
+| `batch-task` | One queued task, run by a haiku driver (`driver:`): difficulty → model/effort (`model_table`) → worktree → worker → reviewer chosen by the diff → merge + `land_test` under the repo's land lock → mark done → cleanup |
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 
@@ -711,7 +755,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list` | List all available workflow definitions | — |
-| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree), `priority` (`low`/`normal`/`high`/`urgent`; default: the parent's level, else `normal`) |
+| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree), `priority` (`low`/`normal`/`high`/`urgent`; default: the parent's level, else `normal`), `context` (string map the session starts with; not `cwd`) — a workflow with `driver:` ends the answer with the driver's Agent call |
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
 | `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |

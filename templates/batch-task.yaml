@@ -1,5 +1,5 @@
 name: batch-task
-description: "One task of a `batch` queue — a child session the batch dispatcher drives: claim (the line's difficulty → model/effort by model_table) → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → review_scope [exec: the diff's class → the reviewer's model] → review (one reviewer agent; FIXES → work) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
+description: "One task of a `batch` queue — a child session a cheap DRIVER agent runs for the batch dispatcher (`driver:`): claim (the line's difficulty → model/effort by model_table) → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → review_scope [exec: the diff's class → the reviewer's model] → review (one reviewer agent; FIXES → work) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done [exec: `[x]` + the record_file line] → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
 initial: claim
 max_transitions: 60
 
@@ -22,6 +22,18 @@ model_table:
     light: { model: sonnet, effort: medium }
     code: { model: opus, effort: high }
 
+# The task's DRIVER: a cheap agent that runs this session's prompts for the dispatcher (`start` answers
+# with its exact Agent call). Its instructions are the shipped `templates/drivers/task-driver.md`; a heir
+# points `prompt_ref` at its own (a path) or replaces `driver:` whole.
+driver:
+  model: haiku
+  effort: low
+  prompt_ref: task-driver
+
+# Agents' outputs are FILES in the task's log dir ({{context.wt}}.log, beside the worktree, kept after
+# cleanup): the worker writes report.md (handoff.md when it stops unfinished), the reviewer review.md;
+# each answers with ONE line naming its file, so the driver and the dispatcher stay small.
+
 # Extension points (a heir replaces a state whole and keeps its routes):
 #   project_prepare — stdout = the worktree path alone (→ context.wt); on_success: work, on_error: prepare_failed
 #   project_land    — merge the task's branch and verify; "0" → mark_done, else land_failed, on_timeout: land_failed
@@ -30,7 +42,11 @@ states:
   claim:
     prompt: |-
       Task session {{session_id}} (dispatcher {{parent_session_id}}), repo {{context.cwd}}. The pick already
-      marked the line `[>]`. context_set on THIS session (session_id {{session_id}}), each its own call:
+      marked the line `[>]`. Every `transition` reply IS the next prompt — never call `status` after it.
+      context_set on THIS session (session_id {{session_id}}), each its own call — skip a key the dispatcher
+      already passed to `start` (task {{context.task}}, queue_file {{context.queue_file}}, difficulty
+      {{context.difficulty}}, model {{context.model}}, effort {{context.effort}}; empty = not passed — a
+      driven task needs none of the queue line):
         task       — the line's ID
         queue_file — the queue's absolute path (the dispatcher's `queue_file`)
         difficulty — the line's difficulty column, when it is not `-`: the engine then sets `model` and
@@ -93,16 +109,21 @@ states:
            You are the worker of task {{context.task}}. Your brief is its line in {{context.queue_file}}
            (read it there; it is self-contained). Your workflow session is W, already started — do NOT call
            start(): first `status({session_id: "W"})`, then follow it to its terminal, passing session_id W
-           in every call. Work ONLY inside {{context.wt}} (branch `batch/{{context.task}}`): ONE commit on
-           that branch, a clean worktree at the end; never touch {{context.cwd}} itself; never push. Check
-           the on-disk state first — work already applied is reconciled, not done twice.
+           in every call; every `transition` reply IS the next prompt — never call `status` after it. Work
+           ONLY inside {{context.wt}} (branch `batch/{{context.task}}`): ONE commit on that branch, a clean
+           worktree at the end; never touch {{context.cwd}} itself; never push. Check the on-disk state
+           first — work already applied is reconciled, not done twice. Your report is a FILE: write
+           {{context.wt}}.log/report.md (what changed and why, the checks run, what is left open; mkdir -p
+           the dir), and {{context.wt}}.log/handoff.md when you stop unfinished. Answer with ONE line:
+           `DONE <sha> report={{context.wt}}.log/report.md` or `BLOCKED <reason> report=<the file>`.
 
       3. `link_agent({session_id: W, agent_id: <its id>})`; context_set `worker_agent`.
       A later visit (a fix round, the cause from the review or the land) — the model now is
       {{context.model}}/{{context.effort}}, the worker runs {{context.worker_model}}:
-      - the same → SendMessage `{{context.worker_agent}}` with the cause, verbatim;
+      - the same → SendMessage `{{context.worker_agent}}` with the cause: its one line plus "read <its file>
+        whole" (never the file's text pasted);
       - different (the engine escalated the task) → steps 1–3 again: a fresh worker on the new model, its
-        prompt above plus "a fix round of a previous worker's branch: <the cause verbatim>".
+        prompt above plus "a fix round of a previous worker's branch: <the cause's line> — read <its file> whole".
       Then END your turn on this task. On the worker's notification: context_set `tokens_worker` = the
       value already set ({{context.tokens_worker}}, empty = 0) PLUS this agent's tokens from its notification's
       usage line. Verify ON-TREE (artifacts outrank the report): `git -C {{context.cwd}} log --oneline
@@ -139,13 +160,16 @@ states:
            You review task {{context.task}} of {{context.queue_file}}, read-only: its line is the brief, the
            change is `git -C {{context.cwd}} diff HEAD...batch/{{context.task}}` (scope `diff`, your batch =
            every file it touches). Your workflow session is R, already started — do NOT call start(): first
-           `status({session_id: "R"})`, then follow it to its terminal, passing session_id R in every call.
-           Answer with ONE line: `VERDICT MERGE|FIXES|REJECT <the reasons; for FIXES the full fix list>`.
+           `status({session_id: "R"})`, then follow it to its terminal, passing session_id R in every call;
+           every `transition` reply IS the next prompt — never call `status` after it. Your review is a
+           FILE: write {{context.wt}}.log/review.md (the verdict, the reasons; for FIXES the full fix list;
+           mkdir -p the dir). Answer with ONE line: `VERDICT MERGE|FIXES|REJECT <one-line summary>
+           review={{context.wt}}.log/review.md design=yes|no` (design=yes: a fix needs a design choice).
 
       3. `link_agent({session_id: R, agent_id: <its id>})`. END your turn on this task.
       On its notification: context_set `tokens_review` = the value already set ({{context.tokens_review}},
-      empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the fix
-      list is the worker's cause, verbatim); REJECT → `reject`. The context_set first, the transition after
+      empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the
+      worker's cause = the verdict line + "read {{context.wt}}.log/review.md whole"); REJECT → `reject`. The context_set first, the transition after
       it returned.
     transitions:
       land: project_land
@@ -221,10 +245,30 @@ states:
 
   mark_done:
     type: exec
-    command: '"$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --done "$TASK" --note "landed $(git rev-parse --short HEAD)"'
+    # Bookkeeping without a model turn: `[x]` with the landed sha, then — when the queue header names a
+    # `record_file:` (relative = beside the queue) — one record line from the task's context. A failed
+    # append only warns: the task landed and `[x]` is set, so cleanup must still run.
+    command: |-
+      sha=$(git rev-parse --short HEAD) || exit 1
+      "$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --done "$TASK" --note "landed $sha" || exit 1
+      rec=$("$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --header record_file) || exit 1
+      [ -n "$rec" ] || exit 0
+      case "$rec" in /*) ;; *) rec=$(dirname "$QUEUE")/$rec;; esac
+      printf '%s\n' "- $(date +%Y-%m-%d) $TASK landed $sha | difficulty: ${DIFFICULTY:--} | model: $MODEL/$EFFORT | review: ${REVIEW_MODEL:-$MODEL}/${REVIEW_EFFORT:-$EFFORT} | rounds: $ROUNDS | tokens: worker=${TOKENS_WORKER:-0} review=${TOKENS_REVIEW:-0} | report: $WT.log/report.md" >>"$rec" ||
+        { echo "warning: the record line for $TASK was not appended to $rec" >&2; exit 0; }
+      echo "recorded $TASK in $rec"
     env:
       TASK: "{{context.task}}"
       QUEUE: "{{context.queue_file}}"
+      WT: "{{context.wt}}"
+      DIFFICULTY: "{{context.difficulty}}"
+      MODEL: "{{context.model}}"
+      EFFORT: "{{context.effort}}"
+      REVIEW_MODEL: "{{context.review_model}}"
+      REVIEW_EFFORT: "{{context.review_effort}}"
+      ROUNDS: "{{visits.work}}"
+      TOKENS_WORKER: "{{context.tokens_worker}}"
+      TOKENS_REVIEW: "{{context.tokens_review}}"
     timeout: 60000
     on_success: cleanup
     on_error: cleanup_failed
@@ -271,22 +315,23 @@ states:
   done:
     terminal: true
     outcome: complete
-    prompt: "Task {{context.task}} landed and cleaned: its slot is free — in the dispatcher session {{parent_session_id}} transition `slot_free`."
+    prompt: "Task {{context.task}} landed and cleaned. A driver: reply with your last line (LANDED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): its slot is free — in {{parent_session_id}} transition `slot_free`."
 
   closed:
     terminal: true
     outcome: complete
-    prompt: "Task {{context.task}} closed without landing (`[!]`): its slot is free — in the dispatcher session {{parent_session_id}} transition `slot_free`."
+    prompt: "Task {{context.task}} closed without landing (`[!]`). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): its slot is free — in {{parent_session_id}} transition `slot_free`."
 
   released:
     terminal: true
     outcome: complete
-    prompt: "Task {{context.task}} released before any work (`[ ]` again): in the dispatcher session {{parent_session_id}} transition `slot_free`."
+    prompt: "Task {{context.task}} released before any work (`[ ]` again). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): in {{parent_session_id}} transition `slot_free`."
 
   stopped:
     terminal: true
     outcome: fail
     prompt: |-
       Task {{context.task}} STOPPED: report to the user the task, the reason, and the exact state of
-      {{context.cwd}} (`git log --oneline -3`, `git status`). In the dispatcher session {{parent_session_id}}
+      {{context.cwd}} (`git log --oneline -3`, `git status`). A driver: put that in a NEEDS-PARENT line and
+      stop — the dispatcher's session is not yours. The dispatcher itself (no driver): in {{parent_session_id}}
       transition `stop`.

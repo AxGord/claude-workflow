@@ -422,6 +422,12 @@ export function registerTools(
             .describe("Parent session ID for sub-agent tracking"),
           cwd: z.string().optional().describe(START_CWD_DESCRIPTION),
           priority: PriorityLevelSchema.optional().describe(START_PRIORITY_DESCRIPTION),
+          context: z
+            .record(z.string())
+            .optional()
+            .describe(
+              "Context keys the session starts with (e.g. a dispatched task's `task`, `queue_file`, `difficulty`); not `cwd`",
+            ),
         })
         .strict(),
     },
@@ -435,6 +441,7 @@ export function registerTools(
               args.parent_session_id,
               args.cwd,
               args.priority,
+              args.context,
             ),
           );
           // No forceFullPrompt here: a digest_on_repeat initial state (master
@@ -447,7 +454,8 @@ export function registerTools(
             "- Complete each state fully before transitioning to the next.\n" +
             "- On tool errors: stop and investigate before continuing.\n" +
             '- To advance: transition({ transition: "<name>" })\n' +
-            "---";
+            "---" +
+            (status.driverCall ? `\n\n${status.driverCall}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {

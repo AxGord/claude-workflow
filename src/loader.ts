@@ -16,6 +16,7 @@ import {
   ModelRowObjectSchema,
   ModelChoiceObjectSchema,
 } from "./types.js";
+import { driverRefError } from "./driver.js";
 import { modelTableErrors } from "./model-table.js";
 
 /** A parsed workflow file of one load tier (bundled, global, project). */
@@ -301,6 +302,7 @@ export class Loader {
       initial: own.initial ?? base.initial,
       max_transitions: own.max_transitions ?? base.max_transitions,
       model_table: own.model_table ?? base.model_table,
+      driver: own.driver ?? base.driver,
       states: { ...base.states, ...own.states },
     };
   }
@@ -338,6 +340,18 @@ export class Loader {
     const hasTerminal = Object.values(wf.states).some(s => s.terminal);
     if (!hasTerminal) errors.push("no terminal state defined");
     if (wf.model_table) errors.push(...modelTableErrors(wf.model_table, stateNames));
+    if (wf.driver) {
+      const refError = driverRefError(wf.driver);
+      if (refError) errors.push(refError);
+      const first = wf.states[wf.initial];
+      if (
+        first &&
+        (first.type === "exec" || first.type === "fetch" || first.sub_workflow || first.skills)
+      )
+        errors.push(
+          `driver: the initial state "${wf.initial}" must be a prompt state (start answers with the driver's call there)`,
+        );
+    }
 
     for (const [name, state] of Object.entries(wf.states)) {
       const isAction = state.type === "exec" || state.type === "fetch";

@@ -14,6 +14,7 @@ import type {
   DetachedRun,
   RunningExec,
   PendingAction,
+  Driver,
 } from "./types.js";
 import {
   MAX_STACK_DEPTH,
@@ -34,6 +35,7 @@ import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { MODEL_KEYS, applyModelTable, difficultyError, parseDifficulty } from "./model-table.js";
 import { render } from "./template.js";
+import { DRIVER_CALL_KEY, renderDriverCall, resolveDriverRef } from "./driver.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
 import { activeParents, staleNote, staleness, type Staleness } from "./stale.js";
@@ -75,6 +77,8 @@ export interface StatusResult {
   readonly taskOps: TaskOp[];
   readonly visitCount: number;
   readonly forcePrompt?: boolean;
+  /** `start` of a workflow with a `driver:` — the Agent call that spawns it (src/driver.ts). */
+  readonly driverCall?: string;
 }
 
 /** Where a move actually lands once `on_exhausted` routes are followed. */
@@ -231,9 +235,14 @@ export class Engine {
     parentSessionId?: string,
     cwd?: string,
     priority?: PriorityLevel,
+    initialContext?: Readonly<Record<string, string>>,
   ): Promise<StatusResult> {
     if (cwd !== undefined) Engine._assertSessionCwd(cwd);
     if (priority !== undefined) PriorityLevelSchema.parse(priority);
+    const initial = initialContext ?? {};
+    for (const key of Object.keys(initial))
+      if (key === "cwd" || key === "claude_code_pid")
+        throw new Error(`start context: "${key}" is the engine's (pass cwd as its own argument)`);
 
     // Guard: prevent duplicate top-level sessions from the same Claude Code process.
     // Sub-agent sessions (with parent_session_id) are exempt — they run alongside the parent.
@@ -287,7 +296,7 @@ export class Engine {
       ? rootSessionIdOf(parent ?? { session_id: parentSessionId })
       : sessionId;
     const claudeSessionId = this._claudeSessionId();
-    const session: SessionState = {
+    const created: SessionState = {
       session_id: sessionId,
       ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
       root_session_id: rootSessionId,
@@ -298,10 +307,29 @@ export class Engine {
       updated_at: now,
       history: [{ frame: 0, event: "start", workflow: workflowName, at: now, actor }],
       overrides: {},
-      context: { claude_code_pid: process.ppid, cwd: cwd ?? process.cwd() },
+      context: { ...initial, claude_code_pid: process.ppid, cwd: cwd ?? process.cwd() },
       global_state_visits: { [globalKey]: 1 },
       ...(claudeSessionId ? { claude_session_id: claudeSessionId } : {}),
     };
+    if (
+      MODEL_KEYS.difficulty in initial &&
+      wf.model_table &&
+      parseDifficulty(initial[MODEL_KEYS.difficulty]) === null
+    )
+      throw new Error(
+        `${difficultyError(initial[MODEL_KEYS.difficulty])} (the workflow's model_table maps it)`,
+      );
+    const modelled = this._withModel(created, new Set(Object.keys(initial)));
+    // Kept in the context: a dispatcher after a restart or compaction re-spawns the driver from it.
+    const session = wf.driver
+      ? {
+          ...modelled,
+          context: {
+            ...modelled.context,
+            [DRIVER_CALL_KEY]: this._driverCall(modelled, wf.driver, parent),
+          },
+        }
+      : modelled;
 
     await this._storage.write(sessionId, session);
 
@@ -317,7 +345,24 @@ export class Engine {
       return this._executeActionState(session, initialState!, []);
     }
 
-    return this._buildStatus(session, []);
+    const status = this._buildStatus(session, []);
+    return wf.driver ? { ...status, driverCall: String(session.context[DRIVER_CALL_KEY]) } : status;
+  }
+
+  /** The Agent call that spawns a `driver:` workflow's driver on this new session. */
+  private _driverCall(session: SessionState, driver: Driver, parent: SessionState | null): string {
+    const cwd = String(session.context.cwd);
+    const instructions = resolveDriverRef(driver.prompt_ref, cwd);
+    const str = (v: unknown): string | undefined =>
+      typeof v === "string" && v !== "" ? v : typeof v === "number" ? String(v) : undefined;
+    return renderDriverCall({
+      driver,
+      sessionId: session.session_id,
+      task: str(session.context.task),
+      queueFile: str(session.context.queue_file) ?? str(parent?.context.queue_file),
+      instructions,
+      instructionsExist: fs.existsSync(instructions),
+    });
   }
 
   public async transition(

@@ -114,6 +114,22 @@ export const ModelTableObjectSchema = z
 
 export type ModelTable = z.infer<typeof ModelTableObjectSchema>;
 
+/**
+ * A task workflow's `driver:` — the cheap agent that drives one task session for the dispatcher.
+ * `prompt_ref` = the driver's instructions: a bare name (`task-driver`) is a shipped one
+ * (`templates/drivers/<name>.md`), anything else a path (absolute, `~/…`, or relative to the session's cwd).
+ * `start` of a session of such a workflow answers with the exact Agent call (src/driver.ts).
+ */
+export const DriverObjectSchema = z
+  .object({
+    model: z.string().min(1),
+    effort: EffortSchema,
+    prompt_ref: z.string().min(1),
+  })
+  .strict();
+
+export type Driver = z.infer<typeof DriverObjectSchema>;
+
 // Single source of truth for state fields. Tool schemas derive from this.
 // To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
 export const StateDefinitionSchema = z
@@ -193,6 +209,7 @@ export const WorkflowDefinitionSchema = z
     initial: z.string().min(1),
     max_transitions: z.number().int().positive().optional().default(50),
     model_table: ModelTableObjectSchema.optional(),
+    driver: DriverObjectSchema.optional(),
     states: z.record(StateDefinitionSchema),
   })
   .strict();
@@ -202,7 +219,7 @@ export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 /**
  * A workflow YAML file as written. With `extends: <workflow>` it is a heir:
  * the base's states plus its own (a state of the same name replaces the
- * base's whole), and `initial` / `max_transitions` / `description` / `model_table` from the
+ * base's whole), and `initial` / `max_transitions` / `description` / `model_table` / `driver` from the
  * heir where it sets them. Without `extends`, `initial` and `states` are required.
  */
 export const WorkflowFileObjectSchema = z
@@ -213,6 +230,7 @@ export const WorkflowFileObjectSchema = z
     initial: z.string().min(1).optional(),
     max_transitions: z.number().int().positive().optional(),
     model_table: ModelTableObjectSchema.optional(),
+    driver: DriverObjectSchema.optional(),
     states: z.record(StateDefinitionSchema).optional(),
   })
   .strict();

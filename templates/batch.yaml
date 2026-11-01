@@ -33,6 +33,7 @@ states:
          batch_size: 3
          base: <repo-abs-path>=<sha>
          land_test: <the project's test command, run after each merge; omit for none>
+         record_file: <a file each landed task appends one record line to; omit for none>
          ## Tasks
          - [ ] T1 | difficulty: 7 | touches: src/a, docs | <self-contained task prompt> |
          - [ ] T2 | model: sonnet | effort: high | after: T1 | touches: src/b | repo: other-repo | <prompt> |
@@ -142,11 +143,17 @@ states:
 
       For EACH admitted line, one task session:
       1. `start({workflow: <its workflow column; `-` → "{{context.task_workflow}}">, parent_session_id:
-         "{{session_id}}", cwd: "<its repo>"})` → session P (the repo's own workflows are found from that cwd). Drive P by its prompts, passing session_id P in every call (its `claim` names what to
-         record, its exec steps make the worktree before any agent starts).
-      2. context_set `tasks` on THIS session ({{session_id}}): one `ID=P` per running task session (all of
-         them, not only the new ones) — after a context compression `status({session_id: "{{session_id}}",
-         key: "tasks"})` and `sessions` are the truth, not your memory.
+         "{{session_id}}", cwd: "<its repo>", context: {task: "<ID>", queue_file: "{{context.queue_file}}",
+         difficulty: "<its difficulty column>"}})` — for a line whose difficulty is `-` pass instead
+         `model: "<its model column>", effort: "<its effort column>"` (a `-` column: leave that key out) → session P (the repo's own
+         workflows are found from that cwd).
+      2. A task workflow with a `driver:` (bundled `batch-task`) — `start`'s answer ends with a DRIVER block:
+         spawn exactly that Agent call (copy it, change nothing), then `link_agent({session_id: P, agent_id:
+         <its id>})`. Do NOT drive P yourself: the driver runs its prompts and answers with one line.
+         Without a DRIVER block, drive P by its prompts yourself, passing session_id P in every call.
+      3. context_set `tasks` on THIS session ({{session_id}}): one `ID=P driver=<agent id or ->` per running
+         task session (all of them, not only the new ones) — after a context compression
+         `status({session_id: "{{session_id}}", key: "tasks"})` and `sessions` are the truth, not your memory.
       Then transition `dispatched` and END your turn: agent notifications wake you in `collect`.
     transitions:
       dispatched: collect
@@ -156,19 +163,31 @@ states:
       Task sessions: `status({session_id: "{{session_id}}", key: "tasks"})` (ID=P). Last pick:
       {{stderr}}
 
-      Woken by an agent notification: find its task session (the agent is linked to a session whose
-      parent is P; `sessions` shows `[agent …]`), read `status(P)` and advance P by its prompt (session_id
-      P). A transition into P's exec steps (the land waits for the repo's land lock) may outlive the call
-      and finish in the background — move other tasks meanwhile.
+      Woken by a DRIVER's one line (the task's bookkeeping — `[x]`, the record line — is already done):
+      - `LANDED <sha> task=<ID> …` / `CLOSED task=<ID> …` → the task session ended: route below.
+      - `NEEDS-PARENT task=<ID> session=<P> reason=… see=<file>` → read only the named file. A design choice
+        or a decision the prompt left open → SendMessage the driver your decision and tell it to continue;
+        a rejected or blocked task → SendMessage the driver its exact path: from `review` transition `reject`,
+        from `work` `blocked`, from `land_failed` `close` (each leads to `blocked`); then in `blocked`
+        `queue_mark` to `failed` with note "<your one-line reason>" and transition `close` (`stop` only when
+        you say so). Then decide whether to `queue_add` a follow-up line; anything that needs the user → tell the user, keep the slot. Never take over the task's work.
+      - a worker or reviewer whose spawner is a driver → ignore it; its driver handles it.
+      A task session you drive yourself (no driver): find it (the agent is linked to a session whose parent
+      is P; `sessions` shows `[agent …]`), read `status(P)` and advance P by its prompt (session_id P). A
+      transition into P's exec steps (the land waits for the repo's land lock) may outlive the call and
+      finish in the background — move other tasks meanwhile.
       Resumed after a restart: every task session P is YOURS — `resume` each; the sessions the resume
-      lists are their agents' (SendMessage exactly as it prints).
+      lists are their agents' (SendMessage exactly as it prints). A driven P whose driver is gone →
+      re-spawn it: `status({session_id: P, key: "driver_call"})` is the exact Agent call `start` gave
+      (it continues from `status`: the session holds the step), then `link_agent` it and update `tasks`.
 
       Stale sessions of this run — no engine call past their state's `stale_after` (`status({session_id:
       "{{session_id}}"})` lists them anew):
       {{stale_sessions}}
       A stale session with an agent → SendMessage that agent asking where it stands; no answer, or the
       agent is gone → spawn a fresh agent on the SAME session with the first one's prompt (it continues
-      from `status`: the session holds the step) and `link_agent` it. A stale task session P without an
+      from `status`: the session holds the step) and `link_agent` it — for a driver that prompt is
+      `status({session_id: P, key: "driver_call"})`. A stale task session P without an
       agent is yours: `status(P)` and advance it.
 
       Route this session:
