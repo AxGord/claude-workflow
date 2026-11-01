@@ -26,6 +26,7 @@ import {
   formatPickSummary,
   markQueue,
   pickQueue,
+  resolveQueueFile,
   setQueueWindow,
   type MarkTarget,
   type PickResult,
@@ -1111,10 +1112,7 @@ export function registerTools(
         "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
       inputSchema: z
         .object({
-          file: z
-            .string()
-            .min(1)
-            .describe("The queue file (absolute, or relative to the server's cwd)"),
+          ...QUEUE_SEL,
           dry_run: z.boolean().optional().describe("Show what would be admitted; mark nothing"),
           explain: z
             .union([z.boolean(), z.literal("all")])
@@ -1128,7 +1126,7 @@ export function registerTools(
     },
     async args => {
       try {
-        const r = await pickQueue(args.file, { dryRun: args.dry_run === true });
+        const r = await pickQueue(resolveQueueFile(args), { dryRun: args.dry_run === true });
         return {
           content: [
             {
@@ -1157,7 +1155,7 @@ export function registerTools(
         "`note` is written right after the id (`- [x] ID | <note> | …`).",
       inputSchema: z
         .object({
-          file: z.string().min(1).describe("The queue file"),
+          ...QUEUE_SEL,
           id: z.string().min(1).describe("The task id"),
           to: z
             .enum(Object.keys(MARK_TARGETS) as [MarkTarget, ...MarkTarget[]])
@@ -1174,7 +1172,7 @@ export function registerTools(
     },
     async args => {
       try {
-        const r = await markQueue(args.file, args.id, args.to, args.note, {
+        const r = await markQueue(resolveQueueFile(args), args.id, args.to, args.note, {
           retry: args.retry === true,
         });
         return { content: [{ type: "text", text: formatMark(r) }] };
@@ -1194,10 +1192,10 @@ export function registerTools(
         "Refused unless it reads as a pick reads it: a new id, one row, each `key:` field a known key " +
         "(model, effort, after, touches, owner, repo, workflow, exclusive, difficulty) at most once, every id in `after:` a line of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10. Goes after `after_id`, before `before_id`, " +
-        "else after the last task line.",
+        "else after the last task line. A queue addressed by `queue` or by default that does not exist yet is CREATED (header `batch_size: 1`, `## Tasks`) and the answer says so (a full `file` path that does not exist is an error, never created).",
       inputSchema: z
         .object({
-          file: z.string().min(1).describe("The queue file"),
+          ...QUEUE_SEL,
           line: z.string().min(1).describe("The new line"),
           after_id: z.string().min(1).optional().describe("Insert right after this line"),
           before_id: z.string().min(1).optional().describe("Insert right before this line"),
@@ -1206,11 +1204,20 @@ export function registerTools(
     },
     async args => {
       try {
-        const r = await addQueueLine(args.file, args.line, {
-          after: args.after_id,
-          before: args.before_id,
-        });
-        return { content: [{ type: "text", text: `${r.id}: added at line ${r.lineNo}` }] };
+        const file = resolveQueueFile(args);
+        const r = await addQueueLine(
+          file,
+          args.line,
+          {
+            after: args.after_id,
+            before: args.before_id,
+          },
+          { create: args.file === undefined },
+        );
+        const made = r.created ? `; the queue did not exist — created ${file}` : "";
+        return {
+          content: [{ type: "text", text: `${r.id}: added at line ${r.lineNo}${made}` }],
+        };
       } catch (err) {
         return queueError(err);
       }
@@ -1228,7 +1235,7 @@ export function registerTools(
         "A set field keeps its place; values are checked as queue_add checks them. Returns the line as written.",
       inputSchema: z
         .object({
-          file: z.string().min(1).describe("The queue file"),
+          ...QUEUE_SEL,
           id: z.string().min(1).describe("The task id"),
           set: z
             .record(z.string())
@@ -1240,7 +1247,12 @@ export function registerTools(
     },
     async args => {
       try {
-        const r = await editQueueLine(args.file, args.id, args.set ?? {}, args.append_note);
+        const r = await editQueueLine(
+          resolveQueueFile(args),
+          args.id,
+          args.set ?? {},
+          args.append_note,
+        );
         return { content: [{ type: "text", text: r.line }] };
       } catch (err) {
         return queueError(err);
@@ -1257,7 +1269,7 @@ export function registerTools(
         "`0` is the pause (running tasks finish, nothing new is admitted). The reason is required.",
       inputSchema: z
         .object({
-          file: z.string().min(1).describe("The queue file"),
+          ...QUEUE_SEL,
           batch_size: z.number().int().min(0).describe("The window; 0 = paused"),
           reason: z.string().min(1).describe("Why — written as the line's comment"),
         })
@@ -1265,7 +1277,7 @@ export function registerTools(
     },
     async args => {
       try {
-        const r = await setQueueWindow(args.file, args.batch_size, args.reason);
+        const r = await setQueueWindow(resolveQueueFile(args), args.batch_size, args.reason);
         return {
           content: [{ type: "text", text: `batch_size ${r.from} → ${r.to}  # ${r.reason}` }],
         };
@@ -1275,6 +1287,25 @@ export function registerTools(
     },
   );
 }
+
+/** The queue a call means: `file` (a full path), else `queue` (a name), else the project's default. */
+const QUEUE_SEL = {
+  file: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "A queue file by full path (a queue of another repo); omit it to use `queue` or the default",
+    ),
+  queue: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "A queue by name: `.claude/batch/<queue>.md` of the project (the git root of the server's cwd; a worktree resolves to its main checkout). " +
+        "Neither `file` nor `queue` = `.claude/batch/queue.md`",
+    ),
+};
 
 function queueError(err: unknown): { content: { type: "text"; text: string }[]; isError: true } {
   return {

@@ -450,6 +450,13 @@ heavy step `on_timeout:` and a state of its own for it.
 
 ### Task queue — `batch`, `queue_next`, `queue_add`, `wf-queue`
 
+Which queue: every queue tool and `wf-queue` takes an optional `queue` NAME beside `file`. Neither =
+the project's default `.claude/batch/queue.md`; `queue: "<name>"` = `.claude/batch/<name>.md`; a full
+`file` path (a queue of another repo) still works. The project is the git root of the server's cwd (a
+linked worktree resolves to its main checkout). `wf-queue [<file>|--queue NAME] …` reads the same way;
+`--path` prints the resolved file. A missing file is an error naming the resolved path, except `queue_add`
+(`--add`), whose first line CREATES the queue (only when addressed by name or by default, never a full `file` path) (header `batch_size: 1`, `## Tasks`) and says so.
+
 A long run of tasks is a queue FILE the engine admits from — one format for every project:
 
 ```markdown
@@ -499,30 +506,30 @@ Each admitted line is marked `[>]` under the queue's lock (`<file>.lock`, an ato
 picks — two tools, two processes — never admit one line. `batch_size: 0` is the pause: nothing new is
 admitted, running tasks finish; the pick answers `window 0 — paused: <the comment>`.
 
-- `queue_next({ file, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, workflow, difficulty, text);
+- `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, workflow, difficulty, text);
   `explain` adds why each other pending line waits (`window full` lines fold into one summary line;
   `explain: "all"` lists every line).
-- `queue_mark({ file, id, to, note?, retry? })` — `running` `[ ]`→`[>]` (with `retry: true`
+- `queue_mark({ queue?, file?, id, to, note?, retry? })` — `running` `[ ]`→`[>]` (with `retry: true`
   `[!]`→`[>]`: a failed line runs again, and its `difficulty: N` becomes `N+1`, at most 10 — the
   answer says `(difficulty 4 → 5)`), `done` `[>]`→`[x]`, `failed`
   `[>]`→`[!]`, `released` `[>]`→`[ ]`; any other current mark is refused; `note` is written after the id
   (one line without `|`, `⏸` or a leading `key:`). A write lands only while the file still reads as
   the pick read it — a hand edit in between makes it plan again, never lost.
-- `queue_add({ file, line, after_id? | before_id? })` — a new `[ ]` line (`- [ ] ID | key: value | … |`,
+- `queue_add({ queue?, file?, line, after_id? | before_id? })` — a new `[ ]` line (`- [ ] ID | key: value | … |`,
   the `- [ ] ` may be left out) after / before a line, else after the last task line. Refused unless a
   pick reads it as meant: a new id, one row, each `key:` field a known key at most once (a typo like
   `toches:` would be read as text), every id in `after:` a line of the queue and no cycle (prose
   beside the ids stays a manual condition), a one-word `workflow:`, a `repo:` that resolves, a
   `difficulty:` of 1..10.
-- `queue_edit({ file, id, set?: { field: value }, append_note? })` — metadata fields of one line
+- `queue_edit({ queue?, file?, id, set?: { field: value }, append_note? })` — metadata fields of one line
   (`""` removes one; a set field keeps its place), and/or a note appended as its last field; checked
   as `queue_add` checks them; the mark stays `queue_mark`'s.
-- `queue_header({ file, batch_size, reason })` — the window: `batch_size: N  # <reason>` (`0` pauses;
+- `queue_header({ queue?, file?, batch_size, reason })` — the window: `batch_size: N  # <reason>` (`0` pauses;
   the reason is required).
 - All of them write under the same lock and re-plan on a changed file, so an edit never drops a mark
   an exec made at the same moment — add and change lines through them, not by editing the file with a
   script while a run is live.
-- From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" <file> [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
+- From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" [<file>|--queue NAME] [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
   bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty` (`-` = no `workflow:` / `difficulty:`) per admitted line and the summary on stderr; exit 0
   admitted, 10 none but `[>]` lines run, 11 none and nothing runs (done), 12 none, nothing runs and
   `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]` (`--running <ID>
@@ -784,11 +791,11 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
 | `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale) | `session_id`, `agent_id` |
-| `queue_next` | Admit the next lines of a task queue file and mark them `[>]` (§ Task queue) | `file`, `dry_run`, `explain` |
-| `queue_mark` | Move one queue line's mark (`running` / `done` / `failed` / `released`; `retry` restarts a `[!]` line) | `file`, `id`, `to`, `note`, `retry` |
-| `queue_add` | Add a pending line to a queue, checked as a pick reads it | `file`, `line`, `after_id`, `before_id` |
-| `queue_edit` | Set / remove a queue line's metadata fields, append a note | `file`, `id`, `set`, `append_note` |
-| `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason | `file`, `batch_size`, `reason` |
+| `queue_next` | Admit the next lines of a task queue file and mark them `[>]` (§ Task queue) | `queue`, `file`, `dry_run`, `explain` |
+| `queue_mark` | Move one queue line's mark (`running` / `done` / `failed` / `released`; `retry` restarts a `[!]` line) | `queue`, `file`, `id`, `to`, `note`, `retry` |
+| `queue_add` | Add a pending line to a queue, checked as a pick reads it | `queue`, `file`, `line`, `after_id`, `before_id` |
+| `queue_edit` | Set / remove a queue line's metadata fields, append a note | `queue`, `file`, `id`, `set`, `append_note` |
+| `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason | `queue`, `file`, `batch_size`, `reason` |
 
 ## Dashboard
 

@@ -413,6 +413,33 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
   };
 }
 
+/** The queue name a `queue:` argument may carry: one file-name stem, no path. */
+const QUEUE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * The queue file a tool or `wf-queue` call means. `file` (a full path) wins; else `queue` names
+ * `.claude/batch/<queue>.md`, and neither names the project's default `.claude/batch/queue.md` —
+ * the project being the git root of `cwd` (a linked worktree resolves to its main checkout).
+ */
+export function resolveQueueFile(
+  sel: { readonly file?: string; readonly queue?: string },
+  cwd: string = process.cwd(),
+): string {
+  if (sel.file !== undefined) {
+    if (sel.queue !== undefined) throw new QueueError("give `file` or `queue`, not both");
+    return path.resolve(cwd, sel.file);
+  }
+  const name = sel.queue ?? "queue";
+  if (!QUEUE_NAME_RE.test(name))
+    throw new QueueError(`refused queue name "${name}" (a file-name stem, no path)`);
+  // A name is the stem: "wave-D.md" would resolve to wave-D.md.md and queue_add would create it.
+  if (/\.md$/i.test(name))
+    throw new QueueError(
+      `refused queue name "${name}" (the stem without .md: "${name.slice(0, -3)}")`,
+    );
+  return path.join(projectRoot(cwd), ".claude", "batch", `${name}.md`);
+}
+
 export function readQueue(file: string): Queue {
   const abs = path.resolve(file);
   let text: string;
@@ -684,7 +711,12 @@ export interface AddResult {
   readonly id: string;
   /** 1-based line number of the new line in the file. */
   readonly lineNo: number;
+  /** True when the queue file did not exist and this call created it. */
+  readonly created?: true;
 }
+
+/** A new queue file's content: the minimal header a pick reads. */
+const NEW_QUEUE = "batch_size: 1\n\n## Tasks\n";
 
 /**
  * A new `[ ]` line under the lock: after the line `after`, before the line `before`, or after the
@@ -697,6 +729,7 @@ export async function addQueueLine(
   file: string,
   line: string,
   pos: { readonly after?: string; readonly before?: string } = {},
+  opts: { readonly create?: boolean } = {},
 ): Promise<AddResult> {
   if (/[\n\r]/.test(line)) throw new QueueError("a queue line is one row");
   const row = line.trim().startsWith("- [") ? line.trim() : `- [ ] ${line.trim()}`;
@@ -720,25 +753,44 @@ export async function addQueueLine(
   }
   if (pos.after !== undefined && pos.before !== undefined)
     throw new QueueError("after_id and before_id exclude each other");
-  return withQueueLock(file, () =>
+  const place = (queue: Queue): { rows: string[]; at: number } => {
+    if (queue.lines.some(l => l.id === r.id))
+      throw new QueueError(`${r.id} is already in ${queue.file}`);
+    let at: number;
+    if (pos.after !== undefined) at = lineOf(queue, pos.after).index + 1;
+    else if (pos.before !== undefined) at = lineOf(queue, pos.before).index;
+    else {
+      const last = queue.lines[queue.lines.length - 1];
+      at = last ? last.index + 1 : queue.rows.findIndex(x => x.trim() === "## Tasks") + 1;
+    }
+    const rows = [...queue.rows];
+    rows.splice(at, 0, joinRow(r));
+    const next = reparse(queue, rows, r.id);
+    checkFields(next.queue, next.line);
+    return { rows, at };
+  };
+  const abs = path.resolve(file);
+  let created = false;
+  if (opts.create === true && !fs.existsSync(abs)) {
+    // the line is judged against the bare header BEFORE the file exists, so a refused first line
+    // creates nothing and no rollback can delete a line another call wrote
+    place(parseQueue(NEW_QUEUE, abs));
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    try {
+      fs.writeFileSync(abs, NEW_QUEUE, { flag: "wx" });
+      created = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
+  }
+  const added = await withQueueLock(file, () =>
     replanning(file, () => {
       const queue = readQueue(file);
-      if (queue.lines.some(l => l.id === r.id))
-        throw new QueueError(`${r.id} is already in ${queue.file}`);
-      let at: number;
-      if (pos.after !== undefined) at = lineOf(queue, pos.after).index + 1;
-      else if (pos.before !== undefined) at = lineOf(queue, pos.before).index;
-      else {
-        const last = queue.lines[queue.lines.length - 1];
-        at = last ? last.index + 1 : queue.rows.findIndex(x => x.trim() === "## Tasks") + 1;
-      }
-      const rows = [...queue.rows];
-      rows.splice(at, 0, joinRow(r));
-      const next = reparse(queue, rows, r.id);
-      checkFields(next.queue, next.line);
+      const { rows, at } = place(queue);
       return writeRows(queue, rows) ? { id: r.id, lineNo: at + 1 } : false;
     }),
   );
+  return created ? { ...added, created: true } : added;
 }
 
 export interface EditResult {

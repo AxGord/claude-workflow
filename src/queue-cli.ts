@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // wf-queue: the exec form of queue_next / queue_mark (src/queue.ts), for a workflow's exec states.
+// The queue: `<queue.md>` (a full path), or `--queue NAME` (.claude/batch/NAME.md of the cwd's project),
+// or nothing (.claude/batch/queue.md); `wf-queue [<queue.md>|--queue NAME] --path` prints the resolved file.
 //   wf-queue <queue.md> [--dry-run] [--explain|--explain-all]   pick: stdout one `ID\tmodel\teffort\trepo\tworkflow\tdifficulty` per admitted line
 //                                                 (marked `[>]`), the summary on stderr; --explain folds
 //                                                 "window full" lines into one, --explain-all lists all
@@ -22,12 +24,13 @@ import {
   markQueue,
   pickQueue,
   readQueue,
+  resolveQueueFile,
   setQueueWindow,
   type MarkTarget,
 } from "./queue.js";
 
 const USAGE =
-  "usage: wf-queue <queue.md> [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running <ID> [--retry] [--note TEXT] | --header <key>" +
+  "usage: wf-queue [<queue.md>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running <ID> [--retry] [--note TEXT] | --header <key> | --path" +
   " | --add <LINE> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] | --batch-size <N> --reason TEXT";
 
 /** `--flag value` pairs after an op; a flag outside `allowed`, a missing value, or a repeat of a non-list flag is a usage error. */
@@ -57,8 +60,18 @@ const MARKS: Readonly<Record<string, MarkTarget>> = {
 };
 
 async function main(args: string[]): Promise<number> {
-  const file = args.shift();
-  if (!file || file.startsWith("--")) throw new QueueError(USAGE);
+  let sel: { file?: string; queue?: string };
+  if (args[0] === "--queue") {
+    const name = args[1];
+    if (!name || name.startsWith("--")) throw new QueueError(USAGE);
+    sel = { queue: name };
+    args.splice(0, 2);
+  } else if (args[0] === undefined || args[0].startsWith("--")) {
+    sel = {};
+  } else {
+    sel = { file: args.shift() };
+  }
+  const file = resolveQueueFile(sel);
   const op = args[0];
   if (op !== undefined && op in MARKS) {
     const id = args[1];
@@ -70,6 +83,11 @@ async function main(args: string[]): Promise<number> {
     process.stdout.write(`${formatMark(r)}\n`);
     return 0;
   }
+  if (op === "--path") {
+    if (args.length !== 1) throw new QueueError(USAGE);
+    process.stdout.write(file);
+    return 0;
+  }
   if (op === "--header") {
     if (!args[1] || args.length !== 2) throw new QueueError(USAGE);
     process.stdout.write(readQueue(file).header[args[1]] ?? "");
@@ -78,11 +96,18 @@ async function main(args: string[]): Promise<number> {
   if (op === "--add") {
     if (!args[1]) throw new QueueError("--add needs a line");
     const o = options(args.slice(2), ["--after", "--before"]);
-    const r = await addQueueLine(file, args[1], {
-      after: o.get("--after")?.[0],
-      before: o.get("--before")?.[0],
-    });
-    process.stdout.write(`${r.id}: added at line ${r.lineNo}\n`);
+    const r = await addQueueLine(
+      file,
+      args[1],
+      {
+        after: o.get("--after")?.[0],
+        before: o.get("--before")?.[0],
+      },
+      { create: sel.file === undefined },
+    );
+    process.stdout.write(
+      `${r.id}: added at line ${r.lineNo}${r.created ? `; the queue did not exist — created ${file}` : ""}\n`,
+    );
     return 0;
   }
   if (op === "--edit") {

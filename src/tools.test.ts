@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   formatContext,
   formatStatus,
@@ -258,6 +258,27 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
     };
     return { storage, engine, call };
   }
+
+  it("queue_add creates a missing queue addressed by name and says so; a missing full path is an error", async () => {
+    const { call } = mount({ w: SIMPLE_WORKFLOW });
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), "wf-qadd-"));
+    fs.mkdirSync(path.join(proj, ".git"));
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(proj);
+    try {
+      const made = await call("queue_add", { queue: "n", line: "A | touches: a" });
+      expect(made.isError).toBeUndefined();
+      expect(made.text).toContain("the queue did not exist — created");
+      expect(fs.existsSync(path.join(proj, ".claude", "batch", "n.md"))).toBe(true);
+      const typo = path.join(proj, "typo.md");
+      const bad = await call("queue_add", { file: typo, line: "B | touches: b" });
+      expect(bad.isError).toBe(true);
+      expect(bad.text).toContain(typo);
+      expect(fs.existsSync(typo)).toBe(false);
+    } finally {
+      cwd.mockRestore();
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
 
   it("formatContext cuts long values and folds keys past the limit", () => {
     const ctx: Record<string, unknown> = {

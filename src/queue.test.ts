@@ -13,6 +13,7 @@ import {
   pickQueue,
   planPick,
   readQueue,
+  resolveQueueFile,
   setQueueWindow,
 } from "./queue.js";
 import { formatQueueNext } from "./tools.js";
@@ -771,6 +772,32 @@ describe("wf-queue CLI", () => {
     return { code: process.exitCode, out: out.join(""), err: err.join("") };
   }
 
+  it("--queue NAME, --path and no file resolve the project's queues; --add says when it creates", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wf-queue-cli-"));
+    dirs.push(root);
+    fs.mkdirSync(path.join(root, ".git"));
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    const def = path.join(root, ".claude", "batch", "queue.md");
+    const named = path.join(root, ".claude", "batch", "wave.md");
+    const made = await cli("--add", "A | touches: a");
+    expect(made.out).toBe(`A: added at line 4; the queue did not exist — created ${def}\n`);
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    expect((await cli("--path")).out).toBe(def);
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    expect((await cli("--queue", "wave", "--path")).out).toBe(named);
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    expect((await cli("--queue", "wave", "--add", "B | touches: b")).out).toContain("created");
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    expect((await cli("--queue", "wave", "--add", "C | touches: c")).out).toBe(
+      "C: added at line 5\n",
+    );
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    expect((await cli("--queue")).code).toBe(2);
+    const typo = path.join(root, "typo.md");
+    expect((await cli(typo, "--add", "D | touches: d")).code).toBe(2);
+    expect(fs.existsSync(typo)).toBe(false);
+  });
+
   it("prints the admitted lines, routes by exit code, marks and reads the header", async () => {
     const file = queueFile(
       `- [ ] A | model: haiku | touches: a\n- [ ] B | after: A | workflow: engine-task | touches: b`,
@@ -853,5 +880,99 @@ describe("explainLines", () => {
   ];
   it.each(cases)("%s", (_n, reasons, mode, expected) => {
     expect(explainLines(reasons, mode)).toEqual(expected);
+  });
+});
+
+describe("queue names", () => {
+  function project(): { root: string; main: string } {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wf-queue-name-"));
+    dirs.push(root);
+    const main = path.join(root, "main");
+    fs.mkdirSync(path.join(main, ".git", "worktrees", "wt"), { recursive: true });
+    fs.mkdirSync(path.join(main, "sub"), { recursive: true });
+    return { root, main };
+  }
+
+  it("no file and no queue: the project's default queue, from a subdirectory", () => {
+    const { main } = project();
+    const want = path.join(main, ".claude", "batch", "queue.md");
+    expect(resolveQueueFile({}, main)).toBe(want);
+    expect(resolveQueueFile({}, path.join(main, "sub"))).toBe(want);
+  });
+
+  it("a name is .claude/batch/<name>.md; a path is taken as it is; a path-like name is refused", () => {
+    const { root, main } = project();
+    expect(resolveQueueFile({ queue: "wave-D" }, main)).toBe(
+      path.join(main, ".claude", "batch", "wave-D.md"),
+    );
+    expect(resolveQueueFile({ file: "/x/y/q.md" }, main)).toBe("/x/y/q.md");
+    expect(() => resolveQueueFile({ queue: "../evil" }, main)).toThrow("refused queue name");
+    expect(() => resolveQueueFile({ queue: "wave-D.md" }, main)).toThrow(
+      'the stem without .md: "wave-D"',
+    );
+    expect(() => resolveQueueFile({ queue: "WAVE.MD" }, main)).toThrow("refused queue name");
+    expect(() => resolveQueueFile({ file: "/a.md", queue: "b" }, main)).toThrow("not both");
+    expect(root).toBeTruthy();
+  });
+
+  it("a linked worktree resolves to its main checkout", () => {
+    const { root, main } = project();
+    const wt = path.join(root, "wt");
+    fs.mkdirSync(wt);
+    fs.writeFileSync(
+      path.join(wt, ".git"),
+      `gitdir: ${path.join(main, ".git", "worktrees", "wt")}\n`,
+    );
+    expect(resolveQueueFile({ queue: "q" }, wt)).toBe(path.join(main, ".claude", "batch", "q.md"));
+  });
+
+  it("the first queue_add creates the default queue; a read of a missing queue names the path", async () => {
+    const { main } = project();
+    const file = resolveQueueFile({}, main);
+    expect(() => readQueue(file)).toThrow(file);
+    const r = await addQueueLine(file, "A | touches: a | first |", {}, { create: true });
+    expect(r.created).toBe(true);
+    expect(fs.readFileSync(file, "utf8")).toContain("batch_size: 1\n\n## Tasks\n");
+    expect(readQueue(file).lines.map(l => l.id)).toEqual(["A"]);
+    expect((await addQueueLine(file, "B | touches: b")).created).toBeUndefined();
+  });
+
+  it("a full file path that does not exist is never created", async () => {
+    const { main } = project();
+    const file = path.join(main, "typo.md");
+    await expect(addQueueLine(file, "A | touches: a", {}, { create: false })).rejects.toThrow(file);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("a refused first line leaves no queue behind", async () => {
+    const { main } = project();
+    const file = resolveQueueFile({ queue: "new" }, main);
+    await expect(
+      addQueueLine(file, "A | difficulty: 0 | touches: a", {}, { create: true }),
+    ).rejects.toThrow();
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("a task session in another repo marks the dispatcher's queue through the absolute path", async () => {
+    const { root, main } = project();
+    const file = resolveQueueFile({ queue: "q" }, main);
+    await addQueueLine(file, "A | touches: a", {}, { create: true });
+    await markQueue(file, "A", "running");
+    const other = path.join(root, "other");
+    fs.mkdirSync(path.join(other, ".git"), { recursive: true });
+    expect(resolveQueueFile({ file }, other)).toBe(file);
+    expect(resolveQueueFile({ queue: "q" }, other)).not.toBe(file);
+    await markQueue(resolveQueueFile({ file }, other), "A", "done");
+    expect(readQueue(file).lines[0].mark).toBe("x");
+  });
+
+  it("a refused first line cannot delete a line another call wrote", async () => {
+    const { main } = project();
+    const file = resolveQueueFile({ queue: "race" }, main);
+    const bad = addQueueLine(file, "A | difficulty: 0 | touches: a", {}, { create: true });
+    const good = addQueueLine(file, "B | touches: b", {}, { create: true });
+    await expect(bad).rejects.toThrow();
+    await good;
+    expect(readQueue(file).lines.map(l => l.id)).toEqual(["B"]);
   });
 });

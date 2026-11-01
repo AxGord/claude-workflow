@@ -80,7 +80,9 @@ states:
          its line. `batch_size` = max parallel tasks; `batch_size: 0  # why,
          was N` pauses: running tasks finish, nothing new starts. The user may
          edit the file mid-run — every pick re-reads it.
-      3. `context_set(key: "queue_file", value: "<absolute path>")` and
+      3. `context_set(key: "queue_file", value: "<absolute path>")` (the project's
+         `.claude/batch/<name>.md` written out as an absolute path: task sessions get the
+         path and never re-resolve a name from their own repo) and
          `context_set(key: "task_workflow", value: "batch-task")` (a project
          with its own heir of `batch-task` names it here).
       4. → transition `ready`.
