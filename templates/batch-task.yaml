@@ -117,11 +117,14 @@ states:
            the dir), and {{context.wt}}.log/handoff.md when you stop unfinished. Answer with ONE line:
            `DONE <sha> report={{context.wt}}.log/report.md` or `BLOCKED <reason> report=<the file>`.
 
-      3. `link_agent({session_id: W, agent_id: <its id>})`; context_set `worker_agent`.
-      A later visit (a fix round, the cause from the review or the land) — the model now is
-      {{context.model}}/{{context.effort}}, the worker runs {{context.worker_model}}:
-      - the same → SendMessage `{{context.worker_agent}}` with the cause: its one line plus "read <its file>
-        whole" (never the file's text pasted);
+      3. `link_agent({session_id: W, agent_id: <its id>})` (the engine records it as this visit's agent);
+         context_set `worker_agent` = its id.
+      A later visit (a fix round, the cause from the review or the land) arrives as "Revisit #N", and the
+      values this prompt rendered are the first visit's: read each one it uses from P's context now
+      (`status` with `key`) — `model` / `effort` against `worker_model`, `worker_agent`, `worker_session`:
+      - the same model → SendMessage `worker_agent` with the cause: its one line plus "read <its file>
+        whole" (never the file's text pasted); then `link_agent({session_id: <worker_session>, agent_id:
+        <worker_agent>})` again — it marks the worker as this visit's;
       - different (the engine escalated the task) → steps 1–3 again: a fresh worker on the new model, its
         prompt above plus "a fix round of a previous worker's branch: <the cause's line> — read <its file> whole".
       Then END your turn on this task. On the worker's notification: context_set `tokens_worker` = the
@@ -166,7 +169,8 @@ states:
            mkdir -p the dir). Answer with ONE line: `VERDICT MERGE|FIXES|REJECT <one-line summary>
            review={{context.wt}}.log/review.md design=yes|no` (design=yes: a fix needs a design choice).
 
-      3. `link_agent({session_id: R, agent_id: <its id>})`. END your turn on this task.
+      3. `link_agent({session_id: R, agent_id: <its id>})` (the engine records it as this visit's agent).
+         END your turn on this task.
       On its notification: context_set `tokens_review` = the value already set ({{context.tokens_review}},
       empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the
       worker's cause = the verdict line + "read {{context.wt}}.log/review.md whole"); REJECT → `reject`. The context_set first, the transition after

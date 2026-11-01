@@ -344,6 +344,42 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
       cleanupDir(wt);
     }
   });
+
+  it("start with a context on a driver: workflow stores the keys, ends with the DRIVER block, refuses cwd", async () => {
+    const { storage, call } = mount({
+      task: {
+        initial: "claim",
+        driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+        states: {
+          claim: { prompt: "claim {{context.task}}", transitions: { go: "done" } },
+          done: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const ok = await call("start", {
+      workflow: "task",
+      parent_session_id: "p",
+      context: { task: "T9", queue_file: "/q/queue.md", difficulty: "4" },
+    });
+    expect(ok.isError).toBeUndefined();
+    const sid = /SESSION: (\w+)/.exec(ok.text)![1];
+    const ctx = storage.read(sid)!.context;
+    expect(ctx).toMatchObject({ task: "T9", queue_file: "/q/queue.md", difficulty: "4" });
+    expect(ok.text).toContain("claim T9");
+    const block = String(ctx.driver_call);
+    expect(block.startsWith("---\nDRIVER — this workflow is driven by an agent")).toBe(true);
+    expect(block).toContain("task T9 of the queue /q/queue.md");
+    expect(ok.text.endsWith(`\n\n${block}`)).toBe(true);
+    const bad = await call("start", {
+      workflow: "task",
+      parent_session_id: "p",
+      context: { task: "T9", cwd: "/x" },
+    });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toBe(
+      'ERROR: start context: "cwd" is the engine\'s (pass cwd as its own argument)',
+    );
+  });
 });
 
 describe("abort tool kills before queueing", () => {

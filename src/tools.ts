@@ -246,12 +246,17 @@ export function formatResume(result: ResumeResult): string {
   ];
   const children = result.suspendedChildren;
   const byId = new Map(children.map(s => [s.session_id, s]));
+  const parents = new Map([...byId, [result.session.session_id, result.session]]);
   if (children.length > 0) {
     parts.push(
       "",
-      "SUSPENDED SUB-AGENT SESSIONS — wake each agent (agent → session → state), with the message below it; one no agent drives is yours:",
-      ...subAgentLines(children, RESUME_TOOL, "  ", s =>
-        drivenByRootAgent(s, result.status.sessionId, byId),
+      "SUSPENDED SUB-AGENT SESSIONS — wake each agent (agent → session → state), with the message below it; one no agent drives is yours; an earlier visit's agent of a `driver:` workflow's state is not woken:",
+      ...subAgentLines(
+        children,
+        RESUME_TOOL,
+        "  ",
+        s => drivenByRootAgent(s, result.status.sessionId, byId),
+        s => (s.parent_session_id ? parents.get(s.parent_session_id) : undefined),
       ),
       "",
       "A session whose agent cannot be woken: abort({ session_id, force: true }).",
@@ -510,6 +515,7 @@ export function registerTools(
         });
 
         const contextLines = formatContext(status.context);
+        const linked = engine.linkedAgentLines(sid);
         const suspendedAt = storage.read(sid)?.suspended_at;
         const starved = starvationLines(storage, sid);
         const body = formatStatus(status, { showSessionId: true, forceFullPrompt: true });
@@ -524,6 +530,7 @@ export function registerTools(
               ]
             : []),
           body,
+          ...(linked.length > 0 ? ["", ...linked] : []),
           ...(contextLines.length > 0 ? ["", ...contextLines] : []),
           "",
           "RECENT HISTORY:",
@@ -1057,7 +1064,9 @@ export function registerTools(
     {
       description:
         "Record which sub-agent (the Agent tool's agent id) drives a child session, so that after a restart resume() " +
-        "of the parent names the agent to wake with SendMessage. Call it once the child session id is known (sessions() lists children).",
+        "of the parent names the agent to wake with SendMessage. Call it once the child session id is known (sessions() lists children). " +
+        "It also records the parent's state and visit: status() of the parent marks the agent current at that visit, " +
+        "stale at a later visit of the state; linking again re-records it.",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
@@ -1068,12 +1077,13 @@ export function registerTools(
     },
     async args => {
       try {
-        await engine.linkAgent(args.session_id, args.agent_id);
+        const step = await engine.linkAgent(args.session_id, args.agent_id);
+        const at = step ? ` at its parent's ${step.state} visit ${step.visit}` : "";
         return {
           content: [
             {
               type: "text",
-              text: `Session "${args.session_id}" linked to agent ${args.agent_id}.`,
+              text: `Session "${args.session_id}" linked to agent ${args.agent_id}${at}.`,
             },
           ],
         };

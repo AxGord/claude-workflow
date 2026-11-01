@@ -5,6 +5,7 @@ import type { Storage } from "./storage.js";
 import type { SessionState } from "./types.js";
 import { isPidAlive } from "./process.js";
 import { Executor } from "./executor.js";
+import { currentStep, linkStanding } from "./agent-link.js";
 
 export const RESUME_TOOL = "mcp__plugin_workflow_wf__resume";
 export const STATUS_TOOL = "mcp__plugin_workflow_wf__status";
@@ -169,15 +170,32 @@ export function drivenByRootAgent(
 }
 
 /**
+ * The agent of `s` was linked at an earlier visit of the state its parent stands at now (a fix
+ * round re-entered it): the note that says so, else undefined. Such an agent is not this visit's.
+ */
+export function earlierVisitNote(
+  s: SessionState,
+  parent: SessionState | undefined,
+): string | undefined {
+  const now = parent && parent.stack.length > 0 ? currentStep(parent) : undefined;
+  const standing = now && linkStanding(s, now);
+  if (!now || !standing || standing === "current") return undefined;
+  return `linked at its parent's ${now.state} visit ${s.agent_step!.visit}, the parent is now at visit ${now.visit}: an earlier visit's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
+}
+
+/**
  * Per session below a root: one the root's own agent drives (`yours`) — one
- * line with the call to make on it; any other — agent → session → state, and
- * the `SendMessage` that wakes its agent to call `call` on its OWN session.
+ * line with the call to make on it; one whose agent is an earlier visit's of its
+ * parent's current state (`parentOf` finds the parent) — one line, no wake; any
+ * other — agent → session → state, and the `SendMessage` that wakes its agent to
+ * call `call` on its OWN session.
  */
 export function subAgentLines(
   sessions: readonly SessionState[],
   call: typeof RESUME_TOOL | typeof STATUS_TOOL,
   indent: string,
   yours: (s: SessionState) => boolean = () => false,
+  parentOf: (s: SessionState) => SessionState | undefined = () => undefined,
 ): string[] {
   const lines: string[] = [];
   const how =
@@ -191,6 +209,11 @@ export function subAgentLines(
       lines.push(
         `${indent}${c.session_id} → ${where(c)}${step} — no agent linked — yours, unless a sub-agent you spawned runs it (then link_agent + SendMessage) → ${call}({ session_id: '${c.session_id}' })`,
       );
+      continue;
+    }
+    const earlier = earlierVisitNote(c, parentOf(c));
+    if (earlier) {
+      lines.push(`${indent}${c.agent_id} → ${c.session_id} → ${where(c)}${step} — ${earlier}`);
       continue;
     }
     const agent = c.agent_id ?? "(not linked — find the agent by its task; link_agent records it)";

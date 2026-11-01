@@ -70,9 +70,13 @@ export async function pickupReport(
     );
     if (subs.length > 0) {
       lines.push(
-        "    sessions below it continue as they are — wake each sub-agent (only you can: SendMessage is your tool); one no agent drives is yours:",
-        ...subAgentLines(subs, STATUS_TOOL, "      ", s =>
-          drivenByRootAgent(s, root.session_id, byId),
+        "    sessions below it continue as they are — wake each sub-agent (only you can: SendMessage is your tool); one no agent drives is yours; an earlier visit's agent of a `driver:` workflow's state is not woken:",
+        ...subAgentLines(
+          subs,
+          STATUS_TOOL,
+          "      ",
+          s => drivenByRootAgent(s, root.session_id, byId),
+          s => (s.parent_session_id ? byId.get(s.parent_session_id) : undefined),
         ),
       );
     }

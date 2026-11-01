@@ -221,6 +221,7 @@ describe("suspend / resume", () => {
     const { storage, engine } = mount({
       w: {
         initial: "start",
+        driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
         states: {
           start: { prompt: "go", transitions: { next: "run" } },
           run: { type: "exec", command: "sleep 0.4", on_success: "end_ok", on_error: "end_ok" },
@@ -229,13 +230,20 @@ describe("suspend / resume", () => {
         },
       },
     });
-    const { sessionId } = await engine.start("w");
+    const parent = await engine.start("w");
+    const { sessionId } = await engine.start("w", undefined, parent.sessionId);
     const pending = engine.transition(sessionId, "next");
     for (let i = 0; i < 100 && !storage.read(sessionId)!.running_exec; i++)
       await new Promise(r => setTimeout(r, 10));
     await engine.linkAgent(sessionId, "agent-x");
     await pending;
     expect(storage.read(sessionId)!.agent_id).toBe("agent-x");
+    // and the parent's step it was linked at
+    expect(storage.read(sessionId)!.agent_step).toEqual({
+      workflow: "w",
+      state: "start",
+      visit: 1,
+    });
   });
 
   it("abort of a suspended session spares the recorded pgid once its exit code is written (the pid may be reused)", async () => {

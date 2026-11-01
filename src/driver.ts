@@ -38,7 +38,7 @@ export function driverRefError(driver: Driver, shippedDir = SHIPPED_DRIVERS_DIR)
   if (!BARE_NAME.test(ref) || ref.endsWith(".md")) return null;
   return fs.existsSync(path.join(shippedDir, `${ref}.md`))
     ? null
-    : `driver.prompt_ref "${ref}": no shipped driver of that name (a path needs a "/")`;
+    : `driver.prompt_ref "${ref}": no shipped driver of that name (a path needs "/", "~" or ".md")`;
 }
 
 export interface DriverCallInput {
@@ -59,10 +59,15 @@ export function driverPrompt(i: DriverCallInput): string {
     `You are the driver of task ${task}${i.queueFile ? ` of the queue ${i.queueFile}` : ""}. Your task session is P = ${i.sessionId}`,
     "(it holds the step — never call start() for it). First read your instructions whole:",
     `${i.instructions} — then \`status({session_id: "${i.sessionId}"})\` and follow its prompts to the end; after that`,
-    "every `transition` reply IS the next prompt — never call `status` after it. Re-spawned (P's context already",
-    "records the current state's agent — worker_session / worker_agent at work, review_session at review): start",
-    "no new session or agent — SendMessage the recorded agent first; gone → check the tree (its commit on the",
-    "task's branch and a clean worktree → the prompt's verify step); else a fresh agent on the SAME recorded session.",
+    "every `transition` reply IS the next prompt — never call `status` after it. Re-spawned on a running session:",
+    "that status lists P's LINKED AGENTS of its current state — the engine marks each `current` (linked at this",
+    "visit) or not; only a `current` one is this visit's agent. A current agent → start no new session or agent —",
+    "SendMessage it first; gone → at work, check the tree (its commit on the task's branch and a clean worktree →",
+    "the prompt's verify step); at review, a <wt>.log/review.md newer than the branch's last commit holding a",
+    "VERDICT line → route by that verdict; else a fresh agent on the session it is linked to, then link_agent it.",
+    "None current → the prompt from its first step, as for a new visit; its own steps still apply (a fix round's",
+    "SendMessage of the cause to worker_agent, then its link_agent, included) — but never ask an earlier visit's",
+    "agent where it stands, nor take it as this visit's.",
     "The workflow tools may be deferred:",
     'load them first with ToolSearch query "+plugin_workflow_wf" (max_results 20). Reply with exactly one line at',
     "the end, as the instructions say.",

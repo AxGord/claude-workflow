@@ -15,6 +15,7 @@ import type {
   RunningExec,
   PendingAction,
   Driver,
+  AgentStep,
 } from "./types.js";
 import {
   MAX_STACK_DEPTH,
@@ -36,6 +37,7 @@ import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
 import { MODEL_KEYS, applyModelTable, difficultyError, parseDifficulty } from "./model-table.js";
 import { render } from "./template.js";
 import { DRIVER_CALL_KEY, renderDriverCall, resolveDriverRef } from "./driver.js";
+import { currentStep, linkedAgentLines } from "./agent-link.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
 import { activeParents, staleNote, staleness, type Staleness } from "./stale.js";
@@ -105,6 +107,8 @@ export interface EngineOptions {
 export interface ResumeResult {
   readonly status: StatusResult;
   readonly suspendedChildren: SessionState[];
+  /** The resumed session as stored once its status is built: the parent its children's links are read against. */
+  readonly session: SessionState;
 }
 
 export class Engine {
@@ -803,7 +807,7 @@ export class Engine {
       this._isActionState(state) && !resumed.pending_pop
         ? await this._executeActionState(resumed, state!, [], 0, resumed.running_exec)
         : this._buildStatus(resumed, []);
-    return { status, suspendedChildren };
+    return { status, suspendedChildren, session: this._storage.read(sessionId) ?? resumed };
   }
 
   /**
@@ -856,12 +860,43 @@ export class Engine {
     return state && this._isActionState(state) ? { state, run } : undefined;
   }
 
-  /** Record the Agent-tool id of the sub-agent that drives a session, for a parent's resume. */
-  public async linkAgent(sessionId: string, agentId: string): Promise<void> {
+  /**
+   * Record the Agent-tool id of the sub-agent that drives a session, for a parent's resume, and —
+   * when the parent is a session of a `driver:` workflow, whose states run one agent per visit — the
+   * parent's step it was linked at (`agent_step`), so a later visit of that state tells it from this
+   * visit's agent. Any other parent (a dispatcher looping a spawning state) records no step, so its
+   * agents are never taken for an earlier visit's. Linking again re-records the step. Returns the
+   * step, or undefined when none is recorded.
+   */
+  public async linkAgent(sessionId: string, agentId: string): Promise<AgentStep | undefined> {
+    const parentId = this._storage.read(sessionId)?.parent_session_id;
+    const parent = parentId ? this._storage.read(parentId) : null;
+    const step =
+      parent && parent.stack.length > 0 && this._declaresDriver(parent)
+        ? currentStep(parent)
+        : undefined;
     const set = await this._storage.update(sessionId, cur =>
-      cur ? { ...cur, agent_id: agentId } : null,
+      cur ? { ...cur, agent_id: agentId, agent_step: step } : null,
     );
     if (!set) throw new Error(`Session "${sessionId}" not found`);
+    return step;
+  }
+
+  /** The session runs a `driver:` workflow: the workflow it was started with declares one. */
+  private _declaresDriver(s: SessionState): boolean {
+    try {
+      return this._getWorkflow(s.session_id, s.stack[0].workflow).driver !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  /** status()'s LINKED AGENTS block of a session: its children's agents linked at its current state. */
+  public linkedAgentLines(sessionId: string): string[] {
+    const s = this._storage.read(sessionId);
+    if (!s || s.stack.length === 0) return [];
+    const children = this._storage.readAll().filter(c => c.parent_session_id === sessionId);
+    return linkedAgentLines(s, children);
   }
 
   /** Suspended sessions, oldest first: those whose cwd lies in `projectRootPath` (its git root), or all. */
@@ -1480,6 +1515,7 @@ export class Engine {
         ...(current.priority ? { priority: current.priority } : {}),
         // so do link_agent and the conversation id a resume stamps
         agent_id: current.agent_id,
+        agent_step: current.agent_step,
         claude_session_id: current.claude_session_id,
         stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
         updated_at: now,

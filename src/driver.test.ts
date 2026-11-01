@@ -8,6 +8,7 @@ import { driverPrompt, driverRefError, resolveDriverRef } from "./driver.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { Loader } from "./loader.js";
+import { render } from "./template.js";
 import { InMemoryStorage, cleanupDir, createFixtureDir, createTestEngine } from "./test-helpers.js";
 
 const TEMPLATES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
@@ -53,6 +54,14 @@ describe("driver (pure)", () => {
       "no shipped driver of that name",
     );
     expect(driverRefError({ ...d, prompt_ref: "lib/nope.md" })).toBeNull();
+    // the message names exactly what resolveDriverRef takes as a path
+    expect(driverRefError({ ...d, prompt_ref: "nope" })).toContain(
+      '(a path needs "/", "~" or ".md")',
+    );
+    for (const ref of ["a/b", "~/b.md", "~", "nope.md"]) {
+      expect(driverRefError({ ...d, prompt_ref: ref })).toBeNull();
+      expect(resolveDriverRef(ref, "/p", "/ship").startsWith("/ship/")).toBe(false);
+    }
   });
 
   it("the driver prompt names the session, the task, the queue and the one-status rule", () => {
@@ -69,9 +78,97 @@ describe("driver (pure)", () => {
     expect(p).toContain("/i.md");
     expect(p).toContain("never call `status` after it");
     const flat = p.replace(/\n/g, " ");
-    expect(flat).toContain("start no new session or agent — SendMessage the recorded agent first");
-    expect(flat).toContain("a fresh agent on the SAME recorded session");
+    expect(flat).toContain(
+      "A current agent → start no new session or agent — SendMessage it first",
+    );
+    expect(flat).toContain("a fresh agent on the session it is linked to");
     expect(p).not.toMatch(/now at|started at|claim/);
+  });
+
+  it("a re-spawned driver takes only an agent the engine marks current as this visit's", () => {
+    const flat = driverPrompt({
+      driver: { model: "m", effort: "low", prompt_ref: "x" },
+      sessionId: "abcd",
+      task: "T1",
+      queueFile: undefined,
+      instructions: "/i.md",
+      instructionsExist: true,
+    }).replace(/\n/g, " ");
+    expect(flat).toContain(
+      "that status lists P's LINKED AGENTS of its current state — the engine marks each `current` (linked at this visit) or not; only a `current` one is this visit's agent",
+    );
+    // the probe is barred, the prompt's own fix-round SendMessage and re-link are not
+    expect(flat).toContain(
+      "its own steps still apply (a fix round's SendMessage of the cause to worker_agent, then its link_agent, included) — but never ask an earlier visit's agent where it stands, nor take it as this visit's",
+    );
+    // a gone agent: the tree at work, the review file's verdict at review, else a fresh agent
+    expect(flat).toContain(
+      "gone → at work, check the tree (its commit on the task's branch and a clean worktree → the prompt's verify step)",
+    );
+    expect(flat).toContain(
+      "at review, a <wt>.log/review.md newer than the branch's last commit holding a VERDICT line → route by that verdict; else a fresh agent on the session it is linked to, then link_agent it",
+    );
+    // no context key carries the visit
+    expect(flat).not.toMatch(/visit marker|worker_visit|review_visit/);
+  });
+});
+
+describe("batch-task links (template text)", () => {
+  const def = () => new Loader(TEMPLATES, tmp(), null).get("batch-task")!;
+  const flat = (state: "work" | "review") =>
+    render(def().states[state].prompt!, { visits: { [state]: 1 }, context: {} }).replace(
+      /\s+/g,
+      " ",
+    );
+
+  it("work links its worker, and a fix round that keeps it links it again; no visit key", () => {
+    const work = flat("work");
+    expect(work).toContain(
+      "`link_agent({session_id: W, agent_id: <its id>})` (the engine records it as this visit's agent); context_set `worker_agent` = its id.",
+    );
+    expect(work).toContain(
+      "the values this prompt rendered are the first visit's: read each one it uses from P's context now (`status` with `key`) — `model` / `effort` against `worker_model`, `worker_agent`, `worker_session`:",
+    );
+    expect(work).toContain(
+      "SendMessage `worker_agent` with the cause: its one line plus \"read <its file> whole\" (never the file's text pasted); then `link_agent({session_id: <worker_session>, agent_id: <worker_agent>})` again — it marks the worker as this visit's;",
+    );
+    expect(def().states.work.prompt).not.toMatch(/worker_visit|review_visit/);
+  });
+
+  it("review links its reviewer and records no visit key", () => {
+    expect(flat("review")).toContain(
+      "`link_agent({session_id: R, agent_id: <its id>})` (the engine records it as this visit's agent). END your turn on this task.",
+    );
+    expect(def().states.review.prompt).not.toMatch(/review_agent|review_visit/);
+  });
+
+  it("the shipped task-driver instructions take only a current linked agent as this visit's", () => {
+    const md = fs.readFileSync(resolveDriverRef("task-driver", "/"), "utf8").replace(/\s+/g, " ");
+    expect(md).toContain(
+      "The `status` you start with lists P's LINKED AGENTS of its current state: `link_agent` records the state's visit beside the agent",
+    );
+    expect(md).toContain(
+      "Only a `current` agent is this visit's. None current → follow the prompt from its first step",
+    );
+    expect(md).toContain(
+      "Its own steps still apply — a fix round's SendMessage of the cause to `worker_agent`, then its `link_agent`, included",
+    );
+    expect(md).toContain(
+      "never ask an earlier visit's agent where it stands, never take it as this visit's",
+    );
+    expect(md).toContain(
+      "Gone → at `work`, check the tree: its commit on `batch/<ID>` and a clean worktree",
+    );
+    expect(md).toContain(
+      "At `review`: `<wt>.log/review.md` newer than the branch's last commit (so not an earlier round's) holding a `VERDICT` line → route by that verdict",
+    );
+    expect(md).toContain(
+      "3. Otherwise spawn a fresh agent with the prompt's text on the SAME session the current agent is linked to",
+    );
+    expect(md).toContain(
+      "A reply \"Revisit #N\" means: follow that state's prompt as you got it at the first visit — but the values it rendered are that visit's",
+    );
+    expect(md).not.toMatch(/visit marker|worker_visit|review_visit/);
   });
 });
 

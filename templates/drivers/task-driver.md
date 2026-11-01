@@ -23,16 +23,26 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 - Tokens: take them from the agent's task-notification usage line; for a resumed agent, subtract the
   value you saw last time.
 - A transition into a long exec (the land) may outlive the call; its notification wakes you.
+- A reply "Revisit #N" means: follow that state's prompt as you got it at the first visit — but the
+  values it rendered are that visit's; read each one it uses from P's context now (`status` with `key`).
 
 ## Re-spawned on a running session
-P's context may already record the current state's agent (`worker_session` / `worker_agent` at
-`work`, `review_session` at `review`): you replace a driver that was lost. Then never start a new
-W/R session or agent at once:
-1. SendMessage the recorded agent asking where it stands; its answer is its notification.
-2. Gone → check the tree: its commit on `batch/<ID>` and a clean worktree → follow the prompt's
-   verify step (as if it had just answered).
-3. Otherwise spawn a fresh agent with the prompt's text on the SAME recorded W/R session (it continues
-   from `status`), `link_agent` it, update `worker_agent` — never a second `start`.
+You replace a driver that was lost. The `status` you start with lists P's LINKED AGENTS of its current
+state: `link_agent` records the state's visit beside the agent, and the engine marks each one
+`current` (linked at this visit) or not (`stale`, or an earlier visit's whose session still runs). Only
+a `current` agent is this visit's. None current → follow the prompt from its first step, as for a new
+visit. Its own steps still apply — a fix round's SendMessage of the cause to `worker_agent`, then its
+`link_agent`, included — but never ask an earlier visit's agent where it stands, never take it as this
+visit's, and never reuse an earlier visit's `review_session`.
+With a current agent, never start a new W/R session or agent at once:
+1. SendMessage the current agent asking where it stands; its answer is its notification.
+2. Gone → at `work`, check the tree: its commit on `batch/<ID>` and a clean worktree → follow the
+   prompt's verify step (as if it had just answered). At `review`: `<wt>.log/review.md` newer than the
+   branch's last commit (so not an earlier round's) holding a `VERDICT` line → route by that verdict
+   as the prompt says (as if the reviewer had just answered).
+3. Otherwise spawn a fresh agent with the prompt's text on the SAME session the current agent is
+   linked to (it continues from `status`), `link_agent` it, update `worker_agent` at `work` — never a
+   second `start`.
 
 ## Stop and hand back — reply with ONE line, then stop
 `NEEDS-PARENT task=<ID> session=<P> reason=<short> see=<file or state>` when:

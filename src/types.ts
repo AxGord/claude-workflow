@@ -318,6 +318,16 @@ export interface DetachedRun {
   readonly boot_ms: number;
 }
 
+/**
+ * Where a parent stood when an agent was linked to its child: the active frame's workflow, state and
+ * that state's visit. A later visit of the same state makes the agent an earlier visit's.
+ */
+export interface AgentStep {
+  readonly workflow: string;
+  readonly state: string;
+  readonly visit: number;
+}
+
 /** A session's foreground exec in flight, recorded so a resume can take it over. */
 export interface RunningExec extends DetachedRun {
   readonly frame: number;
@@ -351,6 +361,8 @@ export interface SessionState {
   readonly claude_session_id?: string;
   /** The Agent-tool id of the sub-agent driving this session (`link_agent`). */
   readonly agent_id?: string;
+  /** The parent's step `link_agent` ran at; absent unless the parent was an active session of a `driver:` workflow then. */
+  readonly agent_step?: AgentStep;
   readonly running_exec?: RunningExec;
   /**
    * The action state a server began and has not routed yet, written before its
