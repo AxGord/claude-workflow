@@ -228,6 +228,8 @@ setName("b");
 
 **Mode interaction:** null-safety MODE is per-class (`@:nullSafety` bare = Loose; `@:nullSafety(Strict)` = Strict), and an `inline` body is re-checked at each expansion under the CALLER's mode. A `cast nullableValue` inside an inline function passes in its Loose defining class but fails when expanded into Strict callers ("Cannot cast nullable value to not nullable type"). Fix: drop `inline` from the function — the defining class becomes the only checked context. (Verified on Haxe 4.3.4.)
 
+**A parameter's null guard does not survive the inline:** `if (p == null) return; use(p.x);` narrows `p` inside the function, but expanded into a caller whose argument is a field, call or `?.` expression the guard no longer narrows anything and Strict refuses the rest. Adding `inline` to such a function is NOT a safe rewrite — typecheck the callers.
+
 ## Non-Null-Safe Library Boundary: Declared Types Are Taken At Face Value — And Can Lie
 
 Calling from `@:nullSafety` code into a module compiled WITHOUT null safety (e.g. a third-party library): the compiler trusts that module's declared types literally, and the trust cuts both ways:
