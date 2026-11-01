@@ -113,8 +113,10 @@ states:
            ONLY inside {{context.wt}} (branch `batch/{{context.task}}`): ONE commit on that branch, a clean
            worktree at the end; never touch {{context.cwd}} itself; never push. Check the on-disk state
            first — work already applied is reconciled, not done twice. Your report is a FILE: write
-           {{context.wt}}.log/report.md (what changed and why, the checks run, what is left open; mkdir -p
-           the dir), and {{context.wt}}.log/handoff.md when you stop unfinished. Answer with ONE line:
+           {{context.wt}}.log/report.md (what changed and why, the checks run; then the sections
+           `## Follow-up not done`, `## Tool defect found`, `## Open` — each a short list, `none` when empty;
+           mkdir -p the dir), and {{context.wt}}.log/handoff.md when you stop unfinished (the same three sections). On a fix
+           round, carry the previous report.md's three sections' items into the new file. Answer with ONE line:
            `DONE <sha> report={{context.wt}}.log/report.md` or `BLOCKED <reason> report=<the file>`.
 
       3. `link_agent({session_id: W, agent_id: <its id>})` (the engine records it as this visit's agent);
@@ -166,7 +168,7 @@ states:
            `status({session_id: "R"})`, then follow it to its terminal, passing session_id R in every call;
            every `transition` reply IS the next prompt — never call `status` after it. Your review is a
            FILE: write {{context.wt}}.log/review.md (the verdict, the reasons; for FIXES the full fix list;
-           mkdir -p the dir). Answer with ONE line: `VERDICT MERGE|FIXES|REJECT <one-line summary>
+           a section `## Notes (non-blocking)` with the follow-ups you saw, `none` when empty; when review.md already exists (an earlier round), carry its `## Notes (non-blocking)` items into the new file; mkdir -p the dir). Answer with ONE line: `VERDICT MERGE|FIXES|REJECT <one-line summary>
            review={{context.wt}}.log/review.md design=yes|no` (design=yes: a fix needs a design choice).
 
       3. `link_agent({session_id: R, agent_id: <its id>})` (the engine records it as this visit's agent).

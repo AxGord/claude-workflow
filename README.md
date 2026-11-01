@@ -614,13 +614,17 @@ driver:
   reply is the next prompt; spawn the prompts' agents exactly as written and wait for their
   notification; hand back with one line `NEEDS-PARENT task=… session=… reason=… see=<file>` on a
   REJECT, a FIXES with `design=yes`, a third FIXES, a BLOCKED worker, a failed land or any open
-  choice; finish with `LANDED <sha> task=… tokens worker=… review=… rounds=…` (or `CLOSED …`).
+  choice; finish with `LANDED <sha> task=… tokens worker=… review=… rounds=… lessons=<phrase (file)>; …|none`
+  (or `CLOSED … lessons=…`): up to two follow-ups COPIED, not judged, from the agents' files.
 - Agents' outputs are files: in bundled `batch-task` the worker writes `report.md` (and `handoff.md`
   when it stops unfinished), the reviewer `review.md`, in the task's log dir `<worktree>.log` (beside
   the worktree, kept after cleanup), and each answers with ONE line naming its file (`DONE <sha>
   report=…`, `BLOCKED …`, `VERDICT MERGE|FIXES|REJECT … review=… design=yes|no`); a fix round sends
   that line plus "read <file> whole", never the text. The spawn prompts also say once that a
-  transition reply IS the next prompt — never `status` after it.
+  transition reply IS the next prompt — never `status` after it. The files hold named sections the
+  driver copies as `lessons`: `report.md` / `handoff.md` `## Follow-up not done`, `## Tool defect found`,
+  `## Open`; `review.md` `## Notes (non-blocking)`; a fix round or a later review carries the previous
+  file's items forward. Bundled `batch` `collect` turns each lesson into a queue line, a memory note or nothing.
 - The rendered call is also kept in P's context as `driver_call`: after a restart or compaction
   `status({session_id: P, key: "driver_call"})` re-spawns the driver (bundled `batch` `collect` says so).
 - Under a parent of a `driver:` workflow (its states run one agent per visit) `link_agent` records the

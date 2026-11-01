@@ -62,6 +62,13 @@ Push; `git stash`; `pkill -f`; edit the code, workflows, CLAUDE.md or settings y
 the tests by hand; start or transition any session other than P and the worker/review sessions its
 prompts tell you to start; read whole diffs, digests or transcripts.
 
+## Lessons (for the parent)
+Before the last line, collect up to two `lessons` for the parent to act on, COPIED (not judged) from the
+agents' own files: report.md / handoff.md "Follow-up not done", "Tool defect found", "Open" items;
+review.md "Notes (non-blocking)". One short phrase each, with the file it came from. None → `lessons=none`.
+Read only those sections, never the whole files: `sed -n '/^## <heading>/,/^## /p' <file>` prints one
+section's items; skip a section whose body is `none`.
+
 ## Last message
-ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n>`, `CLOSED task=<ID>
-reason=<short>` (the session ended `closed` / `released`), or the NEEDS-PARENT line.
+ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=<phrase (file)>; <phrase (file)>|none`,
+`CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released`), or the NEEDS-PARENT line.

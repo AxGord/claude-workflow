@@ -142,6 +142,28 @@ describe("batch-task links (template text)", () => {
     expect(def().states.review.prompt).not.toMatch(/review_agent|review_visit/);
   });
 
+  it("the driver's last line carries lessons copied from the agents' report and review sections", () => {
+    const md = fs.readFileSync(resolveDriverRef("task-driver", "/"), "utf8").replace(/\s+/g, " ");
+    expect(md).toContain("lessons=<phrase (file)>; <phrase (file)>|none");
+    expect(md).toContain("COPIED (not judged)");
+    const d = def();
+    expect(d.states.work.prompt).toContain("## Follow-up not done");
+    expect(d.states.work.prompt).toContain("## Tool defect found");
+    expect(d.states.review.prompt).toContain("## Notes (non-blocking)");
+    expect(d.states.work.prompt).toContain("carry the previous report.md's three sections");
+    expect(d.states.work.prompt).toContain(
+      "handoff.md when you stop unfinished (the same three sections)",
+    );
+    expect(d.states.review.prompt).toContain("carry its `## Notes (non-blocking)` items");
+    expect(d.states.review.prompt).toContain("when review.md already exists (an earlier round)");
+    expect(md).toContain("CLOSED task=<ID> reason=<short> lessons=");
+    const collect = new Loader(TEMPLATES, tmp(), null)
+      .get("batch")!
+      .states.collect.prompt.replace(/\s+/g, " ");
+    expect(collect).toContain("`lessons=<phrase (file)>; …|none`");
+    expect(collect).toContain("`queue_add` line, a memory note, or nothing");
+  });
+
   it("the shipped task-driver instructions take only a current linked agent as this visit's", () => {
     const md = fs.readFileSync(resolveDriverRef("task-driver", "/"), "utf8").replace(/\s+/g, " ");
     expect(md).toContain(

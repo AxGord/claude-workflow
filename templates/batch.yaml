@@ -164,7 +164,8 @@ states:
       {{stderr}}
 
       Woken by a DRIVER's one line (the task's bookkeeping — `[x]`, the record line — is already done):
-      - `LANDED <sha> task=<ID> …` / `CLOSED task=<ID> …` → the task session ended: route below.
+      - `LANDED <sha> task=<ID> …` / `CLOSED task=<ID> …` → the task session ended: route below. Their `lessons=<phrase (file)>; …|none` tail is
+        the agents' own follow-ups, copied: turn each into a `queue_add` line, a memory note, or nothing.
       - `NEEDS-PARENT task=<ID> session=<P> reason=… see=<file>` → read only the named file. A design choice
         or a decision the prompt left open → SendMessage the driver your decision and tell it to continue;
         a rejected or blocked task → SendMessage the driver its exact path: from `review` transition `reject`,
