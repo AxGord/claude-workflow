@@ -147,6 +147,8 @@ describe("sync-live-skills.sh", () => {
     const r = land();
     expect(r.code).toBe(0);
     expect(r.out).toContain("WARNING");
+    expect(r.out).toContain("rsync -a -c --delete");
+    expect(r.out).toContain(".skillsyncignore");
     expect(read(join(live, "a"))).toBe("mine\n");
   });
 

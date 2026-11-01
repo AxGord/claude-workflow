@@ -29,7 +29,7 @@ for name in $names; do
     mkdir -p "$old"
     git -C "$root" archive "$before" "templates/skills/$name" 2>/dev/null | tar -x -C "$old" 2>/dev/null
     if ! diff -rq -x .DS_Store "$live/$name" "$old/templates/skills/$name" >/dev/null 2>&1; then
-        echo "WARNING: live skill $name differs from the pre-merge bundled copy: left alone"
+        echo "WARNING: live skill $name differs from the pre-merge bundled copy: left alone. To take the bundled copy: rsync -a -c --delete --exclude .DS_Store \"$root/templates/skills/$name/\" \"$live/$name/\"; to keep the live copy: add '$name' to $root/.skillsyncignore"
         continue
     fi
     if rsync -a -c --delete --exclude .DS_Store "$root/templates/skills/$name/" "$live/$name/"; then
