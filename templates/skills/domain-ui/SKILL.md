@@ -44,3 +44,13 @@ A field with a live mirror (preview, counter, summary, undo stack, sync) can be 
 **Why:** Nothing errors and no test fails on the stale mirror. A sibling that re-reads its model on every update will refresh normally, which makes the stale mirror look like an unrelated rendering glitch rather than what it is: a consumer with an incremental contract that the write bypassed.
 
 **Symptom of violation:** a change handler that reads `addedText`/`caretIndex`/`removedCount`-style fields off the control, or a seed method guarded by a `firstTime`/`initialised` flag — combined with a new programmatic write path that sets the value directly without going through either.
+
+## Reusing a state mechanism imports ALL its effects - check each one is wanted
+
+A generic "item busy" mark was reused to show a spinner on a row whose item was waiting for a background download. The mark also LOCKED the row (refused uncheck/click) - never requested, and rejected ("why can't I uncheck it?"). A "not available yet" state rendered as a disabled control was rejected too.
+
+**DON'T:** Reuse a state mark for its visual and silently inherit its input locking and action refusal
+**DO:** Before reusing a mark, list every effect (visual, input locking, action refusal) and keep only what the new case needs - add a parameter such as `locks = false`
+**Rule:** Disable a control only when the action is impossible, not when it is merely slow or pending. A pending action stays usable; show the pending state (spinner, tooltip).
+
+**Related gotcha:** many hand-rolled checkbox components IGNORE value writes while disabled. When a state change both disables the control and clears its value, clear the value first, then disable - the reverse order leaves the old value drawn on a disabled control.

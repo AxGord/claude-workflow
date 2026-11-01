@@ -700,6 +700,15 @@ positions), and on a target without `lime_cffi` the lookup answers `ScanCode.UNK
 original `keyCode` rather than trusting the result. Non-letter shortcuts (`ESCAPE`, `ENTER`, arrows) need none of this —
 their key codes are layout-independent by construction.
 
+### A listener's throw never reaches `dispatchEvent`'s caller once uncaught-error events are on
+
+When any `UncaughtErrorEvent.UNCAUGHT_ERROR` listener exists on `loaderInfo.uncaughtErrorEvents` (typical for crash reporters), `stage.__uncaughtErrorEvents.__enabled` is true and `EventDispatcher.__dispatchEvent` wraps EACH listener call in try/catch, handing the error to `stage.__handleError`.
+
+- **Tell:** `try dispatcher.dispatchEvent(e) catch (...)` is dead code in such an app - the throw goes to the crash handler (which usually exits), never to the caller.
+- **Consequence:** "still fire the follow-up event if a listener throws" logic is moot - the app crashes instead.
+- **Tests:** a unit test that adds a throwing listener and expects the throw to propagate fails, and takes the runner down through the crash handler.
+- Without such a listener the throw propagates normally: behaviour depends on app setup, not on the dispatcher.
+
 ## OpenFL Internal APIs (for synthetic events / debug bridges)
 
 ### Coordinate pipeline for synthetic mouse events
