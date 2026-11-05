@@ -79,6 +79,8 @@ export interface StatusResult {
   readonly taskOps: TaskOp[];
   readonly visitCount: number;
   readonly forcePrompt?: boolean;
+  /** `revisit_prompt` of the state, rendered with the same variables as `prompt`. */
+  readonly revisitPrompt?: string;
   /** `start` of a workflow with a `driver:` — the Agent call that spawns it (src/driver.ts). */
   readonly driverCall?: string;
 }
@@ -2079,6 +2081,8 @@ export class Engine {
         frame.state_visits[frame.current_state] ??
         0,
       forcePrompt: actionPrompt !== undefined,
+      revisitPrompt:
+        state?.revisit_prompt === undefined ? undefined : render(state.revisit_prompt, vars),
     };
   }
 }

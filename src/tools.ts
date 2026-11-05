@@ -202,10 +202,14 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
     status.visitCount > 1 &&
     status.currentState.full_on_revisit !== true
   ) {
-    parts.push(
-      `Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`,
-    );
-    parts.push(`If you don't remember them, call status() to re-read.`);
+    if (status.revisitPrompt === undefined) {
+      parts.push(
+        `Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`,
+      );
+      parts.push(`If you don't remember them, call status() to re-read.`);
+    } else {
+      parts.push(status.revisitPrompt);
+    }
   } else if (
     !forceFullPrompt &&
     !status.forcePrompt &&

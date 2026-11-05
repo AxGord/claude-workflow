@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- engine (ENG-REVISIT-PROMPT): optional state field `revisit_prompt` — a template rendered like `prompt` and shown on a revisit instead of the generic "Revisit #N" line; absent = unchanged; a forced full prompt (`status()`) and `full_on_revisit: true` keep precedence. Tests: `src/tools.test.ts`.
+
 - engine (ENG-DRIVER-RESUME): a driver messaged after its last line is not finished. `task-driver.md` gains "Resumed after your last line": `status` on P once and continue (a relayed worker/reviewer line is that agent's answer; never "my run already ended"). Bundled `batch` `collect` relays an orphaned worker/reviewer line after a restart to the driver linked to P, re-spawning from `driver_call` only if that fails. Test: the shipped texts.
 
 - engine (ENG-SKILL-SYNC-2): (1) the engine-task land keeps the pre-merge sha in `<git-common-dir>/land-before-<task>` (removed on a taken-back merge and after the sync), so a retry after `land_failed` (merge already on master) syncs the live skills from it instead of from a no-op `before == merged`. (2) `sync-live-skills.sh`'s "left alone" WARNING now names the next step: the `rsync` command that takes the bundled copy, or adding the name to `.skillsyncignore`. `engine-task.yaml` is git-ignored: installed by the parent.

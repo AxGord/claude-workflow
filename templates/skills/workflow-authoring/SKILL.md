@@ -115,6 +115,12 @@ must do THIS time (a fresh session to start, a value that changed), not a rule i
 from the first visit. A YAML using it needs an engine that knows the flag, so build and
 restart the engine before the YAML goes in.
 
+**revisit_prompt** (per-state template, prompt states): shown on a revisit instead of the
+generic `Revisit #N` line, rendered with the same variables as `prompt` (`{{stdout}}` of the
+latest exec, `{{context.*}}`). Use it when a revisit must carry per-visit data without
+resending the whole prompt. `full_on_revisit` takes precedence; `status()` still returns the
+full prompt. Absent = the generic line. Needs an engine that knows the field.
+
 **digest_on_repeat** (per-state flag, prompt states): after the state's full
 prompt was delivered once in the agent's current context, later deliveries send a
 2-line digest ("already delivered earlier — status() for the full text")

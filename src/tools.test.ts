@@ -83,6 +83,36 @@ describe("formatStatus digest_on_repeat", () => {
     expect(out).toContain("FULL ROUTING RULES");
   });
 
+  it("revisit_prompt replaces the generic revisit line", () => {
+    const out = formatStatus(makeStatus({ visitCount: 2, revisitPrompt: "Admitted: A1" }));
+    expect(out).toContain("Admitted: A1");
+    expect(out).not.toContain("Revisit #2");
+  });
+
+  it("without revisit_prompt a revisit shows the generic line", () => {
+    expect(formatStatus(makeStatus({ visitCount: 2 }))).toContain("Revisit #2");
+  });
+
+  it("a forced full prompt wins over revisit_prompt", () => {
+    const out = formatStatus(makeStatus({ visitCount: 2, revisitPrompt: "R" }), {
+      forceFullPrompt: true,
+    });
+    expect(out).toContain("FULL ROUTING RULES");
+    expect(out).not.toContain("\nR");
+  });
+
+  it("full_on_revisit wins over revisit_prompt", () => {
+    const out = formatStatus(
+      makeStatus({
+        visitCount: 2,
+        revisitPrompt: "R-PROMPT",
+        currentState: { prompt: "FULL ROUTING RULES", full_on_revisit: true },
+      }),
+    );
+    expect(out).toContain("FULL ROUTING RULES");
+    expect(out).not.toContain("R-PROMPT");
+  });
+
   it("digest keys are per workflow:state — a different state is unaffected", () => {
     formatStatus(makeStatus());
     const other = makeStatus({

@@ -161,6 +161,10 @@ export const StateDefinitionSchema = z
     // THIS time (a fresh session to start, a value that changed), not a rule it can recall from the first visit.
     full_on_revisit: z.boolean().optional(),
 
+    // Template (rendered like `prompt`) shown on a revisit instead of the generic
+    // "Revisit #N" line, for per-visit data such as an exec's {{stdout}}
+    revisit_prompt: z.string().optional(),
+
     // seconds the state may go with no engine call before `sessions` / `status` mark the session
     // STALE (0 = never); unset = the state type's default (`STALE_AFTER_DEFAULTS` in stale.ts)
     stale_after: z.number().int().nonnegative().optional(),

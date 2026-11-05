@@ -350,6 +350,16 @@ They come from the session's last action result (`last_action_result` in the ses
 
 Action states can be chained — `exec` → `exec` → `fetch` → `prompt` — up to 20 steps without agent involvement.
 
+### `revisit_prompt` — per-visit data on a revisit
+
+On a revisit of a prompt state the engine sends only "Revisit #N — follow the instructions from your first visit". A state whose prompt carries per-visit data (for example the `{{stdout}}` of the exec before it) can set `revisit_prompt`, a template rendered with the same variables as `prompt`, shown on revisits instead of that line. Absent = the generic line. `status()` (and any forced full prompt) still returns the full `prompt`, and so does a state with `full_on_revisit: true` (it wins over `revisit_prompt`).
+
+```yaml
+dispatch:
+  prompt: "Admitted:\n{{stdout}}\n1. ..."
+  revisit_prompt: "Admitted:\n{{stdout}}\nSame steps as your first visit."
+```
+
 ### Guards and the exhausted route
 
 `max_transitions` (per workflow, per stack frame, default 50) and a state's `max_visits` refuse a move past them with an error. A state may instead name where a move past its `max_visits` goes:

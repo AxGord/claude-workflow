@@ -5,6 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
+import { formatStatus } from "./tools.js";
 import {
   InMemoryStorage,
   createTestLoader,
@@ -1212,6 +1213,30 @@ describe("Engine — ENG-1d: on_exhausted, action results in later states", () =
     });
     expect((await engine.transition(sessionId, "next")).prompt).toBe("still 3");
     expect((await engine.transition(sessionId, "rerun")).prompt).toBe("now 0: prev=3\n");
+  });
+
+  it("revisit_prompt renders the latest exec's {{stdout}} on a revisit instead of the Revisit line", async () => {
+    setup({
+      revisit: {
+        initial: "run1",
+        states: {
+          run1: { type: "exec", command: "echo first", on_success: "seen", on_error: "seen" },
+          seen: {
+            prompt: "Full steps for {{stdout}}",
+            revisit_prompt: "Admitted: {{stdout}}",
+            transitions: { again: "run2" },
+          },
+          run2: { type: "exec", command: "echo second", on_success: "seen", on_error: "seen" },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const first = await engine.start("revisit");
+    expect(formatStatus(first)).toContain("Full steps for first");
+    const again = await engine.transition(first.sessionId, "again");
+    const out = formatStatus(again);
+    expect(out).toContain("Admitted: second");
+    expect(out).not.toContain("Revisit #");
   });
 });
 
