@@ -157,6 +157,10 @@ export const StateDefinitionSchema = z
     // agent's context already holds it; status() always returns the full text)
     digest_on_repeat: z.boolean().optional(),
 
+    // Always deliver the full prompt, also on a revisit: the state's text carries what the agent must do
+    // THIS time (a fresh session to start, a value that changed), not a rule it can recall from the first visit.
+    full_on_revisit: z.boolean().optional(),
+
     // seconds the state may go with no engine call before `sessions` / `status` mark the session
     // STALE (0 = never); unset = the state type's default (`STALE_AFTER_DEFAULTS` in stale.ts)
     stale_after: z.number().int().nonnegative().optional(),

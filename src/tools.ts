@@ -196,7 +196,12 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
   syncContextEpoch();
   const digestKey = `${status.currentWorkflow}:${status.currentStateName}`;
   const digestable = status.currentState.digest_on_repeat === true;
-  if (!forceFullPrompt && !status.forcePrompt && status.visitCount > 1) {
+  if (
+    !forceFullPrompt &&
+    !status.forcePrompt &&
+    status.visitCount > 1 &&
+    status.currentState.full_on_revisit !== true
+  ) {
     parts.push(
       `Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`,
     );

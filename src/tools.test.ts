@@ -72,6 +72,17 @@ describe("formatStatus digest_on_repeat", () => {
     expect(out).not.toContain("FULL ROUTING RULES");
   });
 
+  it("full_on_revisit delivers the prompt on a revisit", () => {
+    const out = formatStatus(
+      makeStatus({
+        visitCount: 2,
+        currentState: { prompt: "FULL ROUTING RULES", full_on_revisit: true },
+      }),
+    );
+    expect(out).not.toContain("Revisit #2");
+    expect(out).toContain("FULL ROUTING RULES");
+  });
+
   it("digest keys are per workflow:state — a different state is unaffected", () => {
     formatStatus(makeStatus());
     const other = makeStatus({
