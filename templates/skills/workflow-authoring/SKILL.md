@@ -10,7 +10,7 @@ description: Reference for authoring workflow YAML — state types, skill gates,
 - Bundled templates load from `templates/` next to the server's `build/` (i.e. `${CLAUDE_PLUGIN_ROOT}/templates`) — once, at server boot. Editing them does NOT hot-reload a running server.
 - Load order (later overrides earlier by workflow name): bundled `templates/` → `~/.claude/workflows/` → project `.claude/workflows/`. The project is the server's cwd — except a session started with `cwd:` in ANOTHER project that has its own `.claude/workflows/` (a worktree counts as its main checkout): that session sees the workflows that project defines itself laid by name over the server's (a server-only name is still found; the home dir is no project) — a queue line's `workflow:` runs in its `repo:`.
 - `~/.claude/workflows/` and the project dir ARE fs.watch'ed; ANY `.yaml` change there triggers a FULL reload that also re-reads bundled templates. Hot-reload trick after editing bundled templates (no server restart): `echo "# t" > ~/.claude/workflows/_trigger.yaml && sleep 1 && rm ~/.claude/workflows/_trigger.yaml`, then verify via `list` (state counts change).
-- Active sessions keep their definition snapshot; only NEW `start()` sessions see reloaded workflows.
+- Active sessions keep their definition snapshot; only NEW `start()` sessions see reloaded workflows. The snapshot lives in the server's memory (engine.ts `_snapshots`), not the state file: after a server restart a session runs the current YAML. A child session snapshots at its own `start()`, so an old pipeline's new review runs the new slice-review.
 - A NEW bundled workflow must also be added to `Engine.GLOBAL_WORKFLOWS` (`src/engine.ts`, a hardcoded name set) — otherwise the route prompt lists it under "Available workflows" as if it were a PROJECT workflow and Step 1 routes it via `project`. That is a code change: `npm run build` + server restart (templates hot-reload, code does not). Before deploying anything, check WHICH tree the running server loads: `ps -axo command | grep build/index.js` — a local-marketplace install can be a symlink straight to the repo, and a copy made into the plugin cache then changes nothing.
 
 ### Inheritance: `extends:`
@@ -108,6 +108,12 @@ load_skills:
 - `?`-prefix marks a skill **optional**: the gate lists it as "load if available, skip if not found" — use for project-local skills that may not be installed
 
 - Skill gate states have `transitions` (unlike action states) — exactly **one**, conventionally named `continue`. The engine auto-takes the *first* transition when all skills are loaded, and its blocking prompt tells the agent "transition to continue", so any other name breaks the instruction
+
+**full_on_revisit** (per-state flag, prompt states): the state delivers its full prompt
+on every visit instead of the `Revisit #N` line. Use it when the text carries what the agent
+must do THIS time (a fresh session to start, a value that changed), not a rule it can recall
+from the first visit. A YAML using it needs an engine that knows the flag, so build and
+restart the engine before the YAML goes in.
 
 **digest_on_repeat** (per-state flag, prompt states): after the state's full
 prompt was delivered once in the agent's current context, later deliveries send a

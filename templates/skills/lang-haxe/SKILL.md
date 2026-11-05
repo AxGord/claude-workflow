@@ -17,7 +17,7 @@ section whose title matches) when the situation in its line is the one in front 
 - **Strict null-safety — index (details: references/null-safety.md)** — BEFORE writing `@:nullSafety(Strict)` code or fighting ANY narrowing error → Read references/null-safety.md.
 - **`catch (e:Exception)` IS a full catch-all — Dynamic is never needed for coverage**
 - **`substr` Counts a NEGATIVE Start From the END — `substring` Clamps It to 0**
-- **Targets/runtime — index (full details: references/targets-runtime.md)** — BEFORE writing target-conditional code (`#if sys`/`nodejs`), stdin handling, regexes on `--interp`, exception-heavy hot paths on JS, or any tool driving the Haxe…
+- **Targets/runtime — index (full details: references/targets-runtime.md)** — BEFORE writing target-conditional code (`#if sys`/`nodejs`), stdin handling, regexes on `--interp` (`EReg.escape` broken; `matchSub(s, off)` loop hangs on non-ASCII text — use `match(s.substr(off))`), exception-heavy hot paths on JS, or any tool driving the Haxe…
 - **Operator Precedence Diverges from C — Bitwise, `|&^` Tier, and `%`**
 - **Abstract types — index (details: references/abstracts.md)** — BEFORE designing an abstract / enum abstract with operators, conversions or catch behavior → Read references/abstracts.md.
 - **Optional Parameters: Type-Based Skipping**

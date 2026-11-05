@@ -80,6 +80,21 @@ r.match('c,)');
 
 **Symptom in utest suites:** class init runs before the first assertion. If a regex is built at class-init time (test setup, static init), the whole interp pass dies with an opaque `at N: unmatched closing parenthesis` — often followed by uninitialized-buffer bytes on stdout. No test body ever runs.
 
+## `EReg.matchSub(s, offset)` on Eval Returns a Stale `matchedPos` for Non-ASCII Text — a Scan Loop Never Ends
+
+On eval (`--run` / `--interp`), `matchSub` from a non-zero start over a string containing non-ASCII characters can report a wrong `matchedPos`. Probe: `~/<[^>]*>/` over `"аб<i>вг</i>де<b>"` (Cyrillic), loop `while (r.matchSub(s, o)) o = p.pos + p.len`, printing `o,pos,len`:
+
+```
+eval  matchSub : 0,2,3  5,7,4  11,7,4  11,7,4 ...   (3rd match repeats pos 7 -> o never advances -> infinite loop, 100% CPU)
+eval  ASCII-only text, same loop: 0,2,3  5,7,4  11,13,3   (correct)
+neko  matchSub : 0,4,3  7,11,4  15,19,3   (terminates; positions are UTF-8 BYTE offsets: 4 for "аб")
+eval  r.match(s.substr(o)); o += p.pos + p.len : 0,2,3  5,2,4  11,2,3   (correct, char offsets)
+```
+
+**Fix:** scan with `re.match(s.substr(offset))` — `matchedPos` is relative to the substring — and `offset += p.pos + p.len`. Also cap iterations in any `matchSub` loop.
+
+**Trap:** a neko probe says nothing about `--run` (eval) behavior, and the two also differ in offset units (bytes vs chars). Verify on the target the code actually runs on.
+
 ## `#if sys` Is FALSE on hxnodejs Builds — Use `#if (sys || nodejs)`
 
 `-lib hxnodejs` does NOT define the `sys` conditional flag. Its `extraParams.hxml` uses `--macro allowPackage('sys')` (so `sys.io.File` / `sys.FileSystem` imports compile) plus `--macro define('nodejs')` (a separate flag). Code gated on `#if sys` runs ONLY on neko / hxcpp / eval / etc. — the JS/Node build silently takes the `#else` branch.

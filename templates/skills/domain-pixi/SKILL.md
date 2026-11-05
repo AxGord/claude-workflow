@@ -494,6 +494,18 @@ spine-core (used by spine-pixi-v8, verified against 4.2) frees a track entry bac
   (or compare by animation name plus the dispose-cleared flag). Spine's own docs: "References to the entry should not be kept after dispose is called, as it may be destroyed or reused."
 - Testing note: the real `AnimationState` runs fine in Node against a bare `SkeletonData` with an empty-timeline `Animation(name, [], duration)` pushed onto it, driven by `state.update(dt); state.apply(new Skeleton(data))` — a regression test can exercise the actual pool instead of a hand-rolled fake.
 
+### 41. Below v8.21.0, `BlurFilter` on WebGL can paint a bright vertical stripe at the group's right edge: it reads an uncleared pool texture — upgrade first; otherwise chain single-pass filters; `legacy: true` trades it for a dot lattice
+
+Fixed upstream in 8.21.0 (pixijs#12188 clamps blur samples to the input frame, issue #12171). On a project that can upgrade, upgrade; the workaround below is only for a pinned older version. Check the upstream tracker before writing a workaround for any renderer defect.
+
+In v8 (read in 8.18.1) `BlurFilterPass._applyOptimized` calls `applyFilter(this, flip, flop, isWebGPU)` for every non-final pass, so on WebGL the pooled temp texture is NOT cleared. Pool textures are power-of-two and larger than the frame, and the blur shader has no input clamp, so the final pass samples past the frame edge into stale pixels left by whichever filter used that texture before. `_calculateInitialStrength` scales the first pass up so the combined reach exceeds the `BlurFilter` padding (`2 * strength`, from `updatePadding`), which is what pushes samples out there.
+
+- Symptom: a thin, soft vertical stripe near the filter region's right edge, moving outward as strength grows, visible only while the blur is active. It depends on the pool texture's size key and its prior contents, so it appears only at certain window sizes — which reads as "only in fullscreen".
+- Wrong: `new BlurFilter({ quality: 2 })` (any `quality > 1`).
+- Also wrong: `legacy: true`. It clears the temp (first pass `clear = true`), so the stripe goes, but equal-strength passes put the samples on a visible dot lattice at strong blur. A stripe-only metric passes this; compare crops against the old look.
+- Right: chain single-pass filters at the strengths the optimized path gives its passes. For two passes: `[new BlurFilter({ quality: 1 }), new BlurFilter({ quality: 1 })]` with strengths `s * 2/√5` and `s * 1/√5` (squares sum to 1, so the combined Gaussian width is the same). `FilterSystem` clears every intermediate target (`filter.apply(this, flip, flop, true)`), and a single pass allocates no uncleared temp. Padding sums across the chain, so the region is slightly larger.
+- Verification note: flipping `quality` back to 2 at runtime on the chained version did not bring the stripe back, so that is not a valid positive control; compare against the actual previous code.
+
 ## Verification & capture
 
 General Playwright/browser-capture traps (stale headless AND headed screenshots,

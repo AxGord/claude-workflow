@@ -138,7 +138,7 @@ Distinct from the read-only query subcommands above: these REWRITE source. All a
 
 A `.json` path selects the `json` grammar plugin whatever `--lang` says (the shim's `--lang haxe` included), so
 `add-element` (`--after` / `--before` / `--append` / `--sorted`), `remove-element`, `replace-node` and the readers `ast`
-/ `source --select` work on JSON exactly as on Haxe. **Edit `test/testkit/mutation-arms.json`, an `apqlint.json`, an
+/ `source --select` work on JSON exactly as on Haxe. **Edit an arm document under `test/testkit/arms/` (one per package of the arm's `type`, e.g. `anyparse.query.json`; outside any package `_root.json`), an `apqlint.json`, an
 `hxformat.json` with these ops — not with python, `jq`, `sed` or by hand.**
 
 Vocabulary (the JSON grammar's ctor names; `hxq ast f.json` prints the tree):
@@ -159,11 +159,11 @@ A key containing `>` cannot be spelled in `--select` (the selector splits on it)
 Recipes:
 ```sh
 # append an arm (DeclaredArms order = JSON order, so --append, never --sorted)
-hxq add-element test/testkit/mutation-arms.json --append --select 'Member:arms > JArray' - --write <<'EOF2'
+hxq add-element test/testkit/arms/anyparse.query.json --append --select 'Member:arms > JArray' - --write <<'EOF2'
 {"name": "M-X", "type": "anyparse.query.Foo", "method": "bar", "force": "null", "note": "…"}
 EOF2
 # re-aim an arm: replace the whole object, addressed by pattern
-hxq replace-node test/testkit/mutation-arms.json --match '{"name": "M-X", "type": "$_", "method": "$_", "force": "$_", "note": "$_"}' - --write <<'EOF2'
+hxq replace-node test/testkit/arms/anyparse.query.json --match '{"name": "M-X", "type": "$_", "method": "$_", "force": "$_", "note": "$_"}' - --write <<'EOF2'
 {"name": "M-X", "type": "anyparse.query.Foo", "method": "baz", "force": "null", "note": "…"}
 EOF2
 # move entries between two lists of a config

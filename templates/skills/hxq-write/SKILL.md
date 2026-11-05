@@ -79,7 +79,7 @@ Writer-emit ops (canonical-gated): add-member · add-import · replace-node ·
 add-element · remove-element · remove-import · remove-member · safe-delete ·
 encapsulate-field · set-doc · set-modifier · set-comment · rewrite ·
 comment-rewrite · resolve-define · patch · extract-method · add-meta.
-JSON files (`mutation-arms.json`, `apqlint.json`, `hxformat.json`): add-element
+JSON files (`test/testkit/arms/<package>.json`, `apqlint.json`, `hxformat.json`): add-element
 (--after/--before/--append/--sorted) · remove-element · replace-node · ast ·
 source work on a `.json` path, format-preserving — NEVER python/sed/jq for
 these files. Vocabulary `Member:<key>` / `JArray` / `JString:<value>` →
