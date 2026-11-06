@@ -143,11 +143,11 @@ states:
       A later visit (a fix round, the cause from the review or the land) arrives as "Revisit #N", and the
       values this prompt rendered are the first visit's: read each one it uses from P's context now
       (`status` with `key`) — `model_fix` / `effort_fix` (a fix round's worker; empty — no difficulty, or a
-      table without a `fix` stage — = `model` / `effort`) against `worker_model`, and `worker_agent`, `worker_session`:
-      - the same model → SendMessage `worker_agent` with the cause: its one line plus "read <its file>
+      table without a `fix` stage — = `model` / `effort`) against `worker_model` (stored as `model/effort`), and `worker_agent`, `worker_session`:
+      - the same `model/effort` → SendMessage `worker_agent` with the cause: its one line plus "read <its file>
         whole" (never the file's text pasted); then `link_agent({session_id: <worker_session>, agent_id:
         <worker_agent>})` again — it marks the worker as this visit's;
-      - different (the fix stage's row, or an escalation, names another) → steps 1–3 again with `model_fix` /
+      - different model or effort (the fix stage's row, or an escalation, names another) → steps 1–3 again with `model_fix` /
         `effort_fix` (empty = `model` / `effort`) in place of `model` / `effort`: a fresh worker on the new model, its
         prompt above plus "a fix round of a previous worker's branch: <the cause's line> — read <its file> whole".
       Then END your turn on this task. On the worker's notification: context_set `tokens_worker` = the

@@ -559,6 +559,14 @@ batch-task` overriding `project_prepare` / `project_land`.
 
 #### Difficulty → model and effort (`model_table:`)
 
+Interactive workflows use it too: bundled `coding` and `bug-fix` declare an `execute` + `review` stage table (no `escalate`);
+a `difficulty` set at `start` or by the plan state (`think` / `diagnose`, from the rubric below) makes their
+implementer and reviewer spawns use `model_execute` / `model_review` and the `effort_*` keys; without a
+difficulty those keys stay empty and each prompt's prose rule applies. Rubric, by the work: 2 one function;
+3 one owner; 4 a few files at one owner; 5 a new rule or command on existing parts; 6 a new shared component
+or config key; 7 cross-file typing or an unknown cause; 8 a contract moving across packages; 9-10 a
+whole-tree redesign that must be split; +1 when the premise is a stale measurement or a hypothesis.
+
 A task workflow may declare which agent does a task of a given difficulty, at every stage of the
 task (planning, doing, reviewing, verifying a fix round, fixing):
 

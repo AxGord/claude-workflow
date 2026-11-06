@@ -235,7 +235,7 @@ describe("model_table stages (pure)", () => {
       fix: { step: 1 },
       plan: { step: 1 },
     });
-    // execute capped, fix not yet: the fix stage still moves
+    // difficulty 7 sits on the last row of execute and fix: the escalation has nowhere to go
     const top = applyModelTable({ difficulty: 7 }, STAGED, { fixes: 2 }, SET)!;
     expect(top.context).toMatchObject({
       model_execute: "opus",
@@ -545,6 +545,61 @@ describe("model_table (engine)", () => {
       review_model: "opus",
       review_effort: "xhigh",
     });
+  });
+
+  it("the bundled coding and bug-fix take a difficulty (3 and 8 spawn the stage rows); without one the keys stay empty", async () => {
+    const templates = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
+    const empty = fs.mkdtempSync(path.join(os.tmpdir(), "wf-mt-"));
+    dirs.push(empty);
+    for (const wf of ["coding", "bug-fix"]) {
+      const storage = new InMemoryStorage();
+      const engine = new Engine(storage, new Loader(templates, empty, null), new Executor());
+      const none = await engine.start(wf);
+      expect(storage.read(none.sessionId)!.context.model_execute).toBeUndefined();
+      await engine.abort(none.sessionId);
+      const picks = [] as string[];
+      for (const d of [3, 8]) {
+        const s = await engine.start(wf);
+        await engine.setContext(s.sessionId, "difficulty", d);
+        const ctx = storage.read(s.sessionId)!.context;
+        picks.push(
+          `${String(ctx.model_execute)}/${String(ctx.effort_execute)} ${String(ctx.model_review)}/${String(ctx.effort_review)}`,
+        );
+        await engine.abort(s.sessionId);
+      }
+      expect(picks).toEqual(["sonnet/high opus/high", "opus/high opus/high"]);
+      // no difficulty: the added lines are the only change to the prose rule, and they render empty
+      const plain = await engine.start(wf);
+      const def = new Loader(templates, empty, null).get(wf)!;
+      for (const [name, rule] of [
+        ["execute", "ALWAYS pass an explicit `model`"],
+        ["review", "ALWAYS pass an explicit `model`"],
+      ] as const) {
+        const st =
+          wf === "coding"
+            ? name === "execute"
+              ? "delegate"
+              : "review_delegate"
+            : name === "execute"
+              ? "fix_delegate"
+              : "review_delegate";
+        const text = def.states[st].prompt!;
+        expect(text).toContain(rule);
+        expect(text).toContain(`{{context.model_${name}}}`);
+      }
+      await engine.abort(plain.sessionId);
+      // a difficulty-4 session: the spawn keys and the ledger line
+      const four = await engine.start(wf);
+      await engine.setContext(four.sessionId, "difficulty", 4);
+      await engine.abort(four.sessionId);
+      expect(storage.ledger.at(-1)).toMatchObject({
+        difficulty: 4,
+        stages: {
+          execute: { model: "sonnet", effort: "high" },
+          review: { model: "opus", effort: "high" },
+        },
+      });
+    }
   });
 
   it("the bundled batch-task at difficulty 5 writes every stage key, and the ledger keeps the stages", async () => {

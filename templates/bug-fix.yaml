@@ -3,6 +3,19 @@ description: "Standard bug fix workflow"
 initial: classify
 max_transitions: 50
 
+# `difficulty` (1..10; rubric: workflow-authoring skill) is optional: set at start or at the plan state
+# (`think` / `diagnose`), the engine writes `model_<stage>` / `effort_<stage>` and the agent prompts
+# spawn with them; without one those keys are empty and each prompt's prose rule applies.
+model_table:
+  stages:
+    execute:
+      - { upto: 6, model: sonnet, effort: high }
+      - { upto: 8, model: opus, effort: high }
+      - { upto: 10, model: opus, effort: xhigh }
+    review:
+      - { upto: 8, model: opus, effort: high }
+      - { upto: 10, model: opus, effort: xhigh }
+
 states:
   classify:
     task: "Classify bug type"
@@ -137,6 +150,12 @@ states:
   diagnose:
     task: "Diagnose root cause"
     prompt: |
+      DIFFICULTY (skip if context `difficulty` is set): from the plan `context_set(key: "difficulty",
+      value: N)`, N by the WORK: 2 one function; 3 one owner; 4 a few files at one owner; 5 a new
+      rule/command on existing parts; 6 a new shared component or config key; 7 cross-file typing or an
+      unknown cause; 8 a contract moving across packages; 9-10 a whole-tree redesign to be split;
+      +1 when the premise is a stale measurement or a hypothesis.
+
       Find the root cause of the bug.
 
       DO NOT fix the bug here. You may add trace/log statements to narrow down
@@ -251,6 +270,8 @@ states:
       (task-delegation's model table): `opus` for non-trivial fix logic,
       `sonnet` for mechanical edits from the plan. Never silent session-model inheritance;
       pass `effort` too (task-delegation table); fable only on user request.
+      With a difficulty set: `model` {{context.model_execute}}, `effort` {{context.effort_execute}}
+      (empty = no difficulty: the rule above); on a later visit read them with `status` + `key`.
 
       For each file, include in the agent prompt VERBATIM:
       ---
@@ -401,6 +422,8 @@ states:
       batches, `opus` for macro-heavy / concurrency / engine-critical /
       no-linter ones (opus wins on overlap). Never silent session-model inheritance;
       pass `effort` too (task-delegation table); fable only on user request.
+      With a difficulty set: `model` {{context.model_review}}, `effort` {{context.effort_review}}
+      (empty = no difficulty: the rule above); on a later visit read them with `status` + `key`.
 
       Launch up to 8 batch agents in ONE message, each with
       `run_in_background: false` — reports gate the merge; a single batch
