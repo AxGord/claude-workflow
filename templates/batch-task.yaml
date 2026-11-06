@@ -3,24 +3,42 @@ description: "One task of a `batch` queue — a child session a cheap DRIVER age
 initial: claim
 max_transitions: 60
 
-# The line's `difficulty:` (1..10) → the agents' model and effort: context_set `difficulty` and the
-# engine writes `model` / `effort` (and `model_step`, `escalations`). Each `escalate` entry moves the
-# task one row up once its state's visits reach the number: `work: 3` = the second fix round.
-# `review_class` (the review_scope exec: `light` = tests/docs only, else `code`) → `review_model` /
-# `review_effort`; a class without an entry takes the task's own model and effort. A heir sets its own
-# table whole (`model_table:` in the heir replaces this one).
+# The line's `difficulty:` (1..10) → the model and effort of EVERY stage: context_set `difficulty` and
+# the engine writes `model_<stage>` / `effort_<stage>` for each stage below, and `model` / `effort`
+# (and `model_step`, `escalations`) = the execute row. Each `escalate` entry moves the execute and fix
+# stages one row up once its state's visits reach the number: `work: 3` = the second fix round; plan,
+# review and review_verify keep the difficulty's own row. `review_class` (the review_scope exec: `light`
+# = tests/docs only, else `code`) → `review_model` / `review_effort` (= `model_review` /
+# `effort_review`): the class's `review` entry overrides the review stage, a class without one keeps it.
+# Stage use here: execute = the first worker, fix = a fix round's worker, review = round 1, review_verify
+# = round 2 and later; plan is written for a plan step a heir adds.
+# The starting values are calibrated on ONE project (154 round-1 review findings over 39 tasks): the
+# findings per band decided where a stronger plan, review or worker pays — measure your own with the
+# ledger and replace the table whole in an heir (`model_table:` in the heir replaces this one).
 model_table:
-  rows:
-    - { upto: 2, model: haiku, effort: low }
-    - { upto: 4, model: sonnet, effort: medium }
-    - { upto: 6, model: sonnet, effort: high }
-    - { upto: 8, model: opus, effort: high }
-    - { upto: 10, model: opus, effort: xhigh }
+  stages:
+    plan:
+      - { upto: 3, model: sonnet, effort: high }
+      - { upto: 6, model: opus, effort: high }
+      - { upto: 8, model: opus, effort: high }
+      - { upto: 10, model: opus, effort: xhigh }
+    execute:
+      - { upto: 3, model: sonnet, effort: high }
+      - { upto: 6, model: sonnet, effort: high }
+      - { upto: 8, model: opus, effort: high }
+      - { upto: 10, model: opus, effort: xhigh }
+    review:
+      - { upto: 8, model: opus, effort: high }
+      - { upto: 10, model: opus, effort: xhigh }
+    review_verify:
+      - { upto: 10, model: sonnet, effort: high }
+    fix:
+      - { upto: 6, model: sonnet, effort: high }
+      - { upto: 10, model: opus, effort: high }
   escalate:
     work: 3
   review:
     light: { model: sonnet, effort: medium }
-    code: { model: opus, effort: high }
 
 # The task's DRIVER: a cheap agent that runs this session's prompts for the dispatcher (`start` answers
 # with its exact Agent call). Its instructions are the shipped `templates/drivers/task-driver.md`; a heir
@@ -124,11 +142,13 @@ states:
          context_set `worker_agent` = its id.
       A later visit (a fix round, the cause from the review or the land) arrives as "Revisit #N", and the
       values this prompt rendered are the first visit's: read each one it uses from P's context now
-      (`status` with `key`) — `model` / `effort` against `worker_model`, `worker_agent`, `worker_session`:
+      (`status` with `key`) — `model_fix` / `effort_fix` (a fix round's worker; empty — no difficulty, or a
+      table without a `fix` stage — = `model` / `effort`) against `worker_model`, and `worker_agent`, `worker_session`:
       - the same model → SendMessage `worker_agent` with the cause: its one line plus "read <its file>
         whole" (never the file's text pasted); then `link_agent({session_id: <worker_session>, agent_id:
         <worker_agent>})` again — it marks the worker as this visit's;
-      - different (the engine escalated the task) → steps 1–3 again: a fresh worker on the new model, its
+      - different (the fix stage's row, or an escalation, names another) → steps 1–3 again with `model_fix` /
+        `effort_fix` (empty = `model` / `effort`) in place of `model` / `effort`: a fresh worker on the new model, its
         prompt above plus "a fix round of a previous worker's branch: <the cause's line> — read <its file> whole".
       Then END your turn on this task. On the worker's notification: context_set `tokens_worker` = the
       value already set ({{context.tokens_worker}}, empty = 0) PLUS this agent's tokens from its notification's
@@ -161,7 +181,9 @@ states:
       1. `start({workflow: "file-review", parent_session_id: "{{session_id}}", cwd: "{{context.wt}}"})` → R;
          context_set `review_session` = R.
       2. Spawn ONE reviewer: Agent, model {{context.review_model}}, effort {{context.review_effort}} (both
-         empty → {{context.model}}, {{context.effort}}), `run_in_background: true`, prompt:
+         empty → {{context.model}}, {{context.effort}}); from review 2 on (a verification of the fixes)
+         model {{context.model_review_verify}}, effort {{context.effort_review_verify}} instead (empty =
+         keep the above); `run_in_background: true`, prompt:
 
            You review task {{context.task}} of {{context.queue_file}}, read-only: its line is the brief, the
            change is `git -C {{context.cwd}} diff HEAD...batch/{{context.task}}` (scope `diff`, your batch =

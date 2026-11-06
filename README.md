@@ -395,7 +395,7 @@ An unknown key in a workflow, a state, a `retry:`, `resource:`, `fanout:` or `mo
 
 ### Ledger
 
-Every session end (complete, fail, abort, cascade, expiry of a suspended session) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. From the session's context it also records `difficulty`, `model`, `effort`, `escalations`, `review_model`, `review_effort` and `tokens` (`tokens` → `total`, `tokens_<role>` → `<role>`, whole numbers only) when set — what a `model_table` is tuned from. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
+Every session end (complete, fail, abort, cascade, expiry of a suspended session) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. From the session's context it also records `difficulty`, `model`, `effort`, `escalations`, `review_model`, `review_effort`, `stages` (the `model` / `effort` of each `model_<stage>` / `effort_<stage>` pair the table wrote) and `tokens` (`tokens` → `total`, `tokens_<role>` → `<role>`, whole numbers only) when set — what a `model_table` is tuned from. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions.
 
 ## Three-Tier Loading
 
@@ -559,34 +559,57 @@ batch-task` overriding `project_prepare` / `project_land`.
 
 #### Difficulty → model and effort (`model_table:`)
 
-A task workflow may declare which agent does a task of a given difficulty:
+A task workflow may declare which agent does a task of a given difficulty, at every stage of the
+task (planning, doing, reviewing, verifying a fix round, fixing):
 
 ```yaml
 model_table:
-  rows:                                  # ascending `upto`; the last row's is 10
-    - { upto: 2, model: haiku, effort: low }
-    - { upto: 6, model: sonnet, effort: high }
-    - { upto: 10, model: opus, effort: high }
-  escalate:                              # one row up per entry whose state's visits reach N
+  stages:                                # each stage has its own rows; ascending `upto`, the last row's is 10
+    plan:
+      - { upto: 3, model: sonnet, effort: high }
+      - { upto: 10, model: opus, effort: high }
+    execute:                             # the model / effort every workflow already reads
+      - { upto: 2, model: haiku, effort: low }
+      - { upto: 6, model: sonnet, effort: high }
+      - { upto: 10, model: opus, effort: high }
+    review:
+      - { upto: 10, model: opus, effort: high }
+    review_verify:                       # review round 2 and later
+      - { upto: 10, model: sonnet, effort: high }
+    fix:
+      - { upto: 6, model: sonnet, effort: high }
+      - { upto: 10, model: opus, effort: high }
+  escalate:                              # execute and fix move one row up per entry whose state's visits reach N
     work: 3                              # the 3rd work = the second fix round
-  review:                                # the reviewer by the diff's class (`review_class`)
+  review:                                # overrides the review stage by the diff's class (`review_class`)
     light: { model: sonnet, effort: medium }
 ```
 
+`stages` is optional. A table with only `rows: [{ upto, model, effort }]` (the execute rows) behaves
+as before and writes no stage key; `rows` and `stages.execute` are the same thing, given once. The
+stage names are `plan`, `execute`, `review`, `review_verify`, `fix`; any other name fails the load, and
+so does a state that reads `{{context.model_<x>}}` / `{{context.effort_<x>}}` for a stage the table
+does not declare. The bundled `batch-task` starts from values calibrated on one project (154
+round-1 review findings over 39 tasks) — replace the table whole in an heir to tune it for yours.
+
 - `context_set` of `difficulty` (the claim sets the queue line's) makes the engine write `model`,
-  `effort`, `model_step` (the row, 1-based) and `escalations` into the session's context; the
-  `context_set` answer names them (`model_table: difficulty 5 → sonnet/high (row 2 of 3)`), and a
-  `model` line goes into the history. Under a table a `difficulty` outside 1..10 is refused.
-- On every move into a state (a transition, an action's route, a skill gate, a pop) the row is
+  `effort` (= the execute row), `model_step` (its row, 1-based) and `escalations` into the session's
+  context, and under `stages` `model_<stage>` / `effort_<stage>` for every declared stage (and
+  `model_reached`, the `escalate` entries reached); the `context_set` answer names them
+  (`model_table: difficulty 5 → sonnet/high (row 2 of 3) [plan opus/high, execute sonnet/high, …]`),
+  and a `model` line goes into the history. Under a table a `difficulty` outside 1..10 is refused.
+- On every move into a state (a transition, an action's route, a skill gate, a pop) the rows are
   recomputed: the difficulty's own row plus one per `escalate` entry whose state has been visited at
-  least N times in that frame, capped by the last row. A move rewrites `model` / `effort` only when
-  the row changed, so a value an agent set itself stays until then.
+  least N times in that frame, capped by the last row — for the `execute` and `fix` stages only; the
+  other stages keep the difficulty's row. A move rewrites the stage keys only when an escalation
+  moved, so a value an agent set itself stays until then.
 - `review_class` set (by an exec's `context_set`, e.g. `scripts/review-class.sh <base> <tip>`: `light`
   when every changed path is a test or a doc — `docs/` / `specs/` at the repo root, `tests/` /
   `__tests__/` anywhere, `*.md` / `.rst` / `.adoc`, `*.test.*` / `*Test.*`, CHANGELOG / LICENSE /
   README; a nested `docs/` package or a `.txt` build file is code — else `code`; doubt is `code`;
   `REVIEW_LIGHT_PATHS` overrides the regex) writes `review_model` /
-  `review_effort`: the class's `review` entry, else the task's own model and effort.
+  `review_effort`: the class's `review` entry, else the `review` stage's row, else (no stages) the
+  task's own model and effort. Under `stages` they always equal `model_review` / `effort_review`.
 - Escalation is per session: fix rounds, and a blocked re-entry within one session — a workflow
   whose `blocked` state routes back to work declares `escalate: { blocked: 1 }` (its first entry
   already moves the row up for the work that follows). No hidden state crosses sessions: in the
@@ -596,15 +619,18 @@ model_table:
   visible in the queue. A line without `difficulty:` is retried unchanged.
 - The table is the nearest one down the session's stack, so a sub-workflow without one runs under
   its caller's; a heir inherits its base's table unless it sets its own whole. Rows out of order, a
-  last row short of 10, an `escalate` state that does not exist or an unknown effort (`low`,
-  `medium`, `high`, `xhigh`, `max`) fail the load.
+  last row short of 10 (in `rows` or any stage), an unknown stage name, an `escalate` state that does
+  not exist or an unknown effort (`low`, `medium`, `high`, `xhigh`, `max`) fail the load.
 
-The bundled `batch-task` maps 1–2 haiku/low, 3–4 sonnet/medium, 5–6 sonnet/high, 7–8 opus/high,
-9–10 opus/xhigh, escalates on the third `work` (the second fix round: the driver then spawns a fresh
-worker on the new model instead of messaging the old one), and reviews `light` diffs with
-sonnet/medium, `code` with opus/high. A line without `difficulty:` keeps its `model:` / `effort:`
-columns. The driver writes the agents' tokens to `tokens_worker` / `tokens_review`; the ledger keeps
-them with the difficulty, model and effort, so the table is tuned from data.
+The bundled `batch-task` declares a stage-aware table (values calibrated on one project; see its
+file): the first worker takes the `execute` row, a fix round's worker the `fix` row (`model_fix` /
+`effort_fix`), the round-1 review the `review` row and a review from round 2 on the `review_verify`
+row. It escalates `execute` and `fix` on the third `work` (the second fix round: the driver then
+spawns a fresh worker on the new model instead of messaging the old one). A `light` diff's review
+takes sonnet/medium, overriding the review stage; there is no `code` entry, so any other class keeps
+the stage's row. A line without `difficulty:` keeps its `model:` / `effort:` columns. The driver
+writes the agents' tokens to `tokens_worker` / `tokens_review`; the ledger keeps
+them with the difficulty, model, effort and per-stage rows, so the table is tuned from data.
 
 #### The task's driver (`driver:`)
 

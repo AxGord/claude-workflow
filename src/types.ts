@@ -102,11 +102,15 @@ export const ModelRowObjectSchema = z
  * A task workflow's `model_table:` (the loader names the nearest key for a typo): `rows` map
  * `context.difficulty` to `model` / `effort` (ascending `upto`, the last row's 10); each `escalate`
  * entry (`state: N`) moves one row up once that state's visits reach N; `review` maps the
- * `context.review_class` an exec measured from the diff to the reviewer's model and effort.
+ * `context.review_class` an exec measured from the diff to the reviewer's model and effort. `stages`
+ * (named agent steps — plan, execute, review, review_verify, fix) each map the difficulty by their own
+ * rows; `stages.execute` replaces `rows` (the model / effort every workflow already reads), and
+ * `escalate` moves the execute and fix stages only.
  */
 export const ModelTableObjectSchema = z
   .object({
-    rows: z.array(ModelRowObjectSchema).nonempty(),
+    rows: z.array(ModelRowObjectSchema).nonempty().optional(),
+    stages: z.record(z.array(ModelRowObjectSchema).nonempty()).optional(),
     escalate: z.record(z.number().int().positive()).optional(),
     review: z.record(ModelChoiceObjectSchema).optional(),
   })

@@ -1,5 +1,5 @@
 import type { SessionState, ShardResult } from "./types.js";
-import { MODEL_KEYS, parseDifficulty } from "./model-table.js";
+import { MODEL_KEYS, STAGE_NAMES, parseDifficulty, stageKeys } from "./model-table.js";
 
 /**
  * The root of a session's parent chain. Sessions record `root_session_id` at
@@ -50,6 +50,8 @@ export interface LedgerEntry {
   readonly escalations?: number;
   readonly review_model?: string;
   readonly review_effort?: string;
+  /** The model and effort of each stage the task's table wrote (`model_<stage>` / `effort_<stage>`, the five stage names). */
+  readonly stages?: Readonly<Record<string, { readonly model: string; readonly effort: string }>>;
   /** The context's `tokens` (→ `total`) and `tokens_<role>` (→ `<role>`) that read as whole numbers. */
   readonly tokens?: Readonly<Record<string, number>>;
 }
@@ -74,6 +76,13 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
     const n = m ? count(v) : undefined;
     if (m && n !== undefined) tokens[m[1] ?? "total"] = n;
   }
+  const stages: Record<string, { model: string; effort: string }> = {};
+  for (const name of STAGE_NAMES) {
+    const k = stageKeys(name);
+    const model = text(context[k.model]);
+    const effort = text(context[k.effort]);
+    if (model && effort) stages[name] = { model, effort };
+  }
   const fields = {
     difficulty: parseDifficulty(context[K.difficulty]) ?? undefined,
     model: text(context[K.model]),
@@ -81,6 +90,7 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
     escalations: count(context[K.escalations]),
     review_model: text(context[K.reviewModel]),
     review_effort: text(context[K.reviewEffort]),
+    stages: Object.keys(stages).length > 0 ? stages : undefined,
     tokens: Object.keys(tokens).length > 0 ? tokens : undefined,
   };
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));

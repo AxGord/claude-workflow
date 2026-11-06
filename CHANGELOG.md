@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- engine (ENG-STAGE-MODEL-TABLE): `model_table:` gains `stages:` — named stages (`plan`, `execute`, `review`, `review_verify`, `fix`), each its own `rows` by difficulty. `difficulty` writes `model_<stage>` / `effort_<stage>` for every declared stage and keeps `model` / `effort` = the execute row, so existing workflows run unchanged; `rows` is the same as `stages.execute` (given once); `escalate` moves execute and fix only; a `review_class` entry still overrides the review stage. The loader refuses a stage row set that does not end at 10, an unknown stage name, and a state reading `context.model_<x>` / `effort_<x>` for a stage the table lacks. The ledger line carries `stages` (model/effort per stage). Bundled `batch-task` starts from a stage-aware table (calibrated on one project: 154 round-1 findings, 39 tasks); its fix round, round-2 review use the fix / review_verify rows. Tests: `src/model-table.test.ts`.
+
 - engine (ENG-REVISIT-PROMPT): optional state field `revisit_prompt` — a template rendered like `prompt` and shown on a revisit instead of the generic "Revisit #N" line; absent = unchanged; a forced full prompt (`status()`) and `full_on_revisit: true` keep precedence. Tests: `src/tools.test.ts`.
 
 - engine (ENG-DRIVER-RESUME): a driver messaged after its last line is not finished. `task-driver.md` gains "Resumed after your last line": `status` on P once and continue (a relayed worker/reviewer line is that agent's answer; never "my run already ended"). Bundled `batch` `collect` relays an orphaned worker/reviewer line after a restart to the driver linked to P, re-spawning from `driver_call` only if that fails. Test: the shipped texts.

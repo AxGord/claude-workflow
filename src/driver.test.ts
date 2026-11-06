@@ -124,7 +124,7 @@ describe("batch-task links (template text)", () => {
       "`link_agent({session_id: W, agent_id: <its id>})` (the engine records it as this visit's agent); context_set `worker_agent` = its id.",
     );
     expect(work).toContain(
-      "the values this prompt rendered are the first visit's: read each one it uses from P's context now (`status` with `key`) — `model` / `effort` against `worker_model`, `worker_agent`, `worker_session`:",
+      "the values this prompt rendered are the first visit's: read each one it uses from P's context now (`status` with `key`) — `model_fix` / `effort_fix` (a fix round's worker; empty — no difficulty, or a table without a `fix` stage — = `model` / `effort`) against `worker_model`, and `worker_agent`, `worker_session`:",
     );
     expect(work).toContain(
       "SendMessage `worker_agent` with the cause: its one line plus \"read <its file> whole\" (never the file's text pasted); then `link_agent({session_id: <worker_session>, agent_id: <worker_agent>})` again — it marks the worker as this visit's;",

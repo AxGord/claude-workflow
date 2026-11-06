@@ -48,7 +48,8 @@ function nearest(key: string, known: readonly string[]): string {
 function knownKeysAt(issuePath: readonly (string | number)[]): readonly string[] {
   if (issuePath.length === 0) return Object.keys(WorkflowFileObjectSchema.shape);
   if (issuePath[0] === "model_table") {
-    if (issuePath[1] === "rows") return Object.keys(ModelRowObjectSchema.shape);
+    if (issuePath[1] === "rows" || issuePath[1] === "stages")
+      return Object.keys(ModelRowObjectSchema.shape);
     if (issuePath[1] === "review") return Object.keys(ModelChoiceObjectSchema.shape);
     return Object.keys(ModelTableObjectSchema.shape);
   }
@@ -339,7 +340,7 @@ export class Loader {
 
     const hasTerminal = Object.values(wf.states).some(s => s.terminal);
     if (!hasTerminal) errors.push("no terminal state defined");
-    if (wf.model_table) errors.push(...modelTableErrors(wf.model_table, stateNames));
+    if (wf.model_table) errors.push(...modelTableErrors(wf.model_table, stateNames, wf.states));
     if (wf.driver) {
       const refError = driverRefError(wf.driver);
       if (refError) errors.push(refError);

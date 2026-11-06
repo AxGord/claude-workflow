@@ -46,9 +46,9 @@ states:
          <repo> rev-parse HEAD` when that prints nothing (clean tree).
          Line fields (`key: value`, any order; the rest is the task's text):
          - `difficulty:` — 1..10, how hard the task is: the task workflow's
-           `model_table` maps it to the worker's model/effort (bundled
-           `batch-task`: 1–2 haiku/low … 9–10 opus/xhigh) and moves it one
-           row up on a second fix round. Prefer it to `model`/`effort`: the
+           `model_table` maps it to the model/effort of each stage — worker,
+           fix round, review, verifying review (see `batch-task`'s table) —
+           and moves the worker and fix rows one row up on a second fix round. Prefer it to `model`/`effort`: the
            ledger keeps difficulty, model, effort and tokens per task, so the
            table can be tuned from data.
          - `model` / `effort` — a line without `difficulty:`, per
