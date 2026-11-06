@@ -94,7 +94,7 @@ A `--select` that matches nothing says WHY: an unknown kind (with did-you-mean o
 | Inline-source AST/writer probe (no /tmp) | `probe '<code>' [ast-options]` / `probe -` (stdin) |
 | Structural AST diff between files | `diff a.hx b.hx` (`--flat`, `--limit N`) |
 | **What a commit range changed, by MEANING** (review a diff without raw `git diff`/`git show`) | `changed <base>..<tip> [paths]` — per file: `layout` / `imports` / `renamed old -> new` / `declarations` (+/−/~ by name, with `--select` address) / `values` (JSON key paths +/−/~ old -> new) / `text`; `--names` names only; `--diff <file>[#<sel>]` prints each changed declaration's lines (`-`/`+`, 2 lines context), `#<sel>` one declaration in full |
-| **A value in a project JSON document** (arms records, apq.json, apqlint.json) — grep on it is refused by the gate | `apq get <file> <path>` (dotted path, `a.0.b`; `.` the whole document; `--select '<sel>'` starts from a node) |
+| **A value in a project JSON document** (arms records, apq.json, apqlint.json) — grep on it is refused by the gate | `apq get <file> <path>` (dotted path, `a.0.b`; `.` the whole document; `--select '<sel>'` starts from a node); `apq get --where <path>=<value> <file|dir|glob>…` names the record holding a value, across several documents |
 | Single-file PARSE OK/FAIL probe | `recon --probe <file>` |
 | **Which `.hx` files plugin can't parse** | `self-status [<dir>]` (`--strict` exits non-zero on any skip-parse) |
 | Sanity-check direct-child count at root | `ast file.hx --count` / `probe '<code>' --count` |
