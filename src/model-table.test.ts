@@ -14,6 +14,7 @@ import {
   parseDifficulty,
 } from "./model-table.js";
 import { InMemoryStorage, cleanupDir, createFixtureDir, createTestEngine } from "./test-helpers.js";
+import type { LedgerEntry } from "./ledger.js";
 import type { ModelTable } from "./types.js";
 
 const TABLE: ModelTable = {
@@ -669,6 +670,66 @@ describe("model_table (engine)", () => {
         },
       });
     }
+  });
+
+  it("the ledger records each stage as run: a rescore after the plan keeps the plan row, a review_class override shows", async () => {
+    const AS_RUN = {
+      ...TASK,
+      initial: "plan",
+      model_table: STAGED,
+      states: {
+        ...TASK.states,
+        plan: {
+          prompt: "{{context.model_plan}}/{{context.effort_plan}}",
+          transitions: { go: "work" },
+        },
+        work: {
+          prompt: "{{context.model_execute}} {{context.model_fix}}",
+          transitions: { fix: "fixes", review: "scope", done: "done" },
+        },
+        fixes: { prompt: "fixes", transitions: { back: "work" } },
+        scope: {
+          type: "exec",
+          command: 'printf %s "$CLS"',
+          env: { CLS: "{{context.cls}}" },
+          context_set: { review_class: "{{stdout}}" },
+          on_success: "rev",
+          on_error: "rev",
+        },
+        rev: { prompt: "{{context.model_review}}", transitions: { done: "done" } },
+      },
+    };
+    const { engine, storage } = createTestEngine({ task: AS_RUN });
+    const s = await engine.start("task");
+    const sid = s.sessionId;
+    await engine.setContext(sid, "difficulty", 3);
+    await engine.setContext(sid, "difficulty", 7);
+    await engine.setContext(sid, "cls", "light");
+    await engine.transition(sid, "go");
+    await engine.transition(sid, "fix");
+    await engine.transition(sid, "back");
+    await engine.transition(sid, "fix");
+    await engine.transition(sid, "back");
+    await engine.transition(sid, "review");
+    await engine.transition(sid, "done");
+    const line = storage.ledger.at(-1) as LedgerEntry;
+    expect(line.difficulty).toBe(7);
+    expect(line.claim_difficulty).toBe(3);
+    expect(line.stages?.plan).toEqual({ model: "sonnet", effort: "high" });
+    expect(line.stages?.execute).toEqual({ model: "sonnet", effort: "high" });
+    expect(line.stages?.review).toEqual({ model: "sonnet", effort: "medium" });
+  });
+
+  it("a write under a frame whose workflow is gone does not throw", async () => {
+    const { engine, storage } = createTestEngine({ task: TASK });
+    const s = await engine.start("task");
+    const session = storage.read(s.sessionId)!;
+    await storage.write(s.sessionId, {
+      ...session,
+      stack: [...session.stack, { ...session.stack[0], workflow: "ghost" }],
+      active_frame: 1,
+    });
+    await expect(engine.setContext(s.sessionId, "difficulty", 4)).resolves.not.toThrow();
   });
 
   it("the bundled batch-task at difficulty 5 writes every stage key, and the ledger keeps the stages", async () => {

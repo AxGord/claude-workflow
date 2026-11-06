@@ -16,6 +16,8 @@ export const MODEL_KEYS = {
   reviewClass: "review_class",
   reviewModel: "review_model",
   reviewEffort: "review_effort",
+  claimDifficulty: "claim_difficulty",
+  stagesFirst: "stages_first",
 } as const;
 
 /** A stage name, any that matches: each stage writes `model_<stage>` / `effort_<stage>`; the bundled workflows give plan, execute, review, review_verify and fix a meaning. */
@@ -29,6 +31,36 @@ export function stageOfKey(key: string, prefix: "model" | "effort"): string | un
   if (!key.startsWith(`${prefix}_`)) return undefined;
   const name = key.slice(prefix.length + 1);
   return STAGE_NAME.test(name) && !RESERVED_STAGES.has(name) ? name : undefined;
+}
+
+/** The stage names a state's text reads as `context.model_<x>` / `context.effort_<x>`. */
+export function stagesRead(state: unknown): string[] {
+  const names = new Set<string>();
+  for (const m of JSON.stringify(state ?? null).matchAll(
+    /context\.(?:model|effort)_([a-z][a-z_]*)/g,
+  )) {
+    if (!RESERVED_STAGES.has(m[1])) names.add(m[1]);
+  }
+  return [...names];
+}
+
+/** `context` with the as-run row of each stage `names` not yet recorded (first value wins); null when none is new. */
+export function recordStagesUsed(
+  context: Readonly<Record<string, unknown>>,
+  names: readonly string[],
+): Record<string, unknown> | null {
+  const was = (context[MODEL_KEYS.stagesFirst] ?? {}) as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...was };
+  for (const name of names) {
+    const k = stageKeys(name);
+    const model = context[k.model];
+    const effort = context[k.effort];
+    if (name in next || typeof model !== "string" || typeof effort !== "string") continue;
+    next[name] = { model, effort };
+  }
+  return Object.keys(next).length === Object.keys(was).length
+    ? null
+    : { ...context, [MODEL_KEYS.stagesFirst]: next };
 }
 
 /** The stages `escalate` moves; the others keep the difficulty's own row. */
@@ -195,6 +227,7 @@ export function applyModelTable(
       (stages !== null && context[K.reached] !== reached)
     ) {
       const was = context[K.step];
+      out[K.claimDifficulty] ??= d;
       out[K.model] = c.model;
       out[K.effort] = c.effort;
       out[K.step] = c.step + 1;

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- engine (ENG-LEDGER-STAGES-AS-RUN): the ledger's `stages` are the rows each stage ran on — recorded (first value wins) when a state reading `context.model_<x>` / `effort_<x>` is entered, so a later rescore does not rewrite them; the line gains `claim_difficulty` (the first difficulty the table saw) beside the final `difficulty`, and `wf-calibration` bands by the claim. Tests: `src/model-table.test.ts`, `src/calibration.test.ts`.
+
 - engine (ENG-STAGE-NAMES-OPEN): model_table stage names open — any `^[a-z][a-z_]*$` except model/effort/step/reached (e.g. `recon`); the ledger's `stages` records every `model_<x>`/`effort_<x>` pair and wf-calibration follows the recorded names. Tests: `src/model-table.test.ts`.
 
 - engine (ENG-CALIBRATION-REPORT): `wf-calibration [--since D] [--project P] [--findings-key K] [--json]` folds `ledger.jsonl` per project x workflow x difficulty band x stage (tasks, review rounds, escalations, tokens, outcomes, verdicts; a line without stage data counts under `-`). Ledger lines gain `project`, `visits` (entries per state), `verdict`, `plan_handoff`, `agent_ids` (`agent_id_<stage>`) and `counts` (length of each context list). Tests: `src/calibration.test.ts`.

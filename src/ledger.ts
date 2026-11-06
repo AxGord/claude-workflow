@@ -44,6 +44,8 @@ export interface LedgerEntry {
   readonly execs: LedgerExec[];
   /** The task's `difficulty` (1..10), as its context held it at the end. */
   readonly difficulty?: number;
+  /** The difficulty the task first ran under (before any rescore): what a calibration report bands by. */
+  readonly claim_difficulty?: number;
   /** The model and effort the task ended on (a `model_table` writes them; an agent may set them itself). */
   readonly model?: string;
   readonly effort?: string;
@@ -51,7 +53,7 @@ export interface LedgerEntry {
   readonly escalations?: number;
   readonly review_model?: string;
   readonly review_effort?: string;
-  /** The model and effort of each stage the task's table wrote (every `model_<stage>` with its `effort_<stage>`). */
+  /** The model and effort each stage RAN on: its row when a state reading it was entered (a rescore afterwards does not replace it); a stage no state read keeps the context's last row. */
   readonly stages?: Readonly<Record<string, { readonly model: string; readonly effort: string }>>;
   /** The git root of the session's cwd: what a calibration report groups by. */
   readonly project?: string;
@@ -98,6 +100,15 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
     const effort = text(context[k.effort]);
     if (model && effort) stages[name] = { model, effort };
   }
+  // The row recorded when a state read the stage is the one it ran on.
+  const first = context[K.stagesFirst];
+  if (first && typeof first === "object")
+    for (const [name, v] of Object.entries(first)) {
+      const row = v as { model?: unknown; effort?: unknown };
+      const model = text(row?.model);
+      const effort = text(row?.effort);
+      if (model && effort) stages[name] = { model, effort };
+    }
   const counts: Record<string, number> = {};
   for (const [k, v] of Object.entries(context)) {
     if (Array.isArray(v) && /^[a-z0-9_]{1,40}$/.test(k)) counts[k] = v.length;
@@ -115,6 +126,7 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
     verdict: text(context.review_verdict) ?? text(context.verdict),
     counts: Object.keys(counts).length > 0 ? counts : undefined,
     difficulty: parseDifficulty(context[K.difficulty]) ?? undefined,
+    claim_difficulty: parseDifficulty(context[K.claimDifficulty]) ?? undefined,
     model: text(context[K.model]),
     effort: text(context[K.effort]),
     escalations: count(context[K.escalations]),

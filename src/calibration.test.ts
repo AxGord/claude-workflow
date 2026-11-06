@@ -51,6 +51,11 @@ const ledger: LedgerEntry[] = [
 ];
 
 describe("calibrate", () => {
+  it("bands by the claim difficulty, not the final one", () => {
+    const rows = calibrate([line("x", { project: "/p", difficulty: 9, claim_difficulty: 5 })], {});
+    expect(rows.map(r => r.band)).toEqual(["4-6"]);
+  });
+
   it("folds two projects and three bands into the exact table", () => {
     const rows = calibrate(ledger, { findingsKey: "findings" });
     expect(

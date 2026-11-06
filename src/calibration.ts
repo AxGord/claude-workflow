@@ -67,14 +67,15 @@ export function calibrate(
       staged.length > 0
         ? staged.map(n => [n, e.stages![n].model, e.stages![n].effort])
         : [["-", e.model ?? "-", e.effort ?? "-"]];
+    const band = bandOf(e.claim_difficulty ?? e.difficulty);
     picks.forEach(([stage, model, effort], i) => {
-      const key = JSON.stringify([project, e.workflow, bandOf(e.difficulty), stage, model, effort]);
+      const key = JSON.stringify([project, e.workflow, band, stage, model, effort]);
       let row = rows.get(key);
       if (row === undefined) {
         row = {
           project,
           workflow: e.workflow ?? "-",
-          band: bandOf(e.difficulty),
+          band,
           stage,
           model,
           effort,

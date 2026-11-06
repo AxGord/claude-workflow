@@ -34,7 +34,14 @@ import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
-import { MODEL_KEYS, applyModelTable, difficultyError, parseDifficulty } from "./model-table.js";
+import {
+  MODEL_KEYS,
+  applyModelTable,
+  difficultyError,
+  parseDifficulty,
+  recordStagesUsed,
+  stagesRead,
+} from "./model-table.js";
 import { render } from "./template.js";
 import { DRIVER_CALL_KEY, renderDriverCall, resolveDriverRef } from "./driver.js";
 import { currentStep, linkedAgentLines } from "./agent-link.js";
@@ -985,15 +992,26 @@ export class Engine {
     const found = this._modelTableOf(session);
     if (!found) return session;
     const r = applyModelTable(session.context, found.table, found.visits, changed);
-    if (!r) return session;
-    return {
-      ...session,
-      context: r.context,
-      history: [
-        ...session.history,
-        { frame: session.active_frame, event: "model", detail: r.note, at: session.updated_at },
-      ],
-    };
+    const derived: SessionState = r
+      ? {
+          ...session,
+          context: r.context,
+          history: [
+            ...session.history,
+            { frame: session.active_frame, event: "model", detail: r.note, at: session.updated_at },
+          ],
+        }
+      : session;
+    // The state now entered fixes the rows of the stages it reads: those are the rows they run on.
+    const frame = derived.stack[derived.active_frame];
+    let state: StateDefinition | undefined;
+    try {
+      state = frame && this._resolveState(derived, frame.workflow, frame.current_state);
+    } catch {
+      state = undefined; // a frame whose workflow is gone has no state to read; the move itself reports it
+    }
+    const used = state ? recordStagesUsed(derived.context, stagesRead(state)) : null;
+    return used ? { ...derived, context: used } : derived;
   }
 
   private _isActionState(state: StateDefinition | undefined): boolean {
