@@ -103,7 +103,7 @@ export const ModelRowObjectSchema = z
  * `context.difficulty` to `model` / `effort` (ascending `upto`, the last row's 10); each `escalate`
  * entry (`state: N`) moves one row up once that state's visits reach N; `review` maps the
  * `context.review_class` an exec measured from the diff to the reviewer's model and effort. `stages`
- * (named agent steps — plan, execute, review, review_verify, fix) each map the difficulty by their own
+ * (named agent steps — any lowercase name; the bundled workflows use plan, execute, review, review_verify, fix) each map the difficulty by their own
  * rows; `stages.execute` replaces `rows` (the model / effort every workflow already reads), and
  * `escalate` moves the execute and fix stages only.
  */

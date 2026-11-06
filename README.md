@@ -595,10 +595,14 @@ model_table:
 
 `stages` is optional. A table with only `rows: [{ upto, model, effort }]` (the execute rows) behaves
 as before and writes no stage key; `rows` and `stages.execute` are the same thing, given once. The
-stage names are `plan`, `execute`, `review`, `review_verify`, `fix`; any other name fails the load, and
-so does a state that reads `{{context.model_<x>}}` / `{{context.effort_<x>}}` for a stage the table
-does not declare. The bundled `batch-task` starts from values calibrated on one project (154
-round-1 review findings over 39 tasks) — replace the table whole in an heir to tune it for yours.
+stage name is any `^[a-z][a-z_]*$` except `model`, `effort`, `step`, `reached` (they collide with the
+table's own keys); `plan`, `execute`, `review`, `review_verify` and `fix` are the five the bundled
+workflows give a meaning, and a workflow adds its own for any step it spawns an agent for — e.g. a
+`recon` stage (`recon: [{ upto: 10, model: haiku, effort: low }]`) writes `model_recon` /
+`effort_recon`, which a state reads as `{{context.model_recon}}`. A state that reads
+`{{context.model_<x>}}` / `{{context.effort_<x>}}` for a stage the table does not declare fails the
+load. The ledger's `stages` records every `model_<x>` / `effort_<x>` pair in the context. The bundled
+`batch-task` starts from values calibrated on one project (154 round-1 review findings over 39 tasks) — replace the table whole in an heir to tune it for yours.
 
 - `context_set` of `difficulty` (the claim sets the queue line's) makes the engine write `model`,
   `effort` (= the execute row), `model_step` (its row, 1-based) and `escalations` into the session's
@@ -627,7 +631,7 @@ round-1 review findings over 39 tasks) — replace the table whole in an heir to
   visible in the queue. A line without `difficulty:` is retried unchanged.
 - The table is the nearest one down the session's stack, so a sub-workflow without one runs under
   its caller's; a heir inherits its base's table unless it sets its own whole. Rows out of order, a
-  last row short of 10 (in `rows` or any stage), an unknown stage name, an `escalate` state that does
+  last row short of 10 (in `rows` or any stage), a malformed or reserved stage name, an `escalate` state that does
   not exist or an unknown effort (`low`, `medium`, `high`, `xhigh`, `max`) fail the load.
 
 The bundled `batch-task` declares a stage-aware table (values calibrated on one project; see its

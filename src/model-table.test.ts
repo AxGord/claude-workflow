@@ -287,19 +287,31 @@ describe("model_table stages (pure)", () => {
     expect(r).not.toHaveProperty("model_reached");
   });
 
-  it("refuses an unknown stage, rows given twice, no execute rows and a stage short of 10", () => {
+  it("refuses a malformed or reserved stage name, rows given twice, no execute rows and a stage short of 10", () => {
     const bad = {
       rows: [{ upto: 10, model: "a", effort: "low" }],
       stages: {
         execute: [{ upto: 10, model: "a", effort: "low" }],
-        planning: [{ upto: 4, model: "a", effort: "low" }],
+        Planning: [{ upto: 10, model: "a", effort: "low" }],
+        model: [{ upto: 10, model: "a", effort: "low" }],
+        step: [{ upto: 10, model: "a", effort: "low" }],
+        short: [{ upto: 4, model: "a", effort: "low" }],
       },
     } as ModelTable;
     expect(modelTableErrors(bad, new Set())).toEqual([
       "model_table: `rows` and `stages.execute` both set — give the execute rows once",
-      'model_table stages: unknown stage "planning" (known: plan, execute, review, review_verify, fix)',
-      'model_table stage "planning": the last row\'s upto is 4, not 10',
+      'model_table stages: stage name "Planning" does not match ^[a-z][a-z_]*$',
+      'model_table stages: "model" is not a stage name (it collides with the table\'s own keys)',
+      'model_table stages: "step" is not a stage name (it collides with the table\'s own keys)',
+      'model_table stage "short": the last row\'s upto is 4, not 10',
     ]);
+    const recon = {
+      stages: {
+        ...STAGED.stages!,
+        recon: [{ upto: 10, model: "haiku", effort: "low" }],
+      },
+    };
+    expect(modelTableErrors(recon as ModelTable, new Set(["fixes", "blocked"]))).toEqual([]);
     expect(modelTableErrors({ stages: { plan: STAGED.stages!.plan } }, new Set())).toEqual([
       "model_table: needs `rows` or `stages.execute`",
     ]);
@@ -388,6 +400,63 @@ describe("model_table (loader)", () => {
     }
     expect(names).toEqual(["good"]);
     expect(errors.join("\n")).toContain('a state reads the stage "wizard"');
+  });
+
+  it("a table declaring recon loads, writes model_recon / effort_recon and the ledger keeps the pair; `model` as a stage is refused", async () => {
+    const recon = {
+      ...STAGED,
+      stages: {
+        ...STAGED.stages!,
+        recon: [{ upto: 10, model: "haiku", effort: "low" }],
+      },
+    };
+    const errors: string[] = [];
+    const orig = console.error;
+    console.error = (...a: unknown[]) => void errors.push(a.map(String).join(" "));
+    let loader: Loader;
+    try {
+      loader = load({
+        good: {
+          ...TASK,
+          model_table: recon,
+          states: {
+            ...TASK.states,
+            claim: {
+              prompt: "{{context.model_recon}}/{{context.effort_recon}}",
+              transitions: { go: "work" },
+            },
+          },
+        },
+        bad: {
+          ...TASK,
+          model_table: {
+            ...STAGED,
+            stages: {
+              ...STAGED.stages!,
+              model: [{ upto: 10, model: "x", effort: "low" }],
+            },
+          },
+        },
+      });
+    } finally {
+      console.error = orig;
+    }
+    expect(loader.names().sort()).toEqual(["good"]);
+    expect(errors.join("\n")).toContain('"model" is not a stage name');
+    const dir = createFixtureDir({ good: loader.get("good")! });
+    dirs.push(dir);
+    const storage = new InMemoryStorage();
+    const engine = new Engine(storage, new Loader(null, dir, null), new Executor());
+    const s = await engine.start("good");
+    await engine.setContext(s.sessionId, "difficulty", 3);
+    expect(storage.read(s.sessionId)!.context).toMatchObject({
+      model_recon: "haiku",
+      effort_recon: "low",
+    });
+    await engine.abort(s.sessionId);
+    expect(storage.ledger.at(-1)).toMatchObject({
+      stages: { recon: { model: "haiku", effort: "low" } },
+    });
   });
 
   it("a heir keeps its base's table unless it sets its own", () => {

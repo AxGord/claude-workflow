@@ -18,8 +18,18 @@ export const MODEL_KEYS = {
   reviewEffort: "review_effort",
 } as const;
 
-/** The stages a `model_table` may declare: each writes `model_<stage>` / `effort_<stage>`. */
-export const STAGE_NAMES = ["plan", "execute", "review", "review_verify", "fix"] as const;
+/** A stage name, any that matches: each stage writes `model_<stage>` / `effort_<stage>`; the bundled workflows give plan, execute, review, review_verify and fix a meaning. */
+export const STAGE_NAME = /^[a-z][a-z_]*$/;
+
+/** Names whose `model_<x>` / `effort_<x>` keys the table writes for itself (`model_step`, `model_reached`) or whose bare key it owns. */
+const RESERVED_STAGES: ReadonlySet<string> = new Set(["model", "effort", "step", "reached"]);
+
+/** The stage a context key `model_<x>` / `effort_<x>` belongs to, if `x` can be a stage name. */
+export function stageOfKey(key: string, prefix: "model" | "effort"): string | undefined {
+  if (!key.startsWith(`${prefix}_`)) return undefined;
+  const name = key.slice(prefix.length + 1);
+  return STAGE_NAME.test(name) && !RESERVED_STAGES.has(name) ? name : undefined;
+}
 
 /** The stages `escalate` moves; the others keep the difficulty's own row. */
 const ESCALATING: ReadonlySet<string> = new Set(["execute", "fix"]);
@@ -63,7 +73,7 @@ function rowErrors(rows: Rows, rowLabel: string, endLabel: string): string[] {
 
 /**
  * What the schema cannot check: `upto` strictly ascending and ending at 10 (in `rows` and in every
- * stage); the execute rows given once; stage names known; `escalate` naming states; and, with
+ * stage); the execute rows given once; stage names well-formed and not reserved; `escalate` naming states; and, with
  * `states` given, no `context.model_<x>` / `context.effort_<x>` read of a stage the table lacks.
  */
 export function modelTableErrors(
@@ -77,8 +87,12 @@ export function modelTableErrors(
     errors.push("model_table: `rows` and `stages.execute` both set — give the execute rows once");
   if (!t.rows && !t.stages?.execute) errors.push("model_table: needs `rows` or `stages.execute`");
   for (const [name, rows] of Object.entries(t.stages ?? {})) {
-    if (!(STAGE_NAMES as readonly string[]).includes(name))
-      errors.push(`model_table stages: unknown stage "${name}" (known: ${STAGE_NAMES.join(", ")})`);
+    if (!STAGE_NAME.test(name))
+      errors.push(`model_table stages: stage name "${name}" does not match ${STAGE_NAME.source}`);
+    else if (RESERVED_STAGES.has(name))
+      errors.push(
+        `model_table stages: "${name}" is not a stage name (it collides with the table's own keys)`,
+      );
     errors.push(
       ...rowErrors(rows, `model_table stage "${name}" row`, `model_table stage "${name}"`),
     );

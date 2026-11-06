@@ -1,6 +1,6 @@
 import type { SessionState, ShardResult } from "./types.js";
 import { projectRoot } from "./pool.js";
-import { MODEL_KEYS, STAGE_NAMES, parseDifficulty, stageKeys } from "./model-table.js";
+import { MODEL_KEYS, parseDifficulty, stageKeys, stageOfKey } from "./model-table.js";
 
 /**
  * The root of a session's parent chain. Sessions record `root_session_id` at
@@ -51,7 +51,7 @@ export interface LedgerEntry {
   readonly escalations?: number;
   readonly review_model?: string;
   readonly review_effort?: string;
-  /** The model and effort of each stage the task's table wrote (`model_<stage>` / `effort_<stage>`, the five stage names). */
+  /** The model and effort of each stage the task's table wrote (every `model_<stage>` with its `effort_<stage>`). */
   readonly stages?: Readonly<Record<string, { readonly model: string; readonly effort: string }>>;
   /** The git root of the session's cwd: what a calibration report groups by. */
   readonly project?: string;
@@ -90,7 +90,9 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
     if (m && n !== undefined) tokens[m[1] ?? "total"] = n;
   }
   const stages: Record<string, { model: string; effort: string }> = {};
-  for (const name of STAGE_NAMES) {
+  for (const key of Object.keys(context)) {
+    const name = stageOfKey(key, "model");
+    if (name === undefined) continue;
     const k = stageKeys(name);
     const model = text(context[k.model]);
     const effort = text(context[k.effort]);

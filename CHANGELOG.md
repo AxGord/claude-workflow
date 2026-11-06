@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- engine (ENG-STAGE-NAMES-OPEN): model_table stage names open — any `^[a-z][a-z_]*$` except model/effort/step/reached (e.g. `recon`); the ledger's `stages` records every `model_<x>`/`effort_<x>` pair and wf-calibration follows the recorded names. Tests: `src/model-table.test.ts`.
+
 - engine (ENG-CALIBRATION-REPORT): `wf-calibration [--since D] [--project P] [--findings-key K] [--json]` folds `ledger.jsonl` per project x workflow x difficulty band x stage (tasks, review rounds, escalations, tokens, outcomes, verdicts; a line without stage data counts under `-`). Ledger lines gain `project`, `visits` (entries per state), `verdict`, `plan_handoff`, `agent_ids` (`agent_id_<stage>`) and `counts` (length of each context list). Tests: `src/calibration.test.ts`.
 
 - engine (ENG-DIFFICULTY-INTERACTIVE): bundled `coding` and `bug-fix` take a `difficulty` (at start, or set at the plan state `think` / `diagnose` from a rubric of anchors 2..10 by the work, +1 for a stale measurement or a hypothesis) and declare an `execute` + `review` stage table; their implementer and reviewer spawns read `model_<stage>` / `effort_<stage>`. Without a difficulty the keys are empty and the prose rule applies (the prompt gains the inert rubric and "with a difficulty set" lines; the template language has no conditional). The ledger line of such a session carries `difficulty` and `stages`. Bundled `batch-task`: a fix round compares the worker's `model/effort` (not the model alone) to choose message-the-old-worker vs spawn-fresh. Rubric in README and the workflow-authoring skill. Tests: `src/model-table.test.ts`.

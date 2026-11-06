@@ -2,7 +2,6 @@
 // the figures a `model_table` is tuned from. Pure; src/calibration-cli.ts reads the file and prints.
 import path from "node:path";
 import type { LedgerEntry } from "./ledger.js";
-import { STAGE_NAMES } from "./model-table.js";
 
 export interface CalibrationOptions {
   /** Keep lines that ended at or after this date (ISO date or timestamp). */
@@ -63,7 +62,7 @@ export function calibrate(
     if (since !== undefined && !(Date.parse(e.ended_at) >= since)) continue;
     const project = e.project ?? "-";
     if (opts.project !== undefined && project !== path.resolve(opts.project)) continue;
-    const staged = STAGE_NAMES.filter(n => e.stages?.[n] !== undefined);
+    const staged = Object.keys(e.stages ?? {});
     const picks: Array<[string, string, string]> =
       staged.length > 0
         ? staged.map(n => [n, e.stages![n].model, e.stages![n].effort])
