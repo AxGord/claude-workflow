@@ -944,6 +944,10 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 
+## Calibration report
+
+`wf-calibration [--since DATE] [--project PATH] [--findings-key KEY] [--json]` folds `ledger.jsonl` per project × workflow × difficulty band (1-3, 4-6, 7-10, `-`) × stage × model/effort: tasks, review rounds (entries into `review*` states), escalations, tokens, outcomes, verdicts. Lines without stage data count under stage `-`. Task-level figures count once per task, on its first stage row. The ledger line carries `project`, `visits`, `verdict`, `plan_handoff`, `agent_ids` (`agent_id_<stage>`) and `counts` (length of each context list; `--findings-key` sums one).
+
 ## License
 
 MIT

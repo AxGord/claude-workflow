@@ -13,7 +13,8 @@
   "main": "build/index.js",
   "bin": {
     "wf-run": "build/wf-run.js",
-    "wf-queue": "build/queue-cli.js"
+    "wf-queue": "build/queue-cli.js",
+    "wf-calibration": "build/calibration-cli.js"
   },
   "scripts": {
     "build": "tsc",

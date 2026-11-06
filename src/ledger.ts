@@ -1,4 +1,5 @@
 import type { SessionState, ShardResult } from "./types.js";
+import { projectRoot } from "./pool.js";
 import { MODEL_KEYS, STAGE_NAMES, parseDifficulty, stageKeys } from "./model-table.js";
 
 /**
@@ -52,6 +53,18 @@ export interface LedgerEntry {
   readonly review_effort?: string;
   /** The model and effort of each stage the task's table wrote (`model_<stage>` / `effort_<stage>`, the five stage names). */
   readonly stages?: Readonly<Record<string, { readonly model: string; readonly effort: string }>>;
+  /** The git root of the session's cwd: what a calibration report groups by. */
+  readonly project?: string;
+  /** Entries into each state (the history's `to`), so review rounds are countable. */
+  readonly visits?: Readonly<Record<string, number>>;
+  /** The context's `review_verdict` (else `verdict`), when text. */
+  readonly verdict?: string;
+  /** The context's `agent_id_<stage>`: the agent that ran each stage (join key for transcript cost). */
+  readonly agent_ids?: Readonly<Record<string, string>>;
+  /** The context's `plan_handoff` when set: a plan stage handed off to a separate executor. */
+  readonly plan_handoff?: boolean;
+  /** Length of each context list (array value), by key: what `--findings-key` of a report sums. */
+  readonly counts?: Readonly<Record<string, number>>;
   /** The context's `tokens` (→ `total`) and `tokens_<role>` (→ `<role>`) that read as whole numbers. */
   readonly tokens?: Readonly<Record<string, number>>;
 }
@@ -83,7 +96,22 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
     const effort = text(context[k.effort]);
     if (model && effort) stages[name] = { model, effort };
   }
+  const counts: Record<string, number> = {};
+  for (const [k, v] of Object.entries(context)) {
+    if (Array.isArray(v) && /^[a-z0-9_]{1,40}$/.test(k)) counts[k] = v.length;
+  }
+  const agentIds: Record<string, string> = {};
+  for (const [k, v] of Object.entries(context)) {
+    const m = /^agent_id_([a-z0-9_]+)$/.exec(k);
+    const id = m ? text(v) : undefined;
+    if (m && id) agentIds[m[1]] = id;
+  }
+  const handoff = context.plan_handoff;
   const fields = {
+    agent_ids: Object.keys(agentIds).length > 0 ? agentIds : undefined,
+    plan_handoff: handoff === true || handoff === "true" || handoff === "yes" ? true : undefined,
+    verdict: text(context.review_verdict) ?? text(context.verdict),
+    counts: Object.keys(counts).length > 0 ? counts : undefined,
     difficulty: parseDifficulty(context[K.difficulty]) ?? undefined,
     model: text(context[K.model]),
     effort: text(context[K.effort]),
@@ -112,6 +140,8 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
       ...(h.step_key !== undefined ? { step_key: h.step_key } : {}),
       ...(h.shards !== undefined ? { shards: h.shards } : {}),
     }));
+  const visits: Record<string, number> = {};
+  for (const h of session.history) if (h.to !== undefined) visits[h.to] = (visits[h.to] ?? 0) + 1;
   return {
     session_id: session.session_id,
     parent_session_id: session.parent_session_id ?? null,
@@ -124,6 +154,10 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
     exec_ms_total: execs.reduce((sum, e) => sum + e.duration_ms, 0),
     wait_ms_total: execs.reduce((sum, e) => sum + (e.wait_ms ?? 0), 0),
     execs,
+    ...(typeof session.context.cwd === "string" && session.context.cwd !== ""
+      ? { project: projectRoot(session.context.cwd) }
+      : {}),
+    ...(Object.keys(visits).length > 0 ? { visits } : {}),
     ...agentFields(session.context),
   };
 }
