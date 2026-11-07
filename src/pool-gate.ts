@@ -340,16 +340,16 @@ const TRANSPARENT = new Set([
 ]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
-const basename = (w: string): string => w.slice(w.lastIndexOf("/") + 1);
+export const basename = (w: string): string => w.slice(w.lastIndexOf("/") + 1);
 
-interface Command {
+export interface Command {
   /** The words naming the command and its arguments: leading assignments and keywords dropped. */
   readonly words: readonly Word[];
   /** The `NAME=value` assignments among the dropped words (`A=1 env B=2 cmd` → A, B). */
   readonly env: ReadonlyMap<string, string>;
 }
 
-function commandOf(seg: Segment): Command {
+export function commandOf(seg: Segment): Command {
   const env = new Map<string, string>();
   let k = 0;
   for (; k < seg.words.length; k++) {

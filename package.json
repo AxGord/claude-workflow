@@ -41,6 +41,7 @@
     "templates/",
     "scripts/",
     "hooks/",
+    "agents/",
     "dashboard/",
     ".claude-plugin/",
     ".mcp.json"
