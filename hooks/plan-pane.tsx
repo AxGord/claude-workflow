@@ -350,19 +350,20 @@ export const register: Register = on => {
     const otherTools = new Map<string, number>()
     for (const c of calls) {
       if (isEngineTool(c.tool)) continue
-      const k = c.tool === 'Bash' ? 'shell' : c.tool.toLowerCase()
+      const k = c.tool === 'Bash' ? '$' : c.tool.toLowerCase() + ' '
       otherTools.set(k, (otherTools.get(k) ?? 0) + 1)
     }
+    // ✎ context writes, ⚙ the other engine calls (status, links, queue), $ shell, any other tool by its name
     const tail = [
-      sets > 0 ? `${sets} set` : '',
-      reads > 0 ? `${reads} wf` : '',
-      ...[...otherTools].map(([k, n]) => `${n} ${k}`),
+      sets > 0 ? `✎${sets}` : '',
+      reads > 0 ? `⚙${reads}` : '',
+      ...[...otherTools].map(([k, n]) => `${k}${n}`),
     ].filter(x => x !== '')
     return (
       <Text>
-        <Text color="cyan">wf </Text>
-        {moves.length > 0 ? moves : <Text dimColor>no moves </Text>}
-        {tail.length > 0 ? <Text dimColor>· {tail.join(' · ')}</Text> : null}
+        <Text color="cyan">⚙ </Text>
+        {moves}
+        {tail.length > 0 ? <Text dimColor>{moves.length > 0 ? '· ' : ''}{tail.join(' ')}</Text> : null}
       </Text>
     )
   })
