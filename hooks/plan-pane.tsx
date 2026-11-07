@@ -455,7 +455,7 @@ export const register: Register = on => {
     )
   })
 
-  // Under an Agent call's row, the pipeline its agent drives or works in: slice, role, workflow and state (the
+  // An Agent call's row, compact, with the pipeline its agent drives or works in: slice, role, workflow and state (the
   // deepest one under it), live while the session exists, then where it ended. The engine's row is kept as it is.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
     if (e.props.tool !== 'Agent' || e.props.isExpanded) return next(e)
@@ -499,14 +499,17 @@ export const register: Register = on => {
       }
     }
     if (!line) return row
+    // one compact line in the row's place (ctrl+o keeps the engine's row with its background hint)
+    const input = (e.props.input ?? {}) as { description?: unknown; model?: unknown }
     return (
-      <Box flexDirection="column">
-        {row}
-        <Text>
-          <Text dimColor>{'  ⎿ '}</Text>
-          {line}
-        </Text>
-      </Box>
+      <Text>
+        <Text>⏺ </Text>
+        <Text weight="bold">Agent</Text>
+        <Text>({String(input.description ?? '')})</Text>
+        {typeof input.model === 'string' ? <Text dimColor> {input.model}</Text> : null}
+        <Text dimColor> · </Text>
+        {line}
+      </Text>
     )
   })
 
