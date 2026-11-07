@@ -8,6 +8,8 @@ export type SessionRow = {
   /** ms since the epoch of the last history entry: when it entered (or last moved in) its state */
   since: number
   isWorking: boolean
+  /** the Agent id linked to the session (link_agent), '' none */
+  agent: string
   /** how many times the session has entered its current state */
   visit: number
   /** the last moves, oldest first */

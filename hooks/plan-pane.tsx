@@ -9,7 +9,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-2' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-3' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** The Plan tab sections the person folded (running, next, lands); none by default. */
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
@@ -104,6 +104,7 @@ function parseSession(text: string): Parsed | null {
       tag,
       since: done.at(-1)?.at || Date.parse(String(j.started_at ?? '')) || 0,
       isWorking: Boolean(j.running_exec) || typeof j.agent_id === 'string',
+      agent: typeof j.agent_id === 'string' ? j.agent_id : '',
       visit: Number(frame?.state_visits?.[state] ?? 0),
       recent: done.slice(-RECENT),
       next: [],
@@ -264,6 +265,21 @@ function movedTo(o: unknown): string | undefined {
   return m?.[2]
 }
 
+/** `<workflow> <id>` (with ` · <slice>`) of a live workflow session of this machine, or ''. */
+async function sessionLabel($: any, id: string): Promise<string> {
+  const home = (await $.env.get('HOME')) ?? ''
+  const dir = (await $.env.get('WF_STATE_DIR')) ?? `${home}/.claude/workflow-state`
+  const text: string = await $.fs.read(`${dir}/${id}.json`).catch(() => '')
+  if (text === '') return ''
+  try {
+    const p = parseSession(text)
+    if (!p || !p.row) return ''
+    return `${p.row.workflow} ${id}${p.row.tag !== '' ? ` · ${p.row.tag}` : ''}`
+  } catch {
+    return ''
+  }
+}
+
 function age(ms: number): string {
   if (ms <= 0) return ''
   const m = Math.floor(ms / 60000)
@@ -286,20 +302,55 @@ export const register: Register = on => {
     const closed = await next(e)
     if (e.id === PANE) await update($, paneOpen, () => false)
     return closed
-  })
+  }).catch(($, e, next) => (next.called ? undefined : next(e)))
 
   on('command.run', { command: 'wf-plan' }, async $ => {
     const isOpen = await togglePane($)
     return { text: isOpen ? 'Plan pane opened (refreshes every 15 s; /wf-plan again closes it).' : 'Plan pane closed.' }
   }).catch(($, e, next) => (next.called ? next(e) : { text: 'wf-plan failed: see the debug log' }))
 
+  // An agent spawned for a workflow session gets the session in its label (the agents list shows it): the first
+  // 8-hex id in its prompt that names a live session adds `· <workflow> <id> · <slice>` to the description.
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    const desc = String(e.description ?? '')
+    const ids = [...new Set([...String(e.prompt ?? '').matchAll(/\b([0-9a-f]{8})\b/g)].map(m => m[1] ?? ''))]
+    for (const id of ids) {
+      if (id === '' || desc.includes(id)) continue
+      const label = await sessionLabel($, id)
+      if (label !== '') return next({ ...e, description: `${desc} · ${label}` })
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // The band above the prompt is the status line: the root session (◆ with children) and the others' count, the
   // queue's running/next/landed, and a button that toggles the pane. Nothing when this session runs no workflow.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey || (await read($, paneOpen))) return next(e)
+    if (e.props.hasSurvey) return next(e)
     const s = await read($, snap)
     if (!s || s.sessions.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)
+    // an agent's transcript in view: the band shows that agent's workflow session (linked by link_agent)
+    const viewed = e.props.view?.agentId
+    if (viewed) {
+      const r = s.sessions.find(x => x.agent === viewed)
+      if (!r) return next(e)
+      let leaf = r
+      for (let i = 0; i < 8; i++) {
+        const child = s.sessions.find(c => c.parent === leaf.id)
+        if (!child) break
+        leaf = child
+      }
+      const now = await $.clock.now()
+      return (
+        <Text>
+          <Text color="cyan">[{r.tag !== '' ? r.tag : r.workflow}] </Text>
+          {r.workflow} @ <Text weight="bold">{r.state}</Text>
+          {leaf.id !== r.id ? <Text> › {leaf.workflow} @ <Text weight="bold">{leaf.state}</Text></Text> : null}
+          <Text dimColor> {age(now - leaf.since)} · {r.id}</Text>
+        </Text>
+      )
+    }
+    if (await read($, paneOpen)) return next(e)
     const ids = new Set(s.sessions.map(r => r.id))
     const roots = s.sessions.filter(r => r.parent === '' || !ids.has(r.parent))
     const hasChildren = (r: SessionRow) => s.sessions.some(c => c.parent === r.id)
