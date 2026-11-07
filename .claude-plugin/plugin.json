@@ -3,7 +3,13 @@
   "displayName": "Workflow Engine",
   "version": "0.1.11",
   "description": "Structured workflow orchestration for AI agents via finite-state machines.",
-  "keywords": ["workflow", "fsm", "orchestration", "state-machine", "mcp"],
+  "keywords": [
+    "workflow",
+    "fsm",
+    "orchestration",
+    "state-machine",
+    "mcp"
+  ],
   "author": {
     "name": "AxGord",
     "email": "axgord@gmail.com",
@@ -11,5 +17,6 @@
   },
   "homepage": "https://github.com/AxGord/claude-workflow",
   "repository": "https://github.com/AxGord/claude-workflow",
-  "license": "MIT"
+  "license": "MIT",
+  "types": "./types/index.d.ts"
 }

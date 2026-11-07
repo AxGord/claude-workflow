@@ -845,6 +845,24 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `queue_edit` | Set / remove a queue line's metadata fields, append a note | `queue`, `file`, `id`, `set`, `append_note` |
 | `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason | `queue`, `file`, `batch_size`, `reason` |
 
+## Plan pane
+
+`/wf-plan` toggles a pane beside the chat (a Claude Code hooks module, `hooks/plan-pane.tsx`, needs a Claude Code
+that loads plugin `modules`; older ones simply have no pane). It refreshes every 15 s from the engine's own state —
+no model call, no tokens:
+
+- **Plan** — for a session whose root workflow has a work queue (`context.queue_file`): `▶ Running n/window` (each
+  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in file order), `✓ Landed today`
+  (the queue repo's `git log` lines carrying a `Slice:` trailer). Each section folds on a click.
+- **Sessions** — the workflow sessions of THIS Claude Code session as a tree (`◆` a root with children, bright `⚙`
+  a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
+  or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's
+  `/api/workflows`), and a link to its graph in the dashboard (`#session=<id>`).
+- **Waiting** — pending lines with why: `after …`, `⏸`, `exclusive`, `parent-run`.
+
+Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier. A session with
+no workflow shows "No active workflow"; nothing opens by itself.
+
 ## Dashboard
 
 The web dashboard runs on `localhost:3100` and provides real-time monitoring:
