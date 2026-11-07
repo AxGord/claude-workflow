@@ -17,6 +17,5 @@
   },
   "homepage": "https://github.com/AxGord/claude-workflow",
   "repository": "https://github.com/AxGord/claude-workflow",
-  "license": "MIT",
-  "types": "./types/index.d.ts"
+  "license": "MIT"
 }

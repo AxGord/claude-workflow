@@ -34,8 +34,5 @@
         ]
       }
     ]
-  },
-  "modules": [
-    "./plan-pane.tsx"
-  ]
+  }
 }
