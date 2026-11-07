@@ -350,10 +350,10 @@ export const register: Register = on => {
     const otherTools = new Map<string, number>()
     for (const c of calls) {
       if (isEngineTool(c.tool)) continue
-      const k = c.tool === 'Bash' ? '$' : c.tool.toLowerCase() + ' '
+      const k = c.tool === 'Bash' ? '❯' : c.tool.toLowerCase() + ' '
       otherTools.set(k, (otherTools.get(k) ?? 0) + 1)
     }
-    // ✎ context writes, ⚙ the other engine calls (status, links, queue), $ shell, any other tool by its name
+    // ✎ context writes, ⚙ the other engine calls (status, links, queue), ❯ shell, any other tool by its name
     const tail = [
       sets > 0 ? `✎${sets}` : '',
       reads > 0 ? `⚙${reads}` : '',
