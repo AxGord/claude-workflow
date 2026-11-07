@@ -455,6 +455,61 @@ export const register: Register = on => {
     )
   })
 
+  // Under an Agent call's row, the pipeline its agent drives or works in: slice, role, workflow and state (the
+  // deepest one under it), live while the session exists, then where it ended. The engine's row is kept as it is.
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    if (e.props.tool !== 'Agent' || e.props.isExpanded) return next(e)
+    const row = await next(e)
+    const id = /agentId: ([A-Za-z0-9]+)/.exec(outputText(e.props.output))?.[1]
+    if (!id) return row
+    const s = await read($, snap)
+    const { Box, Text } = $.ui.resolve(e)
+    const live = s?.sessions.find(r => r.agent === id)
+    let line: any = null
+    if (live && s) {
+      let top = live
+      for (let i = 0; i < 8 && top.tag === '' && top.parent !== ''; i++) top = s.sessions.find(x => x.id === top.parent) ?? top
+      let leaf = live
+      for (let i = 0; i < 8; i++) {
+        const child = s.sessions.find(c => c.parent === leaf.id)
+        if (!child) break
+        leaf = child
+      }
+      const now = await $.clock.now()
+      line = (
+        <Text>
+          <Text color="cyan">⚙ [{top.tag !== '' ? top.tag : live.workflow}] </Text>
+          <Text dimColor>{roleOf(live.workflow)} · </Text>
+          {live.workflow} @ <Text weight="bold">{live.state}</Text>
+          {leaf.id !== live.id ? <Text> › {roleOf(leaf.workflow)} @ <Text weight="bold">{leaf.state}</Text></Text> : null}
+          <Text dimColor> {age(now - leaf.since)}</Text>
+        </Text>
+      )
+    } else {
+      const seen = (await read($, agentsSeen))[id]
+      if (seen) {
+        const land = s?.lands.find(l => l.slice === seen.label)
+        line = (
+          <Text>
+            <Text color="cyan">⚙ [{seen.label}] </Text>
+            <Text dimColor>{seen.role} · </Text>
+            {land && seen.role === 'driver' ? <Text color="green">✓ landed {land.sha}</Text> : <Text dimColor>ended at {seen.state}</Text>}
+          </Text>
+        )
+      }
+    }
+    if (!line) return row
+    return (
+      <Box flexDirection="column">
+        {row}
+        <Text>
+          <Text dimColor>{'  ⎿ '}</Text>
+          {line}
+        </Text>
+      </Box>
+    )
+  })
+
   // A collapsed group of tool calls that holds workflow-engine calls draws as the chain of moves they made
   // (`[slice] transition→state …`) instead of "Called plugin:workflow:wf N times"; other tools keep a count.
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
