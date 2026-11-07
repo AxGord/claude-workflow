@@ -16,6 +16,8 @@ export const DEFAULT_READ_ONLY_AGENTS: readonly string[] = ["wf-recon", "wf-revi
 export interface ReadOnlyConfig {
   /** Extra write commands: leading words (`apq patch`) or `/regex/flags` on the simple command's text. */
   readonly write: readonly string[];
+  /** Extra readers beyond DEFAULT_READERS (same forms as `write`): the project's read-only CLIs (`hxq`, `apq`). */
+  readonly read: readonly string[];
   /** Variables exported before the command of a read-only agent (`APQ_READ_ONLY=1`). */
   readonly env: Readonly<Record<string, string>>;
   readonly agents: readonly string[];
@@ -33,11 +35,13 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 /** Validate a read-only-commands.json text; throws with the offending key named. */
 export function parseReadOnlyConfig(text: string): ReadOnlyConfig {
   const raw = JSON.parse(text) as unknown;
-  if (!isObject(raw)) throw new Error("expected an object with `write` / `env` / `agents`");
-  const { write = [], env = {}, agents } = raw;
+  if (!isObject(raw))
+    throw new Error("expected an object with `write` / `read` / `env` / `agents`");
+  const { write = [], read = [], env = {}, agents } = raw;
   const strings = (v: unknown): v is string[] =>
     Array.isArray(v) && v.every(s => typeof s === "string" && s.trim() !== "");
   if (!strings(write)) throw new Error("`write` must be a list of non-empty strings");
+  if (!strings(read)) throw new Error("`read` must be a list of non-empty strings");
   if (agents !== undefined && !strings(agents))
     throw new Error("`agents` must be a list of agent type names");
   if (
@@ -47,8 +51,13 @@ export function parseReadOnlyConfig(text: string): ReadOnlyConfig {
     )
   )
     throw new Error("`env` must map variable names to string values");
-  for (const w of write) regexOf(w, true);
-  return { write, env: env as Record<string, string>, agents: agents ?? DEFAULT_READ_ONLY_AGENTS };
+  for (const w of [...write, ...read]) regexOf(w, true);
+  return {
+    write,
+    read,
+    env: env as Record<string, string>,
+    agents: agents ?? DEFAULT_READ_ONLY_AGENTS,
+  };
 }
 
 /** The nearest read-only-commands.json from `cwd` up to the git root; none outside a git repo. */
@@ -237,6 +246,168 @@ function writeReason(
   return undefined;
 }
 
+/** Commands a read-only agent may start a pipeline segment with; `git` is judged by subcommand, `find` by flags. */
+export const DEFAULT_READERS: readonly string[] = [
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "wc",
+  "rg",
+  "grep",
+  "egrep",
+  "fgrep",
+  "jq",
+  "cd",
+  "pwd",
+  "echo",
+  "printf",
+  "stat",
+  "file",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+  "basename",
+  "dirname",
+  "diff",
+  "cmp",
+  "which",
+  "realpath",
+  "readlink",
+  "du",
+  "date",
+  "nl",
+  "tac",
+  "column",
+  "test",
+  "[",
+  "true",
+  "false",
+  "find",
+  "git",
+  "sed",
+];
+const GIT_READERS = new Set([
+  "log",
+  "show",
+  "diff",
+  "status",
+  "grep",
+  "blame",
+  "ls-files",
+  "ls-tree",
+  "rev-parse",
+  "rev-list",
+  "cat-file",
+  "describe",
+  "shortlog",
+  "show-ref",
+  "merge-base",
+  "name-rev",
+  "for-each-ref",
+  "branch",
+  "tag",
+  "config",
+]);
+const FLAG_JUDGED = new Set(["find", "git", "sort", "rg", "uniq", "sed"]);
+/** `sed -n` with a print-only script: addresses or ranges and `p`, nothing that writes or runs. */
+function sedReadsOnly(args: readonly string[]): boolean {
+  if (args[0] !== "-n") return false;
+  const script = args[1];
+  if (script === undefined || !/^(\d+|\$)(,(\d+|\$))?p$|^\/[^/]*\/p$/.test(script)) return false;
+  return args.slice(2).every(a => !a.startsWith("-") || a === "-");
+}
+const FIND_WRITES = /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/;
+
+/** Why this segment's command is not a declared reader, or undefined. */
+function readerReason(cmd: Command, config: ReadOnlyConfig | undefined): string | undefined {
+  let c = cmd;
+  let viaXargs = false;
+  if (c.env.size > 0) return "a NAME=value assignment can redirect a reader (GIT_*, PAGER, LD_*)";
+  for (let d = 0; d < 5; d++) {
+    const inner = unwrap(c);
+    if (!inner) break;
+    const skipped = c.words.slice(0, c.words.length - inner.words.length).map(w => w.value);
+    if (skipped.some(v => /^[A-Za-z_][A-Za-z0-9_]*=/.test(v)))
+      return "a NAME=value assignment can redirect a reader (GIT_*, PAGER, LD_*)";
+    if (skipped.some(v => basename(v) === "xargs")) viaXargs = true;
+    c = inner;
+  }
+  if (c.words.length === 0) return undefined;
+  const name = basename(c.words[0].value);
+  const args = c.words.slice(1).map(w => w.value);
+  if ((config?.read ?? []).some(rule => matchesWrite(rule, c))) return undefined;
+  if (!DEFAULT_READERS.includes(name))
+    return `${name} is not a declared reader (the project's .claude/read-only-commands.json \`read\` adds one)`;
+  if (viaXargs && FLAG_JUDGED.has(name))
+    return `xargs ${name}: its arguments come from stdin and cannot be judged`;
+  if (name === "git") {
+    const sub = gitSub(c);
+    if (sub === undefined || !GIT_READERS.has(sub))
+      return `git ${sub ?? ""} is not a reader`.replace("  ", " ");
+    if (
+      args.some(
+        a =>
+          a === "-c" ||
+          a.startsWith("--config-env") ||
+          a.startsWith("--output") ||
+          /^-[A-Za-z]*O/.test(a) ||
+          a.startsWith("--open-files-in-pager"),
+      )
+    )
+      return "git option that runs a command or writes a file";
+  }
+  if (name === "find" && args.some(a => FIND_WRITES.test(a)))
+    return "find with an action writes or runs a command";
+  if (
+    name === "sort" &&
+    args.some(
+      a => /^-[A-Za-z]*o/.test(a) || a.startsWith("--output") || a.startsWith("--compress-program"),
+    )
+  )
+    return "sort -o / --compress-program writes or runs a command";
+  if (name === "uniq") {
+    const dd = args.indexOf("--");
+    const operands = args.filter(
+      (a, k) => (dd >= 0 && k > dd) || (k !== dd && (a === "-" || !a.startsWith("-"))),
+    );
+    if (operands.length > 1) return "uniq with an output operand writes";
+  }
+  if (name === "file" && args.some(a => /^-[A-Za-z]*C/.test(a) || a.startsWith("--compile")))
+    return "file -C writes a magic file";
+  if (name === "sed" && !sedReadsOnly(args))
+    return "sed is allowed only as `sed -n '<addresses>p' [file]`";
+  if (name === "rg" && args.some(a => a.startsWith("--pre"))) return "rg --pre runs a command";
+  return undefined;
+}
+
+/** `$( )`, backticks and process substitution outside single quotes: a command the gate cannot judge. */
+function hasSubstitution(command: string): boolean {
+  let quote = "";
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote === "'") {
+      if (c === "'") quote = "";
+    } else if (c === "\\") i++;
+    else if (c === "`" || ((c === "$" || c === "<" || c === ">") && command[i + 1] === "("))
+      return true;
+    else if (quote === '"') {
+      if (c === '"') quote = "";
+    } else if (c === "'" || c === '"') quote = c;
+  }
+  return false;
+}
+
+/** Is `target` inside a git work tree (a `.git` entry in an ancestor below the scratch root)? */
+function insideWorkTree(target: string): boolean {
+  for (let dir = path.dirname(target); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+    if (SCRATCH.includes(dir)) return false;
+    if (fs.existsSync(path.join(dir, ".git"))) return true;
+  }
+  return false;
+}
+
 /** A redirect of the text into a file outside scratch space; quotes and `>&N` / `/dev/*` targets are not one. */
 export function redirectsToFile(command: string): string | undefined {
   let quote = "";
@@ -258,12 +429,15 @@ export function redirectsToFile(command: string): string | undefined {
       }
       while (command[j] === " " || command[j] === "\t") j++;
       const m = /^[^\s;&|()<>]+/.exec(command.slice(j));
-      const target = (m?.[0] ?? "").replace(/^["']|["']$/g, "");
+      const raw = (m?.[0] ?? "").replace(/^["']|["']$/g, "");
+      const target = raw.startsWith("/") ? path.posix.normalize(raw) : raw;
       i = j;
       if (
         target === "" ||
         target.startsWith("/dev/") ||
-        SCRATCH.some(s => target === s || target.startsWith(s + "/"))
+        (!raw.split("/").includes("..") &&
+          SCRATCH.some(s => target === s || target.startsWith(s + "/")) &&
+          !insideWorkTree(target))
       )
         continue;
       return `redirect > ${target} writes`;
@@ -282,8 +456,11 @@ function commandReason(
     return "cannot verify this command is read-only (heredoc or unbalanced quote) — keep it simple";
   const redirect = redirectsToFile(command);
   if (redirect) return redirect;
+  if (hasSubstitution(command))
+    return "command substitution ($( ), backticks) cannot be verified read-only";
   for (const seg of segments) {
-    const reason = writeReason(commandOf(seg), config, depth);
+    const cmd = commandOf(seg);
+    const reason = writeReason(cmd, config, depth) ?? readerReason(cmd, config);
     if (reason) return reason;
   }
   return undefined;
@@ -309,7 +486,10 @@ export function decideReadOnly(
   if (!isReadOnlyAgent(payload.agent_type, config?.agents)) return { kind: "pass" };
   const reason = commandReason(command, config, 0);
   if (reason !== undefined)
-    return { kind: "deny", reason: `read-only: ${reason}; this agent type does not edit` };
+    return {
+      kind: "deny",
+      reason: `read-only: ${reason}; this agent type does not edit`,
+    };
   const env = Object.entries(config?.env ?? {});
   if (env.length === 0) return { kind: "env", command };
   const exports = env.map(([k, v]) => `${k}='${v.replace(/'/g, `'\\''`)}'`).join(" ");

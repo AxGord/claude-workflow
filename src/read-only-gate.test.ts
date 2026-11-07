@@ -16,6 +16,7 @@ import {
 
 const config = parseReadOnlyConfig(
   JSON.stringify({
+    read: ["apq", "hxq", "make"],
     write: ["apq patch", "hxq replace-node", "/^hxq lint\\b.*--fix/"],
     env: { APQ_READ_ONLY: "1" },
   }),
@@ -34,7 +35,9 @@ describe("read-only gate", () => {
     expect(isReadOnlyAgent("wf-driver")).toBe(false);
     expect(isReadOnlyAgent(undefined)).toBe(false);
     expect(call(undefined, "git commit -m x")).toEqual({ kind: "pass" });
-    expect(call("general-purpose", "git commit -m x")).toEqual({ kind: "pass" });
+    expect(call("general-purpose", "git commit -m x")).toEqual({
+      kind: "pass",
+    });
     expect(call("wf-driver", "rm -rf x")).toEqual({ kind: "pass" });
   });
 
@@ -69,6 +72,42 @@ describe("read-only gate", () => {
     "git gc",
     "git fetch",
     "cat <<EOF\nhi\nEOF",
+    "echo -delete | xargs find .",
+    "GIT_EXTERNAL_DIFF=x git diff",
+    "env GIT_EXTERNAL_DIFF=x git diff",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=x git log",
+    "git grep -O",
+    "git grep -nOless x",
+    "git grep --open-files-in-pager=x y",
+    "sort -ofile f",
+    "sort --compress-program=x f",
+    "uniq in out",
+    "sed -n 'w out' f",
+    "sed -e s/a/b/ f",
+    "uniq - out",
+    "uniq -- - out",
+    "sed -n 1p -e 'w out' f",
+    "sed -n 1p f --expression='w out'",
+    "cat a > /tmp/../x",
+    "file -C -m x",
+    "perl -i -pe 's/a/b/' f",
+    'python -c \'open("f","w")\'',
+    "node -e 'fs.writeFileSync(1,1)'",
+    "find . -name a -delete",
+    "find . -exec rm {} ;",
+    "tee out.txt",
+    "ls | tee out.txt",
+    "dd if=a of=b",
+    "cp a b",
+    "mv a b",
+    "sort -o f f",
+    "git -c core.pager=x log",
+    "git diff --output=f",
+    "echo $(rm a)",
+    'echo "`rm a`"',
+    "cat <(rm a)",
+    "ls; curl x",
+    "make clean > src/x",
   ])("denies %s", command => {
     expect(call("wf-reviewer", command)).toMatchObject(DENY);
   });
@@ -79,7 +118,7 @@ describe("read-only gate", () => {
     "grep -n '>' file",
     "echo 'a > b'",
     "ls 2>&1 | head",
-    "cmd > /dev/null 2>&1",
+    "ls > /dev/null 2>&1",
     "ls > /tmp/out.txt",
     "apq get a.json x.y",
     "git branch --list",
@@ -89,6 +128,9 @@ describe("read-only gate", () => {
     "git config --list",
     "rtk git log -3",
     "hxq lint a.hx",
+    "sed -n 1,20p f",
+    "sed -n '/x/p' f",
+    "sort -u f | uniq -c",
   ])("lets %s through with the env exported", command => {
     expect(call("wf-recon", command)).toEqual({
       kind: "env",
@@ -98,7 +140,10 @@ describe("read-only gate", () => {
 
   it("without a config the built-in write list still holds and nothing is exported", () => {
     expect(call("wf-recon", "git commit -m x", null)).toMatchObject(DENY);
-    expect(call("wf-recon", "git status", null)).toEqual({ kind: "env", command: "git status" });
+    expect(call("wf-recon", "git status", null)).toEqual({
+      kind: "env",
+      command: "git status",
+    });
   });
 
   it("the config can name its own read-only types", () => {
@@ -115,7 +160,28 @@ describe("read-only gate", () => {
     expect(redirectsToFile("a >| src/x")).toContain("src/x");
   });
 
+  it("the config `read` list declares a project reader; unlisted commands are refused with the rule", () => {
+    expect(call("wf-recon", "hxq lint a.hx", null)).toMatchObject({
+      kind: "deny",
+      reason: expect.stringContaining("not a declared reader") as string,
+    });
+    expect(call("wf-recon", "hxq lint a.hx")).toMatchObject({ kind: "env" });
+  });
+
+  it("a redirect into a git work tree under scratch is refused", () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "wf-ro-wt-"));
+    fs.mkdirSync(path.join(d, "src"));
+    fs.writeFileSync(path.join(d, ".git"), "gitdir: x");
+    try {
+      expect(redirectsToFile(`a > ${d}/src/x`)).toContain("src/x");
+      expect(redirectsToFile(`a > ${os.tmpdir()}/../x`)).toBeDefined();
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a malformed config naming the key", () => {
+    expect(() => parseReadOnlyConfig('{"read":[1]}')).toThrow(/read/);
     expect(() => parseReadOnlyConfig("[]")).toThrow(/object/);
     expect(() => parseReadOnlyConfig('{"write":[1]}')).toThrow(/write/);
     expect(() => parseReadOnlyConfig('{"env":{"1x":"a"}}')).toThrow(/env/);
@@ -150,11 +216,13 @@ describe("composition with the pool gate", () => {
     fs.mkdirSync(path.join(proj, ".claude", "workflows"), { recursive: true });
     fs.writeFileSync(
       path.join(proj, ".claude", "workflows", "pool-gate.json"),
-      JSON.stringify({ rules: [{ match: "make", threads: 2, pass: "-j $WF_THREADS" }] }),
+      JSON.stringify({
+        rules: [{ match: "make", threads: 2, pass: "-j $WF_THREADS" }],
+      }),
     );
     fs.writeFileSync(
       path.join(proj, ".claude", "read-only-commands.json"),
-      JSON.stringify({ env: { APQ_READ_ONLY: "1" } }),
+      JSON.stringify({ env: { APQ_READ_ONLY: "1" }, read: ["make"] }),
     );
     const hook = (name: string, agent: string) =>
       spawnSync("node", [path.join(plugin, "build", `${name}.js`)], {
@@ -185,7 +253,10 @@ describe("hooks/read-only-gate.sh", () => {
     });
 
   it("a payload without agent_type exits silently before any node is started", () => {
-    const r = run({ tool_name: "Bash", tool_input: { command: "git commit -m x" } });
+    const r = run({
+      tool_name: "Bash",
+      tool_input: { command: "git commit -m x" },
+    });
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
     expect(r.stderr).toBe("");
