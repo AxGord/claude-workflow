@@ -12,6 +12,8 @@ const STALE_MS = 3 * 24 * 3600 * 1000
 const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-2' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** The Plan tab sections the person folded (running, next, lands); none by default. */
+/** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
+const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-1' })
 /** The session whose card is open in the Sessions tab ('' none). */
 const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { shape: 'expanded-1' })
@@ -231,6 +233,7 @@ async function togglePane($: any): Promise<boolean> {
   }
   await refresh($)
   await $.ui.open({ id: PANE, title: 'Workflow plan', backgroundColor: 'transparent' })
+  await update($, paneOpen, () => true)
   return true
 }
 
@@ -272,7 +275,17 @@ export const register: Register = on => {
     await $.command.register({ name: 'wf-plan', description: 'Toggle the workflow plan pane (running pipelines, next lines, lands)' })
     void refresh($)
     $.clock.every(PERIOD_MS, () => void refresh($))
+    // a reload keeps an open pane: the band follows the engine's record, not the module's memory
+    const isUp = (await $.ui.panes()).some((p: { id: string }) => p.id === PANE)
+    await update($, paneOpen, () => isUp)
     return next(e)
+  })
+
+  // however the pane closes (the command, Esc, its mark, an unload), the band comes back
+  on('ui.close', async ($, e, next) => {
+    const closed = await next(e)
+    if (e.id === PANE) await update($, paneOpen, () => false)
+    return closed
   })
 
   on('command.run', { command: 'wf-plan' }, async $ => {
@@ -283,7 +296,7 @@ export const register: Register = on => {
   // The band above the prompt is the status line: the root session (◆ with children) and the others' count, the
   // queue's running/next/landed, and a button that toggles the pane. Nothing when this session runs no workflow.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) return next(e)
+    if (e.props.hasSurvey || (await read($, paneOpen))) return next(e)
     const s = await read($, snap)
     if (!s || s.sessions.length === 0) return next(e)
     const { Box, Text, Button } = $.ui.resolve(e)

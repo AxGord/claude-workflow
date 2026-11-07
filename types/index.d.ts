@@ -56,6 +56,6 @@ export type Snapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]> }
+    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]>; paneOpen: Shaped<boolean> }
   }
 }
