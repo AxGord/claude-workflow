@@ -348,6 +348,53 @@ export const register: Register = on => {
     )
   })
 
+  // The turn's closing "Waiting for N background agents to finish" names what it waits on: each agent linked to a
+  // workflow session (link_agent) as its slice and where its pipeline stands; agents of no session stay counted.
+  on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
+    const waiting = e.props.waitingFor
+    if (!waiting || e.props.isExpanded || waiting.agents.length === 0) return next(e)
+    const s = await read($, snap)
+    if (!s) return next(e)
+    const byAgent = new Map(s.sessions.filter(r => r.agent !== '').map(r => [r.agent, r]))
+    const named: { label: string; state: string }[] = []
+    let others = 0
+    for (const a of waiting.agents) {
+      const r = byAgent.get(a.id)
+      if (!r) {
+        others++
+        continue
+      }
+      // the pipeline that holds this agent's session: its slice, and the deepest state under it
+      let top = r
+      for (let i = 0; i < 8 && top.tag === '' && top.parent !== ''; i++) top = s.sessions.find(x => x.id === top.parent) ?? top
+      let leaf = r
+      for (let i = 0; i < 8; i++) {
+        const child = s.sessions.find(c => c.parent === leaf.id)
+        if (!child) break
+        leaf = child
+      }
+      named.push({ label: top.tag !== '' ? top.tag : r.workflow, state: leaf.state })
+    }
+    if (named.length === 0) return next(e)
+    const { Text } = $.ui.resolve(e)
+    const SHOW = 4
+    const total = waiting.agents.length + waiting.workflows
+    return (
+      <Text>
+        <Text dimColor>✻ Waiting for {total}: </Text>
+        {named.slice(0, SHOW).map((n, i) => (
+          <Text>
+            {i > 0 ? <Text dimColor> · </Text> : null}
+            <Text color="cyan">{n.label}</Text> <Text dimColor>{n.state}</Text>
+          </Text>
+        ))}
+        {named.length > SHOW || others + waiting.workflows > 0 ? (
+          <Text dimColor> · +{named.length - Math.min(named.length, SHOW) + others + waiting.workflows}</Text>
+        ) : null}
+      </Text>
+    )
+  })
+
   // A collapsed group of tool calls that holds workflow-engine calls draws as the chain of moves they made
   // (`[slice] transition→state …`) instead of "Called plugin:workflow:wf N times"; other tools keep a count.
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
