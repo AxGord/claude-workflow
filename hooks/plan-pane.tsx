@@ -340,8 +340,11 @@ export const register: Register = on => {
     }
     const moves: any[] = []
     let lastSid = ''
-    let sets = 0
-    let reads = 0
+    // the other engine calls by what they did: plan changes (queue_*), context writes, and the rest (reads, links)
+    const ICON: Record<string, string> = {
+      queue_add: '☰+', queue_edit: '☰✎', queue_mark: '☰✓', queue_next: '☰▶', queue_header: '☰⇅', context_set: '✎',
+    }
+    const counted = new Map<string, number>()
     for (const c of wf) {
       const op = engineOp(c.tool)
       const input = (c.input ?? {}) as Record<string, unknown>
@@ -357,8 +360,10 @@ export const register: Register = on => {
             <Text color={c.isErrored ? 'red' : 'cyanBright'} weight="bold">{c.isRunning ? '…' : to ?? '?'}</Text>{' '}
           </Text>,
         )
-      } else if (op === 'context_set') sets++
-      else reads++
+      } else {
+        const icon = ICON[op] ?? '·'
+        counted.set(icon, (counted.get(icon) ?? 0) + 1)
+      }
     }
     const otherTools = new Map<string, number>()
     for (const c of calls) {
@@ -366,10 +371,9 @@ export const register: Register = on => {
       const k = c.tool === 'Bash' ? '❯' : c.tool.toLowerCase() + ' '
       otherTools.set(k, (otherTools.get(k) ?? 0) + 1)
     }
-    // ✎ context writes, ⚙ the other engine calls (status, links, queue), ❯ shell, any other tool by its name
+    // ☰± plan changes, ✎ context writes, · other engine calls, ❯ shell, any other tool by its name
     const tail = [
-      sets > 0 ? `✎${sets}` : '',
-      reads > 0 ? `⚙${reads}` : '',
+      ...[...counted].map(([icon, n]) => `${icon}${n}`),
       ...[...otherTools].map(([k, n]) => `${k}${n}`),
     ].filter(x => x !== '')
     return (
