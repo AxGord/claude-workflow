@@ -43,17 +43,17 @@ describe("dashboard queue API", () => {
   it("lists the queue files sessions name and answers their lines", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashq-"));
     dirs.push(dir);
-    const file = path.join(dir, "q.md");
+    const file = path.join(dir, "q.yaml");
     fs.writeFileSync(
       file,
-      "# x\nbatch_size: 1\n## Tasks\n- [ ] A | repo: /tmp | text of a is long enough to be prose here\n",
+      "batch_size: 1\ntasks:\n  - id: A\n    status: pending\n    repo: /tmp\n    text: text of a\n",
     );
     const base = await setup(file);
     expect(await (await fetch(`${base}/api/queues`)).json()).toEqual([file]);
     const res = await fetch(`${base}/api/queue?file=${encodeURIComponent(file)}`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as { lines: { id: string; reason?: string }[] };
-    expect(body.lines).toMatchObject([{ id: "A", reason: "ready" }]);
+    expect(body.lines).toMatchObject([{ id: "A", status: "pending", reason: "ready", notes: 0 }]);
   });
 
   it("404 for a file no session names", async () => {
@@ -63,9 +63,58 @@ describe("dashboard queue API", () => {
   });
 
   it("422 for a named queue that cannot be read", async () => {
-    const missing = path.join(os.tmpdir(), "wf-dash-missing-queue.md");
+    const missing = path.join(os.tmpdir(), "wf-dash-missing-queue.yaml");
     const base = await setup(missing);
     const res = await fetch(`${base}/api/queue?file=${encodeURIComponent(missing)}`);
     expect(res.status).toBe(422);
+  });
+});
+
+// The plan pane draws from this answer (hooks/plan-pane.test.tsx reads the recorded copy): a field
+// rename in describeQueue fails here, not on the screen. WF_RECORD_REPLIES=1 writes the copy afresh.
+describe("the plan pane's recorded /api/queue answer", () => {
+  it("is what /api/queue answers for its queue", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashrec-"));
+    dirs.push(dir);
+    const file = path.join(dir, "queue.yaml");
+    fs.writeFileSync(
+      file,
+      [
+        "batch_size: 2",
+        "tasks:",
+        "  - {id: RUN-1, status: running, difficulty: 7, repo: /tmp, touches: [r], text: r}",
+        "  - {id: NEXT-1, status: pending, difficulty: 3, repo: /tmp, touches: [n], text: n}",
+        "  - {id: WAIT-1, status: pending, difficulty: 5, repo: /tmp, after: [NEXT-1], touches: [w], text: w}",
+        "  - {id: PARK-1, status: pending, repo: /tmp, parked: true, touches: [p], text: p}",
+        "  - id: DONE-1",
+        "    status: done",
+        "    repo: /tmp",
+        "    text: d",
+        "    notes: [{from: land, date: 2026-11-07, text: landed abc}]",
+        "",
+      ].join("\n"),
+    );
+    const base = await setup(file);
+    const res = await fetch(`${base}/api/queue?file=${encodeURIComponent(file)}`);
+    const body = JSON.parse(
+      JSON.stringify(await res.json())
+        .split(file)
+        .join("/proj/.claude/batch/queue.yaml"),
+    ) as unknown;
+    const rec = path.join(
+      path.dirname(new URL(import.meta.url).pathname),
+      "..",
+      "hooks",
+      "fixtures",
+      "api-queue.ts",
+    );
+    if (process.env.WF_RECORD_REPLIES === "1")
+      fs.writeFileSync(
+        rec,
+        `// Recorded /api/queue answer (src/dashboard.test.ts checks it; WF_RECORD_REPLIES=1 re-records).\n` +
+          `export const API_QUEUE = ${JSON.stringify(body, null, 2)};\n`,
+      );
+    const { API_QUEUE } = await import("../hooks/fixtures/api-queue.js");
+    expect(body).toEqual(API_QUEUE);
   });
 });

@@ -1,5 +1,5 @@
 name: batch
-description: "Long-running batch orchestration — a queue file of tasks; the engine admits the next lines into the window (wf-queue / queue_next: batch_size, after:, touches:, owner:, ⏸), each admitted task runs as a child session (`batch-task`: worktree → worker → merge + tests under the repo's land lock) driven by this agent, and every freed slot re-runs the pick; one fresh-eyes review of the combined diff."
+description: "Long-running batch orchestration — a queue file of tasks; the engine admits the next lines into the window (wf-queue / queue_next: batch_size, after:, touches:, owner:, parked), each admitted task runs as a child session (`batch-task`: worktree → worker → merge + tests under the repo's land lock) driven by this agent, and every freed slot re-runs the pick; one fresh-eyes review of the combined diff."
 initial: load_skills
 max_transitions: 1000
 
@@ -18,70 +18,87 @@ states:
     prompt: |
       Build the task queue for this batch run.
 
-      1. **Resume check** — list `{{context.cwd}}/.claude/batch/*.md`. If a
-         queue file has pending `[ ]` or running `[>]` lines and matches the
+      1. **Resume check** — list `{{context.cwd}}/.claude/batch/*.yaml`. If a
+         queue file has pending or running tasks and matches the
          user's ask, RESUME it: `suspended` → `resume` the task sessions of
-         the previous run (they keep their worktrees); a `[>]` line whose
+         the previous run (they keep their worktrees); a running task whose
          session is gone → `queue_mark({file, id, to: "released"})` (nothing
          of it landed) and its worktree is reused by the next pick. No
-         `base:` line → reconstruct it per repo (the last commit before the
+         `base:` entry → reconstruct it per repo (the last commit before the
          queue's first task landed: `git log --before=<queue file ctime>`).
          Then go to step 3.
-      2. **New queue** — write `{{context.cwd}}/.claude/batch/<short-name>.md`:
-         ```
-         # Batch: <short-name>
+      2. **New queue** — create `{{context.cwd}}/.claude/batch/<short-name>.yaml`
+         through `queue_add({queue: "<short-name>", task: {…}})` (the first add creates
+         it), then `queue_header` for the window; header keys you write by hand once,
+         before the run is live:
+         ```yaml
          batch_size: 3
-         base: <repo-abs-path>=<sha>
+         reason: <why this window>
+         base: [<repo-abs-path>=<sha>]
          land_test: <the project's test command, run after each merge; omit for none>
          record_file: <a file each landed task appends one record line to; omit for none>
-         ## Tasks
-         - [ ] T1 | difficulty: 7 | touches: src/a, docs | <self-contained task prompt> |
-         - [ ] T2 | model: sonnet | effort: high | after: T1 | touches: src/b | repo: other-repo | <prompt> |
+         tasks:
+           - id: T1
+             status: pending
+             difficulty: 7
+             touches: [src/a, docs]
+             text: |-
+               <self-contained task prompt>
+           - id: T2
+             status: pending
+             model: sonnet
+             effort: high
+             repo: other-repo
+             after: [T1]
+             touches: [src/b]
+             text: |-
+               <prompt>
          ```
          Keep the queue file out of git (untracked + ignored, e.g. `.claude/batch/`
          in `.gitignore`): a tracked queue dirties the tree on the first pick and
          every land refuses (exit 3).
-         One `base:` line per repo the tasks touch; <sha> = `git -C <repo>
+         One `base:` entry per repo the tasks touch; <sha> = `git -C <repo>
          stash create` (snapshots a dirty tree without touching it) or `git -C
          <repo> rev-parse HEAD` when that prints nothing (clean tree).
-         Line fields (`key: value`, any order; the rest is the task's text):
+         Task keys (`text` is the brief; `notes:` a list of `{from, date, text}`):
          - `difficulty:` — 1..10, how hard the task is: the task workflow's
            `model_table` maps it to the model/effort of each stage — worker,
            fix round, review, verifying review (see `batch-task`'s table) —
            and moves the worker and fix rows one row up on a second fix round. Prefer it to `model`/`effort`: the
            ledger keeps difficulty, model, effort and tokens per task, so the
            table can be tuned from data.
-         - `model` / `effort` — a line without `difficulty:`, per
+         - `model` / `effort` — a task without `difficulty:`, per
            task-delegation's table: opus/high for non-trivial
            code/judgement, sonnet/high for code from a detailed plan,
            sonnet/medium for routine review, haiku/low for runners.
-           `model: —` = a line the parent does itself (never admitted).
-         - `touches:` — the paths (prefixes) the task edits. Two lines of one
-           repo whose paths overlap never run together; a line WITHOUT
+           `model: —` = a task the parent does itself (never admitted).
+         - `touches:` — the paths (prefixes) the task edits. Two tasks of one
+           repo whose paths overlap never run together; a task WITHOUT
            `touches:` runs alone in its repo. With `overlap: files` in the
            header only FILE entries (an existing file, or a new path like
            `src/x/Foo.hx`) conflict, on the same file; a directory or glob
            entry is a hint. `owner:` — one
-           name (`typer`, `typer.flow`): lines of one owner run one at a
-           time. `exclusive: yes` — the line runs alone (mass moves, renames,
+           name (`typer`, `typer.flow`): tasks of one owner run one at a
+           time. `exclusive: true` — the task runs alone (mass moves, renames,
            reformats).
-         - `after:` — ids that must be `[x]` first.
+         - `after:` — ids that must be done first.
          - `repo:` — another repo (absolute path, or a name: the `base:` repo
            of that name, else the directory beside this project); default
            this project.
-         - `workflow:` — the line's own task workflow (e.g. the heir of
+         - `workflow:` — the task's own task workflow (e.g. the heir of
            `batch-task` its repo defines); default this run's `task_workflow`.
-         - `⏸` in a field — the line is skipped until the mark is removed.
+         - `parked: true` — the task is skipped until unparked; `status: backlog`
+           — kept for later, never picked (`queue_mark` `promoted` makes it pending).
          Each task runs in its OWN worktree (`<repo>/../.wt/<repo-name>/<ID>`,
          branch `batch/<ID>`) and lands by `git merge --no-ff` + `land_test`,
          one land per repo at a time — so tasks need not avoid sharing
          infrastructure files; `touches:` is about logic that must not be
-         edited twice at once. Each line is self-contained: a worker sees ONLY
-         its line. `batch_size` = max parallel tasks; `batch_size: 0  # why,
-         was N` pauses: running tasks finish, nothing new starts. The user may
+         edited twice at once. Each task is self-contained: a worker sees ONLY
+         its task. `batch_size` = max parallel tasks; `batch_size: 0` (with its
+         `reason:`) pauses: running tasks finish, nothing new starts. The user may
          edit the file mid-run — every pick re-reads it.
       3. `context_set(key: "queue_file", value: "<absolute path>")` (the project's
-         `.claude/batch/<name>.md` written out as an absolute path: task sessions get the
+         `.claude/batch/<name>.yaml` written out as an absolute path: task sessions get the
          path and never re-resolve a name from their own repo) and
          `context_set(key: "task_workflow", value: "batch-task")` (a project
          with its own heir of `batch-task` names it here).
@@ -89,21 +106,21 @@ states:
       file; task drivers hand it to their decider (skip it when the project has none).
       4. → transition `ready`.
 
-      Marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed. Only the
-      engine changes marks: `queue_next` / `queue_mark` (exec: `wf-queue`),
+      Statuses: pending, running, done, failed, backlog. Only the
+      engine changes them: `queue_next` / `queue_mark` (exec: `wf-queue`),
       under the queue's lock. Once the run is live, change the queue through
-      the same lock: `queue_add` (new line, checked as a pick reads it),
-      `queue_edit` (a line's fields, a note), `queue_header` (window / pause
-      with its reason), `queue_mark` with `retry: true` (a `[!]` line again;
+      the same lock: `queue_add` (a new task, checked as a pick reads it),
+      `queue_edit` (a task's fields, a note), `queue_header` (window / pause
+      with its reason), `queue_mark` with `retry: true` (a failed task again;
       its `difficulty:` goes up by one, so the re-run starts a model row up)
-      — a script or sed edit can drop a mark an exec writes at that moment. The queue FILE is the source of truth — it
+      — a script or sed edit can drop a status an exec writes at that moment. The queue FILE is the source of truth — it
       survives context compression and session restarts.
     transitions:
       ready: pick
 
   pick:
     type: exec
-    # Deterministic admission + `[>]` marks under the queue's lock (the exec form of queue_next).
+    # Deterministic admission + running statuses under the queue's lock (the exec form of queue_next).
     command: '"$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --explain'
     env:
       QUEUE: "{{context.queue_file}}"
@@ -121,8 +138,8 @@ states:
       The pick failed (exit {{exit_code}}):
       {{stdout}}
       {{stderr}}
-      A held lock (`<queue>.lock`: another pick is writing) → `retry`. A malformed queue (no `## Tasks`,
-      no `batch_size:`) → fix the header and `retry`, or `stop`.
+      A held lock (`<queue>.lock`: another pick is writing) → `retry`. A malformed queue (not YAML, no
+      `batch_size:`, a bad task) → fix the header and `retry`, or `stop`.
     transitions:
       retry: pick
       stop: report
@@ -141,7 +158,7 @@ states:
 
   dispatch:
     prompt: |-
-      The pick admitted (and marked `[>]` in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow difficulty`:
+      The pick admitted (and set running in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow difficulty`:
       {{stdout}}
       {{stderr}}
 
@@ -168,7 +185,7 @@ states:
       Task sessions: `status({session_id: "{{session_id}}", key: "tasks"})` (ID=P). Last pick:
       {{stderr}}
 
-      Woken by a DRIVER's one line (the task's bookkeeping — `[x]`, the record line — is already done):
+      Woken by a DRIVER's one line (the task's bookkeeping — done, the record line — is already done):
       - `LANDED <sha> task=<ID> …` / `CLOSED task=<ID> …` → the task session ended: route below. Their `lessons=<phrase (file)>; …|none` tail is
         the agents' own follow-ups, copied: turn each into a `queue_add` line, a memory note, or nothing.
         A trailing `decided=<file>` means a decider answered design choices without you: audit that file
@@ -207,7 +224,7 @@ states:
         `slot_free` (the pick runs again and refills the freed slot).
       - a task session ended `stopped` → `stop`.
       - task sessions still running, none ended → END your turn here, no transition.
-      - none of YOURS runs and the last pick admitted nothing (exit 10: the `[>]` lines left belong to
+      - none of YOURS runs and the last pick admitted nothing (exit 10: the running tasks left belong to
         other sessions, or block by overlap) → `stalled`.
     transitions:
       slot_free: pick
@@ -261,9 +278,9 @@ states:
          duplicated code introduced by different workers, conflicting
          assumptions.
       4. Real findings: trivial → fix inline; substantial → first write
-         one `review_base: <repo-abs-path>=<sha>` line per repo (same
+         one `review_base: <repo-abs-path>=<sha>` header key per repo (same
          snapshot rule as `base:`, taken NOW) into the header, then append the findings as
-         new `[ ]` task lines and → `refill` (the pick admits them like any
+         new pending tasks (`queue_add`) and → `refill` (the pick admits them like any
          other line). At most 3 visits — on the 3rd (the
          engine's `Revisit #3` header) no `refill`: fix inline or list what
          remains for the report as a human decision (a 4th entry throws).
@@ -281,9 +298,9 @@ states:
          will actually read:
          - What the batch ACCOMPLISHED — outcomes grouped by theme,
            not a per-task echo of the queue.
-         - Counts: done / failed / total; one line per `[!]` task with
-           its reason; why the remaining `[ ]` lines were not admitted
-           (the last pick's reasons: after:, ⏸, overlap, pause).
+         - Counts: done / failed / total; one line per failed task with
+           its reason; why the remaining pending tasks were not admitted
+           (the last pick's reasons: after:, parked, overlap, pause).
          - Review verdict (findings and how they were resolved, seams
            between tasks, or "clean").
          - Anything left unverified or needing a human decision.

@@ -60,7 +60,7 @@ states:
   claim:
     prompt: |-
       Task session {{session_id}} (dispatcher {{parent_session_id}}), repo {{context.cwd}}. The pick already
-      marked the line `[>]`. Every `transition` reply IS the next prompt — never call `status` after it.
+      set the task running. Every `transition` reply IS the next prompt — never call `status` after it.
       context_set on THIS session (session_id {{session_id}}), each its own call — skip a key the dispatcher
       already passed to `start` (task {{context.task}}, queue_file {{context.queue_file}}, difficulty
       {{context.difficulty}}, model {{context.model}}, effort {{context.effort}}; empty = not passed — a
@@ -106,7 +106,7 @@ states:
       {{stderr}}
       A stale branch `batch/{{context.task}}` without its directory: decide (delete it only if it holds nothing
       unmerged) and `retry`. Otherwise `queue_mark({file: "{{context.queue_file}}", id: "{{context.task}}", to:
-      "released"})` (back to `[ ]`, nothing was made) → `release`, or `to: "failed"` with the reason as `note`
+      "released"})` (back to pending, nothing was made) → `release`, or `to: "failed"` with the reason as `note`
       → `close`.
     transitions:
       retry: project_prepare
@@ -125,7 +125,7 @@ states:
       2. Spawn ONE worker: Agent, model {{context.model}}, effort {{context.effort}}, `run_in_background: true`;
          context_set `worker_model` = "{{context.model}}/{{context.effort}}". Prompt:
 
-           You are the worker of task {{context.task}}. Your brief is its line in {{context.queue_file}}
+           You are the worker of task {{context.task}}. Your brief is its entry in {{context.queue_file}}
            (read it there; it is self-contained). Your workflow session is W, already started — do NOT call
            start(): first `status({session_id: "W"})`, then follow it to its terminal, passing session_id W
            in every call; every `transition` reply IS the next prompt — never call `status` after it. Work
@@ -274,9 +274,9 @@ states:
 
   mark_done:
     type: exec
-    # Bookkeeping without a model turn: `[x]` with the landed sha, then — when the queue header names a
+    # Bookkeeping without a model turn: done with the landed sha, then — when the queue header names a
     # `record_file:` (relative = beside the queue) — one record line from the task's context. A failed
-    # append only warns: the task landed and `[x]` is set, so cleanup must still run.
+    # append only warns: the task landed and is done, so cleanup must still run.
     command: |-
       sha=$(git rev-parse --short HEAD) || exit 1
       "$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --done "$TASK" --note "landed $sha" || exit 1
@@ -327,7 +327,7 @@ states:
       Bookkeeping or cleanup of the landed {{context.task}} refused (exit {{exit_code}}):
       {{stdout}}
       {{stderr}}
-      Leave what it kept; make sure the line is `[x]` (`queue_mark` to `done` if the mark step failed) and
+      Leave what it kept; make sure the task is done (`queue_mark` to `done` if the mark step failed) and
       note what was kept on it. Transition `done`.
     transitions:
       done: done
@@ -349,12 +349,12 @@ states:
   closed:
     terminal: true
     outcome: complete
-    prompt: "Task {{context.task}} closed without landing (`[!]`). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): its slot is free — in {{parent_session_id}} transition `slot_free`."
+    prompt: "Task {{context.task}} closed without landing (failed). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): its slot is free — in {{parent_session_id}} transition `slot_free`."
 
   released:
     terminal: true
     outcome: complete
-    prompt: "Task {{context.task}} released before any work (`[ ]` again). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): in {{parent_session_id}} transition `slot_free`."
+    prompt: "Task {{context.task}} released before any work (pending again). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): in {{parent_session_id}} transition `slot_free`."
 
   stopped:
     terminal: true

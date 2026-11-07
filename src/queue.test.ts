@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import YAML from "yaml";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +19,24 @@ import {
   setQueueWindow,
 } from "./queue.js";
 import { formatQueueNext } from "./tools.js";
+import { convertLine, markdownToYaml } from "./queue-convert.js";
+
+/** The old Markdown fixtures, read as the YAML they convert to. */
+const parseMd = (text: string, file: string) => parseQueue(markdownToYaml(text), file);
+/** A task written as an old `ID | key: value | … | text` line. */
+function taskOf(line: string): Record<string, unknown> {
+  const t = convertLine(line.trim().startsWith("- [") ? line.trim() : `- [ ] ${line.trim()}`);
+  if (!t) throw new Error(`not a line: ${line}`);
+  const notes = t.notes.length > 0 ? { notes: t.notes } : {};
+  return {
+    id: t.id,
+    ...(t.status !== "pending" ? { status: t.status } : {}),
+    ...t.fields,
+    ...notes,
+  };
+}
+const addLine = (file: string, line: string, ...rest: [] | [object] | [object, object]) =>
+  addQueueLine(file, taskOf(line), ...(rest as [object?, object?]));
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -25,22 +44,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A project (a `.git` dir) with its queue at `.claude/batch/q.md`; returns the queue path. */
+/** A project (a `.git` dir) with its queue at `.claude/batch/q.yaml` (written as the old Markdown, converted); returns the queue path. */
 function queueFile(body: string, header = "batch_size: 2"): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wf-queue-"));
   dirs.push(root);
   const proj = path.join(root, "proj");
   fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
   fs.mkdirSync(path.join(proj, ".claude", "batch"), { recursive: true });
-  const file = path.join(proj, ".claude", "batch", "q.md");
-  fs.writeFileSync(file, `# Batch: t\n${header}\n\n## Tasks\n${body}\n`);
+  const file = path.join(proj, ".claude", "batch", "q.yaml");
+  fs.writeFileSync(file, markdownToYaml(`# Batch: t\n${header}\n\n## Tasks\n${body}\n`));
   return file;
 }
 
 const plan = (body: string, header?: string) => planPick(readQueue(queueFile(body, header)));
 const admittedIds = (body: string, header?: string) => plan(body, header).admitted.map(a => a.id);
+const MARK = { pending: " ", running: ">", done: "x", failed: "!", backlog: "~" } as const;
+/** Each task's status as the old one-character mark (` ` pending, `>` running, `x` done, `!` failed). */
 const marks = (file: string) =>
-  Object.fromEntries(readQueue(file).lines.map(l => [l.id, l.mark] as const));
+  Object.fromEntries(readQueue(file).lines.map(l => [l.id, MARK[l.status]] as const));
+/** Each task as one row `- [m] ID | key: value | … | note(from): text`, in the file's key order. */
+const taskRows = (file: string) =>
+  (YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] }).tasks.map(
+    t => {
+      const parts = Object.entries(t)
+        .filter(([k]) => k !== "id" && k !== "status")
+        .flatMap(([k, v]) =>
+          k === "notes"
+            ? (v as { from: string; text: string }[]).map(n => `note(${n.from}): ${n.text}`)
+            : [`${k}: ${Array.isArray(v) ? v.join(", ") : String(v)}`],
+        );
+      return [
+        `- [${MARK[(t.status ?? "pending") as keyof typeof MARK]}] ${String(t.id)}`,
+        ...parts,
+      ].join(" | ");
+    },
+  );
 
 describe("queue admission (parity with the picker script)", () => {
   const T = "touches: ";
@@ -139,7 +177,7 @@ describe("queue admission (parity with the picker script)", () => {
     const r = plan(`- [>] R | touches: a\n- [ ] A | touches: a/b\n- [ ] B | after: R | touches: b`);
     expect(r.reasons).toEqual([
       { id: "A", why: "overlaps R (touches a/b ~ a)" },
-      { id: "B", why: "after: R[>]" },
+      { id: "B", why: "after: R (running)" },
     ]);
   });
 
@@ -295,20 +333,20 @@ describe("queue overlap: files, exclusive:, repos", () => {
   it("one repo spelled two ways (absent repo: and its absolute path) is still one repo", () => {
     const file = queueFile(`- [ ] A | touches: src/a.ts`, "batch_size: 3");
     const proj = path.resolve(path.dirname(file), "..", "..");
-    fs.appendFileSync(file, `- [ ] B | repo: ${proj} | touches: src/a.ts\n`);
+    fs.appendFileSync(file, `  - id: B\n    repo: ${proj}\n    touches: [src/a.ts]\n`);
     const r = planPick(readQueue(file));
     expect(r.admitted.map(a => a.id)).toEqual(["A"]);
     expect(r.reasons).toEqual([{ id: "B", why: "overlaps A (touches src/a.ts ~ src/a.ts)" }]);
   });
 
   it("an overlap: value that is neither paths nor files refuses the pick only; a # comment is allowed", async () => {
-    const bad = parseQueue("# x\nbatch_size: 1\noverlap: file\n## Tasks\n", "q");
+    const bad = parseMd("# x\nbatch_size: 1\noverlap: file\n## Tasks\n", "q");
     expect(bad.overlap).toBe("paths");
     expect(() => planPick(bad)).toThrow(/overlap: "file" is not one of paths, files/);
-    expect(parseQueue("# x\nbatch_size: 1\noverlap: files  # why\n## Tasks\n", "q").overlap).toBe(
+    expect(parseMd("# x\nbatch_size: 1\noverlap: files  # why\n## Tasks\n", "q").overlap).toBe(
       "files",
     );
-    expect(parseQueue("# x\nbatch_size: 1\n## Tasks\n", "q").overlap).toBe("paths");
+    expect(parseMd("# x\nbatch_size: 1\n## Tasks\n", "q").overlap).toBe("paths");
     // The running lines are not stranded: marks, edits and the pause still go through the engine.
     const file = queueFile(
       `- [>] R | touches: a\n- [ ] A | touches: b`,
@@ -364,10 +402,12 @@ describe("queue overlap: files, exclusive:, repos", () => {
 
   it("queue_add and queue_edit take exclusive: as a field", async () => {
     const file = queueFile(`- [ ] A | touches: a`);
-    await addQueueLine(file, "B | touches: b | exclusive: yes | Move the tree.");
+    await addLine(file, "B | touches: b | exclusive: yes | Move the tree.");
     expect(readQueue(file).lines.find(l => l.id === "B")?.meta.exclusive).toBe("yes");
-    await editQueueLine(file, "A", { exclusive: "rename" });
-    expect(readQueue(file).lines.find(l => l.id === "A")?.meta.exclusive).toBe("rename");
+    await editQueueLine(file, "A", { exclusive: true });
+    expect(readQueue(file).lines.find(l => l.id === "A")?.meta.exclusive).toBe("yes");
+    await editQueueLine(file, "A", { exclusive: "no" });
+    expect(readQueue(file).lines.find(l => l.id === "A")?.meta.exclusive).toBeUndefined();
   });
 });
 
@@ -426,8 +466,8 @@ describe("queue difficulty:", () => {
 
   it("queue_add and queue_edit accept 1..10 and refuse anything else", async () => {
     const file = queueFile("- [ ] A | touches: a");
-    await addQueueLine(file, "B | difficulty: 3 | touches: b");
-    await expect(addQueueLine(file, "C | difficulty: 0 | touches: c")).rejects.toThrow(
+    await addLine(file, "B | difficulty: 3 | touches: b");
+    await expect(addLine(file, "C | difficulty: 0 | touches: c")).rejects.toThrow(
       'C: difficulty "0" is not a whole number 1..10',
     );
     await editQueueLine(file, "A", { difficulty: "10" });
@@ -435,7 +475,7 @@ describe("queue difficulty:", () => {
       'A: difficulty "2.5" is not a whole number 1..10',
     );
     expect(taskRows(file)).toEqual([
-      "- [ ] A | touches: a | difficulty: 10",
+      "- [ ] A | difficulty: 10 | touches: a",
       "- [ ] B | difficulty: 3 | touches: b",
     ]);
   });
@@ -454,9 +494,18 @@ describe("queue pause (batch_size: 0)", () => {
     expect(plan(`- [>] R | touches: r\n- [ ] A | touches: a`, header).code).toBe(10);
   });
 
-  it("a header without batch_size, or without ## Tasks, is an error", () => {
-    expect(() => parseQueue("# x\nbatch_size: n\n## Tasks\n", "q")).toThrow(/batch_size/);
-    expect(() => parseQueue("# x\nbatch_size: 1\n", "q")).toThrow(/## Tasks/);
+  it("a header without batch_size, a bad tasks: list or a bad task is an error", () => {
+    expect(() => parseQueue("batch_size: n\ntasks: []\n", "q")).toThrow(/batch_size/);
+    expect(() => parseQueue("tasks: []\n", "q")).toThrow(/batch_size/);
+    expect(() => parseQueue("batch_size: 1\ntasks: {}\n", "q")).toThrow(/tasks: is a list/);
+    expect(() => parseQueue("batch_size: 1\ntasks:\n  - id: A\n    status: open\n", "q")).toThrow(
+      /status "open"/,
+    );
+    expect(() => parseQueue("batch_size: 1\ntasks:\n  - id: A\n    toches: [a]\n", "q")).toThrow(
+      /unknown key "toches"/,
+    );
+    expect(() => parseQueue("batch_size: 1\ntasks:\n  - id: A\n  - id: A\n", "q")).toThrow(/twice/);
+    expect(() => parseQueue("batch_size: [1\n", "q")).toThrow(/not YAML/);
   });
 });
 
@@ -468,37 +517,48 @@ describe("queue writes", () => {
     expect(dry.admitted.map(a => a.id)).toEqual(["A"]);
     expect(fs.readFileSync(file, "utf8")).toBe(before);
     await pickQueue(file);
-    expect(fs.readFileSync(file, "utf8")).toBe(before.replace("- [ ] A |", "- [>] A |"));
+    expect(fs.readFileSync(file, "utf8")).toBe(
+      before.replace("- id: A\n    status: pending", "- id: A\n    status: running"),
+    );
   });
 
-  it("queue_mark moves only from the expected mark; a note lands after the id", async () => {
+  it("queue_mark moves only from the expected status; a note goes to notes:", async () => {
     const file = queueFile(`- [>] A | touches: a\n- [ ] B | touches: b`);
-    await expect(markQueue(file, "B", "done")).rejects.toThrow("B is [ ], expected [>]");
-    await expect(markQueue(file, "Z", "done")).rejects.toThrow("no line Z");
+    await expect(markQueue(file, "B", "done")).rejects.toThrow("B is pending, expected running");
+    await expect(markQueue(file, "Z", "done")).rejects.toThrow("no task Z");
     await expect(markQueue(file, "A;rm", "done")).rejects.toThrow("refused task id");
     expect(await markQueue(file, "A", "done", "LANDED abc")).toEqual({
       id: "A",
-      from: ">",
-      to: "x",
+      from: "running",
+      to: "done",
     });
     await markQueue(file, "B", "running");
     await markQueue(file, "B", "released");
-    expect(readQueue(file).rows.filter(r => r.startsWith("- ["))).toEqual([
-      "- [x] A | LANDED abc | touches: a",
+    expect(taskRows(file)).toEqual([
+      "- [x] A | touches: a | note(mark): LANDED abc",
       "- [ ] B | touches: b",
     ]);
+    await markQueue(file, "B", "shelved");
+    expect(planPick(readQueue(file)).pending).toBe(0);
+    await markQueue(file, "B", "promoted");
     await markQueue(file, "B", "running");
     await markQueue(file, "B", "failed");
     expect(marks(file)).toEqual({ A: "x", B: "!" });
   });
 
-  it("a note that would rewrite the line's fields is refused", async () => {
+  it("a note is data: `|`, `key:`, ⏸ and line breaks stay text and touch no field", async () => {
     const file = queueFile(`- [>] A | touches: a`);
-    for (const note of ["x | touches: b", "after: B", "  model: x", "wait ⏸", "two\nlines"])
-      await expect(markQueue(file, "A", "done", note)).rejects.toThrow("a note is one line");
-    expect(marks(file).A).toBe(">");
-    await markQueue(file, "A", "done", "LANDED abc; tokens: 5k");
-    expect(readQueue(file).rows).toContain("- [x] A | LANDED abc; tokens: 5k | touches: a");
+    await markQueue(file, "A", "done", "x | touches: b\nafter: B ⏸", { from: "driver" });
+    const a = readQueue(file).lines[0];
+    expect(a.meta).toEqual({ touches: "a" });
+    expect(a.paused).toBe(false);
+    expect(a.notes).toEqual([
+      {
+        from: "driver",
+        date: expect.stringMatching(/^\d{4}-\d\d-\d\d$/) as unknown,
+        text: "x | touches: b\nafter: B ⏸",
+      },
+    ]);
   });
 
   it("a hand edit made between the read and the write is kept: the pick plans again", async () => {
@@ -507,7 +567,8 @@ describe("queue writes", () => {
     let reads = 0;
     vi.spyOn(fs, "readFileSync").mockImplementation(((p: fs.PathOrFileDescriptor, o?: never) => {
       const text = real(p, o);
-      if (p === file && ++reads === 1) fs.appendFileSync(file, "- [ ] HAND | touches: h\n");
+      if (p === file && ++reads === 1)
+        fs.appendFileSync(file, "  - id: HAND\n    status: pending\n    touches: [h]\n");
       return text;
     }) as typeof fs.readFileSync);
     const r = await pickQueue(file);
@@ -549,24 +610,37 @@ describe("queue writes", () => {
   });
 });
 
-const taskRows = (file: string) => readQueue(file).rows.filter(r => r.startsWith("- ["));
-
 describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
-  it("add: after the last task line, after_id / before_id, with or without `- [ ] `", async () => {
-    const file = queueFile(`- [ ] A | touches: a\n- [x] B | touches: b\n\ntrailing prose`);
-    expect(await addQueueLine(file, "C | touches: c | brief |")).toEqual({ id: "C", lineNo: 7 });
-    await addQueueLine(file, "- [ ] D | after: B | touches: d |", { after: "A" });
-    await addQueueLine(file, "E | touches: e | owner: x", { before: "A" });
+  it("add: last, after_id / before_id; a backlog task; comments and order of the file stay", async () => {
+    const file = queueFile(`- [ ] A | touches: a\n- [x] B | touches: b`);
+    fs.writeFileSync(file, `# the queue\n${fs.readFileSync(file, "utf8")}# trailing comment\n`);
+    const c = await addLine(file, "C | touches: c | brief |");
+    expect(c.id).toBe("C");
+    expect(fs.readFileSync(file, "utf8").split("\n")[c.lineNo - 1]).toBe("  - id: C");
+    await addLine(file, "- [ ] D | after: B | touches: d |", { after: "A" });
+    await addLine(file, "E | touches: e | owner: x", { before: "A" });
+    await addQueueLine(file, {
+      id: "F",
+      status: "backlog",
+      touches: "f",
+      text: "later",
+      notes: [{ from: "user", date: "2026-01-02", text: "kept date" }, { text: "today" }],
+    });
     expect(taskRows(file)).toEqual([
       "- [ ] E | touches: e | owner: x",
       "- [ ] A | touches: a",
-      "- [ ] D | after: B | touches: d |",
+      "- [ ] D | after: B | touches: d",
       "- [x] B | touches: b",
-      "- [ ] C | touches: c | brief |",
+      "- [ ] C | touches: c | text: brief",
+      "- [~] F | touches: f | text: later | note(user): kept date | note(parent): today",
     ]);
-    expect(fs.readFileSync(file, "utf8")).toMatch(
-      /- \[ \] C \| touches: c \| brief \|\n\ntrailing prose\n$/,
-    );
+    const f = readQueue(file).lines.find(l => l.id === "F");
+    expect(f?.notes[0].date).toBe("2026-01-02");
+    expect(f?.notes[1].date).toMatch(/^\d{4}-\d\d-\d\d$/);
+    const text = fs.readFileSync(file, "utf8");
+    expect(text.startsWith("# the queue\n")).toBe(true);
+    expect(text).toContain("# trailing comment");
+    expect(text).toContain("    text: |-\n      brief\n");
     expect(planPick(readQueue(file)).admitted.map(a => a.id)).toEqual(["E", "A"]);
   });
 
@@ -575,23 +649,23 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     const before = fs.readFileSync(file, "utf8");
     const refusals: [string, string, { after?: string; before?: string }?][] = [
       ["A | touches: z", "A is already in"],
-      ["C | after: A, X9 | touches: c", "after: X9 — no such line"],
+      ["C | after: A, X9 | touches: c", "after: X9 — no such task"],
       ["C | after: C | touches: c", "closes a cycle C → C"],
-      ["C | toches: c", 'unknown field "toches:"'],
-      ["C | touches: c | touches: d", "touches: given twice"],
       ["C | workflow: two words", "is not a workflow name"],
       ["C | repo: nowhere-such", "resolves to no directory"],
-      ["- [x] C | touches: c", "a new line is [ ], not [x]"],
-      ["C;rm | touches: c", "refused task id"],
-      ["C | touches: c\n- [ ] D", "one row"],
-      ["C | touches: c", "no line Z", { after: "Z" }],
+      ["- [x] C | touches: c", "a new task is pending or backlog, not done"],
+      ["C | touches: c", "no task Z", { after: "Z" }],
       ["C | touches: c", "exclude each other", { after: "A", before: "B" }],
     ];
     for (const [line, why, pos] of refusals)
-      await expect(addQueueLine(file, line, pos)).rejects.toThrow(why);
+      await expect(addLine(file, line, pos)).rejects.toThrow(why);
+    await expect(addQueueLine(file, { id: "C;rm" })).rejects.toThrow("refused task id");
+    await expect(addQueueLine(file, { id: "C", toches: ["c"] })).rejects.toThrow(
+      'unknown key "toches"',
+    );
     expect(fs.readFileSync(file, "utf8")).toBe(before);
     // Prose beside the ids is a condition for a human, as in a pick: allowed.
-    await addQueueLine(file, "C | after: B + a week of data | touches: c");
+    await addLine(file, "C | after: B + a week of data | touches: c");
     expect(planPick(readQueue(file)).reasons.find(x => x.id === "C")?.why).toContain("manual");
   });
 
@@ -601,7 +675,7 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     await Promise.all([
       ...Array.from({ length: 4 }, (_, i) => markQueue(file, `R${i}`, "done", `landed ${i}`)),
       ...Array.from({ length: 4 }, (_, i) =>
-        addQueueLine(file, `N${i} | after: R${i} | touches: n${i}`),
+        addLine(file, `N${i} | after: R${i} | touches: n${i}`),
       ),
     ]);
     const m = marks(file);
@@ -610,18 +684,18 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
       expect(m[`R${i}`]).toBe("x");
       expect(m[`N${i}`]).toBe(" ");
     }
-    expect(taskRows(file)).toContain("- [x] R2 | landed 2 | touches: r2");
+    expect(taskRows(file)).toContain("- [x] R2 | touches: r2 | note(mark): landed 2");
   });
 
   it("a mark written between an op's read and its write is kept: add, edit and header plan again", async () => {
     const ops: [string, (file: string) => Promise<unknown>, string][] = [
-      ["add", f => addQueueLine(f, "N | touches: n"), "- [ ] N | touches: n"],
+      ["add", f => addLine(f, "N | touches: n"), "- [ ] N | touches: n"],
       [
         "edit",
         f => editQueueLine(f, "B", { model: "sonnet" }),
-        "- [ ] B | touches: b | model: sonnet",
+        "- [ ] B | model: sonnet | touches: b",
       ],
-      ["header", f => setQueueWindow(f, 0, "pause"), "batch_size: 0  # pause"],
+      ["header", f => setQueueWindow(f, 0, "pause"), "- [ ] B | touches: b"],
     ];
     for (const [name, op, row] of ops) {
       const file = queueFile(`- [>] A | touches: a\n- [ ] B | touches: b`);
@@ -634,49 +708,52 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
         const text = real(p, o);
         // An exec's mark lands right after the op's first read, outside its lock.
         if (p === file && ++reads === 1)
-          fs.writeFileSync(file, String(text).replace("- [>] A |", "- [x] A | landed |"));
+          fs.writeFileSync(
+            file,
+            String(text).replace("- id: A\n    status: running", "- id: A\n    status: done"),
+          );
         return text;
       }) as typeof fs.readFileSync);
       await op(file);
       spy.mockRestore();
       expect(reads, name).toBeGreaterThan(2);
-      const rows = readQueue(file).rows;
-      expect(rows, name).toContain("- [x] A | landed | touches: a");
+      const rows = taskRows(file);
+      expect(rows, name).toContain("- [x] A | touches: a");
       expect(rows, name).toContain(row);
+      if (name === "header") expect(readQueue(file).batchSize).toBe(0);
     }
   });
 
-  it("add refuses an unknown key without a space; edit keeps a field's missing lead space", async () => {
-    const file = queueFile(`- [ ] A |touches: a`);
-    await expect(addQueueLine(file, "C | toches:c")).rejects.toThrow('unknown field "toches:"');
-    await addQueueLine(file, "D | touches: d | see https://x.y/z |");
-    expect((await editQueueLine(file, "A", { model: "haiku" })).line).toBe(
-      "- [ ] A |touches: a | model: haiku",
-    );
-  });
-
-  it('edit: a set field keeps its place, a new one follows the metadata, "" removes, a note goes last', async () => {
+  it('edit: a set field keeps its place, a new one goes in key order, "" removes, a note goes to notes:', async () => {
     const file = queueFile(
-      `- [>] A | LANDED x | model: opus | touches: a | brief text |\n- [ ] B | touches: b | model: haiku | model: sonnet`,
+      `- [>] A | LANDED x | model: opus | touches: a | brief text |\n- [ ] B | touches: b | model: haiku`,
     );
-    expect(
-      (await editQueueLine(file, "A", { model: "sonnet", effort: "high" }, "requeued by hand"))
-        .line,
-    ).toBe(
-      "- [>] A | LANDED x | model: sonnet | touches: a | effort: high | brief text | requeued by hand |",
+    const a = await editQueueLine(
+      file,
+      "A",
+      { model: "sonnet", effort: "high" },
+      "requeued by hand",
     );
-    await editQueueLine(file, "B", { model: "", after: "A" });
-    expect(taskRows(file)[1]).toBe("- [ ] B | touches: b | after: A");
+    expect(a.task).toMatch(
+      /^id: A\nstatus: running\nmodel: sonnet\neffort: high\ntouches: \[ a \]\ntext: \|-\n {2}brief text\nnotes:\n/,
+    );
+    expect(taskRows(file)[0]).toBe(
+      "- [>] A | model: sonnet | effort: high | touches: a | text: brief text | note(mark): LANDED x | note(parent): requeued by hand",
+    );
+    await editQueueLine(file, "B", { model: "", after: "A", text: "two\nlines" });
+    expect(taskRows(file)[1]).toBe("- [ ] B | after: A | touches: b | text: two\nlines");
+    await editQueueLine(file, "B", { after: ["A"], touches: null, parked: true });
+    expect(readQueue(file).lines[1].paused).toBe(true);
+    expect(readQueue(file).lines[1].meta.touches).toBeUndefined();
     expect(marks(file)).toEqual({ A: ">", B: " " });
     const before = fs.readFileSync(file, "utf8");
-    const refusals: [string, Record<string, string>, string | undefined, string][] = [
-      ["A", { text: "x" }, undefined, 'unknown field "text"'],
-      ["A", { touches: "a | model: x" }, undefined, "without `|`"],
-      ["A", { after: "Q1" }, undefined, "after: Q1 — no such line"],
+    const refusals: [string, Record<string, unknown>, string | undefined, string][] = [
+      ["A", { status: "done" }, undefined, 'unknown field "status"'],
+      ["A", { model: "a\nb" }, undefined, "a value is one line"],
+      ["A", { after: "Q1" }, undefined, "after: Q1 — no such task"],
       ["A", { after: "B" }, undefined, "closes a cycle A → B → A"],
-      ["A", {}, "after: B", "a note is one line"],
       ["A", {}, undefined, "nothing to edit"],
-      ["Z", { model: "x" }, undefined, "no line Z"],
+      ["Z", { model: "x" }, undefined, "no task Z"],
     ];
     for (const [id, set, note, why] of refusals)
       await expect(editQueueLine(file, id, set, note)).rejects.toThrow(why);
@@ -685,13 +762,15 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
 
   it("header: batch_size with its reason; the pause reads back as a pause", async () => {
     const file = queueFile(`- [ ] A | touches: a`, "batch_size: 2  # two at once");
+    expect(readQueue(file).batchComment).toBe("two at once");
     expect(await setQueueWindow(file, 0, "user review, was 2")).toEqual({
       from: 2,
       to: 0,
       reason: "user review, was 2",
     });
     const q = readQueue(file);
-    expect(q.rows[1]).toBe("batch_size: 0  # user review, was 2");
+    expect(fs.readFileSync(file, "utf8")).toMatch(/^batch_size: 0\nreason: user review, was 2\n/);
+    expect(q.batchComment).toBe("user review, was 2");
     expect(planPick(q).code).toBe(12);
     await expect(setQueueWindow(file, 1, " ")).rejects.toThrow("the reason is one non-empty line");
     await expect(setQueueWindow(file, -1, "x")).rejects.toThrow("whole number");
@@ -699,21 +778,23 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     expect(readQueue(file).batchSize).toBe(3);
   });
 
-  it("mark retry: `[!]`→`[>]` only with retry and `running`", async () => {
+  it("mark retry: failed → running only with retry and `running`", async () => {
     const file = queueFile(`- [!] A | failed once | touches: a\n- [ ] B | touches: b`);
     await expect(markQueue(file, "A", "running")).rejects.toThrow("retry: true restarts");
     await expect(markQueue(file, "A", "done", undefined, { retry: true })).rejects.toThrow(
       "with `running` only",
     );
     await expect(markQueue(file, "B", "running", undefined, { retry: true })).rejects.toThrow(
-      "B is [ ], expected [!]",
+      "B is pending, expected failed",
     );
     expect(await markQueue(file, "A", "running", "retry 2", { retry: true })).toEqual({
       id: "A",
-      from: "!",
-      to: ">",
+      from: "failed",
+      to: "running",
     });
-    expect(taskRows(file)[0]).toBe("- [>] A | retry 2 | failed once | touches: a");
+    expect(taskRows(file)[0]).toBe(
+      "- [>] A | touches: a | text: failed once | note(mark): retry 2",
+    );
   });
 
   it("mark retry raises the line's difficulty: by one, capped at 10; a line without one is unchanged", async () => {
@@ -728,21 +809,21 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
       "batch_size: 5",
     );
     const a = await markQueue(file, "A", "running", "retry 1", { retry: true });
-    expect(a).toEqual({ id: "A", from: "!", to: ">", difficulty: { from: 4, to: 5 } });
-    expect(formatMark(a)).toBe("A: [!] → [>] (difficulty 4 → 5)");
+    expect(a).toEqual({ id: "A", from: "failed", to: "running", difficulty: { from: 4, to: 5 } });
+    expect(formatMark(a)).toBe("A: failed → running (difficulty 4 → 5)");
     const b = await markQueue(file, "B", "running", undefined, { retry: true });
     expect(b.difficulty).toEqual({ from: 10, to: 10 });
-    expect(formatMark(b)).toBe("B: [!] → [>] (difficulty 10: already the cap)");
+    expect(formatMark(b)).toBe("B: failed → running (difficulty 10: already the cap)");
     for (const id of ["C", "D"]) {
       const r = await markQueue(file, id, "running", undefined, { retry: true });
       expect(r.difficulty).toBeUndefined();
-      expect(formatMark(r)).toBe(`${id}: [!] → [>]`);
+      expect(formatMark(r)).toBe(`${id}: failed → running`);
     }
     // only a retry raises it
     await markQueue(file, "E", "done");
     expect(taskRows(file)).toEqual([
-      "- [>] A | retry 1 | difficulty: 5 | touches: a | Do A. |",
-      "- [>] B | touches: b | difficulty: 10",
+      "- [>] A | difficulty: 5 | touches: a | text: Do A. | note(mark): retry 1",
+      "- [>] B | difficulty: 10 | touches: b",
       "- [>] C | difficulty: - | touches: c",
       "- [>] D | touches: d",
       "- [x] E | difficulty: 2 | touches: e",
@@ -778,24 +859,28 @@ describe("wf-queue CLI", () => {
     dirs.push(root);
     fs.mkdirSync(path.join(root, ".git"));
     vi.spyOn(process, "cwd").mockReturnValue(root);
-    const def = path.join(root, ".claude", "batch", "queue.md");
-    const named = path.join(root, ".claude", "batch", "wave.md");
-    const made = await cli("--add", "A | touches: a");
-    expect(made.out).toBe(`A: added at line 4; the queue did not exist — created ${def}\n`);
+    const def = path.join(root, ".claude", "batch", "queue.yaml");
+    const named = path.join(root, ".claude", "batch", "wave.yaml");
+    const made = await cli("--add", "{id: A, touches: [a]}");
+    expect(made.out).toBe(`A: added at line 3; the queue did not exist — created ${def}\n`);
     vi.spyOn(process, "cwd").mockReturnValue(root);
     expect((await cli("--path")).out).toBe(def);
     vi.spyOn(process, "cwd").mockReturnValue(root);
     expect((await cli("--queue", "wave", "--path")).out).toBe(named);
     vi.spyOn(process, "cwd").mockReturnValue(root);
-    expect((await cli("--queue", "wave", "--add", "B | touches: b")).out).toContain("created");
-    vi.spyOn(process, "cwd").mockReturnValue(root);
-    expect((await cli("--queue", "wave", "--add", "C | touches: c")).out).toBe(
-      "C: added at line 5\n",
+    expect((await cli("--queue", "wave", "--add", "{id: B, touches: [b]}")).out).toContain(
+      "created",
     );
     vi.spyOn(process, "cwd").mockReturnValue(root);
+    expect((await cli("--queue", "wave", "--add", "{id: C, touches: [c]}")).out).toBe(
+      "C: added at line 6\n",
+    );
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    expect((await cli("--queue", "wave", "--add", "C | touches: c")).code).toBe(2);
+    vi.spyOn(process, "cwd").mockReturnValue(root);
     expect((await cli("--queue")).code).toBe(2);
-    const typo = path.join(root, "typo.md");
-    expect((await cli(typo, "--add", "D | touches: d")).code).toBe(2);
+    const typo = path.join(root, "typo.yaml");
+    expect((await cli(typo, "--add", "{id: D}")).code).toBe(2);
     expect(fs.existsSync(typo)).toBe(false);
   });
 
@@ -808,9 +893,14 @@ describe("wf-queue CLI", () => {
     const first = await cli(file, "--explain");
     expect(first.code).toBe(0);
     expect(first.out).toBe(`A\thaiku\t-\t${repo}\t-\t-\n`);
-    expect(first.err).toContain("B: after: A[ ]");
+    expect(first.err).toContain("B: after: A (pending)");
     expect((await cli(file)).code).toBe(10);
-    expect((await cli(file, "--done", "A")).out).toBe("A: [>] → [x]\n");
+    expect((await cli(file, "--done", "A", "--note", "landed abc", "--from", "land")).out).toBe(
+      "A: running → done\n",
+    );
+    expect(readQueue(file).lines[0].notes.map(n => [n.from, n.text])).toEqual([
+      ["land", "landed abc"],
+    ]);
     expect((await cli(file, "--header", "land_test")).out).toBe("npm test");
     const second = await cli(file);
     expect(second.code).toBe(0);
@@ -820,14 +910,39 @@ describe("wf-queue CLI", () => {
     expect((await cli(file, "--bogus")).code).toBe(2);
   });
 
+  it("--convert --into an existing queue appends under its lock and says how many; none is an error", async () => {
+    const file = queueFile(`- [ ] A | touches: a`);
+    const md = path.join(path.dirname(file), "old.md");
+    fs.writeFileSync(md, "batch_size: 1\n## Tasks\n- [ ] T9 (2026-10-22) FLAKE: x\n- [x] D | y\n");
+    fs.mkdirSync(`${file}.lock`);
+    const run = cli("--convert", md, "--into", file);
+    await new Promise(r => setTimeout(r, 100));
+    expect(readQueue(file).lines).toHaveLength(1);
+    fs.rmdirSync(`${file}.lock`);
+    expect((await run).out).toBe(`appended 1 task(s) to ${file}\n`);
+    expect(readQueue(file).lines.map(l => [l.id, l.status])).toEqual([
+      ["A", "pending"],
+      ["T9", "backlog"],
+    ]);
+    fs.writeFileSync(md, "batch_size: 1\n## Tasks\n- [x] D | y\n");
+    const none = await cli("--convert", md, "--into", file);
+    expect(none.code).toBe(2);
+    expect(none.err).toContain("no open task to append");
+  });
+
   it("adds, edits, sets the window and retries a failed line", async () => {
     const file = queueFile(`- [!] A | touches: a`, "batch_size: 2");
-    expect((await cli(file, "--add", "B | after: A | touches: b |", "--before", "A")).out).toBe(
-      "B: added at line 5\n",
+    const added = await cli(
+      file,
+      "--add",
+      "{id: B, after: [A], touches: [b], text: x}",
+      "--before",
+      "A",
     );
-    expect((await cli(file, "--add", "C | after: Q7")).code).toBe(2);
+    expect(added.out).toMatch(/^B: added at line \d+\n$/);
+    expect((await cli(file, "--add", "{id: C, after: [Q7]}")).code).toBe(2);
     expect((await cli(file, "--edit", "B", "--set", "model=sonnet", "--set", "after=")).out).toBe(
-      "- [ ] B | touches: b | model: sonnet |\n",
+      "id: B\nstatus: pending\nmodel: sonnet\ntouches: [ b ]\ntext: |-\n  x\n",
     );
     expect((await cli(file, "--edit", "B", "--set", "nokey")).code).toBe(2);
     expect((await cli(file, "--batch-size", "0", "--reason", "pause for review")).out).toBe(
@@ -835,11 +950,11 @@ describe("wf-queue CLI", () => {
     );
     expect((await cli(file, "--batch-size", "1")).code).toBe(2);
     expect((await cli(file, "--running", "A")).code).toBe(2);
-    expect((await cli(file, "--running", "A", "--retry")).out).toBe("A: [!] → [>]\n");
+    expect((await cli(file, "--running", "A", "--retry")).out).toBe("A: failed → running\n");
     await cli(file, "--failed", "A");
     expect((await cli(file, "--edit", "A", "--set", "difficulty=6")).code).toBe(0);
     expect((await cli(file, "--running", "A", "--retry")).out).toBe(
-      "A: [!] → [>] (difficulty 6 → 7)\n",
+      "A: failed → running (difficulty 6 → 7)\n",
     );
     expect((await cli(file, "--done", "A", "--retry")).code).toBe(2);
     expect(marks(file)).toEqual({ B: " ", A: ">" });
@@ -896,18 +1011,21 @@ describe("queue names", () => {
 
   it("no file and no queue: the project's default queue, from a subdirectory", () => {
     const { main } = project();
-    const want = path.join(main, ".claude", "batch", "queue.md");
+    const want = path.join(main, ".claude", "batch", "queue.yaml");
     expect(resolveQueueFile({}, main)).toBe(want);
     expect(resolveQueueFile({}, path.join(main, "sub"))).toBe(want);
   });
 
-  it("a name is .claude/batch/<name>.md; a path is taken as it is; a path-like name is refused", () => {
+  it("a name is .claude/batch/<name>.yaml; a path is taken as it is; a path-like name is refused", () => {
     const { root, main } = project();
     expect(resolveQueueFile({ queue: "wave-D" }, main)).toBe(
-      path.join(main, ".claude", "batch", "wave-D.md"),
+      path.join(main, ".claude", "batch", "wave-D.yaml"),
     );
-    expect(resolveQueueFile({ file: "/x/y/q.md" }, main)).toBe("/x/y/q.md");
+    expect(resolveQueueFile({ file: "/x/y/q.yaml" }, main)).toBe("/x/y/q.yaml");
     expect(() => resolveQueueFile({ queue: "../evil" }, main)).toThrow("refused queue name");
+    expect(() => resolveQueueFile({ queue: "wave-D.yaml" }, main)).toThrow(
+      'the stem without .yaml: "wave-D"',
+    );
     expect(() => resolveQueueFile({ queue: "wave-D.md" }, main)).toThrow(
       'the stem without .md: "wave-D"',
     );
@@ -924,24 +1042,26 @@ describe("queue names", () => {
       path.join(wt, ".git"),
       `gitdir: ${path.join(main, ".git", "worktrees", "wt")}\n`,
     );
-    expect(resolveQueueFile({ queue: "q" }, wt)).toBe(path.join(main, ".claude", "batch", "q.md"));
+    expect(resolveQueueFile({ queue: "q" }, wt)).toBe(
+      path.join(main, ".claude", "batch", "q.yaml"),
+    );
   });
 
   it("the first queue_add creates the default queue; a read of a missing queue names the path", async () => {
     const { main } = project();
     const file = resolveQueueFile({}, main);
     expect(() => readQueue(file)).toThrow(file);
-    const r = await addQueueLine(file, "A | touches: a | first |", {}, { create: true });
+    const r = await addLine(file, "A | touches: a | first |", {}, { create: true });
     expect(r.created).toBe(true);
-    expect(fs.readFileSync(file, "utf8")).toContain("batch_size: 1\n\n## Tasks\n");
+    expect(fs.readFileSync(file, "utf8")).toMatch(/^batch_size: 1\ntasks:\n {2}- id: A\n/);
     expect(readQueue(file).lines.map(l => l.id)).toEqual(["A"]);
-    expect((await addQueueLine(file, "B | touches: b")).created).toBeUndefined();
+    expect((await addLine(file, "B | touches: b")).created).toBeUndefined();
   });
 
   it("a full file path that does not exist is never created", async () => {
     const { main } = project();
-    const file = path.join(main, "typo.md");
-    await expect(addQueueLine(file, "A | touches: a", {}, { create: false })).rejects.toThrow(file);
+    const file = path.join(main, "typo.yaml");
+    await expect(addLine(file, "A | touches: a", {}, { create: false })).rejects.toThrow(file);
     expect(fs.existsSync(file)).toBe(false);
   });
 
@@ -949,7 +1069,7 @@ describe("queue names", () => {
     const { main } = project();
     const file = resolveQueueFile({ queue: "new" }, main);
     await expect(
-      addQueueLine(file, "A | difficulty: 0 | touches: a", {}, { create: true }),
+      addLine(file, "A | difficulty: 0 | touches: a", {}, { create: true }),
     ).rejects.toThrow();
     expect(fs.existsSync(file)).toBe(false);
   });
@@ -957,21 +1077,21 @@ describe("queue names", () => {
   it("a task session in another repo marks the dispatcher's queue through the absolute path", async () => {
     const { root, main } = project();
     const file = resolveQueueFile({ queue: "q" }, main);
-    await addQueueLine(file, "A | touches: a", {}, { create: true });
+    await addLine(file, "A | touches: a", {}, { create: true });
     await markQueue(file, "A", "running");
     const other = path.join(root, "other");
     fs.mkdirSync(path.join(other, ".git"), { recursive: true });
     expect(resolveQueueFile({ file }, other)).toBe(file);
     expect(resolveQueueFile({ queue: "q" }, other)).not.toBe(file);
     await markQueue(resolveQueueFile({ file }, other), "A", "done");
-    expect(readQueue(file).lines[0].mark).toBe("x");
+    expect(readQueue(file).lines[0].status).toBe("done");
   });
 
   it("a refused first line cannot delete a line another call wrote", async () => {
     const { main } = project();
     const file = resolveQueueFile({ queue: "race" }, main);
-    const bad = addQueueLine(file, "A | difficulty: 0 | touches: a", {}, { create: true });
-    const good = addQueueLine(file, "B | touches: b", {}, { create: true });
+    const bad = addLine(file, "A | difficulty: 0 | touches: a", {}, { create: true });
+    const good = addLine(file, "B | touches: b", {}, { create: true });
     await expect(bad).rejects.toThrow();
     await good;
     expect(readQueue(file).lines.map(l => l.id)).toEqual(["B"]);
@@ -979,7 +1099,7 @@ describe("queue names", () => {
 });
 
 describe("describeQueue", () => {
-  const q = parseQueue(
+  const q = parseMd(
     [
       "# x",
       "batch_size: 1",
@@ -1000,7 +1120,7 @@ describe("describeQueue", () => {
     expect(reasons.A).toBeUndefined();
     expect(reasons.B).toMatch(/^overlaps A/);
     expect(reasons.C).toBe("ready");
-    expect(reasons.D).toBe("after: B[ ]");
+    expect(reasons.D).toBe("after: B (pending)");
     expect(reasons.E).toBe("parent-run (model —)");
     expect(reasons.F).toMatch(/^overlaps /);
   });

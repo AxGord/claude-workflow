@@ -185,6 +185,45 @@ describe("registerTools mutation serialization", () => {
     return { storage, engine, call: (name: string, args: object) => handlers.get(name)!(args) };
   }
 
+  // The plan pane reads `<workflow> @ <state>` off these replies (hooks/plan-pane.test.tsx draws the
+  // tool-group chain from the recorded copy): a change of the reply's shape fails here, not on the screen.
+  // WF_RECORD_REPLIES=1 writes the copy afresh.
+  it("the plan pane's recorded start / transition replies are what the engine answers", async () => {
+    const { call } = mountTools({
+      pipe: {
+        initial: "plan",
+        states: {
+          plan: { prompt: "Plan it", transitions: { go: "work" } },
+          work: { prompt: "Work", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const text = (r: unknown) => (r as { content: { text: string }[] }).content[0].text;
+    const started = text(await call("start", { workflow: "pipe" }));
+    const sid = /^SESSION: (\S+)/m.exec(started)?.[1] ?? "";
+    const moved = text(await call("transition", { session_id: sid, transition: "go" }));
+    const norm = (t: string) => t.split(sid).join("SID");
+    const file = path.join(
+      path.dirname(new URL(import.meta.url).pathname),
+      "..",
+      "hooks",
+      "fixtures",
+      "engine-replies.ts",
+    );
+    if (process.env.WF_RECORD_REPLIES === "1")
+      fs.writeFileSync(
+        file,
+        `// Recorded engine replies (src/tools.test.ts checks them; WF_RECORD_REPLIES=1 re-records).\n` +
+          `export const START_REPLY = ${JSON.stringify(norm(started))};\n` +
+          `export const TRANSITION_REPLY = ${JSON.stringify(norm(moved))};\n`,
+      );
+    const rec = await import("../hooks/fixtures/engine-replies.js");
+    expect(sid).not.toBe("");
+    expect(norm(started)).toBe(rec.START_REPLY);
+    expect(norm(moved)).toBe(rec.TRANSITION_REPLY);
+  });
+
   it("parallel context_set + transition keep both changes", async () => {
     const { storage, engine, call } = mountTools({ simple: SIMPLE_WORKFLOW });
 
@@ -306,12 +345,50 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
     fs.mkdirSync(path.join(proj, ".git"));
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(proj);
     try {
-      const made = await call("queue_add", { queue: "n", line: "A | touches: a" });
+      const made = await call("queue_add", { queue: "n", task: { id: "A", touches: ["a"] } });
       expect(made.isError).toBeUndefined();
       expect(made.text).toContain("the queue did not exist — created");
-      expect(fs.existsSync(path.join(proj, ".claude", "batch", "n.md"))).toBe(true);
-      const typo = path.join(proj, "typo.md");
-      const bad = await call("queue_add", { file: typo, line: "B | touches: b" });
+      const file = path.join(proj, ".claude", "batch", "n.yaml");
+      expect(fs.existsSync(file)).toBe(true);
+      // every queue tool on the YAML queue
+      await call("queue_add", {
+        queue: "n",
+        task: { id: "B", after: ["A"], touches: "b", text: "Do B." },
+      });
+      expect((await call("queue_header", { queue: "n", batch_size: 2, reason: "two" })).text).toBe(
+        "batch_size 1 → 2  # two",
+      );
+      const next = await call("queue_next", { queue: "n" });
+      expect(next.text).toContain("ADMITTED (running) A |");
+      expect(
+        (
+          await call("queue_mark", {
+            queue: "n",
+            id: "A",
+            to: "done",
+            note: "landed x",
+            from: "land",
+          })
+        ).text,
+      ).toBe("A: running → done");
+      const edited = await call("queue_edit", {
+        queue: "n",
+        id: "B",
+        set: { difficulty: 4, parked: true },
+        append_note: "wait",
+      });
+      expect(edited.text).toContain("difficulty: 4\n");
+      expect(edited.text).toContain("parked: true\n");
+      const text = fs.readFileSync(file, "utf8");
+      expect(text).toContain("reason: two\n");
+      expect(text).toMatch(
+        /- id: A\n {4}status: done\n {4}touches: \[ a \]\n {4}notes:\n {6}- from: land\n/,
+      );
+      expect((await call("queue_next", { queue: "n", dry_run: true })).text).toContain(
+        "admitted 0",
+      );
+      const typo = path.join(proj, "typo.yaml");
+      const bad = await call("queue_add", { file: typo, task: { id: "B" } });
       expect(bad.isError).toBe(true);
       expect(bad.text).toContain(typo);
       expect(fs.existsSync(typo)).toBe(false);

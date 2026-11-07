@@ -18,10 +18,10 @@ export type SessionRow = {
   next: string[]
 }
 
-/** One queue line, parsed from the queue file. */
+/** One queue task, as the engine's dashboard answers it (/api/queue). */
 export type QueueLine = {
   id: string
-  mark: ' ' | '>' | 'x' | '!'
+  status: 'pending' | 'running' | 'done' | 'failed' | 'backlog'
   difficulty: string
   isParked: boolean
   isExclusive: boolean
@@ -37,9 +37,9 @@ export type QueueView = {
   failed: number
   pending: number
   running: QueueLine[]
-  /** pending lines whose `after:` are all done, not parked: what the picker can take next (file order) */
+  /** pending tasks the picker would admit with the window ignored (file order) */
   ready: QueueLine[]
-  /** pending lines waiting, with why */
+  /** pending tasks waiting (not parked), with the picker's own reason */
   waiting: { id: string; why: string; difficulty: string }[]
 }
 

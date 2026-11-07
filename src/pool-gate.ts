@@ -4,9 +4,10 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { parseYaml, warnLeftoverJson } from "./yaml-config.js";
 
 /** Where a project declares its heavy commands, searched from the cwd up to the git root. */
-export const POOL_GATE_CONFIG = path.join(".claude", "workflows", "pool-gate.json");
+export const POOL_GATE_CONFIG = path.join(".claude", "workflows", "pool-gate.yaml");
 const LABEL_MAX = 80;
 const THREADS_VAR = "$WF_THREADS";
 
@@ -61,7 +62,7 @@ export interface DecideOptions {
 
 // ---- config ----
 
-/** The nearest pool-gate.json from `cwd` up to the git root; none outside a git repo. */
+/** The nearest pool-gate.yaml from `cwd` up to the git root; none outside a git repo. */
 export function findConfig(cwd: string): { file: string; config: GateConfig } | undefined {
   const dirs: string[] = [];
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
@@ -71,6 +72,7 @@ export function findConfig(cwd: string): { file: string; config: GateConfig } | 
   }
   for (const dir of dirs) {
     const file = path.join(dir, POOL_GATE_CONFIG);
+    warnLeftoverJson(file);
     if (!fs.existsSync(file)) continue;
     try {
       return { file, config: parseConfig(fs.readFileSync(file, "utf8")) };
@@ -81,9 +83,9 @@ export function findConfig(cwd: string): { file: string; config: GateConfig } | 
   return undefined;
 }
 
-/** Validate a pool-gate.json text; throws with the offending entry named. */
+/** Validate a pool-gate.yaml text; throws with the offending entry named. */
 export function parseConfig(text: string): GateConfig {
-  const raw = JSON.parse(text) as unknown;
+  const raw = parseYaml(text);
   if (!isObject(raw)) throw new Error("expected an object with `rules`");
   const { rules = [], wrappers = [] } = raw;
   if (!Array.isArray(rules)) throw new Error("`rules` must be a list");

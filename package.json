@@ -26,7 +26,8 @@
     "format:check": "biome format",
     "scan": "ast-grep scan --error",
     "check:ci": "sh scripts/check-ci.sh",
-    "check": "tsc --noEmit && npm run format:check && npm run lint && npm run scan && vitest run && npm run check:ci"
+    "test:pane": "sh scripts/test-pane.sh",
+    "check": "tsc --noEmit && npm run format:check && npm run lint && npm run scan && vitest run && npm run test:pane && npm run check:ci"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",

@@ -300,7 +300,7 @@ export function formatQueueNext(r: PickResult, explain: boolean | "all"): string
   for (const a of r.admitted)
     lines.push(
       "",
-      `${r.dryRun ? "WOULD ADMIT" : "ADMITTED [>]"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}` +
+      `${r.dryRun ? "WOULD ADMIT" : "ADMITTED (running)"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}` +
         (a.workflow ? ` | workflow: ${a.workflow}` : "") +
         (a.difficulty !== undefined ? ` | difficulty: ${a.difficulty}` : ""),
       a.text,
@@ -1111,13 +1111,13 @@ export function registerTools(
     "queue_next",
     {
       description:
-        "Admit the next lines of a task queue file (`batch_size:` header, `- [ ] ID | key: value | … | text |` lines): " +
-        "fills the window (batch_size minus the `[>]` lines) in file order with lines whose `after:` ids are all `[x]`, " +
-        "that carry no `⏸`, and whose `touches:` / `owner:` overlap no running or just-admitted line (`touches:` within " +
-        "one repo only, where no `touches:` = overlaps every line; an `exclusive:` = overlaps every line of every repo; " +
-        "header `overlap: files` = only file entries conflict, a directory or glob is a hint); marks each `[>]` under the queue's lock, so two calls never admit one line. Returns id, " +
-        "model, effort, repo (absolute), workflow (the line's `workflow:`, when set), difficulty (the line's `difficulty:` 1..10, when set: " +
-        "the task workflow's model_table maps it to model/effort) and text per admitted line. `batch_size: 0` = paused: nothing is admitted. " +
+        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text, notes}`): " +
+        "fills the window (batch_size minus the running tasks) in file order with pending tasks whose `after:` ids are all done, " +
+        "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
+        "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of every repo; " +
+        "header `overlap: files` = only file entries conflict, a directory or glob is a hint); sets each admitted task running under the queue's lock, so two calls never admit one task. `backlog` tasks are never admitted. Returns id, " +
+        "model, effort, repo (absolute), workflow (when set), difficulty (1..10, when set: " +
+        "the task workflow's model_table maps it to model/effort) and text per admitted task. `batch_size: 0` = paused: nothing is admitted. " +
         "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
       inputSchema: z
         .object({
@@ -1158,23 +1158,24 @@ export function registerTools(
     "queue_mark",
     {
       description:
-        "Change one line's mark in a task queue file under its lock: running `[ ]`→`[>]` (with `retry: true`: " +
-        "`[!]`→`[>]`, a failed line run again; its `difficulty: N` becomes N+1, at most 10, so the new session starts a row up), done `[>]`→`[x]`, failed `[>]`→`[!]`, released `[>]`→`[ ]` " +
-        "(nothing of the task was made). Refuses any other current mark. " +
-        "`note` is written right after the id (`- [x] ID | <note> | …`).",
+        "Change one task's status in a YAML task queue under its lock: running pending→running (with `retry: true`: " +
+        "failed→running, a failed task run again; its `difficulty: N` becomes N+1, at most 10, so the new session starts a row up), done running→done, failed running→failed, released running→pending " +
+        "(nothing of the task was made), promoted backlog→pending, shelved pending→backlog. Refuses any other current status. " +
+        "`note` is appended to the task's `notes:` as `{from, date, text}` (`from` defaults to `mark`).",
       inputSchema: z
         .object({
           ...QUEUE_SEL,
           id: z.string().min(1).describe("The task id"),
           to: z
             .enum(Object.keys(MARK_TARGETS) as [MarkTarget, ...MarkTarget[]])
-            .describe("running | done | failed | released"),
-          note: z.string().optional().describe("One line written after the id"),
+            .describe("running | done | failed | released | promoted | shelved"),
+          note: z.string().optional().describe("A note appended to the task's notes:"),
+          from: z.string().min(1).optional().describe("Who writes the note (default `mark`)"),
           retry: z
             .boolean()
             .optional()
             .describe(
-              "With `to: running`: restart a failed `[!]` line (`[!]`→`[>]`); its `difficulty:` is raised by one (≤10)",
+              "With `to: running`: restart a failed task (failed→running); its `difficulty:` is raised by one (≤10)",
             ),
         })
         .strict(),
@@ -1183,6 +1184,7 @@ export function registerTools(
       try {
         const r = await markQueue(resolveQueueFile(args), args.id, args.to, args.note, {
           retry: args.retry === true,
+          ...(args.from !== undefined ? { from: args.from } : {}),
         });
         return { content: [{ type: "text", text: formatMark(r) }] };
       } catch (err) {
@@ -1196,16 +1198,17 @@ export function registerTools(
     "queue_add",
     {
       description:
-        "Add a pending line to a task queue file under its lock (the lock queue_next / queue_mark take, so no mark " +
-        "is lost to a concurrent write): `line` is `- [ ] ID | key: value | … | text |` (or the same without `- [ ] `). " +
-        "Refused unless it reads as a pick reads it: a new id, one row, each `key:` field a known key " +
-        "(model, effort, after, touches, owner, repo, workflow, exclusive, difficulty) at most once, every id in `after:` a line of the queue " +
+        "Add a task to a YAML task queue under its lock (the lock queue_next / queue_mark take, so no status " +
+        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, model, effort, repo, workflow, after: [ids], touches: [paths], owner, exclusive, parked, text, notes: [{from, date, text}]}`. " +
+        "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10. Goes after `after_id`, before `before_id`, " +
-        "else after the last task line. A queue addressed by `queue` or by default that does not exist yet is CREATED (header `batch_size: 1`, `## Tasks`) and the answer says so (a full `file` path that does not exist is an error, never created).",
+        "else last. A queue addressed by `queue` or by default that does not exist yet is CREATED (`batch_size: 1`, `tasks: []`) and the answer says so (a full `file` path that does not exist is an error, never created).",
       inputSchema: z
         .object({
           ...QUEUE_SEL,
-          line: z.string().min(1).describe("The new line"),
+          task: z
+            .record(z.unknown())
+            .describe("The new task: `id` and its fields by key (`text` the brief)"),
           after_id: z.string().min(1).optional().describe("Insert right after this line"),
           before_id: z.string().min(1).optional().describe("Insert right before this line"),
         })
@@ -1216,7 +1219,7 @@ export function registerTools(
         const file = resolveQueueFile(args);
         const r = await addQueueLine(
           file,
-          args.line,
+          args.task,
           {
             after: args.after_id,
             before: args.before_id,
@@ -1238,19 +1241,20 @@ export function registerTools(
     "queue_edit",
     {
       description:
-        "Change one queue line's metadata fields under the queue's lock: `set: { field: value }` " +
-        '(model, effort, after, touches, owner, repo, workflow, exclusive, difficulty; `""` removes the field) and/or `append_note` ' +
-        "(one free-text field added at the end; no `|`, `⏸` or leading `key:`). The mark is queue_mark's. " +
-        "A set field keeps its place; values are checked as queue_add checks them. Returns the line as written.",
+        "Change one task's fields in a YAML task queue under the queue's lock: `set: { field: value }` " +
+        '(difficulty, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text; `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
+        "(appended to `notes:` as `{from, date, text}`, `from` default `parent`). The status is queue_mark's. " +
+        "A set field keeps its place; values are checked as queue_add checks them. Returns the task as written (YAML).",
       inputSchema: z
         .object({
           ...QUEUE_SEL,
           id: z.string().min(1).describe("The task id"),
           set: z
-            .record(z.string())
+            .record(z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.null()]))
             .optional()
             .describe("Fields to set; an empty value removes one"),
-          append_note: z.string().optional().describe("A note appended as the line's last field"),
+          append_note: z.string().optional().describe("A note appended to the task's notes:"),
+          from: z.string().min(1).optional().describe("Who writes the note (default `parent`)"),
         })
         .strict(),
     },
@@ -1261,8 +1265,9 @@ export function registerTools(
           args.id,
           args.set ?? {},
           args.append_note,
+          args.from,
         );
-        return { content: [{ type: "text", text: r.line }] };
+        return { content: [{ type: "text", text: r.task }] };
       } catch (err) {
         return queueError(err);
       }
@@ -1274,13 +1279,13 @@ export function registerTools(
     "queue_header",
     {
       description:
-        "Set a task queue's window under its lock: the header line becomes `batch_size: N  # <reason>`. " +
+        "Set a task queue's window under its lock: the header's `batch_size: N` and `reason: <reason>`. " +
         "`0` is the pause (running tasks finish, nothing new is admitted). The reason is required.",
       inputSchema: z
         .object({
           ...QUEUE_SEL,
           batch_size: z.number().int().min(0).describe("The window; 0 = paused"),
-          reason: z.string().min(1).describe("Why — written as the line's comment"),
+          reason: z.string().min(1).describe("Why — written as the header's `reason:`"),
         })
         .strict(),
     },
@@ -1311,8 +1316,8 @@ const QUEUE_SEL = {
     .min(1)
     .optional()
     .describe(
-      "A queue by name: `.claude/batch/<queue>.md` of the project (the git root of the server's cwd; a worktree resolves to its main checkout). " +
-        "Neither `file` nor `queue` = `.claude/batch/queue.md`",
+      "A queue by name: `.claude/batch/<queue>.yaml` of the project (the git root of the server's cwd; a worktree resolves to its main checkout). " +
+        "Neither `file` nor `queue` = `.claude/batch/queue.yaml`",
     ),
 };
 

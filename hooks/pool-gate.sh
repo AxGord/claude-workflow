@@ -1,10 +1,10 @@
 #!/bin/sh
-# PreToolUse(Bash): run a command the project's .claude/workflows/pool-gate.json marks heavy
+# PreToolUse(Bash): run a command the project's .claude/workflows/pool-gate.yaml marks heavy
 # under scripts/wf-run (one machine-wide thread pool), refuse one it denies, pass the rest.
 # Never breaks the Bash call: without node or a build, or when the gate itself fails, the
 # command passes as it is with one line on stderr.
 p=$(cat)
-# Fast path, no process spawned: no pool-gate.json from the payload's cwd up to the git root
+# Fast path, no process spawned: no pool-gate.yaml from the payload's cwd up to the git root
 # → nothing to do. A cwd this cannot read plainly (escapes, another JSON layout) goes to node.
 case $p in
   *'"cwd":"'*) d=${p#*\"cwd\":\"}; d=${d%%\"*} ;;
@@ -17,6 +17,8 @@ case $d in
 esac
 if [ -n "$d" ]; then
   while :; do
+    [ -f "$d/.claude/workflows/pool-gate.yaml" ] && break
+    # a JSON config left from before goes to node, which names the conversion on stderr
     [ -f "$d/.claude/workflows/pool-gate.json" ] && break
     [ -e "$d/.git" ] && exit 0
     [ -z "$d" ] && exit 0

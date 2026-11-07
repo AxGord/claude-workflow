@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parseYaml, warnLeftoverJson } from "./yaml-config.js";
 import lockfile from "proper-lockfile";
 import { LOCK_NAME_PATTERN, LOCK_STALE_MS, PRIORITY_LEVELS, type PriorityLevel } from "./types.js";
 import {
@@ -23,7 +24,7 @@ import {
 export const EX_TEMPFAIL = 75;
 
 const POOL_FILE = "pool.json";
-const CONFIG_FILE = "config.json";
+const CONFIG_FILE = "config.yaml";
 // One line per orphan reaped, over-running lease and starved waiter; rotated past LOG_MAX_BYTES.
 const LOG_FILE = "pool.log";
 const LOG_MAX_BYTES = 1 << 20;
@@ -652,12 +653,18 @@ export class Pool {
     this._probes = probes;
   }
 
-  /** `config.json` (optional): `budget` (default: performance cores − 2, at least 1), `load_threshold`, `starve_after` (seconds, default 900). */
+  /** `config.yaml` (optional): `budget` (default: performance cores − 2, at least 1), `load_threshold`, `starve_after` (seconds, default 900). */
   config(): PoolConfig {
     const fp = path.join(this.dir, CONFIG_FILE);
-    const raw: unknown = fs.existsSync(fp) ? JSON.parse(fs.readFileSync(fp, "utf8")) : {};
+    warnLeftoverJson(fp);
+    let raw: unknown = {};
+    try {
+      if (fs.existsSync(fp)) raw = parseYaml(fs.readFileSync(fp, "utf8"));
+    } catch (err) {
+      throw new Error(`${fp}: ${(err as Error).message}`);
+    }
     if (typeof raw !== "object" || raw === null || Array.isArray(raw))
-      throw new Error(`${fp}: expected a JSON object`);
+      throw new Error(`${fp}: expected a mapping`);
     const obj = raw as Record<string, unknown>;
     for (const key of Object.keys(obj))
       if (key !== "budget" && key !== "load_threshold" && key !== "starve_after")

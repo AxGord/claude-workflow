@@ -245,7 +245,7 @@ describe("review lint pass: probe without a lease, the pass under one", () => {
         const poolDir = path.join(dir, "pool");
         fs.mkdirSync(poolDir);
         fs.writeFileSync(
-          path.join(poolDir, "config.json"),
+          path.join(poolDir, "config.yaml"),
           JSON.stringify({ budget: 10, load_threshold: 1000 }),
         );
         const r = await new Executor(new Pool(poolDir)).execute(state, ctx(path.join(dir, "A.hx")));

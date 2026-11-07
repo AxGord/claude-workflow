@@ -215,13 +215,13 @@ describe("composition with the pool gate", () => {
     fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
     fs.mkdirSync(path.join(proj, ".claude", "workflows"), { recursive: true });
     fs.writeFileSync(
-      path.join(proj, ".claude", "workflows", "pool-gate.json"),
+      path.join(proj, ".claude", "workflows", "pool-gate.yaml"),
       JSON.stringify({
         rules: [{ match: "make", threads: 2, pass: "-j $WF_THREADS" }],
       }),
     );
     fs.writeFileSync(
-      path.join(proj, ".claude", "read-only-commands.json"),
+      path.join(proj, ".claude", "read-only-commands.yaml"),
       JSON.stringify({ env: { APQ_READ_ONLY: "1" }, read: ["make"] }),
     );
     const hook = (name: string, agent: string) =>

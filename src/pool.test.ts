@@ -419,7 +419,7 @@ function fakeProbes(load = 0): PoolProbes {
 
 function poolDir(config: object = { budget: 10, load_threshold: 0 }): string {
   const dir = tmp("wf-pool-");
-  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify(config));
+  fs.writeFileSync(path.join(dir, "config.yaml"), JSON.stringify(config));
   return dir;
 }
 
@@ -427,7 +427,7 @@ const readPool = (dir: string): PoolState =>
   JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8"));
 
 describe("Pool", () => {
-  it("default budget = performance cores − 2 (at least 1); config.json overrides; a bad key throws", () => {
+  it("default budget = performance cores − 2 (at least 1); config.yaml overrides; a bad key throws", () => {
     const dir = tmp("wf-pool-");
     expect(new Pool(dir, fakeProbes()).config()).toEqual({
       budget: 10,
@@ -436,7 +436,7 @@ describe("Pool", () => {
     });
     expect(new Pool(dir, { ...fakeProbes(), perfCores: () => 2 }).config().budget).toBe(1);
     fs.writeFileSync(
-      path.join(dir, "config.json"),
+      path.join(dir, "config.yaml"),
       JSON.stringify({ budget: 4, load_threshold: 0.5, starve_after: 60 }),
     );
     expect(new Pool(dir, fakeProbes()).config()).toEqual({
@@ -444,9 +444,9 @@ describe("Pool", () => {
       load_threshold: 0.5,
       starve_after: 60,
     });
-    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ starve_after: 0 }));
+    fs.writeFileSync(path.join(dir, "config.yaml"), JSON.stringify({ starve_after: 0 }));
     expect(() => new Pool(dir, fakeProbes()).config()).toThrow(/starve_after must be/);
-    fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ budgte: 4 }));
+    fs.writeFileSync(path.join(dir, "config.yaml"), JSON.stringify({ budgte: 4 }));
     expect(() => new Pool(dir, fakeProbes()).config()).toThrow(/unknown key "budgte"/);
   });
 

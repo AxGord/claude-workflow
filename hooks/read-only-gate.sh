@@ -1,6 +1,6 @@
 #!/bin/sh
 # PreToolUse(Bash): a call made by a read-only agent type (wf-recon, wf-reviewer) that would write is
-# refused; the project's .claude/read-only-commands.json adds write commands and the env the CLI reads
+# refused; the project's .claude/read-only-commands.yaml adds write commands and the env the CLI reads
 # (APQ_READ_ONLY=1). Fast path, no node: a payload without an agent_type is the main session or a
 # plain call — nothing to do. Never breaks the Bash call: no node / no build / a failing gate →
 # the command passes as it is with one line on stderr.

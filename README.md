@@ -25,8 +25,8 @@ A Claude Code plugin that drives agents through YAML-defined state machines. The
 - **20 bundled workflows** — complete agent lifecycle from routing to reflection, including long-running batch orchestration and a text-only `docs` route
 - **28 bundled skills** — reusable knowledge modules auto-provisioned on first run
 - **SessionStart hook** — auto-provisions missing skills and injects workflow context
-- **Pool gate** — a PreToolUse(Bash) hook runs the commands a project marks heavy (`.claude/workflows/pool-gate.json`) under `wf-run`, so agents' own test runs and builds share the machine-wide thread pool too
-- **Agent types** — the plugin ships subagent types in `agents/`: `wf-driver` (haiku/low; the task-driver rules, workflow tools only), `wf-recon` (sonnet/medium) and `wf-reviewer` (opus/high), both read-only: no Edit/Write tool, and a PreToolUse(Bash) hook (`hooks/read-only-gate.sh`) refuses a Bash call made by those types unless every pipeline segment starts with a declared reader (an ALLOW list: `ls cat head tail wc rg grep jq find git log/show/diff/status/grep/blame…` plus the config `read` list; `$( )`, backticks, `perl -i`, `python -c`, `node -e`, `tee`, `dd`, `cp`/`mv`, `find -delete` are refused) and any write (redirects into the tree, `git commit/add/rm/mv/stash/reset/checkout…`, `sed -i`, `rm/mv/cp`, plus the project's `.claude/read-only-commands.json`: `{ "read": ["apq"], "write": ["apq patch", "/regex/"], "env": { "APQ_READ_ONLY": "1" }, "agents": [...] }`) and exports `env` before the command. Measured (a real `claude -p` run with a dumping PreToolUse hook, 2026-11-07): the payload of a subagent's Bash call carries `agent_id` and `agent_type` (a project agent's bare name; a plugin agent may arrive as `workflow:wf-recon`, both are matched), the main session's carries neither, so it is never touched. For a read-only agent the read-only hook owns the single rewrite: it exports `env`, then applies the pool gate to the prefixed command (`pool-gate-hook` stays out), so a wrapped heavy command still carries the variables. A rewrite by a hook outside the plugin (e.g. RTK's own) is not composed — Claude Code keeps one `updatedInput` — so the refusal list is the guarantee and the env is defence in depth. A project extends a type in its own `.claude/agents`. Takes effect after a Claude restart
+- **Pool gate** — a PreToolUse(Bash) hook runs the commands a project marks heavy (`.claude/workflows/pool-gate.yaml`) under `wf-run`, so agents' own test runs and builds share the machine-wide thread pool too
+- **Agent types** — the plugin ships subagent types in `agents/`: `wf-driver` (haiku/low; the task-driver rules, workflow tools only), `wf-recon` (sonnet/medium) and `wf-reviewer` (opus/high), both read-only: no Edit/Write tool, and a PreToolUse(Bash) hook (`hooks/read-only-gate.sh`) refuses a Bash call made by those types unless every pipeline segment starts with a declared reader (an ALLOW list: `ls cat head tail wc rg grep jq find git log/show/diff/status/grep/blame…` plus the config `read` list; `$( )`, backticks, `perl -i`, `python -c`, `node -e`, `tee`, `dd`, `cp`/`mv`, `find -delete` are refused) and any write (redirects into the tree, `git commit/add/rm/mv/stash/reset/checkout…`, `sed -i`, `rm/mv/cp`, plus the project's `.claude/read-only-commands.yaml`: `{ "read": ["apq"], "write": ["apq patch", "/regex/"], "env": { "APQ_READ_ONLY": "1" }, "agents": [...] }`) and exports `env` before the command. Measured (a real `claude -p` run with a dumping PreToolUse hook, 2026-11-07): the payload of a subagent's Bash call carries `agent_id` and `agent_type` (a project agent's bare name; a plugin agent may arrive as `workflow:wf-recon`, both are matched), the main session's carries neither, so it is never touched. For a read-only agent the read-only hook owns the single rewrite: it exports `env`, then applies the pool gate to the prefixed command (`pool-gate-hook` stays out), so a wrapped heavy command still carries the variables. A rewrite by a hook outside the plugin (e.g. RTK's own) is not composed — Claude Code keeps one `updatedInput` — so the refusal list is the guarantee and the env is defence in depth. A project extends a type in its own `.claude/agents`. Takes effect after a Claude restart
 - **Survives a restart** — when Claude Code exits, its sessions are suspended, not abandoned; `claude --resume` continues them (`resume`), sub-agents included, and an exec that was running keeps running and is taken over
 
 ## Quick Start
@@ -241,21 +241,21 @@ wf-run --status    # one line per lease and waiter
 
 **The lease only counts threads — the command must actually use that many.** Compilers, test runners and optimizers take every core by default, whatever the lease says. The leased command gets `WF_THREADS` = the threads granted (after `budget` and the clamp to the budget); pass it on: `make -j"$WF_THREADS"`, `vitest --maxWorkers="$WF_THREADS"`, `HXCPP_COMPILE_THREADS="$WF_THREADS" haxe build.hxml`, `oxipng -t "$WF_THREADS"`, `APQ_ORACLE_PARALLEL="$WF_THREADS"`. It is set only for a lease with threads — never for a light exec, a lock-only lease or `--efficiency` (an inherited value is dropped). It is env only, not a template variable: write `$WF_THREADS` in the command.
 
-- **Admission** (under a proper-lockfile lock on `<pool dir>/pool.json`): `held + N <= budget`, and beside a live lease also `held + N + external <= budget` — external load never blocks an EMPTY pool (a head with N ≥ budget would otherwise wait forever on background load). `external = max(0, load − own − load_threshold)` is the load not taken through the pool, where `own` sums over the leases with threads the larger of a lease's threads and what its own process tree runs (below).  `load` is measured from cpu ticks (`os.cpus()`): busy cpus over the window since the pool's previous pass (≥ 0.5 s; a window over 5 s is stale and restarts); without a window (first pass, stale) it falls back to `loadavg1`, which is conservative — it lags a minute and still holds load that has ended. `<pool dir>/config.json` (optional): `budget` (default: performance cores − 2 — `hw.perflevel0.physicalcpu` on macOS, else `os.cpus().length` − 2, at least 1), `load_threshold` (default 2: the noise floor of light work) and `starve_after` (seconds, default 900 — below).
+- **Admission** (under a proper-lockfile lock on `<pool dir>/pool.json`): `held + N <= budget`, and beside a live lease also `held + N + external <= budget` — external load never blocks an EMPTY pool (a head with N ≥ budget would otherwise wait forever on background load). `external = max(0, load − own − load_threshold)` is the load not taken through the pool, where `own` sums over the leases with threads the larger of a lease's threads and what its own process tree runs (below).  `load` is measured from cpu ticks (`os.cpus()`): busy cpus over the window since the pool's previous pass (≥ 0.5 s; a window over 5 s is stale and restarts); without a window (first pass, stale) it falls back to `loadavg1`, which is conservative — it lags a minute and still holds load that has ended. `<pool dir>/config.yaml` (optional): `budget` (default: performance cores − 2 — `hw.perflevel0.physicalcpu` on macOS, else `os.cpus().length` − 2, at least 1), `load_threshold` (default 2: the noise floor of light work) and `starve_after` (seconds, default 900 — below).
 - **A lease's own load**: a lease records its command's process group (`wf-run`'s child, an exec's `sh -c`); each pass reads the process table (`ps`, at most once a second per process, outside the pool lock; a failed read is not retried for 30 s and leaves the trees unmeasured) and sums the busy cpus of the group's members and their descendants — another lease's group excluded, so a `wf-run` nested in a leased exec counts once, as its own lease. That tree is the lease's own load, never `external`: a lease of 4 threads whose command spawns twelve busy compilers no longer reads as 8 cores of foreign load that admits nobody (the incident behind this: `budget 10, held 4, load 13.77 (external 7.8)`, seven waiters for two hours). A tree below its threads still counts as its threads; a lock-only lease takes no threads, so what it runs stays external. A tree that runs at least `max(2, threads/2)` cpus over its threads is OVERRUN: `--status` / `pool_status` show `holds 4 threads, runs ~12 (OVERRUN)`, a waiting `wf-run`'s progress line names it beside its holder (`label (4, runs ~12)`), and `<pool dir>/pool.log` gets one line per lease. **An over-running lease is no longer bounded by admission**: the pool only keeps the threads it hands out within the budget (`held ≤ budget`), so while a lease runs 12 cpus on 4 threads the waiters are still admitted and the machine is oversubscribed. The lease is flagged and logged, not throttled — the fix belongs to the command that ignores `WF_THREADS`: pass it on. CPU per process is the kernel's recent average on macOS, the lifetime average on Linux.
 - **Starvation**: a waiter queued `starve_after` or longer is STARVED, and so is a pool with waiters that granted nothing that long. `--status` / `pool_status` mark the waiter (`since … (Ns, STARVED)`) and print `STARVED: nothing granted for 2h10m, 7 waiting (held 4/10, external 7.8; over-running: pid … holds 4, runs ~12)` under the header; `pool.log` gets one line per waiter; a waiting `wf-run` adds `— STARVED: queued 17m` to its progress line. An exec waiting on a lease checks every 10 s: once starved, its session records it (`pool_starved`) until the lease is granted or the step ends — the MCP progress heartbeat says `waiting for pool lease (Ns) — STARVED: <why>`, `sessions` marks the session `[POOL STARVED since …]`, and `status` / `transition` of the session or any ancestor start or end with `POOL STARVED: session <id> (<workflow @ state>) waits for a pool lease since … — <why>`, so the parent sees it at its next call while the starved child's own call is blocked.
 - **Named locks**: `resource: { locks: [NAME, …] }` / `--lock NAME` (repeatable) — machine-wide mutual exclusion by name (one word, no whitespace: `port:3000`, `ios-simulator`; a name may template a session value — `"{{context.cwd}}-land"` — and whitespace it renders becomes `_`), for dev servers, bridges and anything else on a fixed port or a single device. `threads` is optional beside `locks` (a lock-only lease takes no threads and is never blocked by load; `wf-run --lock` without `--threads` is lock-only), at least one of the two is required. Locks and threads are granted ATOMICALLY in one pass: a task gets everything it asked for or keeps waiting holding nothing — no partial hold, so no deadlock between two tasks wanting the same pair. A dead holder is reaped like any lease; `abort` withdraws a lock wait; `--status` lists held locks; `wait_timeout` → 75.
-- **Order**: priority descending, then arrival; a lock goes to its waiters in queue order. The first waiter that fits by locks but not by threads is the **head**: a later task starts ahead of it (**backfill**) only when that cannot delay it: its estimated run ends before the threads the head waits for (its minimum; a flexible head inside its `wait_full` window: its max) are expected free. The estimates are the p90 of the step's last successful runs on the same threads in the ledger (at least 3, within 30 days; a flexible or `fanout:` step has none) or `wf-run --est SEC`; the head's start is when the running leases' estimated ends free its minimum (a lease with no estimate, past it or over-running ends at an unknown time). No estimate on either side: strict order, a smaller task never overtakes the head — starved or not. A lease backfilled past a head that runs twice its estimate stops backfill past that head (`backfill off:` in `pool.log`; each backfill is a `backfill:` line). Nothing is preempted. A waiter blocked by a held lock claims no threads, so a long-held lock (a dev server) does not stall the rest of the queue. `N` above the budget counts as the budget: it waits for an empty machine and runs alone. `threads: budget` / `--threads budget` asks for the whole budget as `config.json` sets it when the request is made — no hardcoded core count in a workflow.
+- **Order**: priority descending, then arrival; a lock goes to its waiters in queue order. The first waiter that fits by locks but not by threads is the **head**: a later task starts ahead of it (**backfill**) only when that cannot delay it: its estimated run ends before the threads the head waits for (its minimum; a flexible head inside its `wait_full` window: its max) are expected free. The estimates are the p90 of the step's last successful runs on the same threads in the ledger (at least 3, within 30 days; a flexible or `fanout:` step has none) or `wf-run --est SEC`; the head's start is when the running leases' estimated ends free its minimum (a lease with no estimate, past it or over-running ends at an unknown time). No estimate on either side: strict order, a smaller task never overtakes the head — starved or not. A lease backfilled past a head that runs twice its estimate stops backfill past that head (`backfill off:` in `pool.log`; each backfill is a `backfill:` line). Nothing is preempted. A waiter blocked by a held lock claims no threads, so a long-held lock (a dev server) does not stall the rest of the queue. `N` above the budget counts as the budget: it waits for an empty machine and runs alone. `threads: budget` / `--threads budget` asks for the whole budget as `config.yaml` sets it when the request is made — no hardcoded core count in a workflow.
 - **Priority levels**: a session has a level — `low` (−100), `normal` (0, the default), `high` (100), `urgent` (200) — set by `start({ priority })` and inherited by its child sessions (an explicit `priority` on a child's `start` overrides it for that subtree). A lease's priority = the session level + the step's own `resource.priority`, so a step fine-tunes within its level (keep it under ±100). `set_priority({ session_id, level })` changes the level of a session and of its active descendants at once (later children inherit it) and re-ranks their WAITING pool entries in the same pass; running leases keep theirs — there is no preemption. Every exec gets `WF_PRIORITY` (that sum) and `WF_PRIORITY_LEVEL`; `wf-run` without `--priority` queues at `WF_PRIORITY` and keeps the level, so a nested `wf-run` is re-ranked with its session. Two windows keep the old level: an exec whose context was built just before `set_priority` but had not yet joined the queue waits at the old level until it is granted, and a `wf-run` inside an exec started before `set_priority` takes that exec's old `WF_PRIORITY`. An explicit `--priority P` is the whole priority and has no level. `set_priority` is for the user's request — an agent never raises its own session or changes another project's.
 - **Flexible threads**: `threads: { min: A, max: B|budget }` with `wait_full: SEC` (default 0), or `wf-run --threads A-B [--wait-full SEC]` (`B` may be `budget`). The waiter gets `B` when `B` fits; otherwise, once `wait_full` seconds have passed since it queued, it takes every thread that fits if that is at least `A`. `WF_THREADS` = the threads granted. Order is unchanged: while a flexible head waits — for `B` inside its window, or for `A` after it — it closes the threads to everyone behind it like any waiter (the window waits for threads being freed; a smaller task taking them would defeat it). `A`/`B` above the budget clamp to it. `wait_full` without a `{ min, max }` is a load error, `--wait-full` without a range a usage error. `threads: N` is `{ min: N, max: N }`.
 - **Status**: `wf-run --status` and the `pool_status` MCP tool print the budget, the load (and a `STARVED:` line, above) and one line per lease and per waiter (in admission order): `pid`, what it holds or wants (`holds 6 threads (asked 2-8) + lock sim` / `wants 2-8 threads`, `, runs ~N (OVERRUN)`), `prio` with the level, `since HH:MM:SS (Ns[, STARVED])`, the project (the git root of its cwd, a linked worktree mapped to its main repo, `~`-shortened), `session`, `step` (`workflow/state`) and the label (the command).
 - **Reaping**: leases and waiters whose pid is dead are dropped on every pass. A lease lives while its pid OR its recorded process group does. A `wf-run` lease owns its group: a SIGKILLed `wf-run` cannot release, and its child runs detached in a group of its own — so the next pass that finds the `wf-run` dead SIGTERMs that group (one `orphan:` line in `pool.log`), SIGKILLs it once it outlives a 3 s grace, and frees the lease when the group is gone. The group is recorded with the boot it ran under and its leader's start time (`ps -o lstart`): a lease from another boot, or whose pgid now leads another process (the pid wrapped), is dropped without signalling anything. A driver that SIGKILLs a job's `wf-run` therefore leaves no live child and no lease behind (it needs some pass: any waiter, `--status` or `pool_status`). An exec's group is NOT killed when its server dies: the run survives for the resumed session to adopt, and its lease lives with it. A waiter polls each second and wakes at once when `pool.json` changes; `wf-run` prints a progress line to stderr when it starts waiting and every 30 s.
 - **Busy**: no lease within `--wait-timeout` / `wait_timeout` → exit **75** (EX_TEMPFAIL). An exec routes it through `cases`/`on_error`; its `timeout` counts the run only, and `wait_ms` is recorded beside `duration_ms` in the history and the ledger, together with `threads_granted` and `step_key` (below). `abort` withdraws a waiting exec. `resource:` is for foreground execs only (a load error on `background: true` or a fetch).
-- **`wf-run`**: the child runs in its own process group with inherited stdio; `--status` measures over a 0.6 s tick window; SIGINT/SIGTERM/SIGHUP are forwarded to the group; the exit code is the child's; the lease is released on exit. `--efficiency` (macOS) runs the command under `taskpolicy -b` (efficiency cores, low priority) outside the budget — its `--lock`s still hold; elsewhere it warns and goes through the pool. `--fail-open`: when the pool itself cannot be used (dir not writable or not creatable, broken `config.json`, lock not taken) the command runs without a lease, `WF_THREADS` = the smallest share asked, plus one stderr line — busy still waits; without it such a failure is exit 1 and the command never starts.
+- **`wf-run`**: the child runs in its own process group with inherited stdio; `--status` measures over a 0.6 s tick window; SIGINT/SIGTERM/SIGHUP are forwarded to the group; the exit code is the child's; the lease is released on exit. `--efficiency` (macOS) runs the command under `taskpolicy -b` (efficiency cores, low priority) outside the budget — its `--lock`s still hold; elsewhere it warns and goes through the pool. `--fail-open`: when the pool itself cannot be used (dir not writable or not creatable, broken `config.yaml`, lock not taken) the command runs without a lease, `WF_THREADS` = the smallest share asked, plus one stderr line — busy still waits; without it such a failure is exit 1 and the command never starts.
 
 #### Pool gate — agents' heavy Bash commands through the pool
 
-Agents do not call `wf-run` themselves. The plugin's PreToolUse(Bash) hook (`hooks/pool-gate.sh` → `build/pool-gate-hook.js`) rewrites a command the project marks heavy into `<plugin>/scripts/wf-run --fail-open --threads <N|MIN-MAX> --label '<command>' -- <shell> -c '<command>'` (absolute path, not `PATH`; `<shell>` = the Bash tool's `$SHELL` when it is sh/bash/zsh/dash/ksh, else `sh`). What is heavy is decided ONLY by the project's `.claude/workflows/pool-gate.json`, the nearest one from the command's cwd up to the git root (none outside a git repo). No config, or no rule hit → the command is untouched and the hook says nothing; the no-config case is decided in the shell script itself (no node started), so a project without a `pool-gate.json` pays a few milliseconds per Bash call. Example (a sample — the plugin creates no project config):
+Agents do not call `wf-run` themselves. The plugin's PreToolUse(Bash) hook (`hooks/pool-gate.sh` → `build/pool-gate-hook.js`) rewrites a command the project marks heavy into `<plugin>/scripts/wf-run --fail-open --threads <N|MIN-MAX> --label '<command>' -- <shell> -c '<command>'` (absolute path, not `PATH`; `<shell>` = the Bash tool's `$SHELL` when it is sh/bash/zsh/dash/ksh, else `sh`). What is heavy is decided ONLY by the project's `.claude/workflows/pool-gate.yaml`, the nearest one from the command's cwd up to the git root (none outside a git repo). No config, or no rule hit → the command is untouched and the hook says nothing; the no-config case is decided in the shell script itself (no node started), so a project without a `pool-gate.yaml` pays a few milliseconds per Bash call. Example (a sample — the plugin creates no project config):
 
 ```json
 {
@@ -279,7 +279,7 @@ Agents do not call `wf-run` themselves. The plugin's PreToolUse(Bash) hook (`hoo
 - **Left alone**: `WF_THREADS` already in the hook's environment (Claude Code itself runs under a lease), a command holding `wf-run` or a `wrappers` script anywhere (a nested lease could wait on its own outer one), a background `&` (the lease would end before the work), a heredoc or an unterminated quote (not plain enough to edit).
 - **Bypass**: `WF_POOL_BYPASS=1 [WF_POOL_BYPASS_REASON='…'] <command>` — untouched, one stderr line naming the reason.
 - **Output**: unchanged — `wf-run` writes only to stderr (waits, progress) and exits with the command's code; the gate passes no `--wait-timeout`, so a busy pool means a wait, never exit 75. A Bash call that reaches its own timeout while waiting is moved to the background like any long command, not killed.
-- **Never breaks Bash**: no node, no build, a broken `pool-gate.json` or any error in the gate → the command passes as it is plus one stderr line. `--fail-open` does the same for the pool: a pool `wf-run` cannot use (an unwritable or uncreatable `$WF_POOL_DIR` — a sandbox, a read-only `~/.claude` —, a broken `config.json`, a lock it cannot take) runs the command without a lease, `WF_THREADS` = the smallest share asked, plus one stderr line. Busy is not a failure: it waits.
+- **Never breaks Bash**: no node, no build, a broken `pool-gate.yaml` or any error in the gate → the command passes as it is plus one stderr line. `--fail-open` does the same for the pool: a pool `wf-run` cannot use (an unwritable or uncreatable `$WF_POOL_DIR` — a sandbox, a read-only `~/.claude` —, a broken `config.yaml`, a lock it cannot take) runs the command without a lease, `WF_THREADS` = the smallest share asked, plus one stderr line. Busy is not a failure: it waits.
 - **With RTK**: Claude Code (2.1.312) keeps the LAST `updatedInput` of parallel PreToolUse hooks, which is almost always this gate's — RTK's own rewrite of the same command would be lost. So when `rtk` is on `PATH` the gate puts the body through `rtk rewrite` itself, from the command's cwd: exit 0 → RTK's rewrite and `permissionDecision: "allow"` (RTK checked that the user's allow rules cover every command in the chain — the decision Claude Code would take on the original line, whereas its own check sees the rewritten one); 3 → RTK's rewrite, no decision; 2 (a deny matched) → the gate leaves the whole command alone, so Claude Code's deny sees the original line; anything else → the body as it is. Without `rtk` there is no decision: the usual permission flow checks the rewritten line.
 - **Never add an allow rule for `…/scripts/wf-run`**: `Bash(<plugin>/scripts/wf-run:*)` would allow ANY chain wrapped behind it, and the path changes with every plugin version anyway.
 - **Limits**: the inner `<shell> -c` does not get the Bash tool's shell snapshot (aliases, functions, `setopt`); `npx -y …`, `sudo …`, `nice …` and commands inside `$( )` are not recognised; the config is found from the call's `cwd`, not from a `cd` inside the command, and a `cd` inside a wrapped command does not move the Bash tool's working directory.
@@ -475,90 +475,133 @@ heavy step `on_timeout:` and a state of its own for it.
 ### Task queue — `batch`, `queue_next`, `queue_add`, `wf-queue`
 
 Which queue: every queue tool and `wf-queue` takes an optional `queue` NAME beside `file`. Neither =
-the project's default `.claude/batch/queue.md`; `queue: "<name>"` = `.claude/batch/<name>.md`; a full
+the project's default `.claude/batch/queue.yaml`; `queue: "<name>"` = `.claude/batch/<name>.yaml`; a full
 `file` path (a queue of another repo) still works. The project is the git root of the server's cwd (a
 linked worktree resolves to its main checkout). `wf-queue [<file>|--queue NAME] …` reads the same way;
 `--path` prints the resolved file. A missing file is an error naming the resolved path, except `queue_add`
-(`--add`), whose first line CREATES the queue (only when addressed by name or by default, never a full `file` path) (header `batch_size: 1`, `## Tasks`) and says so.
+(`--add`), whose first task CREATES the queue (only when addressed by name or by default, never a full `file` path) (`batch_size: 1`, `tasks: []`) and says so.
 
-A long run of tasks is a queue FILE the engine admits from — one format for every project:
+A long run of tasks is a YAML queue FILE the engine admits from — one format for every project. The
+top-level keys are the header (any other key is free: `wf-queue --header <key>` reads it), `tasks:` the list:
 
-```markdown
-# Batch: wave-3
-batch_size: 3                       # the window; `batch_size: 0  # pause: <why>, was 3` pauses
-base: /abs/repo=<sha>
-land_test: npm test                 # run after each merge (batch-task's default land)
+```yaml
+batch_size: 3                 # the window; 0 pauses
+reason: three at once         # why the window is what it is (queue_header writes both)
+base: [/abs/repo=<sha>]
+land_test: npm test           # run after each merge (batch-task's default land)
 record_file: records.md
-overlap: files                      # optional: only FILE entries of `touches:` conflict (default `paths`)
-## Tasks
-- [ ] T1 | difficulty: 7 | touches: src/engine | <self-contained brief> |
-- [ ] T2 | model: sonnet | after: T1 | touches: src/a, docs | owner: typer | repo: other-repo | <brief> |
+overlap: files                # optional: only FILE entries of `touches:` conflict (default `paths`)
+tasks:
+  - id: T1
+    status: pending           # pending | running | done | failed | backlog
+    difficulty: 7
+    touches: [src/engine]
+    text: |-
+      <self-contained brief>
+  - id: T2
+    status: pending
+    model: sonnet
+    repo: other-repo
+    after: [T1]
+    touches: [src/a, docs]
+    owner: typer
+    parked: true              # never admitted until unparked
+    text: |-
+      <brief>
+    notes:
+      - {from: user, date: 2026-11-07, text: later thought}
 ```
+
+Task keys: `id, status, difficulty, model, effort, repo, workflow, after, touches, owner, exclusive,
+parked, text, notes`; any other key, a bad status, a duplicate id or a malformed file is refused by
+every read. Every write edits the parsed document in place: key order and comments stay.
 
 Keep the queue file untracked and ignored (e.g. `.claude/batch/` in `.gitignore`): a tracked queue is
 dirtied by the first pick, and `batch-task`'s land refuses a dirty tree (exit 3). The land takes a
 merge back with `git reset --keep` only while HEAD is still that merge; otherwise (HEAD moved during
 `land_test`, or local edits on the merged files) it exits 4 and touches nothing.
 
-Marks: `[ ]` pending, `[>]` running, `[x]` done, `[!]` failed. A pick fills the window (`batch_size`
-minus the `[>]` lines) in file order with the `[ ]` lines that:
+A pick fills the window (`batch_size` minus the running tasks) in file order with the pending tasks
+(never `backlog` ones) that:
 
-- are not parent-run (`model: —`) and carry no `⏸` in a metadata field or in `after:` (inside long
-  prose it is a mention);
-- have every `after:` id `[x]` (an id-like token that names no line, or prose beside the ids, is a
+- are not parent-run (`model: —`) and not `parked: true`;
+- have every `after:` id done (an id-like token that names no task, or prose beside the ids, is a
   condition for a human: never admitted);
-- overlap no running and no just-admitted line: `touches:` paths overlap when one is a prefix of the
-  other on a `/` boundary — compared only between lines whose `repo:` resolves to the same repository,
-  where a line WITHOUT `touches:` overlaps every line (it runs alone in its repo); `owner:` names
-  overlap when equal or one is a `.`-prefix, across repos too; a line with `exclusive: <any>` overlaps
-  every line of every repo (a mass move, a rename, a tree reformat; `exclusive: —` is not exclusive).
+- overlap no running and no just-admitted task: `touches:` paths overlap when one is a prefix of the
+  other on a `/` boundary — compared only between tasks whose `repo:` resolves to the same repository,
+  where a task WITHOUT `touches:` overlaps every task (it runs alone in its repo); `owner:` names
+  overlap when equal or one is a `.`-prefix, across repos too; `exclusive: true` overlaps every task
+  of every repo (a mass move, a rename, a tree reformat).
   The header's `overlap: files` narrows `touches:`: only an entry naming a FILE conflicts, with the
-  same file in another line — a FILE is no glob and a regular file under the line's repo (`Makefile`,
+  same file in another task — a FILE is no glob and a regular file under the task's repo (`Makefile`,
   `bin/hxq`), or, when the path does not exist yet, one whose last segment holds a `.`
   (`src/x/Foo.hx`, `.gitattributes`); a directory or glob entry (`src/query`, `src/format/Doc*`) is a
   hint and conflicts with nothing. `overlap: paths` (the default) keeps every entry a path prefix; any
   other value refuses the pick (exit 2) while marks, edits and `queue_header` still work;
 - name a `repo:` that resolves (absolute path; a name = the `base:` repo of that basename, else the
   directory of that name beside the queue's project; none = the queue's project);
-- name, in `workflow:` if any, one word: the line's own task workflow (default: the dispatcher's
-  `task_workflow`). It is started with the line's repo as `cwd`, so it may live in that repo's
+- name, in `workflow:` if any, one word: the task's own task workflow (default: the dispatcher's
+  `task_workflow`). It is started with the task's repo as `cwd`, so it may live in that repo's
   `.claude/workflows/` — one queue can mix tasks of several repos, each run by its repo's procedure;
 - carry, in `difficulty:` if any, a whole number 1..10 (`-` = none): what the task workflow's
   `model_table` turns into the agents' model and effort (below).
 
-Each admitted line is marked `[>]` under the queue's lock (`<file>.lock`, an atomic mkdir), so two
-picks — two tools, two processes — never admit one line. `batch_size: 0` is the pause: nothing new is
-admitted, running tasks finish; the pick answers `window 0 — paused: <the comment>`.
+Each admitted task is set `running` under the queue's lock (`<file>.lock`, an atomic mkdir), so two
+picks — two tools, two processes — never admit one task. `batch_size: 0` is the pause: nothing new is
+admitted, running tasks finish; the pick answers `window 0 — paused: <the reason>`.
 
-- `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted lines (id, model, effort, repo, workflow, difficulty, text);
-  `explain` adds why each other pending line waits (`window full` lines fold into one summary line;
-  `explain: "all"` lists every line).
-- `queue_mark({ queue?, file?, id, to, note?, retry? })` — `running` `[ ]`→`[>]` (with `retry: true`
-  `[!]`→`[>]`: a failed line runs again, and its `difficulty: N` becomes `N+1`, at most 10 — the
-  answer says `(difficulty 4 → 5)`), `done` `[>]`→`[x]`, `failed`
-  `[>]`→`[!]`, `released` `[>]`→`[ ]`; any other current mark is refused; `note` is written after the id
-  (one line without `|`, `⏸` or a leading `key:`). A write lands only while the file still reads as
-  the pick read it — a hand edit in between makes it plan again, never lost.
-- `queue_add({ queue?, file?, line, after_id? | before_id? })` — a new `[ ]` line (`- [ ] ID | key: value | … |`,
-  the `- [ ] ` may be left out) after / before a line, else after the last task line. Refused unless a
-  pick reads it as meant: a new id, one row, each `key:` field a known key at most once (a typo like
-  `toches:` would be read as text), every id in `after:` a line of the queue and no cycle (prose
-  beside the ids stays a manual condition), a one-word `workflow:`, a `repo:` that resolves, a
-  `difficulty:` of 1..10.
-- `queue_edit({ queue?, file?, id, set?: { field: value }, append_note? })` — metadata fields of one line
-  (`""` removes one; a set field keeps its place), and/or a note appended as its last field; checked
-  as `queue_add` checks them; the mark stays `queue_mark`'s.
-- `queue_header({ queue?, file?, batch_size, reason })` — the window: `batch_size: N  # <reason>` (`0` pauses;
+- `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted tasks (id, model, effort, repo, workflow, difficulty, text);
+  `explain` adds why each other pending task waits (`window full` ones fold into one summary line;
+  `explain: "all"` lists every one).
+- `queue_mark({ queue?, file?, id, to, note?, from?, retry? })` — `running` pending→running (with `retry: true`
+  failed→running: a failed task runs again, and its `difficulty: N` becomes `N+1`, at most 10 — the
+  answer says `(difficulty 4 → 5)`), `done` running→done, `failed` running→failed, `released`
+  running→pending, `promoted` backlog→pending, `shelved` pending→backlog; any other current status is
+  refused; `note` is appended to the task's `notes:` as `{from, date, text}` (`from` default `mark`).
+  A write lands only while the file still reads as the pick read it — a hand edit in between makes it
+  plan again, never lost.
+- `queue_add({ queue?, file?, task, after_id? | before_id? })` — a new task (`{id, status?: pending|backlog, …}`)
+  after / before a task, else last. Refused unless a pick reads it as meant: a new id, known keys
+  only, every id in `after:` a task of the queue and no cycle (prose beside the ids stays a manual
+  condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10.
+- `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task
+  (`""`/null removes one; a set field keeps its place, a new one goes in key order; `after`/`touches`
+  a list or a comma-separated string; `text` is written as a block scalar), and/or a note appended to
+  `notes:`; checked as `queue_add` checks them; the status stays `queue_mark`'s.
+- `queue_header({ queue?, file?, batch_size, reason })` — the window: `batch_size: N` and `reason:` (`0` pauses;
   the reason is required).
-- All of them write under the same lock and re-plan on a changed file, so an edit never drops a mark
-  an exec made at the same moment — add and change lines through them, not by editing the file with a
+- All of them write under the same lock and re-plan on a changed file, so an edit never drops a status
+  an exec set at the same moment — add and change tasks through them, not by editing the file with a
   script while a run is live.
 - From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" [<file>|--queue NAME] [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
-  bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty` (`-` = no `workflow:` / `difficulty:`) per admitted line and the summary on stderr; exit 0
-  admitted, 10 none but `[>]` lines run, 11 none and nothing runs (done), 12 none, nothing runs and
-  `batch_size: 0`, 2 error; `--done|--failed|--release|--running <ID> [--note T]` (`--running <ID>
-  --retry`: `[!]`→`[>]`, `difficulty:` +1), `--header <key>`, `--add <LINE> [--after ID|--before ID]`, `--edit <ID>
-  [--set key=value]… [--append-note T]` (`key=` removes), `--batch-size <N> --reason T`.
+  bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty` (`-` = no `workflow:` / `difficulty:`) per admitted task and the summary on stderr; exit 0
+  admitted, 10 none but running tasks run, 11 none and nothing runs (done), 12 none, nothing runs and
+  `batch_size: 0`, 2 error; `--done|--failed|--release|--running|--promote|--shelve <ID> [--note T] [--from W]` (`--running <ID>
+  --retry`: failed→running, `difficulty:` +1), `--header <key>`, `--add '<YAML mapping>' [--after ID|--before ID]`, `--edit <ID>
+  [--set key=value]… [--append-note T] [--from W]` (`key=` removes), `--batch-size <N> --reason T`.
+- Converting the old Markdown queue (`- [m] ID | key: value | … |` lines under `## Tasks`), once:
+  `wf-queue --convert <old.md>` prints the YAML; `--into <new.yaml>` writes it; `--into <existing.yaml>
+  [--status backlog]` APPENDS the old file's open (not done) lines with that status. Marks map to
+  statuses (`[-]`/`[~]` → done with a note), `⏸` → `parked`, fields before the first metadata field
+  and later `(<who> <date>…)` fields → `notes`, the rest → `text`; a twice-used id gets a `-2` suffix.
+  `wf-queue --convert <config.json> [--into <config.yaml>]` turns a JSON config (pool `config.json`,
+  `pool-gate.json`, `read-only-commands.json`) into the YAML the engine now reads.
+  A task row the converter cannot read refuses the conversion with its line numbers (a done row
+  without an id is skipped and named on stderr); an append under `--into` takes the queue's lock and
+  says how many tasks it added — none is an error.
+
+**Migrating (do it before running the new engine):** the engine reads YAML only and ignores a JSON
+config, naming the command on stderr (`workflow: <x.json> is ignored …: wf-queue --convert <x.json>
+--into <x.yaml>`), the pool gate's shell fast path included. Convert each, then point the
+dispatcher's `context.queue_file` at the new queue:
+
+```sh
+wf-queue --convert ~/.claude/workflow-pool/config.json --into ~/.claude/workflow-pool/config.yaml
+wf-queue --convert <proj>/.claude/workflows/pool-gate.json --into <proj>/.claude/workflows/pool-gate.yaml
+wf-queue --convert <proj>/.claude/read-only-commands.json --into <proj>/.claude/read-only-commands.yaml
+wf-queue --convert <proj>/.claude/batch/<name>.md --into <proj>/.claude/batch/<name>.yaml
+wf-queue --convert <second>.md --into <proj>/.claude/batch/<name>.yaml --status backlog   # optional append
+```
 
 The bundled `batch` drives a queue: `plan_queue` (write or resume it; context `queue_file`,
 `task_workflow`) → `pick` (exec, routes on the exit code: `dispatch` / `collect` / `cross_check` /
@@ -639,7 +682,7 @@ load. The ledger's `stages` records every `model_<x>` / `effort_<x>` pair in the
 - Escalation is per session: fix rounds, and a blocked re-entry within one session — a workflow
   whose `blocked` state routes back to work declares `escalate: { blocked: 1 }` (its first entry
   already moves the row up for the work that follows). No hidden state crosses sessions: in the
-  bundled `batch-task`, `blocked` ends the session (`[!]`), and the retry that re-runs the line
+  bundled `batch-task`, `blocked` ends the session (failed), and the retry that re-runs the line
   (`queue_mark` `retry: true`, `wf-queue --running <ID> --retry`) raises its `difficulty:` by one in
   the line itself (at most 10), so the new session starts a row up — the blocked re-entry's step,
   visible in the queue. A line without `difficulty:` is retried unchanged.
@@ -708,7 +751,7 @@ driver:
   (`… — linked at its parent's review visit 1, the parent is now at visit 2: an earlier visit's agent —
   not woken; abort(…) once it is not needed`) with no wake `SendMessage`; so is one linked at another step of the parent than its current one (`… the parent is now at fix: an earlier step's agent — not woken …`).
   `driver:` on a workflow whose initial state is not a prompt state fails the load.
-- Bookkeeping is an exec: `mark_done` marks the line `[x]` with the landed sha and, when the queue
+- Bookkeeping is an exec: `mark_done` sets the task done with the landed sha as a note and, when the queue
   header names `record_file:` (relative = beside the queue; the value is taken whole — no `# comment`), appends one line from the context —
   `- <date> <ID> landed <sha> | difficulty: … | model: …/… | review: …/… | rounds: N | tokens:
   worker=… review=… | report: <log dir>/report.md`.
@@ -853,10 +896,10 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
 | `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale) | `session_id`, `agent_id` |
-| `queue_next` | Admit the next lines of a task queue file and mark them `[>]` (§ Task queue) | `queue`, `file`, `dry_run`, `explain` |
-| `queue_mark` | Move one queue line's mark (`running` / `done` / `failed` / `released`; `retry` restarts a `[!]` line) | `queue`, `file`, `id`, `to`, `note`, `retry` |
-| `queue_add` | Add a pending line to a queue, checked as a pick reads it | `queue`, `file`, `line`, `after_id`, `before_id` |
-| `queue_edit` | Set / remove a queue line's metadata fields, append a note | `queue`, `file`, `id`, `set`, `append_note` |
+| `queue_next` | Admit the next tasks of a YAML task queue and set them running (§ Task queue) | `queue`, `file`, `dry_run`, `explain` |
+| `queue_mark` | Move one task's status (`running` / `done` / `failed` / `released` / `promoted` / `shelved`; `retry` restarts a failed task) | `queue`, `file`, `id`, `to`, `note`, `retry` |
+| `queue_add` | Add a task (pending or backlog) to a queue, checked as a pick reads it | `queue`, `file`, `task`, `after_id`, `before_id` |
+| `queue_edit` | Set / remove a task's fields, append a note to its `notes:` | `queue`, `file`, `id`, `set`, `append_note`, `from` |
 | `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason | `queue`, `file`, `batch_size`, `reason` |
 
 ## Plan pane
@@ -872,7 +915,7 @@ no model call, no tokens:
   a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
   or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's
   `/api/workflows`), and a link to its graph in the dashboard (`#session=<id>`).
-- **Waiting** — pending lines with why: `after …`, `⏸`, `exclusive`, `parent-run`.
+- **Waiting** — pending tasks (not parked) with the picker's own reason, from the dashboard's `/api/queue`.
 
 Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier. A session with
 no workflow shows "No active workflow"; nothing opens by itself.

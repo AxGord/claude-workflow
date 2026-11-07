@@ -387,14 +387,14 @@ describe("pool-gate hook (real processes)", () => {
     }
   });
 
-  /** A git project (a `.git` dir is all the search needs) with this pool-gate.json, if any. */
+  /** A git project (a `.git` dir is all the search needs) with this pool-gate.yaml, if any. */
   function project(cfg?: string): string {
     const dir = tmp("wf-gate-proj-");
     fs.mkdirSync(path.join(dir, ".git"));
     fs.mkdirSync(path.join(dir, "sub"));
     if (cfg !== undefined) {
       fs.mkdirSync(path.join(dir, ".claude", "workflows"), { recursive: true });
-      fs.writeFileSync(path.join(dir, ".claude", "workflows", "pool-gate.json"), cfg);
+      fs.writeFileSync(path.join(dir, ".claude", "workflows", "pool-gate.yaml"), cfg);
     }
     return dir;
   }
@@ -422,12 +422,25 @@ describe("pool-gate hook (real processes)", () => {
     expect(hook(project(), "haxe b.hxml")).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 
+  it("a pool-gate.json left without a .yaml → the command passes, one line naming the conversion", () => {
+    const dir = project();
+    fs.mkdirSync(path.join(dir, ".claude", "workflows"), { recursive: true });
+    const json = path.join(dir, ".claude", "workflows", "pool-gate.json");
+    fs.writeFileSync(json, realCfg());
+    const r = hook(path.join(dir, "sub"), "haxe b.hxml");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toBe(
+      `workflow: ${json} is ignored (configs are YAML now): wf-queue --convert ${json} --into ${json.replace(/json$/, "yaml")}\n`,
+    );
+  });
+
   it("a broken config → the command passes, one stderr line", () => {
     const r = hook(path.join(project("{ rules: "), "sub"), "haxe b.hxml");
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("");
     expect(r.stderr.trim().split("\n")).toHaveLength(1);
-    expect(r.stderr).toMatch(/^pool-gate: config ignored — .*pool-gate\.json: /);
+    expect(r.stderr).toMatch(/^pool-gate: config ignored — .*pool-gate\.yaml: /);
   });
 
   it("no build → the command passes, one stderr line", () => {
@@ -476,7 +489,7 @@ describe("pool-gate hook (real processes)", () => {
   const pool = () => {
     const dir = tmp("wf-gate-pool-");
     fs.writeFileSync(
-      path.join(dir, "config.json"),
+      path.join(dir, "config.yaml"),
       JSON.stringify({ budget: 4, load_threshold: 1000 }),
     );
     return dir;
@@ -519,7 +532,7 @@ describe("pool-gate hook (real processes)", () => {
       hookSpecificOutput: { permissionDecision?: string; updatedInput: { command: string } };
     };
 
-  it("no pool-gate.json → node is never started", () => {
+  it("no pool-gate.yaml → node is never started", () => {
     const mark = path.join(tmp("wf-gate-mark-"), "node-ran");
     const dir = stubBin("node", `touch '${mark}'\nexec '${process.execPath}' "$@"`);
     const env = { ...cleanEnv(), PATH: `${dir}:/usr/bin:/bin` };

@@ -498,7 +498,7 @@ describe("suspend / resume", () => {
     async function fullPool(): Promise<{ pool: Pool; free: () => Promise<void> }> {
       const dir = tmp("wf-pool-");
       fs.writeFileSync(
-        path.join(dir, "config.json"),
+        path.join(dir, "config.yaml"),
         JSON.stringify({ budget: 2, load_threshold: 0 }),
       );
       const probes: PoolProbes = {

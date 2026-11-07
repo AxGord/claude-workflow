@@ -219,7 +219,7 @@ describe("estimates reach the pool", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-bf-"));
     try {
       fs.writeFileSync(
-        path.join(dir, "config.json"),
+        path.join(dir, "config.yaml"),
         JSON.stringify({ budget: 10, load_threshold: 0 }),
       );
       const pool = new Pool(dir, {

@@ -115,52 +115,46 @@ function parseSession(text: string): Parsed | null {
   }
 }
 
-function field(parts: string[], key: string): string {
-  const hit = parts.find(p => p.startsWith(key + ':'))
-  return hit ? hit.slice(key.length + 1).trim() : ''
-}
+/** One task of the engine's /api/queue answer (describeQueue). */
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string }
 
-function parseQueue(file: string, text: string): QueueView {
-  const lines: QueueLine[] = []
-  let window = 0
-  for (const raw of text.split('\n')) {
-    const size = /^batch_size:\s*(\d+)/.exec(raw)
-    if (size) window = Number(size[1])
-    const m = /^- \[([ >x!])\] ([A-Za-z0-9][A-Za-z0-9-]*) \|(.*)$/.exec(raw)
-    if (!m) continue
-    const parts = (m[3] ?? '').split(' | ').map(p => p.trim())
-    const after = field(parts, 'after')
-    lines.push({
-      id: m[2] ?? '',
-      mark: m[1] as QueueLine['mark'],
-      difficulty: field(parts, 'difficulty'),
-      isParked: raw.includes('⏸'),
-      isExclusive: field(parts, 'exclusive') !== '',
-      isParentRun: /^(—|-)$/.test(field(parts, 'model')),
-      after: after === '' ? [] : after.split(',').map(a => a.trim()).filter(a => a !== ''),
-    })
-  }
-  const mark = new Map(lines.map(l => [l.id, l.mark]))
-  const ready: QueueLine[] = []
-  const waiting: { id: string; why: string; difficulty: string }[] = []
-  for (const l of lines) {
-    if (l.mark !== ' ') continue
-    const open = l.after.filter(a => mark.get(a) !== 'x')
-    if (l.isParked) waiting.push({ id: l.id, difficulty: l.difficulty, why: '⏸' })
-    else if (open.length > 0) waiting.push({ id: l.id, difficulty: l.difficulty, why: 'after ' + open.join(', ') })
-    else if (l.isParentRun) waiting.push({ id: l.id, difficulty: l.difficulty, why: 'parent-run (model —)' })
-    else if (l.isExclusive) waiting.push({ id: l.id, difficulty: l.difficulty, why: 'exclusive — runs alone' })
-    else ready.push(l)
-  }
+/** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
+export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }): QueueView {
+  const lines: (QueueLine & { reason: string })[] = api.lines.map(l => ({
+    id: l.id,
+    status: l.status,
+    difficulty: l.difficulty ?? '',
+    isParked: l.paused,
+    isExclusive: l.exclusive,
+    isParentRun: /^(—|-)/.test(l.model ?? ''),
+    after: (l.after ?? '').split(',').map(a => a.trim()).filter(a => a !== ''),
+    reason: l.reason ?? '',
+  }))
+  const strip = ({ reason: _r, ...l }: QueueLine & { reason: string }): QueueLine => l
+  const pending = lines.filter(l => l.status === 'pending')
   return {
     file,
-    window,
-    done: lines.filter(l => l.mark === 'x').length,
-    failed: lines.filter(l => l.mark === '!').length,
-    pending: lines.filter(l => l.mark === ' ').length,
-    running: lines.filter(l => l.mark === '>'),
-    ready,
-    waiting: waiting.filter(w => w.why !== '⏸'),
+    window: api.batchSize,
+    done: lines.filter(l => l.status === 'done').length,
+    failed: lines.filter(l => l.status === 'failed').length,
+    pending: pending.length,
+    running: lines.filter(l => l.status === 'running').map(strip),
+    ready: pending.filter(l => l.reason === 'ready').map(strip),
+    waiting: pending
+      .filter(l => l.reason !== 'ready' && !l.isParked)
+      .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty })),
+  }
+}
+
+async function loadQueue($: any, file: string): Promise<{ queue: QueueView | null; error: string }> {
+  const res = await $.http.fetch(`${DASHBOARD}/api/queue?file=${encodeURIComponent(file)}`).catch((e: unknown) => String(e))
+  if (typeof res === 'string') return { queue: null, error: 'queue: ' + res }
+  try {
+    const body = JSON.parse(res.text)
+    if (!res.ok) return { queue: null, error: 'queue: ' + String(body?.error ?? res.status) }
+    return { queue: queueView(file, body), error: '' }
+  } catch (e) {
+    return { queue: null, error: 'queue: ' + String(e) }
   }
 }
 
@@ -208,15 +202,7 @@ async function build($: any): Promise<Snapshot> {
     sessions.push({ ...p.row, next: graph.get(p.row.workflow)?.get(p.row.state) ?? [] })
     if (p.queueFile !== '') queueFile = p.queueFile
   }
-  let queue: QueueView | null = null
-  let error = ''
-  if (queueFile !== '') {
-    const text = await $.fs.read(queueFile).catch((e: unknown) => {
-      error = 'queue: ' + String(e)
-      return ''
-    })
-    if (text !== '') queue = parseQueue(queueFile, text)
-  }
+  const { queue, error } = queueFile !== '' ? await loadQueue($, queueFile) : { queue: null, error: '' }
   return { at: now, sessions, queue, lands: queue ? await lands($, queueFile) : [], error }
 }
 

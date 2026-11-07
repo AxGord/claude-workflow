@@ -29,7 +29,7 @@ const probes: PoolProbes = {
 /** An executor over a private pool of `budget` threads (never the machine's real pool). */
 function executorWith(budget: number): { executor: Executor; dir: string } {
   const dir = tmp("wf-fanout-pool-");
-  fs.writeFileSync(path.join(dir, "config.json"), JSON.stringify({ budget, load_threshold: 1000 }));
+  fs.writeFileSync(path.join(dir, "config.yaml"), JSON.stringify({ budget, load_threshold: 1000 }));
   return { executor: new Executor(new Pool(dir, probes)), dir };
 }
 
@@ -108,7 +108,7 @@ describe("Executor fanout:", () => {
   it("without max_parallel only as many shards as the budget runs side by side queue in the pool", async () => {
     const dir = tmp("wf-fanout-pool-");
     fs.writeFileSync(
-      path.join(dir, "config.json"),
+      path.join(dir, "config.yaml"),
       JSON.stringify({ budget: 4, load_threshold: 1000 }),
     );
     let inFlight = 0;

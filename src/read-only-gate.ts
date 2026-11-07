@@ -6,9 +6,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parseYaml, warnLeftoverJson } from "./yaml-config.js";
 import { basename, commandOf, splitSegments, type Command } from "./pool-gate.js";
 
-export const READ_ONLY_CONFIG = path.join(".claude", "read-only-commands.json");
+export const READ_ONLY_CONFIG = path.join(".claude", "read-only-commands.yaml");
 
 /** The agent types that are read-only when the project's config names none (bare names; a plugin-qualified `workflow:wf-recon` matches too). */
 export const DEFAULT_READ_ONLY_AGENTS: readonly string[] = ["wf-recon", "wf-reviewer"];
@@ -32,9 +33,9 @@ export type ReadOnlyDecision =
 const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-/** Validate a read-only-commands.json text; throws with the offending key named. */
+/** Validate a read-only-commands.yaml text; throws with the offending key named. */
 export function parseReadOnlyConfig(text: string): ReadOnlyConfig {
-  const raw = JSON.parse(text) as unknown;
+  const raw = parseYaml(text);
   if (!isObject(raw))
     throw new Error("expected an object with `write` / `read` / `env` / `agents`");
   const { write = [], read = [], env = {}, agents } = raw;
@@ -60,10 +61,11 @@ export function parseReadOnlyConfig(text: string): ReadOnlyConfig {
   };
 }
 
-/** The nearest read-only-commands.json from `cwd` up to the git root; none outside a git repo. */
+/** The nearest read-only-commands.yaml from `cwd` up to the git root; none outside a git repo. */
 export function findReadOnlyConfig(cwd: string): ReadOnlyConfig | undefined {
   for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
     const file = path.join(dir, READ_ONLY_CONFIG);
+    warnLeftoverJson(file);
     if (fs.existsSync(file)) {
       try {
         return parseReadOnlyConfig(fs.readFileSync(file, "utf8"));
@@ -339,7 +341,7 @@ function readerReason(cmd: Command, config: ReadOnlyConfig | undefined): string 
   const args = c.words.slice(1).map(w => w.value);
   if ((config?.read ?? []).some(rule => matchesWrite(rule, c))) return undefined;
   if (!DEFAULT_READERS.includes(name))
-    return `${name} is not a declared reader (the project's .claude/read-only-commands.json \`read\` adds one)`;
+    return `${name} is not a declared reader (the project's .claude/read-only-commands.yaml \`read\` adds one)`;
   if (viaXargs && FLAG_JUDGED.has(name))
     return `xargs ${name}: its arguments come from stdin and cannot be judged`;
   if (name === "git") {

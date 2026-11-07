@@ -798,7 +798,7 @@ function planSession(id) {
 }
 
 function planRow(l, extra) {
-  const meta = [l.difficulty ? 'd' + l.difficulty : '', l.model || '', l.exclusive ? 'exclusive' : '', l.paused ? '⏸' : '']
+  const meta = [l.difficulty ? 'd' + l.difficulty : '', l.model || '', l.exclusive ? 'exclusive' : '', l.paused ? 'parked' : '']
     .filter(Boolean).join(' ');
   const text = l.text.length > 160 ? l.text.slice(0, 160) + '…' : l.text;
   return `<div class="session-item"><div class="session-name">${escapeHtml(l.id)} <span class="state-flags">${escapeHtml(meta)}</span></div>
@@ -812,7 +812,7 @@ function renderPlan(q) {
     h += `<h2 style="margin-top:12px">${title} (${lines.length})</h2>`;
     for (const l of lines) h += planRow(l, extra(l));
   };
-  group('Running', by(l => l.mark === '>'), l => {
+  group('Running', by(l => l.status === 'running'), l => {
     const s = planSession(l.id);
     if (!s) return 'no session';
     const f = s.stack[s.active_frame];
@@ -820,13 +820,13 @@ function renderPlan(q) {
     const at = entered.length ? entered[entered.length - 1].at : s.started_at;
     return `<a href="#session=${encodeURIComponent(s.session_id)}" onclick="showTab('sessions')">${escapeHtml(f.workflow + ' @ ' + f.current_state)}</a> · ${timeIn(at)}`;
   });
-  group('Ready', by(l => l.mark === ' ' && l.reason === 'ready'), () => '');
-  group('Waiting', by(l => l.mark === ' ' && l.reason !== 'ready'), l => escapeHtml(l.reason));
-  group('Failed', by(l => l.mark === '!'), () => '');
-  // Marks carry no date: only a line whose text holds today's date (LANDED <sha> YYYY-MM-DD) is "today".
+  group('Ready', by(l => l.status === 'pending' && l.reason === 'ready'), () => '');
+  group('Waiting', by(l => l.status === 'pending' && l.reason !== 'ready'), l => escapeHtml(l.reason));
+  group('Failed', by(l => l.status === 'failed'), () => '');
+  // A done task is "today" when its last note (the land's) is dated today.
   const d = new Date();
   const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  const done = by(l => l.mark === 'x' && l.text.includes(today));
+  const done = by(l => l.status === 'done' && l.lastNoteDate === today);
   h += `<h2 style="margin-top:12px">Done today (${done.length})</h2>`;
   for (const l of done) h += planRow(l, '');
   return h;
