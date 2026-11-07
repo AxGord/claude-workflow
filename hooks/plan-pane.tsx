@@ -418,7 +418,8 @@ export const register: Register = on => {
     ].filter(x => x !== '')
     return (
       <Text>
-        <Text dimColor>✻ Waiting for {total}: </Text>
+        <Text color="cyan">⧗ </Text>
+        <Text dimColor>{slices.length} {slices.length === 1 ? 'slice' : 'slices'} · {total} {total === 1 ? 'agent' : 'agents'}: </Text>
         {slices.slice(0, SHOW).map(([label, v], i) => (
           <Text>
             {i > 0 ? <Text dimColor> · </Text> : null}
