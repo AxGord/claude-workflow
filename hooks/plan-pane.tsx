@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Land, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
+import type { AgentSeen, Land, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
 
 const PANE = 'workflow-plan'
 const PERIOD_MS = 15000
@@ -14,6 +14,9 @@ const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape:
 /** The Plan tab sections the person folded (running, next, lands); none by default. */
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
+/** Agents seen linked to a workflow session, kept after the session ends (its file is removed): the end
+ * notification of a driver, worker or reviewer is drawn from this. */
+const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, { shape: 'agents-seen-1' })
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-1' })
 /** The session whose card is open in the Sessions tab ('' none). */
 const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { shape: 'expanded-1' })
@@ -217,9 +220,33 @@ async function build($: any): Promise<Snapshot> {
   return { at: now, sessions, queue, lands: queue ? await lands($, queueFile) : [], error }
 }
 
+/** The role an agent plays for the workflow its session runs. */
+function roleOf(workflow: string): string {
+  if (/review/.test(workflow)) return 'reviewer'
+  if (/worker/.test(workflow)) return 'worker'
+  if (/recon/.test(workflow)) return 'recon'
+  return 'driver'
+}
+
 async function refresh($: any): Promise<Snapshot> {
   const s = await build($)
   await update($, snap, () => s)
+  // remember each linked agent's slice and where it stood: its session file is gone once the pipeline ends
+  const seen: Record<string, AgentSeen> = {}
+  for (const r of s.sessions) {
+    if (r.agent === '') continue
+    let top = r
+    for (let i = 0; i < 8 && top.tag === '' && top.parent !== ''; i++) top = s.sessions.find(x => x.id === top.parent) ?? top
+    seen[r.agent] = { label: top.tag !== '' ? top.tag : r.workflow, role: roleOf(r.workflow), state: r.state, at: s.at }
+  }
+  if (Object.keys(seen).length > 0) {
+    await update($, agentsSeen, old => {
+      const merged = { ...old, ...seen }
+      // keep the newest 300
+      const keys = Object.keys(merged).sort((a, b) => (merged[b]?.at ?? 0) - (merged[a]?.at ?? 0)).slice(0, 300)
+      return Object.fromEntries(keys.map(k => [k, merged[k]!]))
+    })
+  }
   // the status line keeps the engine statusline script compact; the pane holds the detail
   $.ui.status(undefined)
   return s
@@ -399,6 +426,31 @@ export const register: Register = on => {
           </Text>
         ))}
         {rest.length > 0 ? <Text dimColor> · {rest.join(' · ')}</Text> : null}
+      </Text>
+    )
+  })
+
+  // A background agent's end notification, for an agent of a workflow pipeline: its slice, role and run time, and
+  // how it ended — stopped by hand or failed (red, with the step), landed (the commit), or the step it ended at.
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    const task = e.props.task
+    if (e.props.origin.kind !== 'task-notification' || !task?.id || e.props.isExpanded) return next(e)
+    const seen = (await read($, agentsSeen))[task.id]
+    if (!seen) return next(e)
+    const s = await read($, snap)
+    const { Text } = $.ui.resolve(e)
+    const land = s?.lands.find(l => l.slice === seen.label)
+    const dur = task.durationMs !== undefined ? ` · ${age(task.durationMs) || '<1m'}` : ''
+    const outcome =
+      task.status === 'killed' ? <Text color="red">✗ stopped by hand at {seen.state}</Text>
+      : task.status === 'failed' ? <Text color="red">✗ failed at {seen.state}</Text>
+      : land && seen.role === 'driver' ? <Text color="green">✓ landed {land.sha}</Text>
+      : <Text dimColor>ended at {seen.state}</Text>
+    return (
+      <Text>
+        <Text color="cyan">⚙ [{seen.label}] </Text>
+        <Text dimColor>{seen.role}{dur} · </Text>
+        {outcome}
       </Text>
     )
   })

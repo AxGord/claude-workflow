@@ -45,6 +45,9 @@ export type QueueView = {
 
 export type Land = { sha: string; slice: string; at: string }
 
+/** An agent seen linked to a workflow session: its slice (or workflow), role and last step. */
+export type AgentSeen = { label: string; role: string; state: string; at: number }
+
 /** The pane's tab. */
 export type View = 'plan' | 'sessions' | 'waiting'
 
@@ -58,6 +61,6 @@ export type Snapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]>; paneOpen: Shaped<boolean> }
+    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]>; paneOpen: Shaped<boolean>; agentsSeen: Shaped<Record<string, AgentSeen>> }
   }
 }
