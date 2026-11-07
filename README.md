@@ -39,6 +39,19 @@ The plugin is listed in the [claude-plugins-community](https://github.com/anthro
 /plugin install workflow
 ```
 
+### From this repository
+
+The repository is its own marketplace (`.claude-plugin/marketplace.json`):
+
+```bash
+/plugin install workflow --marketplace AxGord/claude-workflow
+```
+
+A local checkout works the same way: `claude plugin marketplace add /path/to/mcp-workflow-engine`, then
+`claude plugin install workflow@claude-workflow` — the plugin is then read from the checkout itself (edit, then
+`/reload-plugins`). Install it from a folder that IS the plugin, not through a symlink to it: the hooks module
+(`hooks/plan-pane.tsx`) must resolve inside the marketplace folder.
+
 ### From npm
 
 Create a `marketplace.json` and add it as a source, or install directly:

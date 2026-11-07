@@ -1,0 +1,18 @@
+{
+  "name": "claude-workflow",
+  "owner": {
+    "name": "AxGord",
+    "email": "axgord@gmail.com"
+  },
+  "metadata": {
+    "description": "The workflow engine plugin: structured workflow orchestration for AI agents via finite-state machines"
+  },
+  "plugins": [
+    {
+      "name": "workflow",
+      "source": "./",
+      "description": "Structured workflow orchestration for AI agents via finite-state machines.",
+      "version": "0.1.11"
+    }
+  ]
+}
