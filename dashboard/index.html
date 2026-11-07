@@ -771,6 +771,14 @@ function toggleStatePrompt(el, workflowName, stateName) {
   el.after(wrapper);
 }
 
+// Deep link: `#session=<id>` opens that session (the status-line pane links here).
+function selectFromHash() {
+  const m = /^#session=([A-Za-z0-9-]+)$/.exec(location.hash);
+  if (m) selectedSessionId = m[1];
+}
+window.addEventListener('hashchange', () => { selectFromHash(); refresh(); });
+selectFromHash();
+
 // Auto-refresh
 setInterval(refresh, 2000);
 refresh();
