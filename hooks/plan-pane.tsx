@@ -222,6 +222,45 @@ async function refresh($: any): Promise<Snapshot> {
   return s
 }
 
+/** Opens the pane, or closes it when it is up; true when it is open after the call. */
+async function togglePane($: any): Promise<boolean> {
+  const isUp = (await $.ui.panes()).some((p: { id: string }) => p.id === PANE)
+  if (isUp) {
+    await $.ui.close({ id: PANE })
+    return false
+  }
+  await refresh($)
+  await $.ui.open({ id: PANE, title: 'Workflow plan', backgroundColor: 'transparent' })
+  return true
+}
+
+/** A tool of this plugin's workflow MCP server (`mcp__plugin_workflow_wf__<op>`). */
+function isEngineTool(tool: string): boolean {
+  return /^mcp__plugin_workflow_wf__/.test(tool)
+}
+
+function engineOp(tool: string): string {
+  return tool.replace(/^mcp__plugin_workflow_wf__/, '')
+}
+
+/** A tool output as text: a string, an MCP content array, or an object holding one. */
+function outputText(o: unknown): string {
+  if (typeof o === 'string') return o
+  if (Array.isArray(o)) return o.map(outputText).join('\n')
+  if (o && typeof o === 'object') {
+    const r = o as Record<string, unknown>
+    if (typeof r.text === 'string') return r.text
+    if (r.content !== undefined) return outputText(r.content)
+  }
+  return ''
+}
+
+/** The state a `transition` / `start` reply names on its first `<workflow> @ <state>` line. */
+function movedTo(o: unknown): string | undefined {
+  const m = /^([A-Za-z0-9_.-]+) @ ([A-Za-z0-9_.-]+)/m.exec(outputText(o))
+  return m?.[2]
+}
+
 function age(ms: number): string {
   if (ms <= 0) return ''
   const m = Math.floor(ms / 60000)
@@ -237,15 +276,96 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'wf-plan' }, async $ => {
-    const isUp = (await $.ui.panes()).some(p => p.id === PANE)
-    if (isUp) {
-      await $.ui.close({ id: PANE })
-      return { text: 'Plan pane closed.' }
-    }
-    await refresh($)
-    await $.ui.open({ id: PANE, title: 'Workflow plan', backgroundColor: 'transparent' })
-    return { text: 'Plan pane opened (refreshes every 15 s; /wf-plan again closes it).' }
+    const isOpen = await togglePane($)
+    return { text: isOpen ? 'Plan pane opened (refreshes every 15 s; /wf-plan again closes it).' : 'Plan pane closed.' }
   }).catch(($, e, next) => (next.called ? next(e) : { text: 'wf-plan failed: see the debug log' }))
+
+  // The band above the prompt is the status line: the root session (◆ with children) and the others' count, the
+  // queue's running/next/landed, and a button that toggles the pane. Nothing when this session runs no workflow.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const s = await read($, snap)
+    if (!s || s.sessions.length === 0) return next(e)
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const ids = new Set(s.sessions.map(r => r.id))
+    const roots = s.sessions.filter(r => r.parent === '' || !ids.has(r.parent))
+    const hasChildren = (r: SessionRow) => s.sessions.some(c => c.parent === r.id)
+    const main = roots.find(hasChildren) ?? roots[0] ?? s.sessions[0]!
+    const others = s.sessions.length - 1
+    const q = s.queue
+    return (
+      <Box flexDirection="row" gap={2}>
+        <Text>
+          {hasChildren(main) ? <Text color="cyanBright" weight="bold">◆ </Text> : <Text color={main.isWorking ? 'cyanBright' : 'cyan'}>⚙ </Text>}
+          {main.workflow}:{main.state}
+          {others > 0 ? <Text color="cyan"> ({others})</Text> : null}
+        </Text>
+        {q ? (
+          <Text dimColor>
+            ▶ {q.running.length}/{q.window} · ⏭ {q.ready.length} · ✓ {s.lands.length}
+          </Text>
+        ) : null}
+        <Button key="band-plan" hotkey="p" plain onPress={() => void togglePane($)}>
+          <Text color="cyan">[plan]</Text>
+        </Button>
+      </Box>
+    )
+  })
+
+  // A collapsed group of tool calls that holds workflow-engine calls draws as the chain of moves they made
+  // (`[slice] transition→state …`) instead of "Called plugin:workflow:wf N times"; other tools keep a count.
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    if (e.props.isExpanded || e.props.isCallsOnly === false) return next(e)
+    const calls = e.props.calls
+    const wf = calls.filter(c => isEngineTool(c.tool))
+    if (wf.length === 0) return next(e)
+    const { Text } = $.ui.resolve(e)
+    const s = await read($, snap)
+    const label = (sid: string) => {
+      const r = s?.sessions.find(x => x.id === sid)
+      return r ? (r.tag !== '' ? r.tag : r.workflow) : sid.slice(0, 8)
+    }
+    const moves: any[] = []
+    let lastSid = ''
+    let sets = 0
+    let reads = 0
+    for (const c of wf) {
+      const op = engineOp(c.tool)
+      const input = (c.input ?? {}) as Record<string, unknown>
+      const sid = typeof input.session_id === 'string' ? input.session_id : ''
+      if (op === 'transition' || op === 'start') {
+        const to = movedTo(c.output)
+        const name = op === 'start' ? `start ${String(input.workflow ?? '')}` : String(input.transition ?? '?')
+        if (sid !== '' && sid !== lastSid) moves.push(<Text color="cyan">[{label(sid)}] </Text>)
+        lastSid = sid
+        moves.push(
+          <Text>
+            <Text dimColor>{name}→</Text>
+            <Text color={c.isErrored ? 'red' : 'cyanBright'} weight="bold">{c.isRunning ? '…' : to ?? '?'}</Text>{' '}
+          </Text>,
+        )
+      } else if (op === 'context_set') sets++
+      else reads++
+    }
+    const otherTools = new Map<string, number>()
+    for (const c of calls) {
+      if (isEngineTool(c.tool)) continue
+      const k = c.tool === 'Bash' ? 'shell' : c.tool.toLowerCase()
+      otherTools.set(k, (otherTools.get(k) ?? 0) + 1)
+    }
+    const tail = [
+      sets > 0 ? `${sets} set` : '',
+      reads > 0 ? `${reads} wf` : '',
+      ...[...otherTools].map(([k, n]) => `${n} ${k}`),
+    ].filter(x => x !== '')
+    return (
+      <Text>
+        <Text color="cyan">wf </Text>
+        {moves.length > 0 ? moves : <Text dimColor>no moves </Text>}
+        {tail.length > 0 ? <Text dimColor>· {tail.join(' · ')}</Text> : null}
+      </Text>
+    )
+  })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Link } = $.ui.resolve(e)
