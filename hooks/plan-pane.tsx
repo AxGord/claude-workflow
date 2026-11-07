@@ -251,7 +251,8 @@ export const register: Register = on => {
     const { Box, Text, Button, Link } = $.ui.resolve(e)
     const s = await read($, snap)
     if (!s) return <Text dimColor>Reading the workflow engine…</Text>
-    const tab: View = (await read($, view)) ?? 'plan'
+    // no work queue: one view, the session tree — no tabs to choose between
+    const tab: View = s.queue ? ((await read($, view)) ?? 'plan') : 'sessions'
     const open: string = (await read($, expanded)) ?? ''
     const foldedNow: string[] = (await read($, folded)) ?? []
     const isOpen = (key: string) => !foldedNow.includes(key)
@@ -398,7 +399,7 @@ export const register: Register = on => {
     }
     return (
       <Box flexDirection="column">
-        {tabRow}
+        {s.queue ? tabRow : null}
         {body}
         {s.error !== '' && <Text color="red">{s.error}</Text>}
         {footer}
