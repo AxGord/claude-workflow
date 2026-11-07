@@ -337,7 +337,10 @@ export function resolveRepo(queue: Queue, line: QueueLine): string | null {
 }
 
 /** The admission pass over a parsed queue; writes nothing. A bad `overlap:` header is refused. */
-export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
+export function planPick(
+  queue: Queue,
+  opts: { readonly ignoreWindow?: boolean } = {},
+): Omit<PickResult, "dryRun"> {
   if (queue.overlapError !== undefined) throw new QueueError(queue.overlapError);
   const byId = new Map(queue.lines.map(l => [l.id, l]));
   const running = queue.lines.filter(l => l.mark === ">");
@@ -353,7 +356,7 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
     let why: string | null = null;
     let repo: string | null = null;
     if (queue.batchSize === 0) why = "paused (batch_size 0)";
-    else if (free <= admitted.length) why = "window full";
+    else if (opts.ignoreWindow !== true && free <= admitted.length) why = "window full";
     else if ((l.meta.model ?? "").startsWith("—")) why = "parent-run (model —)";
     else if (l.paused) why = "⏸";
     else {
@@ -410,6 +413,45 @@ export function planPick(queue: Queue): Omit<PickResult, "dryRun"> {
     pending: queue.lines.filter(l => l.mark === " ").length,
     admitted,
     reasons,
+  };
+}
+
+export interface QueueLineView {
+  readonly id: string;
+  readonly mark: string;
+  readonly difficulty?: string;
+  readonly model?: string;
+  readonly after?: string;
+  readonly exclusive: boolean;
+  readonly paused: boolean;
+  readonly text: string;
+  /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
+  readonly reason?: string;
+}
+
+/** Every line of a queue with, for each pending one, the picker's reason evaluated without the window. */
+export function describeQueue(queue: Queue): {
+  readonly file: string;
+  readonly batchSize: number;
+  readonly lines: readonly QueueLineView[];
+} {
+  const plan = planPick(queue, { ignoreWindow: true });
+  const why = new Map(plan.reasons.map(r => [r.id, r.why]));
+  const ready = new Set(plan.admitted.map(a => a.id));
+  return {
+    file: queue.file,
+    batchSize: queue.batchSize,
+    lines: queue.lines.map(l => ({
+      id: l.id,
+      mark: l.mark,
+      ...(l.meta.difficulty !== undefined ? { difficulty: l.meta.difficulty } : {}),
+      ...(l.meta.model !== undefined ? { model: l.meta.model } : {}),
+      ...(l.meta.after !== undefined ? { after: l.meta.after } : {}),
+      exclusive: exclusiveOf(l),
+      paused: l.paused,
+      text: l.text,
+      ...(l.mark === " " ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") } : {}),
+    })),
   };
 }
 

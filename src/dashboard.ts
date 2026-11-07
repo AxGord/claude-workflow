@@ -6,10 +6,11 @@ import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
 import { ledgerEntry } from "./ledger.js";
+import { describeQueue, readQueue, QueueError } from "./queue.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-function buildApp(storage: Storage, loader: Loader): express.Express {
+export function buildApp(storage: Storage, loader: Loader): express.Express {
   const app = express();
   app.use(express.json());
 
@@ -41,6 +42,34 @@ function buildApp(storage: Storage, loader: Loader): express.Express {
       };
     }
     res.json(result);
+  });
+
+  // The queue files root sessions name through context.queue_file.
+  const queueFiles = (): string[] => {
+    const out = new Set<string>();
+    for (const s of storage.readAll()) {
+      const f = s.context.queue_file;
+      if (typeof f === "string" && f !== "") out.add(f);
+    }
+    return [...out].sort();
+  };
+
+  app.get("/api/queues", (_req, res) => {
+    res.json(queueFiles());
+  });
+
+  // Only a file some session names is readable: the endpoint is not a file server.
+  app.get("/api/queue", (req, res) => {
+    const file = typeof req.query.file === "string" ? req.query.file : "";
+    if (!queueFiles().includes(file)) {
+      res.status(404).json({ error: "Queue not named by any session" });
+      return;
+    }
+    try {
+      res.json(describeQueue(readQueue(file)));
+    } catch (err) {
+      res.status(err instanceof QueueError ? 422 : 500).json({ error: (err as Error).message });
+    }
   });
 
   // Abandon a session via REST (used by SessionEnd hook)

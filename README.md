@@ -850,6 +850,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 
 - **Sessions panel** — active sessions plus the most recent finished ones (terminal history is capped)
+- **Plan tab** — each queue named by a session's `context.queue_file`: running lines (with the pipeline state and time in it, linked to the session), ready lines in file order, waiting lines with the picker's reason (window ignored), failed, done today (a done line counts when its text holds today's date, `LANDED <sha> YYYY-MM-DD`; marks carry no date)
 - **Workflow list** — all loaded workflows with state counts
 - **Session detail** — state history, stack depth, context data
 - **Workflow graphs** — interactive DAG visualization rendered with dagre
@@ -862,6 +863,8 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 | `GET` | `/api/session/:id` | Get session detail |
 | `POST` | `/api/session/:id/abandon` | Abandon a session |
 | `GET` | `/api/workflows` | List all workflow definitions |
+| `GET` | `/api/queues` | Queue files named by sessions' `context.queue_file` |
+| `GET` | `/api/queue?file=<path>` | Every line of that queue with the picker's reason per pending line |
 
 ## Configuration
 

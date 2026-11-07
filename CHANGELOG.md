@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- engine (ENG-DASH-PLAN): web dashboard Plan tab. `GET /api/queues` lists the queue files sessions name in `context.queue_file`; `GET /api/queue?file=` (404 for an unnamed file, 422 for a bad queue) answers every line with, for pending ones, the picker's real reason. `planPick(queue, {ignoreWindow})` skips "window full"; `describeQueue` builds the answer. The tab: running (pipeline state, time since entering it, link to `#session=<id>`), ready, waiting with reasons, failed, done today. Tests: `src/queue.test.ts`, `src/dashboard.test.ts`.
+
 - engine (ENG-LEDGER-STAGES-AS-RUN): the ledger's `stages` are the rows each stage ran on — recorded (first value wins) when a state reading `context.model_<x>` / `effort_<x>` is entered, so a later rescore does not rewrite them; the line gains `claim_difficulty` (the first difficulty the table saw) beside the final `difficulty`, and `wf-calibration` bands by the claim. Tests: `src/model-table.test.ts`, `src/calibration.test.ts`.
 
 - engine (ENG-STAGE-NAMES-OPEN): model_table stage names open — any `^[a-z][a-z_]*$` except model/effort/step/reached (e.g. `recon`); the ledger's `stages` records every `model_<x>`/`effort_<x>` pair and wf-calibration follows the recorded names. Tests: `src/model-table.test.ts`.

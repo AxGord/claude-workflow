@@ -59,6 +59,12 @@
 <body>
 <div class="container">
   <h1>MCP Workflow Engine</h1>
+  <div style="margin-bottom:12px">
+    <a href="#" id="tab-sessions" onclick="showTab('sessions');return false">Sessions</a> |
+    <a href="#" id="tab-plan" onclick="showTab('plan');return false">Plan</a>
+  </div>
+  <div id="plan-view" style="display:none"><div class="panel"><h2>Plan</h2><div id="plan-content"><div class="empty-state">No queue</div></div></div></div>
+  <div id="main-view">
   <div class="grid">
     <div>
       <div class="panel" id="sessions-panel">
@@ -77,6 +83,7 @@
       </div>
     </div>
   </div>
+</div>
 </div>
 <div class="refresh-indicator" id="refresh-indicator">Auto-refresh: 2s</div>
 
@@ -771,6 +778,69 @@ function toggleStatePrompt(el, workflowName, stateName) {
   el.after(wrapper);
 }
 
+// Plan tab: queue lines grouped by what they are now; reasons come from the picker via /api/queue.
+let currentTab = 'sessions';
+function showTab(t) {
+  currentTab = t;
+  document.getElementById('main-view').style.display = t === 'sessions' ? '' : 'none';
+  document.getElementById('plan-view').style.display = t === 'plan' ? '' : 'none';
+  if (t === 'plan') refreshPlan();
+}
+
+function timeIn(iso) {
+  const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  return sec < 60 ? sec + 's' : sec < 3600 ? Math.floor(sec / 60) + 'm' : Math.floor(sec / 3600) + 'h';
+}
+
+function planSession(id) {
+  return allSessions.find(s => s.stack.length > 0 && typeof s.context.task === 'string'
+    && (s.context.task === id || s.context.task.startsWith(id + ' ') || s.context.task.startsWith(id + ':')));
+}
+
+function planRow(l, extra) {
+  const meta = [l.difficulty ? 'd' + l.difficulty : '', l.model || '', l.exclusive ? 'exclusive' : '', l.paused ? '⏸' : '']
+    .filter(Boolean).join(' ');
+  const text = l.text.length > 160 ? l.text.slice(0, 160) + '…' : l.text;
+  return `<div class="session-item"><div class="session-name">${escapeHtml(l.id)} <span class="state-flags">${escapeHtml(meta)}</span></div>
+    <div class="session-info">${extra || ''}</div><div class="session-info">${escapeHtml(text)}</div></div>`;
+}
+
+function renderPlan(q) {
+  const by = f => q.lines.filter(f);
+  let h = `<div class="session-uuid">${escapeHtml(q.file)} — batch_size ${q.batchSize}</div>`;
+  const group = (title, lines, extra) => {
+    h += `<h2 style="margin-top:12px">${title} (${lines.length})</h2>`;
+    for (const l of lines) h += planRow(l, extra(l));
+  };
+  group('Running', by(l => l.mark === '>'), l => {
+    const s = planSession(l.id);
+    if (!s) return 'no session';
+    const f = s.stack[s.active_frame];
+    const entered = s.history.filter(e => e.frame === s.active_frame && e.to === f.current_state);
+    const at = entered.length ? entered[entered.length - 1].at : s.started_at;
+    return `<a href="#session=${encodeURIComponent(s.session_id)}" onclick="showTab('sessions')">${escapeHtml(f.workflow + ' @ ' + f.current_state)}</a> · ${timeIn(at)}`;
+  });
+  group('Ready', by(l => l.mark === ' ' && l.reason === 'ready'), () => '');
+  group('Waiting', by(l => l.mark === ' ' && l.reason !== 'ready'), l => escapeHtml(l.reason));
+  group('Failed', by(l => l.mark === '!'), () => '');
+  // Marks carry no date: only a line whose text holds today's date (LANDED <sha> YYYY-MM-DD) is "today".
+  const d = new Date();
+  const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const done = by(l => l.mark === 'x' && l.text.includes(today));
+  h += `<h2 style="margin-top:12px">Done today (${done.length})</h2>`;
+  for (const l of done) h += planRow(l, '');
+  return h;
+}
+
+async function refreshPlan() {
+  const files = await fetchJSON('/api/queues');
+  if (!files || files.length === 0) return;
+  const qs = await Promise.all(files.map(f => fetchJSON('/api/queue?file=' + encodeURIComponent(f))));
+  const ok = qs.filter(Boolean);
+  if (ok.length === 0) return;
+  document.getElementById('plan-content').innerHTML = ok.map(renderPlan).join('');
+}
+
 // Deep link: `#session=<id>` opens that session (the status-line pane links here).
 function selectFromHash() {
   const m = /^#session=([A-Za-z0-9-]+)$/.exec(location.hash);
@@ -780,7 +850,7 @@ window.addEventListener('hashchange', () => { selectFromHash(); refresh(); });
 selectFromHash();
 
 // Auto-refresh
-setInterval(refresh, 2000);
+setInterval(() => { refresh(); if (currentTab === 'plan') refreshPlan(); }, 2000);
 refresh();
 </script>
 </body>

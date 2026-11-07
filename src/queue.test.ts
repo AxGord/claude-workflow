@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addQueueLine,
+  describeQueue,
   editQueueLine,
   explainLines,
   formatMark,
@@ -974,5 +975,37 @@ describe("queue names", () => {
     await expect(bad).rejects.toThrow();
     await good;
     expect(readQueue(file).lines.map(l => l.id)).toEqual(["B"]);
+  });
+});
+
+describe("describeQueue", () => {
+  const q = parseQueue(
+    [
+      "# x",
+      "batch_size: 1",
+      "## Tasks",
+      "- [>] A | repo: /tmp | touches: src/a.ts | text of a is long enough to be prose here",
+      "- [ ] B | repo: /tmp | touches: src/a.ts | text of b is long enough to be prose here",
+      "- [ ] C | repo: /tmp | touches: src/c.ts | text of c is long enough to be prose here",
+      "- [ ] D | repo: /tmp | after: B | text of d is long enough to be prose here",
+      "- [ ] E | repo: /tmp | model: — | text of e is long enough to be prose here",
+      "- [ ] F | repo: /tmp | exclusive: yes | text of f is long enough to be prose here",
+      "",
+    ].join("\n"),
+    "/tmp/q.md",
+  );
+  const reasons = Object.fromEntries(describeQueue(q).lines.map(l => [l.id, l.reason]));
+
+  it("gives a real reason to every pending line past the window", () => {
+    expect(reasons.A).toBeUndefined();
+    expect(reasons.B).toMatch(/^overlaps A/);
+    expect(reasons.C).toBe("ready");
+    expect(reasons.D).toBe("after: B[ ]");
+    expect(reasons.E).toBe("parent-run (model —)");
+    expect(reasons.F).toMatch(/^overlaps /);
+  });
+
+  it("keeps the window reason in the real pick", () => {
+    expect(planPick(q).reasons.find(r => r.id === "C")?.why).toBe("window full");
   });
 });
