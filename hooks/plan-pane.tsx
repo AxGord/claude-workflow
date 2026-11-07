@@ -513,6 +513,37 @@ export const register: Register = on => {
     )
   })
 
+  // A driver's one-line hand-back (another session's message) drawn by its outcome. Only when ALL hold: the row is a
+  // peer message; its whole text is ONE line in the exact protocol shape (LANDED <sha> slice=|task=<ID> …,
+  // NEEDS-PARENT slice=|task=<ID> …, WAITING slice=|task=<ID> …); and that ID is a slice this session knows (running in
+  // the queue, landed in the last 24 h, or an agent seen on it). Anything else draws as the engine draws it.
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    if (e.props.origin.kind !== 'peer' || e.props.isExpanded) return next(e)
+    const text = e.props.text.trim()
+    if (text.includes('\n')) return next(e)
+    const landed = /^LANDED ([0-9a-f]{7,40}) (?:slice|task)=([A-Za-z0-9][A-Za-z0-9-]*)(?: .*)?$/.exec(text)
+    const needs = /^NEEDS-PARENT (?:slice|task)=([A-Za-z0-9][A-Za-z0-9-]*) .*?reason=(.+?)(?: see=\S+)?$/.exec(text)
+    const waits = /^WAITING (?:slice|task)=([A-Za-z0-9][A-Za-z0-9-]*)(?: .*)?$/.exec(text)
+    const id = landed?.[2] ?? needs?.[1] ?? waits?.[1]
+    if (!id) return next(e)
+    const s = await read($, snap)
+    const seen = await read($, agentsSeen)
+    const known =
+      (s?.queue?.running.some(l => l.id === id) ?? false) ||
+      (s?.lands.some(l => l.slice === id) ?? false) ||
+      Object.values(seen).some(a => a.label === id)
+    if (!known) return next(e)
+    const { Text } = $.ui.resolve(e)
+    const short = (r: string) => (r.length > 140 ? r.slice(0, 139) + '…' : r)
+    return (
+      <Text>
+        {landed ? <Text color="green">✓ [{id}] landed {landed[1]}</Text>
+          : needs ? <Text><Text color="yellow">⏸ [{id}] needs the parent: </Text>{short(needs[2] ?? '')}</Text>
+          : <Text dimColor>… [{id}] waiting</Text>}
+      </Text>
+    )
+  })
+
   // A collapsed group of tool calls that holds workflow-engine calls draws as the chain of moves they made
   // (`[slice] transition→state …`) instead of "Called plugin:workflow:wf N times"; other tools keep a count.
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
