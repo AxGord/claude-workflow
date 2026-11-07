@@ -356,7 +356,8 @@ export const register: Register = on => {
     const s = await read($, snap)
     if (!s) return next(e)
     const byAgent = new Map(s.sessions.filter(r => r.agent !== '').map(r => [r.agent, r]))
-    const named: { label: string; state: string }[] = []
+    // one entry per slice: a driver and its worker are two agents of one pipeline
+    const bySlice = new Map<string, { state: string; agents: number }>()
     let others = 0
     for (const a of waiting.agents) {
       const r = byAgent.get(a.id)
@@ -367,30 +368,37 @@ export const register: Register = on => {
       // the pipeline that holds this agent's session: its slice, and the deepest state under it
       let top = r
       for (let i = 0; i < 8 && top.tag === '' && top.parent !== ''; i++) top = s.sessions.find(x => x.id === top.parent) ?? top
-      let leaf = r
+      let leaf = top
       for (let i = 0; i < 8; i++) {
         const child = s.sessions.find(c => c.parent === leaf.id)
         if (!child) break
         leaf = child
       }
-      named.push({ label: top.tag !== '' ? top.tag : r.workflow, state: leaf.state })
+      const label = top.tag !== '' ? top.tag : r.workflow
+      const seen = bySlice.get(label)
+      bySlice.set(label, { state: leaf.state, agents: (seen?.agents ?? 0) + 1 })
     }
-    if (named.length === 0) return next(e)
+    if (bySlice.size === 0) return next(e)
     const { Text } = $.ui.resolve(e)
     const SHOW = 4
+    const slices = [...bySlice]
     const total = waiting.agents.length + waiting.workflows
+    const hidden = slices.length - Math.min(slices.length, SHOW)
+    const rest = [
+      hidden > 0 ? `+${hidden} ${hidden === 1 ? 'slice' : 'slices'}` : '',
+      others > 0 ? `+${others} without a session` : '',
+      waiting.workflows > 0 ? `+${waiting.workflows} workflow${waiting.workflows === 1 ? '' : 's'}` : '',
+    ].filter(x => x !== '')
     return (
       <Text>
         <Text dimColor>✻ Waiting for {total}: </Text>
-        {named.slice(0, SHOW).map((n, i) => (
+        {slices.slice(0, SHOW).map(([label, v], i) => (
           <Text>
             {i > 0 ? <Text dimColor> · </Text> : null}
-            <Text color="cyan">{n.label}</Text> <Text dimColor>{n.state}</Text>
+            <Text color="cyan">{label}</Text> <Text dimColor>{v.state}{v.agents > 1 ? ` ×${v.agents}` : ''}</Text>
           </Text>
         ))}
-        {named.length > SHOW || others + waiting.workflows > 0 ? (
-          <Text dimColor> · +{named.length - Math.min(named.length, SHOW) + others + waiting.workflows}</Text>
-        ) : null}
+        {rest.length > 0 ? <Text dimColor> · {rest.join(' · ')}</Text> : null}
       </Text>
     )
   })
