@@ -165,8 +165,8 @@ async function lands($: any, queueFile: string): Promise<Land[]> {
   const repo = queueFile.replace(/\/\.claude\/batch\/[^/]+$/, '')
   if (repo === queueFile) return []
   const run = await $.process
-    .run(['git', '-C', repo, 'log', '--since=midnight', '--first-parent', '-n', '300',
-      '--format=%h%x09%cd%x09%(trailers:key=Slice,valueonly,separator=)', '--date=format:%H:%M', 'main'],
+    .run(['git', '-C', repo, 'log', '--since=24 hours ago', '--first-parent', '-n', '300',
+      '--format=%h%x09%cd%x09%(trailers:key=Slice,valueonly,separator=)', '--date=format:%d.%m %H:%M', 'main'],
       { timeoutMs: 10000 })
     .catch(() => undefined)
   if (!run || run.exitCode !== 0) return []
@@ -608,8 +608,16 @@ export const register: Register = on => {
           {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
           {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{l.id} {level(l.difficulty)}</Text>)}
           {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in file order</Text>}
-          {header('lands', 'green', `✓ Landed today (${s.lands.length})`)}
-          {isOpen('lands') && s.lands.map(l => <Text>{'  '}<Text dimColor>{l.at} {l.sha}</Text> {l.slice}</Text>)}
+          {header('lands', 'green', `✓ Landed · 24h (${s.lands.length})`)}
+          {isOpen('lands') &&
+            s.lands.flatMap((l, i) => {
+              // `at` is `DD.MM HH:MM` (numeric: locale-free): a dim date row where the day changes (the window spans midnight)
+              const day = l.at.slice(0, 5)
+              const prev = i > 0 ? (s.lands[i - 1]?.at ?? '').slice(0, 5) : ''
+              const days = new Set(s.lands.map(x => x.at.slice(0, 5)))
+              const row = <Text>{'  '}<Text dimColor>{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
+              return days.size > 1 && day !== prev ? [<Text dimColor>{'  — '}{day}{' —'}</Text>, row] : [row]
+            })}
         </Box>
       )
     }
