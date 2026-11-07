@@ -265,21 +265,6 @@ function movedTo(o: unknown): string | undefined {
   return m?.[2]
 }
 
-/** `<workflow> <id>` (with ` · <slice>`) of a live workflow session of this machine, or ''. */
-async function sessionLabel($: any, id: string): Promise<string> {
-  const home = (await $.env.get('HOME')) ?? ''
-  const dir = (await $.env.get('WF_STATE_DIR')) ?? `${home}/.claude/workflow-state`
-  const text: string = await $.fs.read(`${dir}/${id}.json`).catch(() => '')
-  if (text === '') return ''
-  try {
-    const p = parseSession(text)
-    if (!p || !p.row) return ''
-    return `${p.row.workflow} ${id}${p.row.tag !== '' ? ` · ${p.row.tag}` : ''}`
-  } catch {
-    return ''
-  }
-}
-
 function age(ms: number): string {
   if (ms <= 0) return ''
   const m = Math.floor(ms / 60000)
@@ -308,19 +293,6 @@ export const register: Register = on => {
     const isOpen = await togglePane($)
     return { text: isOpen ? 'Plan pane opened (refreshes every 15 s; /wf-plan again closes it).' : 'Plan pane closed.' }
   }).catch(($, e, next) => (next.called ? next(e) : { text: 'wf-plan failed: see the debug log' }))
-
-  // An agent spawned for a workflow session gets the session in its label (the agents list shows it): the first
-  // 8-hex id in its prompt that names a live session adds `· <workflow> <id> · <slice>` to the description.
-  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
-    const desc = String(e.description ?? '')
-    const ids = [...new Set([...String(e.prompt ?? '').matchAll(/\b([0-9a-f]{8})\b/g)].map(m => m[1] ?? ''))]
-    for (const id of ids) {
-      if (id === '' || desc.includes(id)) continue
-      const label = await sessionLabel($, id)
-      if (label !== '') return next({ ...e, description: `${desc} · ${label}` })
-    }
-    return next(e)
-  }).catch(($, e, next) => next(e))
 
   // The band above the prompt is the status line: the root session (◆ with children) and the others' count, the
   // queue's running/next/landed, and a button that toggles the pane. Nothing when this session runs no workflow.
