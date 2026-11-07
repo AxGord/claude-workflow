@@ -8,7 +8,9 @@
 #   wf_info  — the root session of THIS Claude Code instance (its MCP engine's sessions only, matched by
 #              context.claude_code_pid == the statusline's parent pid); alone it is drawn like any session,
 #              with children it is marked ◆ in bold.
-#   wf_lines — the other sessions, oldest first, three per line, at most nine (eight and "+N" past nine).
+#              The other sessions add their count in parentheses: `◆ slice-dispatch:collect (5)`.
+#   wf_lines — empty by default; with WF_STATUS_LIST=1 the other sessions, oldest first, three per line, at
+#              most nine (eight and "+N" past nine), and no count beside wf_info.
 # Bright cyan ⚙ = a leaf an agent or an engine step is working in; plain cyan ⚙ = waiting (on a child or idle).
 # Needs jq. STATUSLINE_PID overrides the parent pid (for testing).
 wf_info=""
@@ -49,7 +51,9 @@ if [ -d "$wf_state_dir" ]; then
   fi
   wf_n=0
   [ -n "$wf_rest" ] && wf_n=$(printf '%s\n' "$wf_rest" | wc -l | tr -d ' ')
-  if [ "$wf_n" -gt 0 ]; then
+  # compact (the default): the other sessions are a count beside wf_info; WF_STATUS_LIST=1 lists them in wf_lines
+  [ "$wf_n" -gt 0 ] && [ "${WF_STATUS_LIST:-0}" != 1 ] && wf_info="${wf_info} \\033[36m(${wf_n})\\033[0m"
+  if [ "$wf_n" -gt 0 ] && [ "${WF_STATUS_LIST:-0}" = 1 ]; then
     wf_shown=9
     [ "$wf_n" -gt 9 ] && wf_shown=8
     wf_items=$(printf '%s\n' "$wf_rest" | head -n "$wf_shown" | awk "$wf_paint")

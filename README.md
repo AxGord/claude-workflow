@@ -892,9 +892,10 @@ printf "%b\n" "<your line 1> ${wf_info}"          # the root session, inline
 - Only the sessions of THIS instance (`context.claude_code_pid` = the statusline's parent pid), read with one
   `jq` pass over `~/.claude/workflow-state`.
 - `wf_info` — the root session. Alone it is drawn like any session; once it has children it is marked `◆` in
-  bold.
-- `wf_lines` — the other sessions, oldest first, three per line, at most nine (eight and `+N workflows`
-  past nine); each as `workflow[slice or task]:state`.
+  bold and the other sessions add their count: `◆ slice-dispatch:collect (5)`.
+- `wf_lines` — empty by default. With `WF_STATUS_LIST=1` the other sessions are listed there instead of
+  counted, oldest first, three per line, at most nine (eight and `+N workflows` past nine); each as
+  `workflow[slice or task]:state`.
 - Bright cyan `⚙` — a leaf session an agent or an engine step is working in; plain cyan `⚙` — waiting (on a
   child, or idle).
 - `STATUSLINE_PID` / `WF_STATE_DIR` override the parent pid and the state directory (for testing).
