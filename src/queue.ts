@@ -52,6 +52,7 @@ export const TASK_KEYS = [
   "id",
   "status",
   "difficulty",
+  "priority",
   "model",
   "effort",
   "repo",
@@ -130,6 +131,8 @@ export interface AdmittedTask {
   readonly workflow?: string;
   /** The task's `difficulty:` (1..10): the task workflow's `model_table` maps it to model/effort. */
   readonly difficulty?: number;
+  /** The task's `priority:` when set (`normal` = absent): the picker admits higher first. */
+  readonly priority?: Priority;
   readonly text: string;
 }
 
@@ -198,6 +201,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
   const meta: Record<string, string> = {};
   for (const k of [
     "difficulty",
+    "priority",
     "model",
     "effort",
     "repo",
@@ -291,6 +295,19 @@ function difficultyOf(line: QueueLine): number | undefined | null {
   if (!v || v === "-" || v === "—") return undefined;
   return parseDifficulty(v);
 }
+
+export const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
+/** The line's `priority:`: `normal` when absent or `-`/`—`; null when it is not a priority. */
+function priorityOf(line: QueueLine): Priority | null {
+  const v = line.meta.priority?.trim().toLowerCase();
+  if (!v || v === "-" || v === "—") return "normal";
+  return (PRIORITIES as readonly string[]).includes(v) ? (v as Priority) : null;
+}
+
+/** Rank for sorting: urgent first; an unreadable priority ranks as normal (the pick refuses it). */
+const priorityRank = (l: QueueLine): number => PRIORITIES.indexOf(priorityOf(l) ?? "normal");
 
 /** The line's `workflow:`: undefined when absent or `—`; null when it is not a workflow name. */
 function workflowOf(line: QueueLine): string | undefined | null {
@@ -424,12 +441,15 @@ export function planPick(
   const running = queue.lines.filter(l => l.status === "running");
   const taken: QueueLine[] = [...running];
   const admitted: AdmittedTask[] = [];
-  const reasons: { id: string; why: string }[] = [];
+  const reasons: { id: string; why: string; index: number }[] = [];
   const free = queue.batchSize - running.length;
   const repoKeys = new Map<QueueLine, string | null>(
     running.map(l => [l, repoKey(resolveRepo(queue, l))]),
   );
-  for (const l of queue.lines) {
+  const order = [...queue.lines].sort(
+    (a, b) => priorityRank(a) - priorityRank(b) || a.index - b.index,
+  );
+  for (const l of order) {
     if (l.status !== "pending") continue;
     let why: string | null = null;
     let repo: string | null = null;
@@ -446,6 +466,8 @@ export function planPick(
         else if (workflowOf(l) === null)
           why = `workflow: "${l.meta.workflow}" is not a workflow name`;
         else if (difficultyOf(l) === null) why = difficultyError(l.meta.difficulty);
+        else if (priorityOf(l) === null)
+          why = `priority: "${l.meta.priority}" is not one of ${PRIORITIES.join(", ")}`;
       }
       if (why === null) {
         const key = repoKey(repo);
@@ -461,6 +483,7 @@ export function planPick(
     if (why === null && repo !== null) {
       const workflow = workflowOf(l) ?? undefined;
       const difficulty = difficultyOf(l) ?? undefined;
+      const priority = priorityOf(l);
       admitted.push({
         id: l.id,
         model: l.meta.model ?? "opus",
@@ -468,11 +491,12 @@ export function planPick(
         repo,
         ...(workflow ? { workflow } : {}),
         ...(difficulty !== undefined ? { difficulty } : {}),
+        ...(priority !== null && priority !== "normal" ? { priority } : {}),
         text: l.text,
       });
       taken.push(l);
       repoKeys.set(l, repoKey(repo));
-    } else reasons.push({ id: l.id, why: why ?? "?" });
+    } else reasons.push({ id: l.id, why: why ?? "?", index: l.index });
   }
   const code: PickCode =
     admitted.length > 0
@@ -490,7 +514,7 @@ export function planPick(
     running: running.map(l => l.id),
     pending: queue.lines.filter(l => l.status === "pending").length,
     admitted,
-    reasons,
+    reasons: reasons.sort((a, b) => a.index - b.index).map(({ id, why }) => ({ id, why })),
   };
 }
 
@@ -854,6 +878,10 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
     throw new QueueError(`${line.id}: repo: "${line.meta.repo}" resolves to no directory`);
   if (has("difficulty") && difficultyOf(line) === null)
     throw new QueueError(`${line.id}: ${difficultyError(line.meta.difficulty)}`);
+  if (has("priority") && priorityOf(line) === null)
+    throw new QueueError(
+      `${line.id}: priority: "${line.meta.priority}" is not one of ${PRIORITIES.join(", ")}`,
+    );
 }
 
 /** Splits a list given as one string on its top-level commas (a `(…)` keeps its commas). */

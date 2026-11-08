@@ -481,6 +481,42 @@ describe("queue difficulty:", () => {
   });
 });
 
+describe("queue priority:", () => {
+  it("a high line far down is admitted before a normal one on top; equal priorities keep file order", () => {
+    const r = plan(
+      [
+        "- [ ] A | touches: a",
+        "- [ ] B | touches: b",
+        "- [ ] C | priority: low | touches: c",
+        "- [ ] D | priority: high | touches: d",
+        "- [ ] E | priority: urgent | touches: e",
+        "- [ ] F | priority: high | touches: f",
+      ].join("\n"),
+      "batch_size: 4",
+    );
+    expect(r.admitted.map(a => [a.id, a.priority])).toEqual([
+      ["E", "urgent"],
+      ["D", "high"],
+      ["F", "high"],
+      ["A", undefined],
+    ]);
+    expect(r.reasons.map(x => x.id)).toEqual(["B", "C"]);
+    expect(formatQueueNext({ ...r, dryRun: true }, false)).toMatch(
+      /WOULD ADMIT D \|.*\| priority: high\n/,
+    );
+  });
+
+  it("queue_add and queue_edit accept the four values and refuse anything else", async () => {
+    const file = queueFile("- [ ] A | touches: a");
+    await addLine(file, "B | priority: high | touches: b");
+    await expect(addLine(file, "C | priority: soon | touches: c")).rejects.toThrow(
+      'C: priority: "soon" is not one of urgent, high, normal, low',
+    );
+    await editQueueLine(file, "A", { priority: "low" });
+    await expect(editQueueLine(file, "A", { priority: "x" })).rejects.toThrow(/not one of/);
+  });
+});
+
 describe("queue pause (batch_size: 0)", () => {
   it("admits nothing; 12 when nothing runs, 10 while a line still runs; the comment is shown", () => {
     const header = "batch_size: 0  # пауза: машина занята, было 4";

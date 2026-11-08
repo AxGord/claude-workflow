@@ -512,7 +512,7 @@ tasks:
       - {from: user, date: 2026-11-07, text: later thought}
 ```
 
-Task keys: `id, status, difficulty, model, effort, repo, workflow, after, touches, owner, exclusive,
+Task keys: `id, status, difficulty, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
 parked, text, notes`; any other key, a bad status, a duplicate id or a malformed file is refused by
 every read. Every write edits the parsed document in place: key order and comments stay.
 
@@ -521,7 +521,7 @@ dirtied by the first pick, and `batch-task`'s land refuses a dirty tree (exit 3)
 merge back with `git reset --keep` only while HEAD is still that merge; otherwise (HEAD moved during
 `land_test`, or local edits on the merged files) it exits 4 and touches nothing.
 
-A pick fills the window (`batch_size` minus the running tasks) in file order with the pending tasks
+A pick fills the window (`batch_size` minus the running tasks) in `priority:` order (`urgent`, `high`, `normal` = default, `low`; file order within one priority) with the pending tasks
 (never `backlog` ones) that:
 
 - are not parent-run (`model: —`) and not `parked: true`;
@@ -550,7 +550,7 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
 picks — two tools, two processes — never admit one task. `batch_size: 0` is the pause: nothing new is
 admitted, running tasks finish; the pick answers `window 0 — paused: <the reason>`.
 
-- `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted tasks (id, model, effort, repo, workflow, difficulty, text);
+- `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted tasks (id, model, effort, repo, workflow, difficulty, priority when not normal, text);
   `explain` adds why each other pending task waits (`window full` ones fold into one summary line;
   `explain: "all"` lists every one).
 - `queue_mark({ queue?, file?, id, to, note?, from?, retry? })` — `running` pending→running (with `retry: true`
@@ -563,7 +563,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
 - `queue_add({ queue?, file?, task, after_id? | before_id? })` — a new task (`{id, status?: pending|backlog, …}`)
   after / before a task, else last. Refused unless a pick reads it as meant: a new id, known keys
   only, every id in `after:` a task of the queue and no cycle (prose beside the ids stays a manual
-  condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10.
+  condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, a `priority:` of urgent|high|normal|low.
 - `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task
   (`""`/null removes one; a set field keeps its place, a new one goes in key order; `after`/`touches`
   a list or a comma-separated string; `text` is written as a block scalar), and/or a note appended to

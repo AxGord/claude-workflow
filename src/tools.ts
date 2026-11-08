@@ -302,7 +302,8 @@ export function formatQueueNext(r: PickResult, explain: boolean | "all"): string
       "",
       `${r.dryRun ? "WOULD ADMIT" : "ADMITTED (running)"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}` +
         (a.workflow ? ` | workflow: ${a.workflow}` : "") +
-        (a.difficulty !== undefined ? ` | difficulty: ${a.difficulty}` : ""),
+        (a.difficulty !== undefined ? ` | difficulty: ${a.difficulty}` : "") +
+        (a.priority !== undefined ? ` | priority: ${a.priority}` : ""),
       a.text,
     );
   return lines.join("\n");
@@ -1111,8 +1112,8 @@ export function registerTools(
     "queue_next",
     {
       description:
-        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text, notes}`): " +
-        "fills the window (batch_size minus the running tasks) in file order with pending tasks whose `after:` ids are all done, " +
+        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, priority, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text, notes}`): " +
+        "fills the window (batch_size minus the running tasks) in `priority:` order (urgent, high, normal, low; file order within one) with pending tasks whose `after:` ids are all done, " +
         "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
         "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of every repo; " +
         "header `overlap: files` = only file entries conflict, a directory or glob is a hint); sets each admitted task running under the queue's lock, so two calls never admit one task. `backlog` tasks are never admitted. Returns id, " +
@@ -1199,7 +1200,7 @@ export function registerTools(
     {
       description:
         "Add a task to a YAML task queue under its lock (the lock queue_next / queue_mark take, so no status " +
-        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, model, effort, repo, workflow, after: [ids], touches: [paths], owner, exclusive, parked, text, notes: [{from, date, text}]}`. " +
+        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, priority: urgent|high|normal|low, model, effort, repo, workflow, after: [ids], touches: [paths], owner, exclusive, parked, text, notes: [{from, date, text}]}`. " +
         "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10. Goes after `after_id`, before `before_id`, " +
         "else last. A queue addressed by `queue` or by default that does not exist yet is CREATED (`batch_size: 1`, `tasks: []`) and the answer says so (a full `file` path that does not exist is an error, never created).",
@@ -1242,7 +1243,7 @@ export function registerTools(
     {
       description:
         "Change one task's fields in a YAML task queue under the queue's lock: `set: { field: value }` " +
-        '(difficulty, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text; `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
+        '(difficulty, priority, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text; `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
         "(appended to `notes:` as `{from, date, text}`, `from` default `parent`). The status is queue_mark's. " +
         "A set field keeps its place; values are checked as queue_add checks them. Returns the task as written (YAML).",
       inputSchema: z
