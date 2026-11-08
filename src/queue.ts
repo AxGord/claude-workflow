@@ -17,6 +17,7 @@
 // nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
 // task's own task workflow (the dispatcher's default otherwise); `difficulty:` (1..10) is what a
 // task workflow's `model_table` maps to model/effort. `backlog` tasks are never picked.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
@@ -356,6 +357,75 @@ function isFileEntry(p: string, repo: string | null): boolean {
   return (p.split("/").pop() ?? "").includes(".");
 }
 
+/** Count of git processes spawned for ignore checks (a test seam: one per repo per plan). */
+export const ignoreProbes = { count: 0 };
+
+/** The entries of `rels` that git ignores in `repo`: ONE `git check-ignore --stdin`; empty when `repo` is no work tree. */
+function gitIgnoredSet(repo: string, rels: readonly string[]): ReadonlySet<string> {
+  if (rels.length === 0) return new Set();
+  ignoreProbes.count++;
+  const r = spawnSync("git", ["-C", repo, "check-ignore", "--stdin", "-z"], {
+    input: `${rels.join("\0")}\0`,
+    encoding: "utf8",
+  });
+  return new Set(r.status === 0 ? r.stdout.split("\0").filter(x => x !== "") : []);
+}
+
+/** Whether `t` names a path inside `repo` (git refuses the whole batch on one that is not). */
+const insideRepo = (repo: string, t: string): boolean =>
+  !path.isAbsolute(t) && !path.relative(repo, path.resolve(repo, t)).startsWith("..");
+
+const isGlob = (t: string): boolean => /[*?[\]{}]/.test(t);
+
+/** repo -> its ignored `touches:` entries over the pending repo-bound lines: one git process per repo. */
+function ignoredByRepo(
+  queue: Queue,
+  lines: readonly QueueLine[],
+): Map<string, ReadonlySet<string>> {
+  const want = new Map<string, Set<string>>();
+  for (const l of lines) {
+    const v = l.meta.repo?.trim();
+    if (!v || v === "-" || v === "—") continue;
+    const repo = resolveRepo(queue, l);
+    if (repo === null) continue;
+    const set = want.get(repo) ?? new Set<string>();
+    for (const t of touchesOf(l) ?? []) if (!isGlob(t) && insideRepo(repo, t)) set.add(t);
+    want.set(repo, set);
+  }
+  return new Map([...want].map(([repo, set]) => [repo, gitIgnoredSet(repo, [...set])]));
+}
+
+/** The first `touches:` entry of a line that its repo's ignored set holds, or null. */
+function ignoredTouch(line: QueueLine, ignored: ReadonlySet<string> | undefined): string | null {
+  return (touchesOf(line) ?? []).find(t => ignored?.has(t) === true) ?? null;
+}
+
+/** Warnings for a line's `touches:` entries: git-ignored (the line runs in the parent), or a file whose directory is missing. */
+function touchesWarnings(queue: Queue, line: QueueLine): string[] {
+  const repo = resolveRepo(queue, line);
+  if (repo === null) return [];
+  const out: string[] = [];
+  const v = line.meta.repo?.trim();
+  const bound = !!v && v !== "-" && v !== "—";
+  const ign = bound ? ignoredTouch(line, ignoredByRepo(queue, [line]).get(repo)) : null;
+  if (ign !== null)
+    out.push(
+      `touches ${ign} is git-ignored in ${repo}: the picker treats ${line.id} as parent-run`,
+    );
+  for (const t of touchesOf(line) ?? []) {
+    if (/[*?[\]{}]/.test(t) || !(t.split("/").pop() ?? "").includes(".")) continue;
+    const dir = path.dirname(path.resolve(repo, t));
+    let isDir = false;
+    try {
+      isDir = fs.statSync(dir).isDirectory();
+    } catch {
+      /* missing */
+    }
+    if (!isDir) out.push(`touches ${t}: directory ${path.dirname(t)} does not exist in ${repo}`);
+  }
+  return out;
+}
+
 /** A line's repo as compared across lines: the resolved path, through symlinks when it exists. */
 function repoKey(repo: string | null): string | null {
   if (repo === null) return null;
@@ -454,6 +524,10 @@ export function planPick(
   const repoKeys = new Map<QueueLine, string | null>(
     running.map(l => [l, repoKey(resolveRepo(queue, l))]),
   );
+  const ignoredIn = ignoredByRepo(
+    queue,
+    opts.only === undefined ? queue.lines.filter(l => l.status === "pending") : [],
+  );
   const order = [...queue.lines].sort(
     (a, b) => priorityRank(a) - priorityRank(b) || a.index - b.index,
   );
@@ -479,6 +553,10 @@ export function planPick(
         else if (difficultyOf(l) === null) why = difficultyError(l.meta.difficulty);
         else if (priorityOf(l) === null)
           why = `priority: "${l.meta.priority}" is not one of ${PRIORITIES.join(", ")}`;
+        else if (!hand) {
+          const ign = ignoredTouch(l, ignoredIn.get(repo));
+          if (ign !== null) why = `parent-run (touches ${ign} is git-ignored in its repo)`;
+        }
       }
       if (why === null) {
         const key = repoKey(repo);
@@ -988,6 +1066,8 @@ export interface AddResult {
   readonly lineNo: number;
   /** True when the queue file did not exist and this call created it. */
   readonly created?: true;
+  /** Notes on the written line (`touches:` entries the picker cannot run in a worktree). */
+  readonly warnings?: readonly string[];
 }
 
 /** A new queue file's content: the minimal header a pick reads. */
@@ -1079,13 +1159,21 @@ export async function addQueueLine(
   }
   await writing(file, place, check);
   const lineNo = lineNoOf(fs.readFileSync(abs, "utf8"), id);
-  return created ? { id, lineNo, created: true } : { id, lineNo };
+  const warnings = touchesWarnings(readQueue(abs), lineOf(readQueue(abs), id));
+  return {
+    id,
+    lineNo,
+    ...(created ? { created: true as const } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 export interface EditResult {
   readonly id: string;
   /** The task as written (YAML). */
   readonly task: string;
+  /** Notes on the written line, as AddResult.warnings. */
+  readonly warnings?: readonly string[];
 }
 
 /**
@@ -1108,7 +1196,7 @@ export async function editQueueLine(
   const note = appendNote?.trim() || undefined;
   if (Object.keys(set).length === 0 && note === undefined)
     throw new QueueError("nothing to edit: give fields to set or a note");
-  return writing(
+  const done = await writing(
     file,
     e => {
       const node = taskNode(e, lineOf(e.queue, id));
@@ -1133,6 +1221,10 @@ export async function editQueueLine(
     },
     next => checkFields(next, lineOf(next, id), new Set(Object.keys(set))),
   );
+  if (!("touches" in set) && !("repo" in set)) return done;
+  const q = readQueue(file);
+  const warnings = touchesWarnings(q, lineOf(q, id));
+  return warnings.length > 0 ? { ...done, warnings } : done;
 }
 
 export interface HeaderResult {

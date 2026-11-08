@@ -532,7 +532,7 @@ merge back with `git reset --keep` only while HEAD is still that merge; otherwis
 A pick fills the window (`batch_size` minus the running tasks) in `priority:` order (`urgent`, `high`, `normal` = default, `low`; file order within one priority) with the pending tasks
 (never `backlog` ones) that:
 
-- are not parent-run (`model: —`) and not `parked: true`;
+- are not parent-run (`model: —`, or a repo-bound line with a `touches:` entry that git ignores in its repo: no worktree copy exists; `queue_next` names the path) and not `parked: true`. `queue_add` / `queue_edit` warn on such an entry and on a file entry whose directory does not exist;
 - have every `after:` id done (an id-like token that names no task, or prose beside the ids, is a
   condition for a human: never admitted);
 - overlap no running and no just-admitted task: `touches:` paths overlap when one is a prefix of the

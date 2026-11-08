@@ -178,6 +178,7 @@ async function main(args: string[]): Promise<number> {
     process.stdout.write(
       `${r.id}: added at line ${r.lineNo}${r.created ? `; the queue did not exist — created ${file}` : ""}\n`,
     );
+    for (const w of r.warnings ?? []) process.stderr.write(`warning: ${w}\n`);
     return 0;
   }
   if (op === "--edit") {
@@ -197,6 +198,7 @@ async function main(args: string[]): Promise<number> {
       o.get("--from")?.[0],
     );
     process.stdout.write(`${r.task}\n`);
+    for (const w of r.warnings ?? []) process.stderr.write(`warning: ${w}\n`);
     return 0;
   }
   if (op === "--batch-size") {

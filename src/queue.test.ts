@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import YAML from "yaml";
 import os from "node:os";
@@ -8,6 +9,7 @@ import {
   describeQueue,
   editQueueLine,
   explainLines,
+  ignoreProbes,
   formatMark,
   formatTask,
   markQueue,
@@ -1227,5 +1229,71 @@ describe("describeQueue", () => {
 
   it("keeps the window reason in the real pick", () => {
     expect(planPick(q).reasons.find(r => r.id === "C")?.why).toBe("window full");
+  });
+});
+
+describe("touches: tracked in the repo", () => {
+  /** A real git repo with `.claude/` ignored and a `src/` dir; returns a queue file inside it. */
+  function ignoredRepo(task: string): { file: string; repo: string } {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "wf-queue-ign-"));
+    dirs.push(repo);
+    execFileSync("git", ["init", "-q", repo]);
+    fs.writeFileSync(path.join(repo, ".gitignore"), ".claude/\n");
+    fs.mkdirSync(path.join(repo, "src"));
+    const file = path.join(repo, "q.yaml");
+    fs.writeFileSync(file, `batch_size: 2\ntasks:\n${task}`);
+    return { file, repo };
+  }
+
+  it("an ignored .claude/ entry is not admitted and is named; a new file in an existing dir is", () => {
+    const { file, repo } = ignoredRepo(
+      `  - id: A\n    status: pending\n    repo: ${"REPO"}\n    touches: [ .claude/workflows/x.yaml ]\n    text: a\n` +
+        `  - id: B\n    status: pending\n    repo: ${"REPO"}\n    touches: [ src/new.ts ]\n    text: b\n`,
+    );
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replaceAll("REPO", repo));
+    const r = planPick(readQueue(file));
+    expect(r.admitted.map(a => a.id)).toEqual(["B"]);
+    expect(r.reasons.find(x => x.id === "A")?.why).toMatch(
+      /parent-run.*\.claude\/workflows\/x\.yaml/,
+    );
+  });
+
+  it("queue_add warns on an ignored entry and on a file in a missing directory", async () => {
+    const { file, repo } = ignoredRepo("  []\n");
+    fs.writeFileSync(file, "batch_size: 2\ntasks: []\n");
+    fs.mkdirSync(path.join(repo, ".claude", "w"), { recursive: true });
+    const r = await addQueueLine(file, {
+      id: "A",
+      repo,
+      touches: [".claude/w/x.yaml", "nodir/y.ts", "src/ok.ts"],
+      text: "a",
+    });
+    expect(r.warnings).toHaveLength(2);
+    expect(r.warnings?.join("\n")).toMatch(/git-ignored/);
+    expect(r.warnings?.join("\n")).toMatch(/nodir does not exist/);
+    const e = await editQueueLine(file, "A", { touches: ["src/ok.ts"] });
+    expect(e.warnings).toBeUndefined();
+  });
+
+  it("a plan over many entries of one repo spawns git once", () => {
+    const rows = [1, 2, 3, 4, 5].map(
+      n =>
+        `  - id: T${n}\n    status: pending\n    repo: REPO\n    touches: [ src/a${n}.ts, src/b${n}.ts ]\n    text: t\n`,
+    );
+    const { file, repo } = ignoredRepo(rows.join(""));
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replaceAll("REPO", repo));
+    ignoreProbes.count = 0;
+    planPick(readQueue(file), { ignoreWindow: true });
+    expect(ignoreProbes.count).toBe(1);
+  });
+
+  it("an entry outside the repo does not hide an ignored one on another line", () => {
+    const { file, repo } = ignoredRepo(
+      `  - id: A\n    status: pending\n    repo: REPO\n    touches: [ .claude/x.yaml ]\n    text: a\n` +
+        `  - id: B\n    status: pending\n    repo: REPO\n    touches: [ ../x.ts, /abs/y.ts ]\n    text: b\n`,
+    );
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replaceAll("REPO", repo));
+    const r = planPick(readQueue(file));
+    expect(r.reasons.find(x => x.id === "A")?.why).toMatch(/parent-run/);
   });
 });

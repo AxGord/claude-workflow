@@ -1238,7 +1238,12 @@ export function registerTools(
         );
         const made = r.created ? `; the queue did not exist — created ${file}` : "";
         return {
-          content: [{ type: "text", text: `${r.id}: added at line ${r.lineNo}${made}` }],
+          content: [
+            {
+              type: "text",
+              text: `${r.id}: added at line ${r.lineNo}${made}${(r.warnings ?? []).map(w => `\nwarning: ${w}`).join("")}`,
+            },
+          ],
         };
       } catch (err) {
         return queueError(err);
@@ -1277,7 +1282,14 @@ export function registerTools(
           args.append_note,
           args.from,
         );
-        return { content: [{ type: "text", text: r.task }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text: r.task + (r.warnings ?? []).map(w => `\nwarning: ${w}`).join(""),
+            },
+          ],
+        };
       } catch (err) {
         return queueError(err);
       }
