@@ -25,7 +25,7 @@ import {
   DEFAULT_SUSPENDED_TTL_DAYS,
   PriorityLevelSchema,
 } from "./types.js";
-import { projectRoot } from "./pool.js";
+import { projectNameOf, projectRoot } from "./pool.js";
 import { LEDGER_FILE, type Storage } from "./storage.js";
 import { Estimates } from "./estimate.js";
 import type { Loader } from "./loader.js";
@@ -261,7 +261,7 @@ export class Engine {
     if (priority !== undefined) PriorityLevelSchema.parse(priority);
     const initial = initialContext ?? {};
     for (const key of Object.keys(initial))
-      if (key === "cwd" || key === "claude_code_pid")
+      if (key === "cwd" || key === "claude_code_pid" || key === "project")
         throw new Error(`start context: "${key}" is the engine's (pass cwd as its own argument)`);
 
     // Guard: prevent duplicate top-level sessions from the same Claude Code process.
@@ -327,7 +327,13 @@ export class Engine {
       updated_at: now,
       history: [{ frame: 0, event: "start", workflow: workflowName, at: now, actor }],
       overrides: {},
-      context: { ...initial, claude_code_pid: process.ppid, cwd: cwd ?? process.cwd() },
+      context: {
+        ...initial,
+        claude_code_pid: process.ppid,
+        cwd: cwd ?? process.cwd(),
+        // resolved while the worktree exists: a removed one can no longer be mapped to its checkout
+        project: projectNameOf(cwd ?? process.cwd()),
+      },
       global_state_visits: { [globalKey]: 1 },
       ...(claudeSessionId ? { claude_session_id: claudeSessionId } : {}),
     };

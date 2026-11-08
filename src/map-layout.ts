@@ -242,7 +242,12 @@ export interface MapBand {
   readonly y: number;
   readonly height: number;
   readonly width: number;
-  readonly stations: readonly (MapStation & { readonly x: number })[];
+  /** `label` is the name cut to the column, `title` the whole name when it was cut */
+  readonly stations: readonly (MapStation & {
+    readonly x: number;
+    readonly label: string;
+    readonly title?: string;
+  })[];
   readonly plaqueX: number;
   readonly landedY: number | null;
   readonly runningY: number | null;
@@ -478,7 +483,12 @@ function pickSteps(steps: readonly StepIn[], max: number): StepIn[] {
  * (keeping the first and the latest, `…` between) until every text fits between its neighbours and
  * inside the branch; at the smallest count a name still too long is cut, its full text a tooltip.
  */
-function placeSteps(key: string, steps: readonly StepIn[], x1: number, x2: number): MapStep[] {
+export function placeSteps(
+  key: string,
+  steps: readonly StepIn[],
+  x1: number,
+  x2: number,
+): MapStep[] {
   const room = Math.max(0, x2 - x1 - 2 * G.stepPad);
   const cap = Math.max(2, Math.floor(room / G.stepMin) + 1);
   const budgets = (n: number): number[] => {
@@ -1126,7 +1136,15 @@ export function layout(
       y,
       height,
       width: bandWidth,
-      stations: stations.map((st, i) => ({ ...st, x: xs[i] })),
+      stations: stations.map((st, i) => {
+        const cut = fitText(st.name, col - 8, G.charW);
+        return {
+          ...st,
+          x: xs[i],
+          label: cut.text,
+          ...(cut.title !== undefined ? { title: cut.title } : {}),
+        };
+      }),
       plaqueX,
       landedY,
       runningY,
@@ -1484,7 +1502,8 @@ function bandScene(band: MapBand): SceneGroup {
         tag: "text",
         cls: `m-station m-mid${st.terminal ? " end" : ""}`,
         attrs: { x: st.x, y: 50 },
-        text: st.name,
+        text: st.label,
+        ...(st.title !== undefined ? { title: st.title } : {}),
       },
     );
   const section = (y: number | null, text: string): void => {

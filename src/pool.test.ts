@@ -14,6 +14,7 @@ import {
   formatStatus,
   poolStarvation,
   projectRoot,
+  projectNameOf,
   starvationNotice,
   systemProbes,
   treeLoads,
@@ -384,6 +385,22 @@ describe("pool rows and projects", () => {
     expect(formatEntry(waiter, 10, now, home)).toBe(
       "  pid 100  wants 2-8 threads  prio -100 low  since 10:00:09 (3s)  /srv/y  -",
     );
+  });
+
+  it("projectNameOf: a linked worktree is named for its main checkout; a non-path is null", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-pn-"));
+    const main = path.join(dir, "repo");
+    const wt = path.join(dir, "wf-SLICE");
+    fs.mkdirSync(path.join(main, ".git", "worktrees", "wf-SLICE"), { recursive: true });
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${main}/.git/worktrees/wf-SLICE\n`);
+    try {
+      expect(projectNameOf(wt)).toBe("repo");
+      expect(projectNameOf(main)).toBe("repo");
+      expect(projectNameOf(undefined)).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("projectRoot: the nearest .git; a linked worktree maps to its main worktree; no repo = the cwd", () => {

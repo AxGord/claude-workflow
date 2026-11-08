@@ -709,6 +709,19 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
     expect(r.prompt.split("\n")[0]).toBe(worktree);
   });
 
+  it("start stores the project name: a removed worktree keeps its main checkout's name", async () => {
+    setup({ pwd: PWD_WORKFLOW });
+    const root = tmpDir();
+    const main = path.join(root, "repo");
+    const wt = path.join(root, "wf-SLICE");
+    fs.mkdirSync(path.join(main, ".git", "worktrees", "wf-SLICE"), { recursive: true });
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${main}/.git/worktrees/wf-SLICE\n`);
+    const { sessionId } = await engine.start("pwd", undefined, undefined, wt);
+    fs.rmSync(wt, { recursive: true });
+    expect(storage.read(sessionId)!.context.project).toBe("repo");
+  });
+
   it("start cwd: a relative state cwd resolves against the session's cwd", async () => {
     setup({
       rel: {

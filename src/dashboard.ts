@@ -7,6 +7,7 @@ import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
 import type { WfEvent } from "./event-log.js";
 import { computeStations } from "./stations.js";
+import { projectNameOf } from "./pool.js";
 import { ledgerEntry } from "./ledger.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
 
@@ -28,7 +29,9 @@ export function buildApp(
 
   // API endpoints
   app.get("/api/sessions", (_req, res) => {
-    const sessions = storage.readAll();
+    const sessions = storage
+      .readAll()
+      .map(s => ({ ...s, project: s.context?.project ?? projectNameOf(s.context?.cwd) }));
     res.json(sessions);
   });
 

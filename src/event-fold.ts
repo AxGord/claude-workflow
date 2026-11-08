@@ -292,6 +292,8 @@ export interface SeedSession {
     readonly duration_ms?: number;
   }[];
   readonly context: Record<string, unknown>;
+  /** The project name resolved server-side (a worktree is its main checkout); absent: the cwd's last segment. */
+  readonly project?: string | null;
   readonly outcome?: string;
   readonly agent_id?: string;
   readonly agent_step?: unknown;
@@ -322,7 +324,7 @@ export function seedEvents(sessions: readonly SeedSession[]): WfEvent[] {
       parent: s.parent_session_id ?? null,
       task: ctx.task ?? ctx.slice ?? ctx.task_id ?? null,
       difficulty: ctx.difficulty ?? null,
-      project: projectOf(ctx.cwd),
+      project: s.project ?? projectOf(ctx.cwd),
     });
     const frames: (string | undefined)[] = [root];
     for (const h of s.history) {

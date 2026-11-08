@@ -276,6 +276,12 @@ export function projectRoot(cwd: string): string {
   }
 }
 
+/** The project name a session's cwd belongs to: the main checkout's directory name, so every worktree of a repo is one project. Null when the cwd is not a path. */
+export function projectNameOf(cwd: unknown): string | null {
+  if (typeof cwd !== "string" || cwd === "") return null;
+  return path.basename(projectRoot(cwd)) || null;
+}
+
 /** The pool priority of a request at `level` with the step's own `priority` added. */
 export function levelPriority(level: PriorityLevel, stepPriority = 0): number {
   return PRIORITY_LEVELS[level] + stepPriority;

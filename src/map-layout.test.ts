@@ -6,6 +6,7 @@ import { fold, seedEvents, type EventKind, type SeedSession, type WfEvent } from
 import {
   G,
   layout,
+  placeSteps,
   scene,
   type MapLane,
   type MapLayout,
@@ -1008,6 +1009,20 @@ describe("which sessions are bands", () => {
     expect(m.bands.map(b => b.title)).toEqual(["work · alpha", "work · beta"]);
   });
 
+  it("sessions in worktrees of one repo are one band: the session files carry the main checkout's name", () => {
+    const base = {
+      stack: [{ workflow: "work", current_state: "a" }],
+      started_at: "2026-01-01T10:00:00Z",
+      updated_at: "2026-01-01T10:00:00Z",
+      history: [],
+    };
+    const events = seedEvents([
+      { ...base, session_id: "W1", context: { cwd: "/x/repo" }, project: "repo" },
+      { ...base, session_id: "W2", context: { cwd: "/x/wf-W2" }, project: "repo" },
+    ]);
+    expect(run(events).bands.map(b => b.title)).toEqual(["work"]);
+  });
+
   it("one project keeps the bare workflow name", () => {
     const m = run(
       mk(() => {
@@ -1050,4 +1065,56 @@ describe("bands without declared stations", () => {
     });
     expect(m.bands.map(b => b.title)).toEqual(["bare"]);
   });
+});
+
+describe("the steps of a crowded branch", () => {
+  const steps = Array.from({ length: 8 }, (_, i) => ({
+    name: `step-number-${i}`,
+    kind: "done" as const,
+  }));
+
+  it("the count shrinks until every name fits whole between its neighbours, `…` for the hidden", () => {
+    const placed = placeSteps("b", steps, 0, 600);
+    expect(placed.length).toBeLessThan(steps.length);
+    expect(placed.some(s => s.name === "…")).toBe(true);
+    for (const [k, s] of placed.entries()) {
+      if (k === 0 || k === placed.length - 1) continue;
+      const gap = (placed[k + 1].x - s.x) / 1;
+      expect(textWidthOf(s.label)).toBeLessThanOrEqual(gap);
+    }
+  });
+});
+
+describe("station names", () => {
+  const WF: Record<string, MapWorkflow> = {
+    long: {
+      stations: [
+        st("reconciliation-of-everything-and-all-its-parts"),
+        st("implementation-of-everything-and-all-its-parts"),
+        st("finish", false, true),
+      ],
+    },
+  };
+  const events = scenario(() => {
+    start("L1", "long", "10:00", null, { task: "T", difficulty: 3 });
+  });
+  for (const width of [undefined, 640])
+    it(`are cut to their column and keep the whole name as a tooltip, ${width ?? "normal"} width`, () => {
+      const m = layout(fold(events), WF, {
+        now: NOW,
+        clock: () => "hh:mm",
+        ...(width !== undefined ? { width } : {}),
+      });
+      const cut = m.bands[0].stations.filter(s => s.label !== s.name);
+      expect(cut.length).toBeGreaterThan(0);
+      for (const s of cut) {
+        expect(s.label.endsWith("…")).toBe(true);
+        expect(s.title).toBe(s.name);
+      }
+      const el = scene(m).groups[0].els.find(
+        e => e.key === "band:long:station:reconciliation-of-everything-and-all-its-parts",
+      );
+      expect(el?.title).toBe("reconciliation-of-everything-and-all-its-parts");
+      expect(collisions(m)).toEqual([]);
+    });
 });
