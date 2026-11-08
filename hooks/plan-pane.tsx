@@ -272,10 +272,12 @@ function outputText(o: unknown): string {
   return ''
 }
 
-/** The state a `transition` / `start` reply names on its first `<workflow> @ <state>` line. */
-function movedTo(o: unknown): string | undefined {
-  const m = /^([A-Za-z0-9_.-]+) @ ([A-Za-z0-9_.-]+)/m.exec(outputText(o))
-  return m?.[2]
+/** The state a `transition` / `start` reply names: the `← ACTIVE` frame when a stack is printed, else the flat `<workflow> @ <state>` line. */
+export function movedTo(o: unknown): string | undefined {
+  const t = outputText(o)
+  const frame = /^\s*\[\d+\]\s+[A-Za-z0-9_.-]+ @ ([A-Za-z0-9_.-]+)[^\n]*←\s*ACTIVE/m.exec(t)
+  if (frame) return frame[1]
+  return /^([A-Za-z0-9_.-]+) @ ([A-Za-z0-9_.-]+)/m.exec(t)?.[2]
 }
 
 function age(ms: number): string {

@@ -927,6 +927,7 @@ no model call, no tokens:
 
 The pane's header links to the live map (`map ↗`, the dashboard's `/map`); an Agent call's row of a workflow
 pipeline links to its lane (`lane ↗`, `/map/<session id>`); `/wf-map` prints the map's URL.
+A move row (`a→b`) names the state of the reply's `← ACTIVE` frame when the reply prints a stack (a sub-workflow), else the flat `<workflow> @ <state>` line; a reply naming none shows `?`.
 
 Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier. A session with
 no workflow shows "No active workflow"; nothing opens by itself.
