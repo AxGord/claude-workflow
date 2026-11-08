@@ -568,6 +568,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   refused; `note` is appended to the task's `notes:` as `{from, date, text}` (`from` default `mark`).
   A write lands only while the file still reads as the pick read it — a hand edit in between makes it
   plan again, never lost.
+- An unknown task key this server does not know (written by newer code) is kept on write and inert for the pick; `queue_next` / `queue_mark` name it (`unknown key priority on X: ignored by this server`); `queue_add` / `queue_edit` still refuse it in their input.
 - `queue_add({ queue?, file?, task, after_id? | before_id? })` — a new task (`{id, status?: pending|backlog, …}`)
   after / before a task, else last. Refused unless a pick reads it as meant: a new id, known keys
   only, every id in `after:` a task of the queue and no cycle (prose beside the ids stays a manual

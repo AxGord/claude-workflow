@@ -563,15 +563,32 @@ describe("queue pause (batch_size: 0)", () => {
     expect(plan(`- [>] R | touches: r\n- [ ] A | touches: a`, header).code).toBe(10);
   });
 
+  it("a task key this server does not know reads, picks, marks and round-trips, and is named", async () => {
+    const file = queueFile("- [ ] A | touches: a");
+    const doc = YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] };
+    doc.tasks[0].future = "x";
+    fs.writeFileSync(file, YAML.stringify(doc));
+    expect(readQueue(file).lines[0].unknownKeys).toEqual(["future"]);
+    expect(admittedIds("- [ ] B")).toEqual(["B"]);
+    const dry = await pickQueue(file, { dryRun: true });
+    expect(dry.admitted.map(a => a.id)).toEqual(["A"]);
+    expect(formatQueueNext(dry, false)).toContain(
+      "unknown key future on A: ignored by this server",
+    );
+    const r = await markQueue(file, "A", "running");
+    expect(formatMark(r)).toContain("unknown key future on A: ignored by this server");
+    expect(fs.readFileSync(file, "utf8")).toContain("future: x");
+    await expect(addQueueLine(file, { id: "C", future: "y" })).rejects.toThrow(
+      'unknown key "future"',
+    );
+  });
+
   it("a header without batch_size, a bad tasks: list or a bad task is an error", () => {
     expect(() => parseQueue("batch_size: n\ntasks: []\n", "q")).toThrow(/batch_size/);
     expect(() => parseQueue("tasks: []\n", "q")).toThrow(/batch_size/);
     expect(() => parseQueue("batch_size: 1\ntasks: {}\n", "q")).toThrow(/tasks: is a list/);
     expect(() => parseQueue("batch_size: 1\ntasks:\n  - id: A\n    status: open\n", "q")).toThrow(
       /status "open"/,
-    );
-    expect(() => parseQueue("batch_size: 1\ntasks:\n  - id: A\n    toches: [a]\n", "q")).toThrow(
-      /unknown key "toches"/,
     );
     expect(() => parseQueue("batch_size: 1\ntasks:\n  - id: A\n  - id: A\n", "q")).toThrow(/twice/);
     expect(() => parseQueue("batch_size: [1\n", "q")).toThrow(/not YAML/);

@@ -103,6 +103,8 @@ export interface QueueLine {
   readonly paused: boolean;
   readonly text: string;
   readonly notes: readonly QueueNote[];
+  /** Task keys this server does not know (written by newer code): kept on write, inert for the pick. */
+  readonly unknownKeys: readonly string[];
 }
 
 export interface Queue {
@@ -149,6 +151,13 @@ export interface PickResult {
   /** One entry per pending task not admitted, in file order. */
   readonly reasons: readonly { readonly id: string; readonly why: string }[];
   readonly dryRun: boolean;
+  /** Lines carrying a task key this server does not know, in file order. */
+  readonly unknownKeys: readonly { readonly id: string; readonly keys: readonly string[] }[];
+}
+
+/** `unknown key priority on X: ignored by this server` — one line per task with unknown keys. */
+export function unknownKeyNotice(id: string, keys: readonly string[]): string {
+  return `unknown key${keys.length > 1 ? "s" : ""} ${keys.join(", ")} on ${id}: ignored by this server`;
 }
 
 function stripParens(s: string): string {
@@ -192,9 +201,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
   const o = raw as Record<string, unknown>;
   const id = typeof o.id === "string" || typeof o.id === "number" ? String(o.id) : "";
   if (!ID_RE.test(id)) throw new QueueError(`${at}: id "${id}" is not a task id`);
-  const unknown = Object.keys(o).find(k => !(TASK_KEYS as readonly string[]).includes(k));
-  if (unknown !== undefined)
-    throw new QueueError(`${at} (${id}): unknown key "${unknown}" (keys: ${TASK_KEYS.join(", ")})`);
+  const unknownKeys = Object.keys(o).filter(k => !(TASK_KEYS as readonly string[]).includes(k));
   const status = (o.status ?? "pending") as Status;
   if (!STATUSES.includes(status))
     throw new QueueError(
@@ -231,6 +238,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     paused: o.parked === true,
     text: o.text === undefined || o.text === null ? "" : str(o.text).trim(),
     notes: parseNotes(o.notes, `${at} (${id})`),
+    unknownKeys,
   };
 }
 
@@ -608,6 +616,9 @@ export function planPick(
     pending: queue.lines.filter(l => l.status === "pending").length,
     admitted,
     reasons: reasons.sort((a, b) => a.index - b.index).map(({ id, why }) => ({ id, why })),
+    unknownKeys: queue.lines
+      .filter(l => l.unknownKeys.length > 0)
+      .map(l => ({ id: l.id, keys: l.unknownKeys })),
   };
 }
 
@@ -861,6 +872,8 @@ export interface MarkResult {
   readonly to: Status;
   /** A retry of a task with `difficulty:`: the value it had and the one written (+1, at most 10). */
   readonly difficulty?: { readonly from: number; readonly to: number };
+  /** The task's keys this server does not know (kept, ignored). */
+  readonly unknownKeys?: readonly string[];
 }
 
 /** The answer of a mark: `ID: failed → running`, plus the difficulty a retry raised. */
@@ -871,7 +884,8 @@ export function formatMark(r: MarkResult): string {
     : d.to > d.from
       ? ` (difficulty ${d.from} → ${d.to})`
       : ` (difficulty ${d.to}: already the cap)`;
-  return `${r.id}: ${r.from} → ${r.to}${bump}`;
+  const extra = r.unknownKeys?.length ? `\n${unknownKeyNotice(r.id, r.unknownKeys)}` : "";
+  return `${r.id}: ${r.from} → ${r.to}${bump}${extra}`;
 }
 
 /** Today as `YYYY-MM-DD` (local time): a note's date. */
@@ -948,7 +962,13 @@ export async function markQueue(
       difficulty = { from: was, to: Math.min(was + 1, DIFFICULTY_MAX) };
       node.set("difficulty", difficulty.to);
     }
-    return { id, from, to: status, ...(difficulty ? { difficulty } : {}) };
+    return {
+      id,
+      from,
+      to: status,
+      ...(difficulty ? { difficulty } : {}),
+      ...(line.unknownKeys.length > 0 ? { unknownKeys: line.unknownKeys } : {}),
+    };
   });
 }
 
@@ -1301,6 +1321,7 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
           : "nothing admitted and nothing runs: the queue is done (what stays pending is blocked)",
     );
   out.push(...explainLines(r.reasons, explain));
+  for (const u of r.unknownKeys) out.push(unknownKeyNotice(u.id, u.keys));
   return out.join("\n");
 }
 
