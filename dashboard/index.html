@@ -807,6 +807,7 @@ function planRow(l, extra, stateCls) {
   const title = [
     ui.dot(stateCls + (l.status === 'running' ? ' ' + modelClass(l.model) + ' live' : '')),
     ui.plaque(escapeHtml(l.id), '', planDifficulty(l)),
+    l.priority ? `<span class="flags mono">${escapeHtml(l.priority)}</span>` : '',
     l.difficulty ? `<span class="flags mono">d${l.difficulty}</span>` : '',
     l.model ? ui.chip(l.model) : '',
     flags ? `<span class="flags">${escapeHtml(flags)}</span>` : '',
@@ -831,7 +832,7 @@ function renderPlan(q) {
   // A done task is "today" when its last note (the land's) is dated today.
   const d = new Date();
   const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  const ready = by(l => l.status === 'pending' && l.reason === 'ready');
+  const ready = by(l => l.status === 'pending' && l.reason === 'ready').sort((a, b) => (a.pickOrder ?? 0) - (b.pickOrder ?? 0));
   const done = by(l => l.status === 'done' && l.lastNoteDate === today);
   h += planStrip('next:', ready, 'next') + planStrip('landed earlier:', done, 'landed');
   const group = (title, lines, extra, stateCls) => {

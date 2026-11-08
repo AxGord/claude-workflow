@@ -28,6 +28,8 @@ export type QueueLine = {
   /** `model: —`: the parent runs it by hand, the picker never admits it */
   isParentRun: boolean
   after: string[]
+  /** urgent / high / low; absent = normal */
+  priority?: string
 }
 
 export type QueueView = {

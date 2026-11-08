@@ -1200,7 +1200,7 @@ export function registerTools(
     {
       description:
         "Add a task to a YAML task queue under its lock (the lock queue_next / queue_mark take, so no status " +
-        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, priority: urgent|high|normal|low, model, effort, repo, workflow, after: [ids], touches: [paths], owner, exclusive, parked, text, notes: [{from, date, text}]}`. " +
+        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], owner, exclusive, parked, text, notes: [{from, date, text}]}`. " +
         "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10. Goes after `after_id`, before `before_id`, " +
         "else last. A queue addressed by `queue` or by default that does not exist yet is CREATED (`batch_size: 1`, `tasks: []`) and the answer says so (a full `file` path that does not exist is an error, never created).",
@@ -1243,7 +1243,7 @@ export function registerTools(
     {
       description:
         "Change one task's fields in a YAML task queue under the queue's lock: `set: { field: value }` " +
-        '(difficulty, priority, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text; `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
+        '(difficulty, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, owner, exclusive, parked, text; `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
         "(appended to `notes:` as `{from, date, text}`, `from` default `parent`). The status is queue_mark's. " +
         "A set field keeps its place; values are checked as queue_add checks them. Returns the task as written (YAML).",
       inputSchema: z

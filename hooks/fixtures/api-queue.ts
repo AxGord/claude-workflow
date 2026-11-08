@@ -22,7 +22,21 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 0,
       "text": "n",
-      "reason": "ready"
+      "reason": "ready",
+      "pickOrder": 1
+    },
+    {
+      "id": "NEXT-2",
+      "status": "pending",
+      "difficulty": "2",
+      "touches": "n2",
+      "exclusive": false,
+      "paused": false,
+      "notes": 0,
+      "text": "n2",
+      "reason": "ready",
+      "pickOrder": 0,
+      "priority": "high"
     },
     {
       "id": "WAIT-1",

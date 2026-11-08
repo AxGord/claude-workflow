@@ -534,7 +534,16 @@ export interface QueueLineView {
   readonly text: string;
   /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
   readonly reason?: string;
+  /** A ready line's place in the picker's order (priority, then file order). */
+  readonly pickOrder?: number;
+  /** Set when not `normal`. */
+  readonly priority?: Priority;
 }
+
+const prioOf = (l: QueueLine): Priority | undefined => {
+  const p = priorityOf(l);
+  return p === null || p === "normal" ? undefined : p;
+};
 
 /** Every line of a queue with, for each pending one, the picker's reason evaluated without the window. */
 export function describeQueue(queue: Queue): {
@@ -544,7 +553,7 @@ export function describeQueue(queue: Queue): {
 } {
   const plan = planPick(queue, { ignoreWindow: true });
   const why = new Map(plan.reasons.map(r => [r.id, r.why]));
-  const ready = new Set(plan.admitted.map(a => a.id));
+  const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
   return {
     file: queue.file,
     batchSize: queue.batchSize,
@@ -564,6 +573,8 @@ export function describeQueue(queue: Queue): {
       ...(l.status === "pending"
         ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }
         : {}),
+      ...(ready.has(l.id) ? { pickOrder: ready.get(l.id) } : {}),
+      ...(prioOf(l) !== undefined ? { priority: prioOf(l) } : {}),
     })),
   };
 }

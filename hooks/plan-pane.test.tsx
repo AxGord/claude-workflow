@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { ledgerRunsOf, movedTo, startText } from './plan-pane'
+import { ledgerRunsOf, movedTo, queueView, startText } from './plan-pane'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
 
@@ -71,6 +71,7 @@ test('the Plan tab is drawn from the engine\'s /api/queue answer', async ($, on)
     expect((await ui.find({ type: 'Text', text: /Plan 1\/2/ }))?.text).toContain('Plan 1/2')
     expect(await ui.find({ type: 'Text', text: /RUN-1/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /NEXT-1/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /NEXT-2 \[high\]/ })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: /Waiting/ }))?.text).toContain('Waiting 1')
     expect(await ui.find({ type: 'Text', text: /PARK-1/ })).toBeUndefined()
     await ui.unmount()
@@ -211,4 +212,10 @@ test('Landed is a tree: day rows with counts, bar + start-end per land, `?` with
   expect(await ui.find({ type: 'Text', text: /L-ONE/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /L-MIDNIGHT/ })).toBeDefined()
   await ui.unmount()
+})
+
+test('ready lines come in the picker\'s order, the priority named', () => {
+  const view = queueView('/proj/q.yaml', API_QUEUE as never)
+  expect(view.ready.map(l => l.id)).toEqual(['NEXT-2', 'NEXT-1'])
+  expect(view.ready[0].priority).toBe('high')
 })

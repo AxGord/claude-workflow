@@ -84,6 +84,7 @@ describe("the plan pane's recorded /api/queue answer", () => {
         "tasks:",
         "  - {id: RUN-1, status: running, difficulty: 7, repo: /tmp, touches: [r], text: r}",
         "  - {id: NEXT-1, status: pending, difficulty: 3, repo: /tmp, touches: [n], text: n}",
+        "  - {id: NEXT-2, status: pending, difficulty: 2, priority: high, repo: /tmp, touches: [n2], text: n2}",
         "  - {id: WAIT-1, status: pending, difficulty: 5, repo: /tmp, after: [NEXT-1], touches: [w], text: w}",
         "  - {id: PARK-1, status: pending, repo: /tmp, parked: true, touches: [p], text: p}",
         "  - id: DONE-1",

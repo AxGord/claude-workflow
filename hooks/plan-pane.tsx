@@ -116,7 +116,7 @@ function parseSession(text: string): Parsed | null {
 }
 
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }): QueueView {
@@ -128,8 +128,10 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     isExclusive: l.exclusive,
     isParentRun: /^(—|-)/.test(l.model ?? ''),
     after: (l.after ?? '').split(',').map(a => a.trim()).filter(a => a !== ''),
+    priority: l.priority ?? '',
     reason: l.reason ?? '',
   }))
+  const order = new Map(api.lines.map(l => [l.id, l.pickOrder ?? 0]))
   const strip = ({ reason: _r, ...l }: QueueLine & { reason: string }): QueueLine => l
   const pending = lines.filter(l => l.status === 'pending')
   return {
@@ -139,7 +141,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     failed: lines.filter(l => l.status === 'failed').length,
     pending: pending.length,
     running: lines.filter(l => l.status === 'running').map(strip),
-    ready: pending.filter(l => l.reason === 'ready').map(strip),
+    ready: pending.filter(l => l.reason === 'ready').sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).map(strip),
     waiting: pending
       .filter(l => l.reason !== 'ready' && !l.isParked)
       .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty })),
@@ -797,8 +799,8 @@ export const register: Register = on => {
           })}
           {header('next', 'blue', `⏭ Next (${q.ready.length})`)}
           {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
-          {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{level(l.difficulty)} {l.id}</Text>)}
-          {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in file order</Text>}
+          {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{level(l.difficulty)} {l.id}{l.priority ? ` [${l.priority}]` : ''}</Text>)}
+          {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in the picker's order</Text>}
           {header('lands', 'green', `✓ Landed · 24h (${s.lands.length})`)}
           {isOpen('lands') &&
             [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {

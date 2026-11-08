@@ -933,7 +933,7 @@ that loads plugin `modules`; older ones simply have no pane). It refreshes every
 no model call, no tokens:
 
 - **Plan** — for a session whose root workflow has a work queue (`context.queue_file`): `▶ Running n/window` (each
-  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in file order), `✓ Landed · 24h`
+  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in the picker's order: priority, then file order, the priority beside the id), `✓ Landed · 24h`
   (the queue repo's `git log` lines carrying a `Slice:` trailer) as a tree: one foldable `▦ DD.MM (n)` row per day,
   under it `▰▰▱▱▱ start-end sha id` per land — the difficulty bar first on every row that has one (`?????` when
   unknown), start from the ledger's `started_at` of the line's task session (matched by its `task`, which the
@@ -957,7 +957,7 @@ no workflow shows "No active workflow"; nothing opens by itself.
 The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 
 - **Sessions panel** — active sessions plus the most recent finished ones (terminal history is capped)
-- **Plan tab** — each queue named by a session's `context.queue_file`: running lines (with the pipeline state and time in it, linked to the session), ready lines in file order, waiting lines with the picker's reason (window ignored), failed, done today (a done line counts when its text holds today's date, `LANDED <sha> YYYY-MM-DD`; marks carry no date)
+- **Plan tab** — each queue named by a session's `context.queue_file`: running lines (with the pipeline state and time in it, linked to the session), ready lines in the picker's order (priority, then file order; the priority beside the id), waiting lines with the picker's reason (window ignored), failed, done today (a done line counts when its text holds today's date, `LANDED <sha> YYYY-MM-DD`; marks carry no date)
 - **Workflow list** — all loaded workflows with state counts
 - **Session detail** — state history, stack depth, context data
 - **Workflow graphs** — interactive DAG visualization rendered with dagre

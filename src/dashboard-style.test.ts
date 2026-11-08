@@ -409,7 +409,17 @@ describe("every view renders with the shared components", () => {
     const planOpus = page.run(
       `renderPlan(${JSON.stringify({ ...QUEUE, lines: [QUEUE.lines[0]] })})`,
     ) as string;
+    const planOrder = page.run(
+      `renderPlan(${JSON.stringify({
+        ...QUEUE,
+        lines: [
+          { ...QUEUE.lines[1], id: "FILE-FIRST", pickOrder: 1 },
+          { ...QUEUE.lines[1], id: "PICK-FIRST", pickOrder: 0, priority: "high" },
+        ],
+      })})`,
+    ) as string;
     return {
+      planOrder,
       sessionsList,
       workflowsList,
       detail,
@@ -504,6 +514,11 @@ describe("every view renders with the shared components", () => {
       expect(html).toContain(`class="g-node live ${model}"`);
       expect(html).toContain(`class="g-name  live ${model}"`);
     }
+    expect(views.planOrder.indexOf("PICK-FIRST")).toBeGreaterThan(-1);
+    expect(views.planOrder.indexOf("PICK-FIRST")).toBeLessThan(
+      views.planOrder.indexOf("FILE-FIRST"),
+    );
+    expect(views.planOrder).toMatch(/PICK-FIRST[\s\S]*?>high</);
     expect(views.planOpus).toContain('class="dot st-run opus live"');
     // no live dot, node or frame without the running state class
     for (const html of Object.values(views)) {
