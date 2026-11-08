@@ -1,0 +1,69 @@
+/* The dashboard's design tokens: the ONLY file that holds a colour literal (src/dashboard-style.test.ts
+   enforces it). Every other stylesheet and the page's script reach a colour through var(--…). */
+:root {
+  /* surfaces */
+  --page: #0f1117;
+  --panel: #11141c;
+  --panel-border: #222838;
+  --panel-radius: 16px;
+  --raised: #1e293b;
+  --grid: #1a1f2b;
+  --rail: #1c2230;
+  --inset: #0b0e14;
+
+  /* text */
+  --text: #e5e7eb;
+  --text-2: #cbd5e1;
+  --text-3: #94a3b8;
+  --text-4: #64748b;
+  --link: #7dd3fc;
+  --link-hover: #bae6fd;
+
+  /* states: running = a model colour + glow (--model-*), landed = --ok dimmed */
+  --ok: #22c55e;
+  --ok-text: #86efac;
+  --ok-bg: #0f1f17;
+  --warn: #eab308;
+  --warn-text: #fde68a;
+  --warn-bg: #26200c;
+  --bad: #ef4444;
+  --bad-text: #fca5a5;
+  --bad-bg: #2a1214;
+  --slow: #f472b6;
+  --next-bg: #172554;
+  --skill: #2dd4bf;
+  --sub: #c084fc;
+
+  /* models */
+  --model-haiku: #94a3b8;
+  --model-sonnet: #38bdf8;
+  --model-opus: #c084fc;
+  --model-script: #64748b;
+
+  /* difficulty 1 -> 10 */
+  --diff-1: #22c55e;
+  --diff-2: #22c55e;
+  --diff-3: #84cc16;
+  --diff-4: #84cc16;
+  --diff-5: #eab308;
+  --diff-6: #f59e0b;
+  --diff-7: #f97316;
+  --diff-8: #f97316;
+  --diff-9: #ef4444;
+  --diff-10: #ef4444;
+
+  /* the colour a history actor's name hashes to */
+  --actor-0: #38bdf8;
+  --actor-1: #22c55e;
+  --actor-2: #c084fc;
+  --actor-3: #f59e0b;
+  --actor-4: #ef4444;
+  --actor-5: #7dd3fc;
+  --actor-6: #86efac;
+  --actor-7: #eab308;
+
+  /* Inter when it is installed, else the system face; numbers and ids in a mono stack. No web font is
+     downloaded: the dashboard is local and works offline. */
+  --font: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}

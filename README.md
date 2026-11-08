@@ -950,6 +950,10 @@ Every view has a real path, driven by the History API (links are plain anchors; 
 
 The server answers every `GET` that is not an `/api` call or a static file with the page; an unknown `/api/...` path is a JSON 404. The route table is `src/dashboard-routes.ts`, served to the page as `/routes.js`.
 
+### Look
+
+One style for every view (sessions, session detail, workflow graphs, plan): `dashboard/tokens.css` holds the design tokens (surfaces, text, state colours, model colours, the difficulty scale 1 -> 10, fonts) and is the only file with a colour literal; `dashboard/components.css` holds each component once (plaque, agent chip `model ▮▮▮▯ effort · role`, step dot, script square, section label, band panel, the `next:` / `landed earlier:` rows) and reads colours only through `var(--…)`. A state reads the same everywhere: running = the model's colour with a glow, waiting on the pool = pink, waiting on a parent or the user = yellow, stopped or failed = red, landed = green and dimmed. The dagre graphs use the same palette (state nodes are plaques, exec states squares, the current state glows, backward edges dashed). Inter is used when installed, else the system font; nothing is downloaded, so the page works offline. The page's script builds its markup from the `ui` helpers in `index.html`; `src/dashboard-style.test.ts` renders every view and fails on a colour literal outside the tokens file.
+
 ### REST API
 
 | Method | Endpoint | Description |
@@ -1048,6 +1052,7 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/dashboard-routes.ts` | The dashboard's route table (path <-> view), shared by the page and the tests |
+| `dashboard/` | The page: `index.html` (views, `ui` component helpers), `tokens.css` (the only colour literals), `components.css` |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 
 ## Calibration report

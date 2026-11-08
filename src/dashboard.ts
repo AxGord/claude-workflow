@@ -12,7 +12,14 @@ import { describeQueue, readQueue, QueueError } from "./queue.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function buildApp(storage: Storage, loader: Loader): express.Express {
+/** The compiled route table the page imports as `/routes.js` (a test serves a transpiled copy instead). */
+const ROUTES_MODULE = path.join(__dirname, "dashboard-routes.js");
+
+export function buildApp(
+  storage: Storage,
+  loader: Loader,
+  routesModule: string = ROUTES_MODULE,
+): express.Express {
   const app = express();
   app.use(express.json());
 
@@ -159,7 +166,7 @@ export function buildApp(storage: Storage, loader: Loader): express.Express {
 
   // The route table the page's router imports (src/dashboard-routes.ts, compiled beside this file).
   app.get("/routes.js", (_req, res) => {
-    res.sendFile(path.join(__dirname, "dashboard-routes.js"));
+    res.sendFile(routesModule);
   });
 
   // An unknown /api path is a JSON 404, never the page.
