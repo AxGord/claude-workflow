@@ -22,8 +22,8 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   unless a prompt needs a value from them.
 - Where a prompt says "the cause verbatim" or "the fix list": send the one line plus "read <the file>
   whole" — never paste the file's text.
-- Tokens: take them from the agent's task-notification usage line; for a resumed agent, subtract the
-  value you saw last time.
+- Tokens: the agent's task-notification usage line is its context size at stop, not its spend: report
+  the last value you saw for that role, never a sum over rounds.
 - A transition into a long exec (the land) may outlive the call; its notification wakes you.
 - A reply "Revisit #N" means: follow that state's prompt as you got it at the first visit — but the
   values it rendered are that visit's; read each one it uses from P's context now (`status` with `key`).
