@@ -459,11 +459,28 @@ function hasBraceExpansion(command: string): boolean {
     } else if (c === "\\") i++;
     else if (c === "'" || c === '"') quote = c;
     else if (c === "{" && command[i - 1] !== "$") {
-      const close = command.indexOf("}", i + 1);
+      const close = matchingBrace(command, i);
       if (close > 0 && /,|\.\./.test(command.slice(i + 1, close))) return true;
     }
   }
   return false;
+}
+
+/** The index of the `}` closing the `{` at `open`, nested braces counted, escaped and quoted ones not; -1 when none. */
+function matchingBrace(command: string, open: number): number {
+  let depth = 0;
+  let quote = "";
+  for (let i = open; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      if (c === quote) quote = "";
+      else if (c === "\\" && quote === '"') i++;
+    } else if (c === "\\") i++;
+    else if (c === "'" || c === '"') quote = c;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i;
+  }
+  return -1;
 }
 
 /** Is `target` inside a git work tree (a `.git` entry in an ancestor below the scratch root)? */
@@ -491,11 +508,12 @@ export function redirectsToFile(command: string): string | undefined {
     else if (c === ">") {
       let j = i + 1;
       if (command[j] === ">" || command[j] === "|") j++;
-      // `>&2` / `>&-` duplicate or close a descriptor; `>&file` writes the file.
+      // `>&2` / `>&-` duplicate or close a descriptor (the whole word); `>&file` and `>&1foo` write the file.
       if (command[j] === "&") {
         j++;
-        if (/[0-9-]/.test(command[j] ?? "")) {
-          i = j;
+        const fd = /^(\d+-?|-)(?=$|[\s;&|()<>])/.exec(command.slice(j));
+        if (fd) {
+          i = j + fd[0].length - 1;
           continue;
         }
       }
@@ -582,10 +600,44 @@ function isHarmlessDefault(cmd: Command, afterPipe: boolean): boolean {
   const searcher = name.endsWith("grep") || name === "rg";
   if (searcher && args.some(a => /^-[A-Za-z]*[rRf]|^--(file|recursive|dereference|pre)/.test(a)))
     return false;
-  // A numeric word is an option value (`head -n 5`) for a filter, but may be a grep pattern.
-  const isOperand = (a: string): boolean =>
-    !a.startsWith("-") && (searcher || !/^[+-]?\d+$/.test(a));
+  if (searcher) return searcherFileOperands(name, args) === 0;
+  // A numeric word is an option value (`head -n 5`) for a filter.
+  const isOperand = (a: string): boolean => !a.startsWith("-") && !/^[+-]?\d+$/.test(a);
   return args.filter(isOperand).length <= operands;
+}
+
+/**
+ * Flags of grep / rg that take a value in the next word (`-C 3`); `-e` / `--regexp` give the pattern
+ * itself. A short cluster ends in the value letter and holds no other value letter before it (`-eC`
+ * has a glued value). `grep -d` / `--directories` are not here (`recurse` reads files), nor grep's
+ * `--context` (optional value on BSD grep).
+ */
+const GREP_VALUE_SHORT = /^-(?:(?![ABCmeD])[A-Za-z])*([ABCmeD])$/;
+const RG_VALUE_SHORT = /^-(?:(?![ABCmegtTjMd])[A-Za-z])*([ABCmegtTjMd])$/;
+const GREP_VALUE_LONG = /^--(after-context|before-context|max-count|regexp|devices)$/;
+const RG_VALUE_LONG =
+  /^--(after-context|before-context|context|max-count|regexp|glob|type|type-not|threads|max-columns|max-depth)$/;
+
+/** How many words of a grep / rg call are file operands: positional words past the values of value-taking flags, less the pattern unless `-e` / `--regexp` gave it. */
+function searcherFileOperands(name: string, args: readonly string[]): number {
+  const valueShort = name === "rg" ? RG_VALUE_SHORT : GREP_VALUE_SHORT;
+  const valueLong = name === "rg" ? RG_VALUE_LONG : GREP_VALUE_LONG;
+  let positional = 0;
+  let patternFlag = false;
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k];
+    if (a === "--") {
+      positional += args.length - k - 1;
+      break;
+    }
+    const short = valueShort.exec(a);
+    if (short || valueLong.test(a)) {
+      if (short?.[1] === "e" || a === "--regexp") patternFlag = true;
+      k++;
+    } else if (a.startsWith("--regexp=") || /^-[A-Za-z]*e./.test(a)) patternFlag = true;
+    else if (!a.startsWith("-")) positional++;
+  }
+  return Math.max(0, positional - (patternFlag ? 0 : 1));
 }
 
 /**
