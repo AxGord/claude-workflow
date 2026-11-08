@@ -161,7 +161,21 @@ export function createMap({ root, fetchJSON }) {
     for (const [k, v] of Object.entries(item.attrs)) if (el.getAttribute(k) !== String(v)) el.setAttribute(k, v);
     if (item.c) el.style.setProperty('--c', `var(${item.c})`);
     else el.style.removeProperty('--c');
-    if (item.text !== undefined && el.textContent !== item.text) el.textContent = item.text;
+    // a tooltip is a <title> child, so the text is compared with what was set, not with textContent
+    if (item.text !== undefined && el._text !== item.text) {
+      el.textContent = item.text;
+      el._text = item.text;
+      el._title = undefined;
+    }
+    if (item.title !== el._title) {
+      el.querySelector(':scope > title')?.remove();
+      if (item.title !== undefined) {
+        const t = document.createElementNS(NS, 'title');
+        t.textContent = item.title;
+        el.appendChild(t);
+      }
+      el._title = item.title;
+    }
   }
 
   function enter(el, item) {

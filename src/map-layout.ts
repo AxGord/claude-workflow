@@ -56,8 +56,15 @@ export const G = {
   mainTop: 22,
   mainBottom: 18,
   branchDrop: 56,
-  branchRow: 46,
+  /** a branch row: its chip, then its steps with a name and a detail under each */
+  branchRow: 62,
+  /** a chip's distance above the steps of its row */
+  chipRise: 20,
   stepLabels: 30,
+  /** how far a step label may reach past the branch's own station line */
+  labelEdge: 6,
+  /** a rail text row's height */
+  textRow: 12,
   branchInset: 16,
   stepPad: 20,
   stepMin: 40,
@@ -75,6 +82,8 @@ export interface MapChip {
   readonly text: string;
   /** a model token (`--model-sonnet`, …) */
   readonly c: string;
+  /** the full text when `text` was cut to fit its room (a tooltip) */
+  readonly title?: string;
 }
 
 export interface MapStop {
@@ -101,6 +110,10 @@ export interface MapStep {
   readonly x: number;
   readonly kind: Kind;
   readonly detail?: string;
+  /** what is drawn under the step: `name`, cut to the room between its neighbours */
+  readonly label: string;
+  /** the full name when `label` was cut, or the names a `…` stands for (a tooltip) */
+  readonly title?: string;
 }
 
 export interface MapBranch {
@@ -128,6 +141,7 @@ export interface MapLoop {
   readonly x2: number;
   readonly y2: number;
   readonly label: string;
+  readonly title?: string;
 }
 
 export interface MapPlaque {
@@ -135,6 +149,8 @@ export interface MapPlaque {
   readonly y: number;
   readonly width: number;
   readonly title: string;
+  /** the full id when `title` was cut */
+  readonly full?: string;
   readonly sub: string;
   /** a state class (st-done / st-stop / st-pool / st-wait) or '' for the difficulty colour */
   readonly cls: string;
@@ -183,7 +199,12 @@ export interface MapAsk {
   readonly y1: number;
   readonly y2: number;
   readonly label: string;
+  /** the full question when `label` was cut */
+  readonly title?: string;
   readonly answer: string | null;
+  /** the text rows above the rail the question and the answer sit on (0 = next to the rail) */
+  readonly qRow: number;
+  readonly aRow: number;
 }
 
 export interface MapRail {
@@ -194,7 +215,12 @@ export interface MapRail {
   readonly label: string;
   readonly asks: readonly MapAsk[];
   /** a question the parent passed to the user: a glowing mark on the rail */
-  readonly user: { readonly x: number; readonly label: string } | null;
+  readonly user: {
+    readonly x: number;
+    readonly label: string;
+    readonly title?: string;
+    readonly row: number;
+  } | null;
 }
 
 export interface MapBand {
@@ -275,7 +301,29 @@ function localClock(ms: number): string {
 const time = (ts: string | undefined): number => (ts ? Date.parse(ts) : NaN);
 
 function textWidth(s: string, w: number = G.charW): number {
-  return Math.ceil(s.length * w);
+  return Math.ceil([...s].length * w);
+}
+
+/** `text` cut with an ellipsis to fit `px` at `glyph` px a character; `title` is the whole text when it was cut. */
+function fitText(
+  text: string,
+  px: number,
+  glyph: number = G.chipW,
+): { text: string; title?: string } {
+  if (textWidth(text, glyph) <= px) return { text };
+  const chars = Math.max(1, Math.floor(px / glyph) - 1);
+  return { text: [...text].slice(0, chars).join("") + "…", title: text };
+}
+
+/** The rows of a set of text rectangles: each takes the first row where it touches none already there. */
+function packRows(boxes: readonly { x0: number; x1: number }[], pad = 6): number[] {
+  const rows: { x0: number; x1: number }[][] = [];
+  return boxes.map(b => {
+    let r = rows.findIndex(row => row.every(o => b.x0 >= o.x1 + pad || b.x1 <= o.x0 - pad));
+    if (r < 0) r = rows.push([]) - 1;
+    rows[r].push(b);
+    return r;
+  });
 }
 
 function lastAgent(s: FoldedSession): FoldedAgent | undefined {
@@ -383,32 +431,71 @@ function branchSteps(
   return out;
 }
 
-/** Steps placed between x1 and x2; too many keep the first and the latest, with `…` between. */
-function placeSteps(
-  key: string,
-  steps: readonly { name: string; kind: Kind; detail?: string }[],
-  x1: number,
-  x2: number,
-): MapStep[] {
-  const room = Math.max(0, x2 - x1 - 2 * G.stepPad);
-  const max = Math.max(2, Math.floor(room / G.stepMin) + 1);
+type StepIn = { name: string; kind: Kind; detail?: string; title?: string };
+
+/** At most `max` steps: the first and the latest are kept, with `…` (naming the hidden ones) between. */
+function pickSteps(steps: readonly StepIn[], max: number): StepIn[] {
   let shown = [...steps];
   if (shown.length > max) {
     const live = shown.filter(st => st.kind !== "ahead");
     shown = live.length > max ? live : shown.slice(0, max);
-    if (shown.length > max)
-      shown = [shown[0], { name: "…", kind: "done" }, ...shown.slice(shown.length - (max - 2))];
+    if (shown.length > max) {
+      const kept = shown.slice(shown.length - (max - 2));
+      const hidden = steps.filter(st => st !== shown[0] && !kept.includes(st));
+      shown = [
+        shown[0],
+        { name: "…", kind: "done", title: hidden.map(st => st.name).join(", ") },
+        ...kept,
+      ];
+    }
   }
+  return shown;
+}
+
+/**
+ * Steps placed between x1 and x2. A step's name and detail sit centred under it, so the count shrinks
+ * (keeping the first and the latest, `…` between) until every text fits between its neighbours and
+ * inside the branch; at the smallest count a name still too long is cut, its full text a tooltip.
+ */
+function placeSteps(key: string, steps: readonly StepIn[], x1: number, x2: number): MapStep[] {
+  const room = Math.max(0, x2 - x1 - 2 * G.stepPad);
+  const cap = Math.max(2, Math.floor(room / G.stepMin) + 1);
+  const budgets = (n: number): number[] => {
+    const gap = n > 1 ? room / (n - 1) : Infinity;
+    const edge = 2 * (G.stepPad + G.labelEdge);
+    return Array.from({ length: n }, (_, k) =>
+      Math.floor(Math.min(gap - 4, k === 0 || k === n - 1 ? edge : Infinity)),
+    );
+  };
+  const wide = (st: StepIn): number =>
+    Math.max(
+      textWidth(st.name, G.chipW),
+      st.detail !== undefined ? textWidth(st.detail, G.chipW) : 0,
+    );
+  let shown = pickSteps(steps, Math.min(cap, Math.max(2, steps.length)));
+  for (let m = Math.min(cap, steps.length); m >= 3; m--) {
+    shown = pickSteps(steps, m);
+    const b = budgets(shown.length);
+    if (shown.every((st, k) => wide(st) <= b[k])) break;
+  }
+  const b = budgets(shown.length);
   const gap = shown.length > 1 ? room / (shown.length - 1) : 0;
   const seen = new Map<string, number>();
   return shown.map((st, k) => {
     const n = (seen.get(st.name) ?? 0) + 1;
     seen.set(st.name, n);
+    const fit = fitText(st.name, b[k]);
     return {
       key: `${key}:${st.name}:${n}`,
       name: st.name,
       x: Math.round(x1 + G.stepPad + gap * k),
       kind: st.kind,
+      label: fit.text,
+      ...(st.title !== undefined
+        ? { title: st.title }
+        : fit.title !== undefined
+          ? { title: fit.title }
+          : {}),
       ...(st.detail !== undefined ? { detail: st.detail } : {}),
     };
   });
@@ -483,6 +570,13 @@ function layLane(
     const mainY = passY[pass];
     const stepY = mainY + G.branchDrop + row * G.branchRow;
     const key = `${s.id}:b:${child.id}`;
+    // the chip sits on its own text row above its steps, cut to the branch's width: the next
+    // branch of the row starts right after it
+    const chipX = x1 + 10;
+    const chip = fitText(
+      agent ? chipText(agent.model, agent.effort, role) : `script · ${role}`,
+      x2 - 4 - chipX - 16,
+    );
     return {
       key,
       session: child.id,
@@ -494,9 +588,10 @@ function layLane(
       stepY,
       c: bc,
       chip: {
-        x: x1 + 10,
-        y: mainY + 18 + row * G.branchRow,
-        text: agent ? chipText(agent.model, agent.effort, role) : `script · ${role}`,
+        x: chipX,
+        y: stepY - G.chipRise,
+        text: chip.text,
+        ...(chip.title !== undefined ? { title: chip.title } : {}),
         c: bc,
       },
       steps: placeSteps(
@@ -556,14 +651,17 @@ function layLane(
   const mapLoops: MapLoop[] = loops.map((l, k) => {
     const hanging = branches.filter(b => b.pass === l.pass && stations[l.from]?.name === b.station);
     const from = hanging.at(-1);
+    const x1 = from ? from.x2 : xs[l.from];
+    const label = fitText(`↺ ${l.name || "back"}`, Math.abs(x1 - xs[l.to]) - 8);
     return {
       key: `${s.id}:loop${k}`,
-      x1: from ? from.x2 : xs[l.from],
+      x1,
       y1: from ? from.stepY : passY[l.pass],
       yBack: passBottom[l.pass] + G.loopGap / 2,
       x2: xs[l.to],
       y2: passY[l.pass + 1],
-      label: `↺ ${l.name || "back"}`,
+      label: label.text,
+      ...(label.title !== undefined ? { title: label.title } : {}),
     };
   });
 
@@ -600,7 +698,8 @@ function layLane(
     cls = status === "landed" ? "st-done" : "st-stop";
   }
   const room = G.plaqueMax - textWidth(sub) - 3 * 10;
-  let title = laneTitle(s);
+  const full = laneTitle(s);
+  let title = full;
   if (textWidth(title, G.titleW) > room) {
     const chars = Math.max(4, Math.floor(room / G.titleW) - 1);
     title = title.slice(0, chars) + "…";
@@ -625,10 +724,15 @@ function layLane(
         : openAsk
           ? "the parent"
           : (s.state ?? "");
+    const text = fitText(
+      `driver · ${chipText(model, effort, `waits on ${who}`)}`,
+      G.plaqueMax - 16,
+    );
     driver = {
       x: plaqueX,
       y: endY + G.plaqueH / 2 + 14,
-      text: `driver · ${chipText(model, effort, `waits on ${who}`)}`,
+      text: text.text,
+      ...(text.title !== undefined ? { title: text.title } : {}),
       c: modelToken(model),
     };
   }
@@ -651,7 +755,16 @@ function layLane(
     branches,
     end: { x1: lastX, x2: plaqueX, y: endY, faint: status === "running" },
     ahead,
-    plaque: { x: plaqueX, y: endY, width, title, sub, cls, c: cls === "" ? c : "" },
+    plaque: {
+      x: plaqueX,
+      y: endY,
+      width,
+      title,
+      ...(title !== full ? { full } : {}),
+      sub,
+      cls,
+      c: cls === "" ? c : "",
+    },
     driver,
     labels,
     highlight: opts.highlight === s.id,
@@ -703,6 +816,130 @@ function bandStations(
       if (name !== undefined && !seen.includes(name)) seen.push(name);
   }
   return seen.map(name => ({ name, script: false, terminal: false }));
+}
+
+/** An ask before the rail's y is known: `lane` and `rel` place the asking line (the lane's session, the y inside it). */
+interface AskDraft {
+  key: string;
+  x: number;
+  lane: string;
+  rel: number;
+  label: string;
+  title?: string;
+  answer: string | null;
+  qRow: number;
+  aRow: number;
+}
+
+interface RailDraft {
+  label: string;
+  asks: AskDraft[];
+  user: MapRail["user"];
+  /** the text rows the rail needs above its line */
+  rows: number;
+}
+
+/**
+ * The parent rail's texts: its own label, the question it passed to the user, and a `?` / answer pair
+ * per ask of the running lanes and their branches. Every text is measured and takes the first row
+ * above the rail where it touches no other, so none is drawn over another.
+ */
+function draftRail(
+  p: FoldedSession,
+  live: readonly LaneInput[],
+  body: readonly Omit<MapLane, "y">[],
+  stations: readonly MapStation[],
+  xs: readonly number[],
+  col: number,
+  bandWidth: number,
+  now: number,
+): RailDraft {
+  const index = new Map(stations.map((st, i) => [st.name, i]));
+  const asks: AskDraft[] = [];
+  const answerOf = (a: FoldedSession["asks"][number]): string | null =>
+    a.answered !== undefined ? `→ ${a.to ?? ""} · ${age(time(a.answered) - time(a.at))}` : null;
+  body.forEach((lane, li) => {
+    const input = live[li];
+    const { visits } = walk(input.s, index);
+    for (const [k, a] of input.s.asks.entries()) {
+      const v = visitAt(visits, a.at);
+      const i = index.get(String(a.state)) ?? v.i;
+      const pass = lane.passes[v.pass] ?? lane.passes.at(-1);
+      asks.push({
+        key: `${lane.session}:ask${k}`,
+        x: xs[i],
+        lane: lane.session,
+        rel: pass?.y ?? 0,
+        label: `? ${String(a.state)}`,
+        answer: answerOf(a),
+        qRow: 0,
+        aRow: 0,
+      });
+    }
+    for (const b of lane.branches) {
+      const child = input.children.find(c => c.id === b.session) as FoldedSession;
+      for (const [k, a] of child.asks.entries()) {
+        const step = b.steps.find(st => st.name === a.state);
+        asks.push({
+          key: `${b.session}:ask${k}`,
+          x: step?.x ?? b.x1,
+          lane: lane.session,
+          rel: b.stepY,
+          label: `? ${String(a.state)}`,
+          answer: answerOf(a),
+          qRow: 0,
+          aRow: 0,
+        });
+      }
+    }
+  });
+  // cut what would leave the band, then measure
+  for (const a of asks) {
+    const fit = fitText(a.label, a.x - 6 - 4);
+    a.label = fit.text;
+    if (fit.title !== undefined) a.title = fit.title;
+  }
+  const label = `parent agent · ${p.workflow ?? ""} · ${p.id.slice(0, 8)}`;
+  const userAsk = p.asks.filter(a => a.answered === undefined).at(-1);
+  const userX = xs[xs.length - 1] - Math.round(col / 2);
+  const userFit = userAsk
+    ? fitText(
+        `⏸ ${String(userAsk.state)} · asked the user · open ${age(now - time(userAsk.at))}`,
+        bandWidth - (userX + 12) - 8,
+      )
+    : null;
+  const items: { x0: number; x1: number }[] = [
+    { x0: G.left - 50, x1: G.left - 50 + textWidth(label, G.chipW) },
+  ];
+  if (userFit) items.push({ x0: userX + 12, x1: userX + 12 + textWidth(userFit.text, G.chipW) });
+  const first = items.length;
+  const order = asks.map((_, i) => i).sort((i, j) => asks[i].x - asks[j].x || i - j);
+  for (const i of order) {
+    const a = asks[i];
+    items.push({ x0: a.x - 6 - textWidth(a.label, G.chipW), x1: a.x - 6 });
+    if (a.answer !== null)
+      items.push({ x0: a.x + 12, x1: a.x + 12 + textWidth(a.answer, G.chipW) });
+  }
+  const rows = packRows(items);
+  let at = first;
+  for (const i of order) {
+    asks[i].qRow = rows[at++];
+    if (asks[i].answer !== null) asks[i].aRow = rows[at++];
+  }
+  return {
+    label,
+    asks,
+    user:
+      userAsk && userFit
+        ? {
+            x: userX,
+            label: userFit.text,
+            ...(userFit.title !== undefined ? { title: userFit.title } : {}),
+            row: rows[1],
+          }
+        : null,
+    rows: Math.max(1, ...rows.map(r => r + 1)),
+  };
 }
 
 /**
@@ -791,69 +1028,44 @@ export function layout(
         if (l.s.parent !== null && dispatchers.has(l.s.parent))
           parents.set(l.s.parent, (parents.get(l.s.parent) ?? 0) + 1);
       const parent = [...parents].sort((a, b) => b[1] - a[1])[0]?.[0];
-      let railY = 0;
+      const body = live.map(l => layLane(l, stations, xs, plaqueX, workflows, opts, true));
+      let railRows = 0;
+      let draft: RailDraft | null = null;
       if (parent !== undefined) {
-        railY = by + G.rail / 2;
-        by += G.rail;
+        draft = draftRail(
+          folded.get(parent) as FoldedSession,
+          live,
+          body,
+          stations,
+          xs,
+          col,
+          bandWidth,
+          opts.now,
+        );
+        railRows = draft.rows;
+        by += G.rail + (railRows - 1) * G.textRow;
       }
-      const runningLanes: MapLane[] = [];
-      for (const l of live) {
-        const lane = layLane(l, stations, xs, plaqueX, workflows, opts, true);
-        runningLanes.push({ ...lane, y: by });
+      const railY = parent !== undefined ? by - G.rail / 2 : 0;
+      const runningLanes: MapLane[] = body.map(lane => {
+        const placed = { ...lane, y: by };
         by += lane.height + G.laneGap;
-      }
+        return placed;
+      });
       laid.push(...runningLanes);
-      if (parent !== undefined) {
-        const p = folded.get(parent) as FoldedSession;
-        const asks: MapAsk[] = [];
-        for (const lane of runningLanes) {
-          const input = live.find(l => l.s.id === lane.session) as LaneInput;
-          const index = new Map(stations.map((st, i) => [st.name, i]));
-          const { visits } = walk(input.s, index);
-          for (const [k, a] of input.s.asks.entries()) {
-            const v = visitAt(visits, a.at);
-            const i = index.get(String(a.state)) ?? v.i;
-            const pass = lane.passes[v.pass] ?? lane.passes.at(-1);
-            const wait = a.answered !== undefined ? age(time(a.answered) - time(a.at)) : "";
-            asks.push({
-              key: `${lane.session}:ask${k}`,
-              x: xs[i],
-              y1: railY,
-              y2: lane.y + (pass?.y ?? 0),
-              label: `? ${String(a.state)}`,
-              answer: a.answered !== undefined ? `→ ${a.to ?? ""} · ${wait}` : null,
-            });
-          }
-          for (const b of lane.branches) {
-            const child = folded.get(b.session) as FoldedSession;
-            for (const [k, a] of child.asks.entries()) {
-              const step = b.steps.find(st => st.name === a.state);
-              const wait = a.answered !== undefined ? age(time(a.answered) - time(a.at)) : "";
-              asks.push({
-                key: `${b.session}:ask${k}`,
-                x: step?.x ?? b.x1,
-                y1: railY,
-                y2: lane.y + b.stepY,
-                label: `? ${String(a.state)}`,
-                answer: a.answered !== undefined ? `→ ${a.to ?? ""} · ${wait}` : null,
-              });
-            }
-          }
-        }
-        const userAsk = p.asks.filter(a => a.answered === undefined).at(-1);
+      if (parent !== undefined && draft !== null) {
+        const laneY = new Map(runningLanes.map(l => [l.session, l.y]));
         rail = {
           session: parent,
           y: railY,
           x1: G.left - 50,
           x2: plaqueX,
-          label: `parent agent · ${p.workflow ?? ""} · ${parent.slice(0, 8)}`,
-          asks,
-          user: userAsk
-            ? {
-                x: xs[n - 1] - Math.round(col / 2),
-                label: `⏸ ${String(userAsk.state)} · asked the user · open ${age(opts.now - time(userAsk.at))}`,
-              }
-            : null,
+          label: draft.label,
+          asks: draft.asks.map(({ lane, rel, ...a }) => ({
+            ...a,
+            y1: railY,
+            y2: (laneY.get(lane) as number) + rel,
+          })),
+          user: draft.user,
         };
       }
     }
@@ -907,6 +1119,8 @@ export interface SceneEl {
   readonly c?: string;
   /** a new path draws itself (stroke-dashoffset) instead of fading in */
   readonly draw?: boolean;
+  /** a tooltip: the full text of one that was cut to fit */
+  readonly title?: string;
 }
 
 export interface SceneGroup {
@@ -929,6 +1143,7 @@ function plaqueEls(
   cls: string,
   c: string,
   width: number,
+  full?: string,
 ): SceneEl[] {
   return [
     {
@@ -944,6 +1159,7 @@ function plaqueEls(
       cls: "m-plaque-text",
       attrs: { x: x + 10, y: y + 4 },
       text: title,
+      ...(full !== undefined ? { title: full } : {}),
     },
     {
       key: `${key}:sub`,
@@ -964,6 +1180,7 @@ function chipEls(key: string, chip: MapChip, extra = ""): SceneEl[] {
       cls: `m-chip${extra}`,
       attrs: { x: chip.x, y: chip.y - 8, width: w, height: 16, rx: 8 },
       c: chip.c,
+      ...(chip.title !== undefined ? { title: chip.title } : {}),
     },
     {
       key: `${key}:text`,
@@ -972,6 +1189,7 @@ function chipEls(key: string, chip: MapChip, extra = ""): SceneEl[] {
       attrs: { x: chip.x + 8, y: chip.y + 3.5 },
       text: chip.text,
       c: chip.c,
+      ...(chip.title !== undefined ? { title: chip.title } : {}),
     },
   ];
 }
@@ -1063,6 +1281,7 @@ function laneScene(lane: MapLane): SceneGroup {
         cls: "m-label m-mid",
         attrs: { x: r((l.x1 + l.x2) / 2), y: l.yBack - 5 },
         text: l.label,
+        ...(l.title !== undefined ? { title: l.title } : {}),
       },
     );
   els.push({
@@ -1114,7 +1333,8 @@ function laneScene(lane: MapLane): SceneGroup {
           tag: "text",
           cls: `m-label m-mid${st.kind === "ahead" ? " ahead" : st.kind === "stop" ? " stop" : ""}`,
           attrs: { x: st.x, y: b.stepY + 17 },
-          text: st.name,
+          text: st.label,
+          ...(st.title !== undefined ? { title: st.title } : {}),
         });
       if (st.detail !== undefined && (lane.labels || st.kind === "live"))
         els.push({
@@ -1158,6 +1378,7 @@ function laneScene(lane: MapLane): SceneGroup {
       lane.plaque.cls,
       lane.plaque.c,
       lane.plaque.width,
+      lane.plaque.full,
     ),
   );
   if (lane.driver) els.push(...chipEls(`${k}:driver`, lane.driver, " m-driver"));
@@ -1254,8 +1475,9 @@ function bandScene(band: MapBand): SceneGroup {
           key: `${a.key}:q`,
           tag: "text",
           cls: "m-ask-label m-end",
-          attrs: { x: a.x - 6, y: a.y1 - 7 },
+          attrs: { x: a.x - 6, y: a.y1 - 7 - a.qRow * G.textRow },
           text: a.label,
+          ...(a.title !== undefined ? { title: a.title } : {}),
         },
       );
       if (a.answer !== null)
@@ -1271,7 +1493,7 @@ function bandScene(band: MapBand): SceneGroup {
             key: `${a.key}:a`,
             tag: "text",
             cls: "m-answer-label",
-            attrs: { x: a.x + 12, y: a.y1 - 7 },
+            attrs: { x: a.x + 12, y: a.y1 - 7 - a.aRow * G.textRow },
             text: a.answer,
           },
         );
@@ -1288,8 +1510,9 @@ function bandScene(band: MapBand): SceneGroup {
           key: `${k}:user:label`,
           tag: "text",
           cls: "m-ask-label",
-          attrs: { x: rail.user.x + 12, y: rail.y - 9 },
+          attrs: { x: rail.user.x + 12, y: rail.y - 7 - rail.user.row * G.textRow },
           text: rail.user.label,
+          ...(rail.user.title !== undefined ? { title: rail.user.title } : {}),
         },
       );
   }

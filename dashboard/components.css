@@ -148,6 +148,8 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
    a chip takes its colour from --c (the lane's difficulty, the agent's model), set inline to a token */
 .map-wrap { position: relative; overflow-x: auto; }
 .map-wrap svg { display: block; }
+/* `svg text` turns pointer events off; a text that carries a tooltip (a cut name) takes them back */
+.map-wrap svg text:has(> title) { pointer-events: auto; }
 .m-root { font-family: var(--font); }
 .m-panel { fill: var(--panel); stroke: var(--panel-border); }
 .m-title { font-size: 14px; font-weight: 700; fill: var(--model-sonnet); }

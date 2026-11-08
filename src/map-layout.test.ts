@@ -10,6 +10,7 @@ import {
   type MapLane,
   type MapLayout,
   type MapWorkflow,
+  type SceneEl,
   type SceneGroup,
 } from "./map-layout.js";
 
@@ -637,5 +638,247 @@ describe("the scene", () => {
     expect([...classes].filter(c => c && !defined.has(c))).toEqual([]);
     const colours = new Set(els.flatMap(e => (e.c ? [e.c] : [])));
     expect([...colours].filter(c => !tokens.includes(`${c}:`))).toEqual([]);
+  });
+});
+
+// --- no two text rectangles of a band intersect ---
+
+interface Box {
+  readonly key: string;
+  readonly x0: number;
+  readonly x1: number;
+  readonly y0: number;
+  readonly y1: number;
+}
+
+/** Font size in px by class: what components.css gives the text a class names. */
+const FONT: Readonly<Record<string, number>> = {
+  "m-title": 14,
+  "m-station": 12,
+  "m-section": 10,
+  "m-label": 10,
+  "m-detail": 10,
+  "m-ask-label": 10,
+  "m-answer-label": 10,
+  "m-rail-label": 10,
+  "m-lead": 11,
+};
+
+/** The width of a text at `px`, from the layout's own glyph widths (G.chipW at 10 px, G.charW at 12 px). */
+function widthAt(text: string, px: number): number {
+  const w = px <= 10 ? G.chipW : px >= 12 ? (G.charW * px) / 12 : (G.charW + G.chipW) / 2;
+  return Math.ceil([...text].length * w);
+}
+
+/**
+ * The rectangles a band draws, in band coordinates: each free text by its anchor, font and baseline;
+ * a chip, a plaque or a strip item as its rounded box (the text inside it is the box's own).
+ */
+function boxesOf(group: SceneGroup, dy = 0, out: Box[] = []): Box[] {
+  const y = dy + group.y;
+  for (const e of group.els) {
+    const a = e.attrs;
+    if (e.tag === "rect" && /(^| )m-(chip|plaque)( |$)/.test(e.cls)) {
+      const x0 = Number(a.x);
+      const y0 = y + Number(a.y);
+      out.push({ key: e.key, x0, x1: x0 + Number(a.width), y0, y1: y0 + Number(a.height) });
+    } else if (e.tag === "text") {
+      const font = e.cls.split(/\s+/).find(c => FONT[c] !== undefined);
+      if (font === undefined) continue;
+      const px = FONT[font];
+      const w = widthAt(e.text ?? "", px);
+      const x = Number(a.x);
+      const x0 = / m-mid( |$)/.test(e.cls) ? x - w / 2 : / m-end( |$)/.test(e.cls) ? x - w : x;
+      const base = y + Number(a.y);
+      out.push({ key: e.key, x0, x1: x0 + w, y0: base - 0.8 * px, y1: base + 0.2 * px });
+    }
+  }
+  for (const g of group.groups) boxesOf(g, y, out);
+  return out;
+}
+
+function overlaps(a: Box, b: Box): boolean {
+  return a.x0 < b.x1 - 0.5 && b.x0 < a.x1 - 0.5 && a.y0 < b.y1 - 0.5 && b.y0 < a.y1 - 0.5;
+}
+
+/** Every pair of boxes of one band that intersect, by key. */
+function collisions(m: MapLayout): string[] {
+  const root = scene(m);
+  const found: string[] = [];
+  for (const g of root.groups) {
+    const boxes = boxesOf(g);
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++)
+        if (overlaps(boxes[i], boxes[j])) found.push(`${g.key}: ${boxes[i].key} x ${boxes[j].key}`);
+  }
+  return found;
+}
+
+/** A log built by `build` with the shared helpers, leaving `log` as it was. */
+function scenario(build: () => void): WfEvent[] {
+  const saved = log.splice(0);
+  build();
+  const out = log.splice(0);
+  log.push(...saved);
+  return out;
+}
+
+const LONG: Record<string, MapWorkflow> = {
+  ...WORKFLOWS,
+  "pipe-verification": {
+    stations: [
+      st("reconciliation"),
+      st("implementation"),
+      st("verification"),
+      st("finish", false, true),
+    ],
+  },
+};
+
+/** Lanes whose branches share a station, long roles and state names, repeated and branch asks. */
+function crowded(running: number): WfEvent[] {
+  return scenario(() => {
+    start("CD", "dispatch", "09:00", null);
+    for (let k = 0; k < running; k++) {
+      const id = `X${k}`;
+      start(id, P, "11:00", "CD", { task: `CROWD-${k}`, difficulty: 5 });
+      agent(id, "11:00", "haiku", "low");
+      move(id, P, "11:01", "queue", "recon");
+      child(
+        `${id}-r`,
+        "pipe-verification",
+        id,
+        "11:01",
+        ["reconciliation", "implementation"],
+        null,
+      );
+      move(id, P, "11:05", "recon", "work");
+      child(`${id}-w`, "pipe-worker", id, "11:06", ["orient", "edit", "check", "commit"], null);
+      child(`${id}-v`, "pipe-review", id, "11:07", ["read", "probe", "verdict"], null);
+      child(
+        `${id}-u`,
+        "pipe-verification",
+        id,
+        "11:08",
+        ["reconciliation", "implementation"],
+        null,
+      );
+      move(id, P, "11:10", "work", "gate");
+      move(id, P, "11:12", "gate", "review");
+      move(id, P, "11:14", "review", "work", "needs more work");
+      move(id, P, "11:16", "work", "gate");
+      move(id, P, "11:18", "gate", "review");
+      ev("ask", id, "11:19", { state: "review" });
+      ev("ask", id, "11:21", { state: "review" });
+      ev("answer", id, "11:22", { state: "review" });
+      ev("ask", `${id}-w`, "11:20", { state: "edit" });
+    }
+    // landed lanes beside four or more running ones draw without step labels
+    for (const id of ["L0", "L1"]) {
+      start(id, P, "10:00", "CD", { task: `DONE-${id}`, difficulty: 4 });
+      move(id, P, "10:01", "queue", "work");
+      child(`${id}-w`, "pipe-worker", id, "10:02", ["orient", "edit", "check", "commit"], "10:20");
+      child(`${id}-v`, "pipe-review", id, "10:03", ["read", "probe", "verdict"], "10:20");
+      move(id, P, "10:30", "work", "done");
+      ev("session_end", id, "10:40", { outcome: "completed" });
+    }
+    move("CD", "dispatch", "11:00", "dispatch", "ask_user");
+    ev("ask", "CD", "11:00", { state: "ask_user" });
+  });
+}
+
+describe("no two text rectangles of a band intersect", () => {
+  const cases: [string, WfEvent[]][] = [
+    ["the fixture log", log],
+    ["a crowded lane, labels on", crowded(1)],
+    ["crowded lanes, landed ones without labels", crowded(5)],
+  ];
+  it("the labels-off case really has lanes without step labels", () => {
+    const m = layout(fold(crowded(5)), LONG, { now: NOW, clock: () => "hh:mm" });
+    const lanes = m.bands[0].lanes;
+    expect(lanes.filter(l => l.status === "landed").map(l => l.labels)).toEqual([false, false]);
+    expect(lanes.filter(l => l.status === "running").every(l => l.labels)).toBe(true);
+  });
+
+  for (const [name, events] of cases)
+    for (const width of [undefined, 640, 900, 1500])
+      it(`${name}, ${width === undefined ? "the normal" : width + " px"} width`, () => {
+        const m = layout(fold(events), LONG, {
+          now: NOW,
+          clock: () => "hh:mm",
+          ...(width !== undefined ? { width } : {}),
+        });
+        expect(collisions(m)).toEqual([]);
+      });
+});
+
+describe("what is cut or moved to avoid a collision keeps its full text", () => {
+  const m = layout(fold(crowded(1)), LONG, { now: NOW, clock: () => "hh:mm", width: 900 });
+  const x0 = m.bands[0].lanes.find(l => l.session === "X0")!;
+  const rail = m.bands[0].rail!;
+
+  it("a second branch under one station takes the row below the first one's step labels", () => {
+    const [w, v, u] = ["X0-w", "X0-v", "X0-u"].map(id => x0.branches.find(b => b.session === id)!);
+    expect([w.stepY, v.stepY, u.stepY]).toEqual([
+      w.y + G.branchDrop,
+      w.y + G.branchDrop + G.branchRow,
+      w.y + G.branchDrop + 2 * G.branchRow,
+    ]);
+    // the chip clears the row above (its detail line ends 31 px under the steps) and its own steps
+    expect(v.chip.y - 8).toBeGreaterThan(w.stepY + 31);
+    expect(v.chip.y + 8).toBeLessThan(v.stepY - 6);
+  });
+
+  it("a chip is cut to its branch and keeps the whole text as a tooltip", () => {
+    const r = x0.branches.find(b => b.session === "X0-r")!;
+    expect(r.chip.text.endsWith("…")).toBe(true);
+    expect(r.chip.title).toContain("· verification");
+    expect(r.chip.x + textWidthOf(r.chip.text) + 16).toBeLessThanOrEqual(r.x2);
+    const el = scene(m)
+      .groups[0].groups.flatMap(g => g.els)
+      .find(e => e.key === `${r.key}:chip:text`)!;
+    expect(el.title).toBe(r.chip.title);
+  });
+
+  it("a step name too long for its room is cut; `…` names the steps it hides", () => {
+    const steps = x0.branches.flatMap(b => b.steps);
+    const cut = steps.filter(s => s.label !== s.name && s.name !== "…");
+    for (const s of cut) expect(s.title).toBe(s.name);
+    const gap = steps.find(s => s.name === "…");
+    if (gap) expect(gap.title).not.toBe("");
+  });
+
+  it("asks and answers at one place stack on rows above the rail", () => {
+    const rows = rail.asks.map(a => [a.key, a.qRow]);
+    expect(rows.filter(([k]) => String(k).startsWith("X0:ask")).map(([, r]) => r)).toEqual([
+      expect.any(Number),
+      expect.any(Number),
+    ]);
+    const both = rail.asks.filter(a => a.x === rail.asks[0].x);
+    expect(new Set(both.map(a => a.qRow)).size).toBe(both.length);
+  });
+});
+
+function textWidthOf(s: string): number {
+  return widthAt(s, 10);
+}
+
+describe("a cut text's tooltip can be reached", () => {
+  it("the page turns pointer events back on for a text that carries a title", () => {
+    const dash = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dashboard");
+    const css = fs.readFileSync(path.join(dash, "components.css"), "utf8");
+    expect(css).toMatch(/svg text \{[^}]*pointer-events: none/);
+    expect(css).toMatch(/\.map-wrap svg text:has\(> title\) \{ pointer-events: auto; \}/);
+  });
+
+  it("every cut text of the crowded lanes is a scene element with a title", () => {
+    const m = layout(fold(crowded(1)), LONG, { now: NOW, clock: () => "hh:mm", width: 900 });
+    const titled = scene(m)
+      .groups.flatMap(function walk(g: SceneGroup): SceneEl[] {
+        return [...g.els, ...g.groups.flatMap(walk)];
+      })
+      .filter(e => e.tag === "text" && e.title !== undefined);
+    expect(titled.length).toBeGreaterThan(0);
+    for (const e of titled) expect(e.text).not.toBe(e.title);
   });
 });
