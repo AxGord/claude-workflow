@@ -464,7 +464,7 @@ describe("queue workflow:", () => {
     expect(r.reasons).toEqual([{ id: "D", why: 'workflow: "two words" is not a workflow name' }]);
     const text = formatQueueNext({ ...r, dryRun: true }, false);
     expect(text).toContain("WOULD ADMIT A | model: opus | effort: - | repo: ");
-    expect(text).toMatch(/WOULD ADMIT A \|.*\| workflow: engine-task\n/);
+    expect(text).toMatch(/WOULD ADMIT A \|.*\| workflow: engine-task \| kind: feature\n/);
     expect(text).not.toMatch(/WOULD ADMIT C \|.*workflow/);
   });
 });
@@ -490,10 +490,10 @@ describe("queue difficulty:", () => {
       { id: "D", why: 'difficulty "11" is not a whole number 1..10' },
       { id: "E", why: 'difficulty "hard" is not a whole number 1..10' },
     ]);
-    expect(formatTask(r.admitted[0])).toBe(`A\topus\t-\t${r.admitted[0].repo}\t-\t7`);
-    expect(formatTask(r.admitted[2])).toMatch(/\t-\t-$/);
+    expect(formatTask(r.admitted[0])).toBe(`A\topus\t-\t${r.admitted[0].repo}\t-\t7\tfeature`);
+    expect(formatTask(r.admitted[2])).toMatch(/\t-\t-\tfeature$/);
     const text = formatQueueNext({ ...r, dryRun: true }, false);
-    expect(text).toMatch(/WOULD ADMIT A \|.*\| difficulty: 7\n/);
+    expect(text).toMatch(/WOULD ADMIT A \|.*\| difficulty: 7 \| kind: feature\n/);
     expect(text).not.toMatch(/WOULD ADMIT C \|.*difficulty/);
   });
 
@@ -510,6 +510,54 @@ describe("queue difficulty:", () => {
     expect(taskRows(file)).toEqual([
       "- [ ] A | difficulty: 10 | touches: a",
       "- [ ] B | difficulty: 3 | touches: b",
+    ]);
+  });
+});
+
+describe("queue kind:", () => {
+  it("bug, feature and research reach the pick and queue_next; absent or `-` reads as feature; anything else keeps the line out", () => {
+    const r = plan(
+      [
+        "- [ ] A | kind: bug | touches: a",
+        "- [ ] B | kind: feature | touches: b",
+        "- [ ] C | kind: research | touches: c",
+        "- [ ] D | touches: d",
+        "- [ ] E | kind: - | touches: e",
+        "- [ ] F | kind: chore | touches: f",
+      ].join("\n"),
+      "batch_size: 9",
+    );
+    expect(r.admitted.map(a => [a.id, a.kind])).toEqual([
+      ["A", "bug"],
+      ["B", "feature"],
+      ["C", "research"],
+      ["D", "feature"],
+      ["E", "feature"],
+    ]);
+    expect(r.reasons).toEqual([
+      { id: "F", why: 'kind: "chore" is not one of bug, feature, research' },
+    ]);
+    expect(formatTask(r.admitted[0])).toMatch(/\t-\t-\tbug$/);
+    expect(formatTask(r.admitted[3])).toMatch(/\t-\t-\tfeature$/);
+    const text = formatQueueNext({ ...r, dryRun: true }, false);
+    expect(text).toMatch(/WOULD ADMIT A \|.*\| kind: bug\n/);
+    expect(text).toMatch(/WOULD ADMIT C \|.*\| kind: research\n/);
+    expect(text).toMatch(/WOULD ADMIT D \|.*\| kind: feature\n/);
+  });
+
+  it("queue_add and queue_edit accept the three values and refuse anything else", async () => {
+    const file = queueFile("- [ ] A | touches: a");
+    await addLine(file, "B | kind: bug | touches: b");
+    await expect(addLine(file, "C | kind: chore | touches: c")).rejects.toThrow(
+      'C: kind: "chore" is not one of bug, feature, research',
+    );
+    await editQueueLine(file, "A", { kind: "research" });
+    await expect(editQueueLine(file, "A", { kind: "x" })).rejects.toThrow(
+      'A: kind: "x" is not one of bug, feature, research',
+    );
+    expect(taskRows(file)).toEqual([
+      "- [ ] A | kind: research | touches: a",
+      "- [ ] B | kind: bug | touches: b",
     ]);
   });
 });
@@ -1011,7 +1059,7 @@ describe("wf-queue CLI", () => {
     const repo = path.resolve(file, "../../..");
     const first = await cli(file, "--explain");
     expect(first.code).toBe(0);
-    expect(first.out).toBe(`A\thaiku\t-\t${repo}\t-\t-\n`);
+    expect(first.out).toBe(`A\thaiku\t-\t${repo}\t-\t-\tfeature\n`);
     expect(first.err).toContain("B: after: A (pending)");
     expect((await cli(file)).code).toBe(10);
     expect((await cli(file, "--done", "A", "--note", "landed abc", "--from", "land")).out).toBe(
@@ -1023,7 +1071,7 @@ describe("wf-queue CLI", () => {
     expect((await cli(file, "--header", "land_test")).out).toBe("npm test");
     const second = await cli(file);
     expect(second.code).toBe(0);
-    expect(second.out).toBe(`B\topus\t-\t${repo}\tengine-task\t-\n`);
+    expect(second.out).toBe(`B\topus\t-\t${repo}\tengine-task\t-\tfeature\n`);
     await cli(file, "--failed", "B");
     expect((await cli(file)).code).toBe(11);
     expect((await cli(file, "--bogus")).code).toBe(2);

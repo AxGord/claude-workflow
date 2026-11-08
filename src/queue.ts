@@ -1,8 +1,8 @@
 // A task queue in a YAML file, shared by every project: the top-level keys are the header —
 // `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
-// `{id, status, difficulty, model, effort, repo, workflow, after, touches, owner, exclusive, breaking,
-// parked, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
+// breaking, parked, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
 //
@@ -16,7 +16,8 @@
 // exist whose last segment holds a `.`): a directory or glob entry is a hint that conflicts with
 // nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
 // task's own task workflow (the dispatcher's default otherwise); `difficulty:` (1..10) is what a
-// task workflow's `model_table` maps to model/effort. `backlog` tasks are never picked.
+// task workflow's `model_table` maps to model/effort; `kind:` (`bug|feature|research`, absent = feature) is the
+// task's type, reported by the pick. `backlog` tasks are never picked.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,6 +54,7 @@ export const TASK_KEYS = [
   "id",
   "status",
   "difficulty",
+  "kind",
   "priority",
   "model",
   "effort",
@@ -135,6 +137,8 @@ export interface AdmittedTask {
   readonly workflow?: string;
   /** The task's `difficulty:` (1..10): the task workflow's `model_table` maps it to model/effort. */
   readonly difficulty?: number;
+  /** The task's `kind:`; `feature` when absent. */
+  readonly kind: Kind;
   /** The task's `priority:` when set (`normal` = absent): the picker admits higher first. */
   readonly priority?: Priority;
   readonly text: string;
@@ -210,6 +214,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
   const meta: Record<string, string> = {};
   for (const k of [
     "difficulty",
+    "kind",
     "priority",
     "model",
     "effort",
@@ -319,6 +324,20 @@ function priorityOf(line: QueueLine): Priority | null {
 
 /** Rank for sorting: urgent first; an unreadable priority ranks as normal (the pick refuses it). */
 const priorityRank = (l: QueueLine): number => PRIORITIES.indexOf(priorityOf(l) ?? "normal");
+
+export const KINDS = ["bug", "feature", "research"] as const;
+export type Kind = (typeof KINDS)[number];
+
+/** The line's `kind:`: `feature` when absent or `-`/`—`; null when it is not a kind. */
+function kindOf(line: QueueLine): Kind | null {
+  const v = line.meta.kind?.trim().toLowerCase();
+  if (!v || v === "-" || v === "—") return "feature";
+  return (KINDS as readonly string[]).includes(v) ? (v as Kind) : null;
+}
+
+/** Why a `kind:` value is refused. */
+const kindError = (line: QueueLine): string =>
+  `kind: "${line.meta.kind}" is not one of ${KINDS.join(", ")}`;
 
 /** The line's `workflow:`: undefined when absent or `—`; null when it is not a workflow name. */
 function workflowOf(line: QueueLine): string | undefined | null {
@@ -579,6 +598,7 @@ export function planPick(
         else if (workflowOf(l) === null)
           why = `workflow: "${l.meta.workflow}" is not a workflow name`;
         else if (difficultyOf(l) === null) why = difficultyError(l.meta.difficulty);
+        else if (kindOf(l) === null) why = kindError(l);
         else if (priorityOf(l) === null)
           why = `priority: "${l.meta.priority}" is not one of ${PRIORITIES.join(", ")}`;
         else if (!hand) {
@@ -605,6 +625,7 @@ export function planPick(
       const workflow = workflowOf(l) ?? undefined;
       const difficulty = difficultyOf(l) ?? undefined;
       const priority = priorityOf(l);
+      const kind = kindOf(l) ?? "feature";
       admitted.push({
         id: l.id,
         model: l.meta.model ?? "opus",
@@ -612,6 +633,7 @@ export function planPick(
         repo,
         ...(workflow ? { workflow } : {}),
         ...(difficulty !== undefined ? { difficulty } : {}),
+        kind,
         ...(priority !== null && priority !== "normal" ? { priority } : {}),
         text: l.text,
       });
@@ -1037,7 +1059,8 @@ function afterCycle(queue: Queue, id: string): string[] | null {
 /**
  * Checks the fields `keys` of `line` (every field when `keys` is undefined) as a pick would read
  * them in `queue` (which holds the task): `after:` names only tasks of the queue and closes no
- * cycle, `workflow:` is one word, `repo:` resolves, `difficulty:` is 1..10.
+ * cycle, `workflow:` is one word, `repo:` resolves, `difficulty:` is 1..10,
+ * `kind:` and `priority:` are one of theirs.
  */
 function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>): void {
   const has = (k: string): boolean =>
@@ -1056,6 +1079,7 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
     throw new QueueError(`${line.id}: repo: "${line.meta.repo}" resolves to no directory`);
   if (has("difficulty") && difficultyOf(line) === null)
     throw new QueueError(`${line.id}: ${difficultyError(line.meta.difficulty)}`);
+  if (has("kind") && kindOf(line) === null) throw new QueueError(`${line.id}: ${kindError(line)}`);
   if (has("priority") && priorityOf(line) === null)
     throw new QueueError(
       `${line.id}: priority: "${line.meta.priority}" is not one of ${PRIORITIES.join(", ")}`,
@@ -1353,9 +1377,11 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
 }
 
 /**
- * `ID\tmodel\teffort\trepo\tworkflow\tdifficulty` — one admitted line as the exec form prints it
- * (`-` = no `workflow:` / `difficulty:`).
+ * `ID\tmodel\teffort\trepo\tworkflow\tdifficulty\tkind` — one admitted line as the exec form prints it
+ * (`-` = no `workflow:` / `difficulty:`; `kind` is `feature` when the line has none).
  */
 export function formatTask(a: AdmittedTask): string {
-  return [a.id, a.model, a.effort, a.repo, a.workflow ?? "-", a.difficulty ?? "-"].join("\t");
+  return [a.id, a.model, a.effort, a.repo, a.workflow ?? "-", a.difficulty ?? "-", a.kind].join(
+    "\t",
+  );
 }

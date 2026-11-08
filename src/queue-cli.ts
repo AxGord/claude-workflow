@@ -2,7 +2,7 @@
 // wf-queue: the exec form of queue_next / queue_mark (src/queue.ts), for a workflow's exec states.
 // The queue: `<queue.yaml>` (a full path), or `--queue NAME` (.claude/batch/NAME.yaml of the cwd's project),
 // or nothing (.claude/batch/queue.yaml); `wf-queue [<queue.yaml>|--queue NAME] --path` prints the resolved file.
-//   wf-queue <q> [--dry-run] [--explain|--explain-all]   pick: stdout one `ID\tmodel\teffort\trepo\tworkflow\tdifficulty` per admitted task
+//   wf-queue <q> [--dry-run] [--explain|--explain-all]   pick: stdout one `ID\tmodel\teffort\trepo\tworkflow\tdifficulty\tkind` per admitted task
 //                                                 (set running), the summary on stderr; --explain folds
 //                                                 "window full" tasks into one, --explain-all lists all
 //   wf-queue <q> --done|--failed|--release|--running|--promote|--shelve <ID> [--note TEXT] [--from WHO]

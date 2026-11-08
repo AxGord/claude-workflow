@@ -18,6 +18,7 @@ const META_KEYS = new Set([
   "workflow",
   "exclusive",
   "difficulty",
+  "kind",
   "priority",
 ]);
 // A field this long is the line's prose; `⏸` inside prose is a mention, not a pause.

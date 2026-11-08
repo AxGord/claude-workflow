@@ -503,6 +503,7 @@ tasks:
   - id: T1
     status: pending           # pending | running | done | failed | backlog
     difficulty: 7
+    kind: feature             # optional: bug | feature | research (absent = feature)
     touches: [src/engine]
     text: |-
       <self-contained brief>
@@ -520,7 +521,7 @@ tasks:
       - {from: user, date: 2026-11-07, text: later thought}
 ```
 
-Task keys: `id, status, difficulty, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
+Task keys: `id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
 breaking, parked, text, notes`; any other key, a bad status, a duplicate id or a malformed file is refused by
 every read. Every write edits the parsed document in place: key order and comments stay.
 
@@ -552,13 +553,16 @@ A pick fills the window (`batch_size` minus the running tasks) in `priority:` or
   `task_workflow`). It is started with the task's repo as `cwd`, so it may live in that repo's
   `.claude/workflows/` — one queue can mix tasks of several repos, each run by its repo's procedure;
 - carry, in `difficulty:` if any, a whole number 1..10 (`-` = none): what the task workflow's
-  `model_table` turns into the agents' model and effort (below).
+  `model_table` turns into the agents' model and effort (below);
+- carry, in `kind:` if any, `bug`, `feature` or `research` (`-` or absent = `feature`): the task's type. The pick
+  only reports it (`queue_next`'s admitted line, the exec form's last column); a task workflow reads it as `kind`
+  the way it reads `difficulty`.
 
 Each admitted task is set `running` under the queue's lock (`<file>.lock`, an atomic mkdir), so two
 picks — two tools, two processes — never admit one task. `batch_size: 0` is the pause: nothing new is
 admitted, running tasks finish; the pick answers `window 0 — paused: <the reason>`.
 
-- `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted tasks (id, model, effort, repo, workflow, difficulty, priority when not normal, text);
+- `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted tasks (id, model, effort, repo, workflow, difficulty, kind (`feature` when the task has none), priority when not normal, text);
   `explain` adds why each other pending task waits (`window full` ones fold into one summary line;
   `explain: "all"` lists every one).
 - `queue_mark({ queue?, file?, id, to, note?, from?, retry?, force? })` — `running` pending→running (refused, with the reason, when the picker would not admit the line: overlap, `after:`, `exclusive`, `breaking`, `parked`; `force: "<reason>"` marks it anyway and writes the reason into its `notes:`; the window, a pause and `model: —` do not count) (with `retry: true`
@@ -572,7 +576,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
 - `queue_add({ queue?, file?, task, after_id? | before_id? })` — a new task (`{id, status?: pending|backlog, …}`)
   after / before a task, else last. Refused unless a pick reads it as meant: a new id, known keys
   only, every id in `after:` a task of the queue and no cycle (prose beside the ids stays a manual
-  condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, a `priority:` of urgent|high|normal|low.
+  condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, a `kind:` of bug|feature|research, a `priority:` of urgent|high|normal|low.
 - `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task
   (`""`/null removes one; a set field keeps its place, a new one goes in key order; `after`/`touches`
   a list or a comma-separated string; `text` is written as a block scalar), and/or a note appended to
@@ -583,7 +587,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   an exec set at the same moment — add and change tasks through them, not by editing the file with a
   script while a run is live.
 - From an exec: `"$WF_PLUGIN_ROOT/scripts/wf-queue" [<file>|--queue NAME] [--dry-run] [--explain|--explain-all]` (also the `wf-queue`
-  bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty` (`-` = no `workflow:` / `difficulty:`) per admitted task and the summary on stderr; exit 0
+  bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty<TAB>kind` (`-` = no `workflow:` / `difficulty:`; `kind` is `feature` when the line has none) per admitted task and the summary on stderr; exit 0
   admitted, 10 none but running tasks run, 11 none and nothing runs (done), 12 none, nothing runs and
   `batch_size: 0`, 2 error; `--done|--failed|--release|--running|--promote|--shelve <ID> [--note T] [--from W]` (`--running <ID>
   --retry`: failed→running, `difficulty:` +1; `--running <ID> --force REASON`: mark a line the picker would not admit), `--header <key>`, `--add '<YAML mapping>' [--after ID|--before ID]`, `--edit <ID>

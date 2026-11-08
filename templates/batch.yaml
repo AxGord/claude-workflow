@@ -71,6 +71,8 @@ states:
            and moves the worker and fix rows one row up on a second fix round. Prefer it to `model`/`effort`: the
            ledger keeps difficulty, model, effort and tokens per task, so the
            table can be tuned from data.
+         - `kind:` — `bug`, `feature` or `research` (absent = feature): the
+           task's type. The pick reports it; any other value is refused.
          - `model` / `effort` — a task without `difficulty:`, per
            task-delegation's table: opus/high for non-trivial
            code/judgement, sonnet/high for code from a detailed plan,
@@ -164,7 +166,7 @@ states:
 
   dispatch:
     prompt: |-
-      The pick admitted (and set running in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow difficulty`:
+      The pick admitted (and set running in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow difficulty kind` (`kind` is `feature` when the line has none):
       {{stdout}}
       {{stderr}}
 
