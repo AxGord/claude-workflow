@@ -279,6 +279,15 @@ function loadPage(): Page {
   vm.runInContext(SCRIPT.slice(0, SCRIPT.indexOf(marker)), context);
   // /stable.js morphs real nodes (src/dashboard-browser.test.ts runs it in a browser); here it just writes the markup
   vm.runInContext("Stable = { patchHtml(el, html) { el.innerHTML = html; } };", context);
+  // /map-layout.js (the one difficultyBar) is the module the page imports; the test runs its transpiled copy
+  const layoutJs = ts.transpileModule(
+    fs.readFileSync(fileURLToPath(new URL("./map-layout.ts", import.meta.url)), "utf8"),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  vm.runInContext(
+    `Layout = (() => { const exports = {}; ${layoutJs}\n return exports; })();`,
+    context,
+  );
   return { els, run: code => vm.runInContext(code, context) as unknown };
 }
 
@@ -500,6 +509,49 @@ describe("every view renders with the shared components", () => {
     expect(html).toContain('class="dot st-stop"');
     expect(html).toContain('class="dot st-done"');
     expect(views.planWithSession).toContain('href="/session/s-1"');
+  });
+
+  it("the difficulty bar is the first element of every plan row and strip item, one component", () => {
+    const html = views.plan;
+    expect(html).not.toMatch(/>d\d+</);
+    expect(PAGE).not.toContain("planDifficulty");
+    // RUN-1 is difficulty 6: three of five cells, in its token, before the state dot
+    expect(html).toMatch(
+      /<span class="diffbar" style="--c:var\(--diff-6\)">▰▰▰▱▱<\/span> <span class="dot st-run opus live">/,
+    );
+    // the strip item: bar, then the plaque
+    expect(html).toMatch(
+      /<span class="diffbar" style="--c:var\(--diff-3\)">▰▰▱▱▱<\/span><span class="plaque">NEXT-1/,
+    );
+    // unknown difficulty: five wide placeholder
+    const page = loadPage();
+    expect(page.run("ui.difficulty(undefined)")).toBe(
+      '<span class="diffbar unknown" style="--c:var(--text-4)">?????</span>',
+    );
+  });
+
+  it("an ask: parent step reads as waiting (yellow) in the list and the detail", () => {
+    const page = loadPage();
+    const wf = {
+      ...WORKFLOW,
+      states: { ...WORKFLOW.states, work: { ...WORKFLOW.states.work, ask: "parent" } },
+    };
+    page.run(
+      `allWorkflows = { task: ${JSON.stringify(wf)} }; allSessions = [${JSON.stringify(SESSION)}]; selectedSessionId = "s-1"; renderSessions(allSessions); renderDetail(allSessions[0]);`,
+    );
+    const list = page.els.get("sessions-list")?.innerHTML ?? "";
+    const detail = page.els.get("detail-content")?.innerHTML ?? "";
+    expect(list).toContain('class="plaque st-wait">waiting for parent');
+    expect(detail).toContain('class="frame active-frame st-wait"');
+    expect(page.run("sessionState(allSessions[0]).text")).toBe("waiting for parent");
+    const plan = page.run(
+      `renderPlan(${JSON.stringify({ ...QUEUE, lines: [{ ...QUEUE.lines[0], id: "T1" }] })})`,
+    ) as string;
+    expect(plan).toContain('class="dot st-wait"');
+    expect(plan).not.toContain("live");
+    // a state without the tag stays running
+    page.run(`allWorkflows = { task: ${JSON.stringify(WORKFLOW)} }`);
+    expect(page.run("sessionState(allSessions[0]).text")).toBe("active");
   });
 
   it("running reads as the model's colour everywhere, never the --ok default", () => {

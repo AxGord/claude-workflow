@@ -190,7 +190,14 @@ export interface MapStrip {
   readonly y: number;
   readonly lead: string;
   /** `key` is unique in the row (a session id, a queue line id); two items may show one id */
-  readonly items: readonly { readonly key: string; readonly id: string; readonly c: string }[];
+  readonly items: readonly {
+    readonly key: string;
+    readonly id: string;
+    readonly c: string;
+    /** the difficulty bar drawn before the plaque, and its colour token */
+    readonly bar: string;
+    readonly barC: string;
+  }[];
   readonly more: number;
 }
 
@@ -283,6 +290,14 @@ export function chipText(model: unknown, effort: unknown, role: string): string 
 export function difficultyToken(d: unknown): string {
   const n = Number(d);
   return Number.isFinite(n) && n >= 1 ? `--diff-${Math.min(10, Math.round(n))}` : "--text-4";
+}
+
+/** The one difficulty plaque every dashboard view draws, first in its row: five cells wide, `?????` when unknown. */
+export function difficultyBar(d: unknown): { readonly text: string; readonly token: string } {
+  const n = Number(d);
+  if (!Number.isFinite(n) || n < 1) return { text: "?????", token: difficultyToken(d) };
+  const full = Math.min(5, Math.max(1, Math.round(n / 2)));
+  return { text: "▰".repeat(full) + "▱".repeat(5 - full), token: difficultyToken(d) };
 }
 
 /** `slice-worker` → `worker` */
@@ -1038,6 +1053,8 @@ export function layout(
             key: l.s.id,
             id: laneTitle(l.s),
             c: l.s.outcome === "completed" ? "--ok" : "--bad",
+            bar: difficultyBar(l.s.difficulty).text,
+            barC: difficultyToken(l.s.difficulty),
           })),
           more: Math.max(0, newest.length - G.earlierShown),
         };
@@ -1126,9 +1143,13 @@ export function layout(
       ? {
           y,
           lead: "next:",
-          items: ready
-            .slice(0, G.nextShown)
-            .map((l, i) => ({ key: `${i}:${l.id}`, id: l.id, c: difficultyToken(l.difficulty) })),
+          items: ready.slice(0, G.nextShown).map((l, i) => ({
+            key: `${i}:${l.id}`,
+            id: l.id,
+            c: difficultyToken(l.difficulty),
+            bar: difficultyBar(l.difficulty).text,
+            barC: difficultyToken(l.difficulty),
+          })),
           more: Math.max(0, ready.length - G.nextShown),
         }
       : null;
@@ -1234,23 +1255,32 @@ function stripEls(key: string, s: MapStrip, x: number): SceneEl[] {
   let at = x + textWidth(s.lead) + 10;
   for (const it of s.items) {
     const w = textWidth(it.id, G.titleW) + 20;
+    const barW = textWidth(it.bar) + 6;
     els.push(
+      {
+        key: `${key}:${it.key}:bar`,
+        tag: "text",
+        cls: "m-bar",
+        attrs: { x: at, y: s.y + 17 },
+        text: it.bar,
+        c: it.barC,
+      },
       {
         key: `${key}:${it.key}:box`,
         tag: "rect",
         cls: "m-plaque",
-        attrs: { x: at, y: s.y + 4, width: w, height: 18, rx: 9 },
+        attrs: { x: at + barW, y: s.y + 4, width: w, height: 18, rx: 9 },
         c: it.c,
       },
       {
         key: `${key}:${it.key}:text`,
         tag: "text",
         cls: "m-plaque-text",
-        attrs: { x: at + 10, y: s.y + 17 },
+        attrs: { x: at + barW + 10, y: s.y + 17 },
         text: it.id,
       },
     );
-    at += w + 8;
+    at += barW + w + 8;
   }
   if (s.more > 0)
     els.push({

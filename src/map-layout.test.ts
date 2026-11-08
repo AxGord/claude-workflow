@@ -12,6 +12,7 @@ import {
   type MapWorkflow,
   type SceneEl,
   type SceneGroup,
+  difficultyBar,
 } from "./map-layout.js";
 
 // --- a fixture event log: a dispatcher, a landed lane with a review loop, a stop and a land; an older
@@ -810,6 +811,26 @@ describe("no two text rectangles of a band intersect", () => {
         });
         expect(collisions(m)).toEqual([]);
       });
+});
+
+describe("the difficulty bar", () => {
+  it("is five cells, filled by difficulty, a five-wide placeholder when unknown", () => {
+    expect(difficultyBar(1)).toEqual({ text: "▰▱▱▱▱", token: "--diff-1" });
+    expect(difficultyBar(6)).toEqual({ text: "▰▰▰▱▱", token: "--diff-6" });
+    expect(difficultyBar(10)).toEqual({ text: "▰▰▰▰▰", token: "--diff-10" });
+    expect(difficultyBar(undefined)).toEqual({ text: "?????", token: "--text-4" });
+  });
+
+  it("starts every item of the next: row", () => {
+    const m = layout(
+      fold([]),
+      {},
+      { now: NOW, next: [{ id: "N-1", difficulty: 4 }, { id: "N-2" }] },
+    );
+    const bars = scene(m).els.filter(e => e.cls === "m-bar");
+    expect(bars.map(e => e.text)).toEqual(["▰▰▱▱▱", "?????"]);
+    expect(bars[0]?.c).toBe("--diff-4");
+  });
 });
 
 describe("what is cut or moved to avoid a collision keeps its full text", () => {

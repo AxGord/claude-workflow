@@ -50,6 +50,7 @@ let shownWorkflow = null;
 let allWorkflows = {};
 let allSessions = [];
 let liveMap = null; // /map.js (the live workflow map), imported when the Map tab first opens
+let Layout = null; // /map-layout.js (difficultyBar: the one difficulty plaque), imported before the first render
 let Stable = null; // /stable.js (in-place refresh, scroll memory), imported before the first render
 
 // Every refresh on a timer takes its markup into the live node in place: scroll, focus and selection stay.
@@ -94,7 +95,11 @@ const ui = {
   empty: (text, tight) => `<div class="empty${tight ? ' tight' : ''}">${text}</div>`,
   // A pill with a 2 px border in the state colour (cls: st-run / st-wait / st-stop / st-done / st-pool) or a token.
   plaque: (text, cls, color) => `<span class="plaque${cls ? ' ' + cls : ''}"${color ? ` style="--c:var(${color})"` : ''}>${text}</span>`,
-  difficulty: d => ui.plaque('d' + d, '', `--diff-${Math.min(10, Math.max(1, Number(d) || 1))}`),
+  // The five-cell difficulty bar, first in every row that has a difficulty (`?????` when unknown, so columns align).
+  difficulty(d) {
+    const b = Layout.difficultyBar(d);
+    return `<span class="diffbar${b.token === '--text-4' ? ' unknown' : ''}" style="--c:var(${b.token})">${b.text}</span>`;
+  },
   // model ▮▮▮▯ effort · role
   chip(model, effort, role) {
     const n = EFFORT_BARS[String(effort || '').toLowerCase()];
@@ -137,6 +142,10 @@ function sessionState(s) {
     return s.outcome === 'abandoned' ? { cls: 'st-stop', text: 'abandoned' } : { cls: 'st-done', text: 'done' };
   // The step's exec waits for a pool lease past the pool's starve_after: waiting on the pool.
   if (s.pool_starved) return { cls: 'st-pool', text: 'waiting for pool', live: 'pool' };
+  // The active step is a question to the parent (a state tagged `ask: parent`): waiting on the parent.
+  const frame = s.stack[s.active_frame];
+  if (allWorkflows[frame?.workflow]?.states?.[frame.current_state]?.ask === 'parent')
+    return { cls: 'st-wait', text: 'waiting for parent', live: '' };
   return { cls: 'st-run ' + sessionModel(s), text: 'active', live: sessionModel(s) };
 }
 
@@ -804,25 +813,24 @@ function planSession(id) {
 function planRow(l, extra, stateCls) {
   const flags = [l.exclusive ? 'exclusive' : '', l.paused ? 'parked' : ''].filter(Boolean).join(' ');
   const text = l.text.length > 160 ? l.text.slice(0, 160) + '…' : l.text;
+  // A running line whose session sits on an `ask: parent` step reads as waiting: yellow, no glow.
+  const sess = l.status === 'running' ? planSession(l.id) : null;
+  const asking = sess && sessionState(sess).cls === 'st-wait';
   const title = [
-    ui.dot(stateCls + (l.status === 'running' ? ' ' + modelClass(l.model) + ' live' : '')),
-    ui.plaque(escapeHtml(l.id), '', planDifficulty(l)),
+    ui.difficulty(l.difficulty),
+    ui.dot(asking ? 'st-wait' : stateCls + (l.status === 'running' ? ' ' + modelClass(l.model) + ' live' : '')),
+    ui.plaque(escapeHtml(l.id)),
     l.priority ? `<span class="flags mono">${escapeHtml(l.priority)}</span>` : '',
-    l.difficulty ? `<span class="flags mono">d${l.difficulty}</span>` : '',
     l.model ? ui.chip(l.model) : '',
     flags ? `<span class="flags">${escapeHtml(flags)}</span>` : '',
   ].join(' ');
   return ui.item({ title, info: extra || '', extra: escapeHtml(text) });
 }
 
-function planDifficulty(l) {
-  return l.difficulty ? `--diff-${Math.min(10, Math.max(1, l.difficulty))}` : '';
-}
-
 // `next: … +N` / `landed earlier: … +N` over a group of lines (the first few, then the count).
 function planStrip(lead, lines, cls) {
   const shown = lines.slice(0, 6);
-  return ui.strip(lead, shown.map(l => ui.plaque(escapeHtml(l.id), '', planDifficulty(l))),
+  return ui.strip(lead, shown.map(l => ui.difficulty(l.difficulty) + ui.plaque(escapeHtml(l.id))),
     lines.length - shown.length, cls);
 }
 
@@ -864,8 +872,9 @@ async function refreshPlan() {
 }
 
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
-Promise.all([import('/routes.js'), import('/stable.js')]).then(([m, s]) => {
+Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js')]).then(([m, s, l]) => {
   Routes = m;
+  Layout = l;
   Stable = s;
   Stable.rememberScroll();
   window.addEventListener('popstate', applyRoute);
