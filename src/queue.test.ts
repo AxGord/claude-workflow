@@ -387,6 +387,9 @@ describe("queue overlap: files, exclusive:, repos", () => {
     await setQueueWindow(file, 0, "typo in the header");
     expect(marks(file)).toEqual({ R: "x", A: " " });
     expect(readQueue(file).batchSize).toBe(0);
+    // A bad overlap: header refuses the pick only: a hand mark still goes through.
+    await markQueue(file, "A", "running");
+    expect(marks(file)).toEqual({ R: "x", A: ">" });
   });
 
   it("files: an existing dotless file is a file; a missing dotless path or an existing dotted directory is a hint", () => {
@@ -608,6 +611,39 @@ describe("queue writes", () => {
     await markQueue(file, "B", "running");
     await markQueue(file, "B", "failed");
     expect(marks(file)).toEqual({ A: "x", B: "!" });
+  });
+
+  it("queue_mark running refuses a line the picker would not admit; force marks it and notes the reason", async () => {
+    const file = queueFile(
+      `- [>] R | touches: a/b\n- [ ] O | touches: a/b/c\n- [ ] W | after: Z | touches: w\n- [ ] P ⏸ | touches: p\n- [ ] OK | touches: ok`,
+    );
+    await expect(markQueue(file, "O", "running")).rejects.toThrow(
+      "O would not be admitted: overlaps R",
+    );
+    await expect(markQueue(file, "W", "running")).rejects.toThrow(
+      "W would not be admitted: after:",
+    );
+    await expect(markQueue(file, "P", "running")).rejects.toThrow(
+      "P would not be admitted: parked",
+    );
+    expect(marks(file)).toEqual({ R: ">", O: " ", W: " ", P: " ", OK: " " });
+    await markQueue(file, "OK", "running");
+    await markQueue(file, "O", "running", undefined, { force: "disjoint in fact" });
+    const o = readQueue(file).lines.find(l => l.id === "O");
+    expect(o?.status).toBe("running");
+    expect(o?.notes[0]?.text).toContain("forced running over: overlaps R");
+    expect(o?.notes[0]?.text).toContain("disjoint in fact");
+  });
+
+  it("queue_mark running ignores a pause and model —, refuses exclusive and breaking lines", async () => {
+    const paused = queueFile(`- [ ] A | model: — | touches: a`, "batch_size: 0");
+    await markQueue(paused, "A", "running");
+    expect(marks(paused)).toEqual({ A: ">" });
+    const ex = queueFile(`- [>] R | touches: r\n- [ ] E | touches: e | exclusive: yes`);
+    await expect(markQueue(ex, "E", "running")).rejects.toThrow("E would not be admitted");
+    const br = queueFile(`- [>] R | touches: r\n- [ ] B | touches: b`);
+    await editQueueLine(br, "B", { breaking: "true" });
+    await expect(markQueue(br, "B", "running")).rejects.toThrow(/breaking: window not empty/);
   });
 
   it("a note is data: `|`, `key:`, ⏸ and line breaks stay text and touch no field", async () => {

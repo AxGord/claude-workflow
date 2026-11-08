@@ -7,6 +7,7 @@
 //                                                 "window full" tasks into one, --explain-all lists all
 //   wf-queue <q> --done|--failed|--release|--running|--promote|--shelve <ID> [--note TEXT] [--from WHO]
 //   wf-queue <q> --running <ID> --retry [--note TEXT]   a failed task again: failed → running, its difficulty +1 (≤10)
+//   wf-queue <q> --running <ID> --force REASON    mark a line the picker would not admit; the reason goes to its notes
 //   wf-queue <q> --header <key>                   the header's value of <key> (empty when absent)
 //   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, touches: [a], text: …}`)
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
@@ -40,7 +41,7 @@ import {
 } from "./queue.js";
 
 const USAGE =
-  "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--note TEXT] [--from WHO] | --header <key> | --path" +
+  "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--note TEXT] [--from WHO] | --header <key> | --path" +
   " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --batch-size <N> --reason TEXT" +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
@@ -131,13 +132,14 @@ async function main(args: string[]): Promise<number> {
     if (!id) throw new QueueError(`${op} needs a task id`);
     const o = options(
       args.slice(2),
-      ["--note", "--from"],
+      ["--note", "--from", ...(op === "--running" ? ["--force"] : [])],
       [],
       op === "--running" ? ["--retry"] : [],
     );
     const from = o.get("--from")?.[0];
     const r = await markQueue(file, id, MARKS[op], o.get("--note")?.[0], {
       retry: o.has("--retry"),
+      ...(o.get("--force")?.[0] !== undefined ? { force: o.get("--force")?.[0] as string } : {}),
       ...(from !== undefined ? { from } : {}),
     });
     process.stdout.write(`${formatMark(r)}\n`);

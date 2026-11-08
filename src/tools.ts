@@ -1162,6 +1162,7 @@ export function registerTools(
         "Change one task's status in a YAML task queue under its lock: running pending→running (with `retry: true`: " +
         "failed→running, a failed task run again; its `difficulty: N` becomes N+1, at most 10, so the new session starts a row up), done running→done, failed running→failed, released running→pending " +
         "(nothing of the task was made), promoted backlog→pending, shelved pending→backlog. Refuses any other current status. " +
+        '`running` also refuses a pending line the picker would not admit (overlap, after, exclusive, breaking, parked) and names why; `force: "<reason>"` marks it anyway and notes the reason. ' +
         "`note` is appended to the task's `notes:` as `{from, date, text}` (`from` defaults to `mark`).",
       inputSchema: z
         .object({
@@ -1178,6 +1179,13 @@ export function registerTools(
             .describe(
               "With `to: running`: restart a failed task (failed→running); its `difficulty:` is raised by one (≤10)",
             ),
+          force: z
+            .string()
+            .min(1)
+            .optional()
+            .describe(
+              "With `to: running` (pending→running): the reason to mark a line the picker would not admit (overlap, after, exclusive, breaking, parked); written into its notes",
+            ),
         })
         .strict(),
     },
@@ -1185,6 +1193,7 @@ export function registerTools(
       try {
         const r = await markQueue(resolveQueueFile(args), args.id, args.to, args.note, {
           retry: args.retry === true,
+          ...(args.force !== undefined ? { force: args.force } : {}),
           ...(args.from !== undefined ? { from: args.from } : {}),
         });
         return { content: [{ type: "text", text: formatMark(r) }] };

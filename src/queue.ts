@@ -441,9 +441,10 @@ export function resolveRepo(queue: Queue, line: QueueLine): string | null {
 /** The admission pass over a parsed queue; writes nothing. A bad `overlap:` header is refused. */
 export function planPick(
   queue: Queue,
-  opts: { readonly ignoreWindow?: boolean } = {},
+  opts: { readonly ignoreWindow?: boolean; readonly only?: string } = {},
 ): Omit<PickResult, "dryRun"> {
-  if (queue.overlapError !== undefined) throw new QueueError(queue.overlapError);
+  if (opts.only === undefined && queue.overlapError !== undefined)
+    throw new QueueError(queue.overlapError);
   const byId = new Map(queue.lines.map(l => [l.id, l]));
   const running = queue.lines.filter(l => l.status === "running");
   const taken: QueueLine[] = [...running];
@@ -458,11 +459,14 @@ export function planPick(
   );
   for (const l of order) {
     if (l.status !== "pending") continue;
+    // `only`: a hand mark asks about one line; the window, a pause and parent-run are not its concern.
+    if (opts.only !== undefined && l.id !== opts.only) continue;
+    const hand = opts.only !== undefined;
     let why: string | null = null;
     let repo: string | null = null;
-    if (queue.batchSize === 0) why = "paused (batch_size 0)";
-    else if (opts.ignoreWindow !== true && free <= admitted.length) why = "window full";
-    else if ((l.meta.model ?? "").startsWith("—")) why = "parent-run (model —)";
+    if (!hand && queue.batchSize === 0) why = "paused (batch_size 0)";
+    else if (!hand && opts.ignoreWindow !== true && free <= admitted.length) why = "window full";
+    else if (!hand && (l.meta.model ?? "").startsWith("—")) why = "parent-run (model —)";
     else if (l.paused) why = "parked";
     else {
       const after = blockedBy(l, byId);
@@ -812,6 +816,12 @@ function addNote(e: Editable, node: YAMLMap, text: string, from: string, date = 
   seq.add(e.doc.createNode({ from, date, text }));
 }
 
+/** Why the picker would not admit this pending line (window, pause and parent-run aside); null = it would. */
+function admitRefusal(queue: Queue, id: string): string | null {
+  const plan = planPick(queue, { only: id });
+  return plan.reasons.find(r => r.id === id)?.why ?? null;
+}
+
 /**
  * One task's status under the lock, only from the status `to` expects; `note` goes to its `notes:`.
  * `retry` (with `running` only) restarts a failed task: failed → running, and raises its
@@ -822,7 +832,7 @@ export async function markQueue(
   id: string,
   to: MarkTarget,
   note?: string,
-  opts: { readonly retry?: boolean; readonly from?: string } = {},
+  opts: { readonly retry?: boolean; readonly from?: string; readonly force?: string } = {},
 ): Promise<MarkResult> {
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
   checkNote(note);
@@ -837,8 +847,21 @@ export async function markQueue(
         line.status === "failed" && to === "running" ? " (retry: true restarts a failed task)" : "";
       throw new QueueError(`${id} is ${line.status}, expected ${from}${hint}`);
     }
+    let forced: string | undefined;
+    if (to === "running" && opts.retry !== true) {
+      const why = admitRefusal(e.queue, id);
+      if (why !== null) {
+        const reason = opts.force?.trim();
+        if (!reason)
+          throw new QueueError(
+            `${id} would not be admitted: ${why} (force: "<reason>" marks it anyway, the reason goes into its notes)`,
+          );
+        forced = `forced running over: ${why}; ${reason}`;
+      }
+    }
     const node = taskNode(e, line);
     node.set("status", status);
+    if (forced !== undefined) addNote(e, node, forced, opts.from ?? "mark");
     const text = note?.trim();
     if (text) addNote(e, node, text, opts.from ?? "mark");
     const was = opts.retry === true ? difficultyOf(line) : undefined;

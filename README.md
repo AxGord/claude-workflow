@@ -561,7 +561,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
 - `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted tasks (id, model, effort, repo, workflow, difficulty, priority when not normal, text);
   `explain` adds why each other pending task waits (`window full` ones fold into one summary line;
   `explain: "all"` lists every one).
-- `queue_mark({ queue?, file?, id, to, note?, from?, retry? })` — `running` pending→running (with `retry: true`
+- `queue_mark({ queue?, file?, id, to, note?, from?, retry?, force? })` — `running` pending→running (refused, with the reason, when the picker would not admit the line: overlap, `after:`, `exclusive`, `breaking`, `parked`; `force: "<reason>"` marks it anyway and writes the reason into its `notes:`; the window, a pause and `model: —` do not count) (with `retry: true`
   failed→running: a failed task runs again, and its `difficulty: N` becomes `N+1`, at most 10 — the
   answer says `(difficulty 4 → 5)`), `done` running→done, `failed` running→failed, `released`
   running→pending, `promoted` backlog→pending, `shelved` pending→backlog; any other current status is
@@ -585,7 +585,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty` (`-` = no `workflow:` / `difficulty:`) per admitted task and the summary on stderr; exit 0
   admitted, 10 none but running tasks run, 11 none and nothing runs (done), 12 none, nothing runs and
   `batch_size: 0`, 2 error; `--done|--failed|--release|--running|--promote|--shelve <ID> [--note T] [--from W]` (`--running <ID>
-  --retry`: failed→running, `difficulty:` +1), `--header <key>`, `--add '<YAML mapping>' [--after ID|--before ID]`, `--edit <ID>
+  --retry`: failed→running, `difficulty:` +1; `--running <ID> --force REASON`: mark a line the picker would not admit), `--header <key>`, `--add '<YAML mapping>' [--after ID|--before ID]`, `--edit <ID>
   [--set key=value]… [--append-note T] [--from W]` (`key=` removes), `--batch-size <N> --reason T`.
 - Converting the old Markdown queue (`- [m] ID | key: value | … |` lines under `## Tasks`), once:
   `wf-queue --convert <old.md>` prints the YAML; `--into <new.yaml>` writes it; `--into <existing.yaml>
@@ -921,7 +921,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
 | `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale) | `session_id`, `agent_id` |
 | `queue_next` | Admit the next tasks of a YAML task queue and set them running (§ Task queue) | `queue`, `file`, `dry_run`, `explain` |
-| `queue_mark` | Move one task's status (`running` / `done` / `failed` / `released` / `promoted` / `shelved`; `retry` restarts a failed task) | `queue`, `file`, `id`, `to`, `note`, `retry` |
+| `queue_mark` | Move one task's status (`running` / `done` / `failed` / `released` / `promoted` / `shelved`; `retry` restarts a failed task) | `queue`, `file`, `id`, `to`, `note`, `retry`, `force` |
 | `queue_add` | Add a task (pending or backlog) to a queue, checked as a pick reads it | `queue`, `file`, `task`, `after_id`, `before_id` |
 | `queue_edit` | Set / remove a task's fields, append a note to its `notes:` | `queue`, `file`, `id`, `set`, `append_note`, `from` |
 | `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason | `queue`, `file`, `batch_size`, `reason` |
