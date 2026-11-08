@@ -263,6 +263,29 @@ describe("read-only gate", () => {
     }
   });
 
+  it("a Write by a read-only agent is allowed only in a task report directory", () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "wf-ro-w-"));
+    const wt = path.join(d, "wf-T");
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, ".git"), "gitdir: x");
+    const w = (agent: string | undefined, file_path: string) =>
+      decideReadOnly({ tool_name: "Write", agent_type: agent, tool_input: { file_path } }, config);
+    try {
+      expect(w("workflow:recon", `${d}/wf-T.log/recon.md`)).toEqual({ kind: "pass" });
+      expect(w("workflow:reviewer", `${d}/wf-T-logs/review.md`)).toEqual({ kind: "pass" });
+      expect(w("workflow:reviewer", `${wt}/src/x.ts`)).toMatchObject(DENY);
+      expect(w("workflow:reviewer", `${wt}/wf-T.log/x.md`)).toMatchObject(DENY);
+      expect(w("workflow:recon", `${d}/other/x.md`)).toMatchObject(DENY);
+      expect(w("workflow:recon", `${d}/wf-T.log/../x.md`)).toMatchObject(DENY);
+      expect(w("workflow:recon", "wf-T.log/x.md")).toMatchObject(DENY);
+      expect(w("workflow:recon", "/etc/wf.log/x.md")).toMatchObject(DENY);
+      expect(w("other:agent", `${wt}/src/x.ts`)).toEqual({ kind: "pass" });
+      expect(w(undefined, `${wt}/src/x.ts`)).toEqual({ kind: "pass" });
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a malformed config naming the key", () => {
     expect(() => parseReadOnlyConfig('{"read":[1]}')).toThrow(/read/);
     expect(() => parseReadOnlyConfig("[]")).toThrow(/object/);
@@ -423,9 +446,23 @@ describe("shipped agent types", () => {
     for (const n of names) expect(tools).toContain(`mcp__plugin_workflow_wf__${n}`);
   });
 
-  it("read-only types carry no edit tool; the driver no Edit/Write/Bash", () => {
-    for (const n of ["recon", "reviewer"])
-      expect(front(n).tools).not.toMatch(/Edit|Write|NotebookEdit/);
+  it("read-only types carry no edit tool, only the gated Write; the driver no Edit/Write/Bash", () => {
+    for (const n of ["recon", "reviewer"]) expect(front(n).tools).not.toMatch(/Edit|NotebookEdit/);
+    for (const n of ["recon", "reviewer"]) expect(front(n).tools).toMatch(/\bWrite\b/);
     expect(front("driver").tools).not.toMatch(/Edit|Write|Bash|NotebookEdit/);
+  });
+});
+
+describe("hook registration", () => {
+  it("hooks.json registers read-only-gate.sh for Bash and for Write", () => {
+    const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, "hooks", "hooks.json"), "utf8")) as {
+      hooks: { PreToolUse: { matcher: string; hooks: { command: string }[] }[] };
+    };
+    for (const m of ["Bash", "Write"])
+      expect(
+        hooks.hooks.PreToolUse.filter(e => e.matcher === m)
+          .flatMap(e => e.hooks)
+          .map(h => h.command),
+      ).toEqual(expect.arrayContaining([expect.stringContaining("read-only-gate.sh")]));
   });
 });

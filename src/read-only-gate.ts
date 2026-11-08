@@ -613,7 +613,25 @@ export function rewriteIsHarmless(command: string, config: ReadOnlyConfig | unde
 export interface ReadOnlyPayload {
   readonly agent_type?: unknown;
   readonly tool_name?: string;
-  readonly tool_input?: { readonly command?: unknown };
+  readonly tool_input?: { readonly command?: unknown; readonly file_path?: unknown };
+}
+
+/**
+ * Why a Write by a read-only agent is refused, undefined when allowed. The one write a read-only
+ * agent keeps is its report: an absolute path in scratch space, outside any git work tree, with a
+ * `<name>.log` or `<name>-logs` directory in it (the task's report directory), and no `..`.
+ */
+export function writeToolReason(filePath: unknown): string | undefined {
+  if (typeof filePath !== "string" || !filePath.startsWith("/"))
+    return "Write needs an absolute file_path";
+  const target = path.posix.normalize(filePath);
+  const dirs = target.split("/").slice(0, -1);
+  if (filePath.split("/").includes("..")) return `Write ${filePath} has a .. segment`;
+  if (!SCRATCH.some(s => target.startsWith(s + "/")) || insideWorkTree(target))
+    return `Write ${target} is outside the report directories (scratch space, not in a git work tree)`;
+  if (!dirs.some(d => d.endsWith(".log") || d.endsWith("-logs")))
+    return `Write ${target} is not in a <task>.log or <task>-logs directory`;
+  return undefined;
 }
 
 /**
@@ -627,6 +645,12 @@ export function decideReadOnly(
   payload: ReadOnlyPayload,
   config: ReadOnlyConfig | undefined,
 ): ReadOnlyDecision {
+  if (payload.tool_name === "Write" && isReadOnlyAgent(payload.agent_type, config?.agents)) {
+    const why = writeToolReason(payload.tool_input?.file_path);
+    return why === undefined
+      ? { kind: "pass" }
+      : { kind: "deny", reason: `read-only: ${why}; this agent type writes only its report` };
+  }
   const command = payload.tool_input?.command;
   if (payload.tool_name !== "Bash" || typeof command !== "string") return { kind: "pass" };
   if (!isReadOnlyAgent(payload.agent_type, config?.agents)) return { kind: "pass" };
