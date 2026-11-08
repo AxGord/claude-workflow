@@ -2,6 +2,7 @@ name: file-review
 description: "Deep review of one file or a small coupled batch — spawned as an agent per batch, or run inline as a sub-workflow for a single file"
 initial: probe_hxq
 max_transitions: 25
+map: false
 
 states:
   # Spawned agents start a fresh session — parent context does not carry over,

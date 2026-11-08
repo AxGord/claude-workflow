@@ -48,6 +48,8 @@ export interface FoldedSession {
   parent: string | null;
   task: unknown;
   difficulty: unknown;
+  /** the directory name of the session's cwd */
+  project?: string;
   state?: string;
   started?: string;
   ended?: string;
@@ -63,6 +65,13 @@ export interface FoldedSession {
   /** `to` = the state the answer moved to; `text` = the question a driver passed (`ask_parent`) */
   asks: { state: unknown; at: string; answered?: string; to?: string; text?: string }[];
   outcome?: unknown;
+}
+
+/** The last path segment of a session's cwd, null when it has none. */
+export function projectOf(cwd: unknown): string | null {
+  if (typeof cwd !== "string") return null;
+  const name = cwd.split("/").filter(Boolean).at(-1);
+  return name ?? null;
 }
 
 function emptySession(id: string): FoldedSession {
@@ -135,6 +144,7 @@ export function fold(events: readonly WfEvent[]): Map<string, FoldedSession> {
         if (s.parent === null && known(d.parent)) s.parent = d.parent as string;
         if (!known(s.task)) s.task = d.task;
         if (!known(s.difficulty)) s.difficulty = d.difficulty;
+        if (s.project === undefined && known(d.project)) s.project = d.project as string;
         s.started ??= e.ts;
         break;
       case "transition": {
@@ -312,6 +322,7 @@ export function seedEvents(sessions: readonly SeedSession[]): WfEvent[] {
       parent: s.parent_session_id ?? null,
       task: ctx.task ?? ctx.slice ?? ctx.task_id ?? null,
       difficulty: ctx.difficulty ?? null,
+      project: projectOf(ctx.cwd),
     });
     const frames: (string | undefined)[] = [root];
     for (const h of s.history) {

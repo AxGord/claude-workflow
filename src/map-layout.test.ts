@@ -941,3 +941,92 @@ describe("a question asked from a state no workflow tags", () => {
     ]);
   });
 });
+
+describe("which sessions are bands", () => {
+  const WF: Record<string, MapWorkflow> = {
+    chat: { map: false, stations: [st("talk"), st("end", false, true)] },
+    work: { stations: [st("a"), st("b", false, true)] },
+  };
+  const run = (events: WfEvent[], now = NOW): MapLayout =>
+    layout(fold(events), WF, { now, clock: () => "hh:mm" });
+  const mk = (build: () => void): WfEvent[] => {
+    log.length = 0;
+    seq = 0;
+    build();
+    return [...log];
+  };
+
+  it("a childless root of a `map: false` workflow stays off the map", () => {
+    const m = run(
+      mk(() => {
+        start("C1", "chat", "10:00", null, { project: "other" });
+        start("W1", "work", "10:00", null, { project: "other" });
+      }),
+    );
+    expect(m.bands.map(b => b.title)).toEqual(["work"]);
+  });
+
+  it("a `map: false` workflow with children is a dispatcher and stays", () => {
+    const m = run(
+      mk(() => {
+        start("C1", "chat", "10:00", null);
+        start("W1", "work", "10:01", "C1");
+      }),
+    );
+    expect(m.bands.map(b => b.title)).toEqual(["work"]);
+    expect(m.bands[0].rail).not.toBeNull();
+  });
+
+  it("one workflow in two projects is two bands titled with the project", () => {
+    const m = run(
+      mk(() => {
+        start("W1", "work", "10:00", null, { project: "alpha" });
+        start("W2", "work", "10:00", null, { project: "beta" });
+      }),
+    );
+    expect(m.bands.map(b => b.title)).toEqual(["work · alpha", "work · beta"]);
+  });
+
+  it("one project keeps the bare workflow name", () => {
+    const m = run(
+      mk(() => {
+        start("W1", "work", "10:00", null, { project: "alpha" });
+        start("W2", "work", "10:00", null, { project: "alpha" });
+      }),
+    );
+    expect(m.bands.map(b => b.title)).toEqual(["work"]);
+  });
+});
+
+describe("bands without declared stations", () => {
+  const run = (build: () => void): MapLayout => {
+    log.length = 0;
+    seq = 0;
+    build();
+    return layout(fold([...log]), { quiet: { map: false } }, { now: NOW, clock: () => "hh:mm" });
+  };
+
+  it("a lane that has not moved still draws, in one column", () => {
+    const m = run(() => start("N1", "bare", "10:00", null));
+    expect(m.bands.map(b => b.title)).toEqual(["bare"]);
+    expect(m.bands[0].stations.map(s => s.name)).toEqual(["start"]);
+    expect(m.bands[0].lanes).toHaveLength(1);
+  });
+
+  it("undeclared stations are the states the lanes visited, in order", () => {
+    const m = run(() => {
+      start("N1", "bare", "10:00", null);
+      move("N1", "bare", "10:01", "a", "b");
+    });
+    expect(m.bands[0].stations.map(s => s.name)).toEqual(["a", "b"]);
+  });
+
+  it("a dispatcher's child of a `map: false` workflow is left off, the dispatcher stays", () => {
+    const m = run(() => {
+      start("D1", "disp", "10:00", null);
+      start("K1", "quiet", "10:01", "D1");
+      start("K2", "bare", "10:01", "D1");
+    });
+    expect(m.bands.map(b => b.title)).toEqual(["bare"]);
+  });
+});

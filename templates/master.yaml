@@ -2,6 +2,7 @@ name: master
 description: "Master workflow — single entry point. Analyzes task, loads knowledge skills, routes to process sub-workflows."
 initial: scan_project
 max_transitions: 100
+map: false
 
 states:
   scan_project:

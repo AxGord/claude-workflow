@@ -52,6 +52,7 @@ export function buildApp(
         max_transitions: wf.max_transitions,
         states: wf.states,
         stations: computeStations(wf),
+        ...(wf.map === false ? { map: false } : {}),
         ...(wf.driver ? { driver: { model: wf.driver.model, effort: wf.driver.effort } } : {}),
       };
     }

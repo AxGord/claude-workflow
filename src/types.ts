@@ -230,6 +230,8 @@ export const WorkflowDefinitionSchema = z
     max_transitions: z.number().int().positive().optional().default(50),
     model_table: ModelTableObjectSchema.optional(),
     driver: DriverObjectSchema.optional(),
+    // Live map: `false` keeps a root session of this workflow with no children (a conversation, not a task) off the map
+    map: z.boolean().optional(),
     states: z.record(StateDefinitionSchema),
   })
   .strict();
@@ -251,6 +253,7 @@ export const WorkflowFileObjectSchema = z
     max_transitions: z.number().int().positive().optional(),
     model_table: ModelTableObjectSchema.optional(),
     driver: DriverObjectSchema.optional(),
+    map: z.boolean().optional(),
     states: z.record(StateDefinitionSchema).optional(),
   })
   .strict();

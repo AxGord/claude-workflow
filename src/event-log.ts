@@ -10,7 +10,7 @@ import path from "node:path";
 import { stagesRead } from "./model-table.js";
 import { isPidAlive } from "./process.js";
 import type { HistoryEntry, SessionState } from "./types.js";
-import { openAsk } from "./event-fold.js";
+import { openAsk, projectOf } from "./event-fold.js";
 import type { EventKind, WfEvent } from "./event-fold.js";
 
 export { ASK_KEY, fold, openAsk, seedEvents } from "./event-fold.js";
@@ -146,6 +146,7 @@ export class EventLog {
           parent: next.parent_session_id ?? null,
           task: ctx.task ?? ctx.slice ?? ctx.task_id ?? null,
           difficulty: ctx.difficulty ?? null,
+          project: projectOf(ctx.cwd),
         },
         next.started_at,
       );

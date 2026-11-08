@@ -304,6 +304,7 @@ export class Loader {
       max_transitions: own.max_transitions ?? base.max_transitions,
       model_table: own.model_table ?? base.model_table,
       driver: own.driver ?? base.driver,
+      map: own.map ?? base.map,
       states: { ...base.states, ...own.states },
     };
   }

@@ -15,6 +15,8 @@ export interface MapStation {
 export interface MapWorkflow {
   readonly stations?: readonly MapStation[];
   readonly driver?: { readonly model?: string; readonly effort?: string } | null;
+  /** `false`: a root session of it with no children is a conversation, not a task, and is left off the map */
+  readonly map?: boolean;
 }
 
 export interface MapOptions {
@@ -228,6 +230,8 @@ export interface MapRail {
 export interface MapBand {
   readonly key: string;
   readonly workflow: string;
+  /** the band's heading: the workflow, with the project when its sessions run in more than one */
+  readonly title: string;
   readonly y: number;
   readonly height: number;
   readonly width: number;
@@ -774,7 +778,10 @@ function layLane(
 }
 
 /** Which sessions are lanes: a root with no children, or a child of a root with children (a dispatcher); their children hang as branches. */
-function classify(folded: ReadonlyMap<string, FoldedSession>): {
+function classify(
+  folded: ReadonlyMap<string, FoldedSession>,
+  workflows: Readonly<Record<string, MapWorkflow>>,
+): {
   lanes: LaneInput[];
   dispatchers: Set<string>;
 } {
@@ -793,17 +800,17 @@ function classify(folded: ReadonlyMap<string, FoldedSession>): {
     const kids = childrenOf.get(s.id) ?? [];
     if (isRoot(s)) {
       if (kids.length > 0) dispatchers.add(s.id);
-      else lanes.push({ s, children: [] });
+      else if (workflows[s.workflow]?.map !== false) lanes.push({ s, children: [] });
     }
   }
   for (const d of dispatchers)
     for (const s of childrenOf.get(d) ?? [])
-      if (s.workflow)
+      if (s.workflow && workflows[s.workflow]?.map !== false)
         lanes.push({ s, children: (childrenOf.get(s.id) ?? []).filter(c => c.workflow) });
   return { lanes, dispatchers };
 }
 
-/** The columns of a band: the workflow's stations, else the states its lanes visited, in first-visit order. */
+/** The columns of a band: the workflow's stations, else the states its lanes visited, in first-visit order (one `start` column when none has moved). */
 function bandStations(
   workflow: string,
   lanes: readonly LaneInput[],
@@ -814,9 +821,11 @@ function bandStations(
   const seen: string[] = [];
   for (const { s } of lanes) {
     const moves = ownMoves(s);
-    for (const name of [moves[0]?.from, ...moves.map(t => t.to)])
+    for (const name of [moves[0]?.from, ...moves.map(t => t.to), s.state])
       if (name !== undefined && !seen.includes(name)) seen.push(name);
   }
+  // a session that has not moved yet leaves no state to name: one column keeps its band on the map
+  if (seen.length === 0) seen.push("start");
   return seen.map(name => ({ name, script: false, terminal: false }));
 }
 
@@ -961,13 +970,23 @@ export function layout(
   workflows: Readonly<Record<string, MapWorkflow>>,
   opts: MapOptions,
 ): MapLayout {
-  const { lanes, dispatchers } = classify(folded);
+  const { lanes, dispatchers } = classify(folded, workflows);
   const foldAfter = opts.foldAfterMs ?? 3600_000;
+  const projectsOf = new Map<string, Set<string>>();
+  for (const l of lanes) {
+    const set = projectsOf.get(l.s.workflow as string) ?? new Set<string>();
+    set.add(l.s.project ?? "");
+    projectsOf.set(l.s.workflow as string, set);
+  }
+  const bandKey = (l: LaneInput): string =>
+    (projectsOf.get(l.s.workflow as string)?.size ?? 0) > 1
+      ? `${l.s.workflow}@${l.s.project ?? ""}`
+      : (l.s.workflow as string);
   const byWorkflow = new Map<string, LaneInput[]>();
   for (const l of lanes) {
-    const list = byWorkflow.get(l.s.workflow as string) ?? [];
+    const list = byWorkflow.get(bandKey(l)) ?? [];
     list.push(l);
-    byWorkflow.set(l.s.workflow as string, list);
+    byWorkflow.set(bandKey(l), list);
   }
   const running = lanes.filter(l => l.s.outcome === undefined).length;
   const labels = running < G.manyRunning;
@@ -975,8 +994,12 @@ export function layout(
   const bands: MapBand[] = [];
   let y = 0;
   let width = 0;
-  for (const workflow of [...byWorkflow.keys()].sort()) {
-    const group = byWorkflow.get(workflow) as LaneInput[];
+  for (const bandId of [...byWorkflow.keys()].sort()) {
+    const group = byWorkflow.get(bandId) as LaneInput[];
+    const workflow = group[0].s.workflow as string;
+    const project = group[0].s.project;
+    const title =
+      bandId === workflow ? workflow : `${workflow} · ${project === undefined ? "?" : project}`;
     const stations = bandStations(workflow, group, workflows);
     if (stations.length === 0) continue;
     const n = stations.length;
@@ -1080,8 +1103,9 @@ export function layout(
     }
     const height = by - G.laneGap + G.bandBottom;
     bands.push({
-      key: workflow,
+      key: bandId,
       workflow,
+      title,
       y,
       height,
       width: bandWidth,
@@ -1414,7 +1438,7 @@ function bandScene(band: MapBand): SceneGroup {
       tag: "text",
       cls: "m-title",
       attrs: { x: 20, y: 26 },
-      text: band.workflow,
+      text: band.title,
     },
   ];
   for (const st of band.stations)
