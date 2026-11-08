@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
+import type { WfEvent } from "./event-log.js";
 import { ledgerEntry } from "./ledger.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
 
@@ -42,6 +43,46 @@ export function buildApp(storage: Storage, loader: Loader): express.Express {
       };
     }
     res.json(result);
+  });
+
+  // The event log of the server process that holds the dashboard port. A reader resumes with
+  // `since` = `<run>:<seq>` (or a bare seq of this run); a position of another run counts as 0.
+  app.get("/api/events", (req, res) => {
+    const log = storage.events;
+    res.json({ run: log.run, events: log.since(log.resumeFrom(req.query.since)) });
+  });
+
+  // Server-sent events: replays after `since` (or Last-Event-ID), then streams; `id:` is the seq.
+  app.get("/api/events/stream", (req, res) => {
+    const log = storage.events;
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.flushHeaders();
+    const send = (e: WfEvent): void => {
+      res.write(`id: ${e.run}:${e.seq}\nevent: wf\ndata: ${JSON.stringify(e)}\n\n`);
+    };
+    let last = Math.max(log.resumeFrom(req.query.since), log.resumeFrom(req.get("last-event-id")));
+    // subscribe first, then replay: nothing between the two is lost, and `last` drops the overlap
+    const unsub = log.subscribe(e => {
+      if (e.seq > last) {
+        last = e.seq;
+        send(e);
+      }
+    });
+    for (const e of log.since(last)) {
+      if (e.seq > last) {
+        last = e.seq;
+        send(e);
+      }
+    }
+    const beat = setInterval(() => res.write(": ping\n\n"), 15_000);
+    req.on("close", () => {
+      clearInterval(beat);
+      unsub();
+    });
   });
 
   // The queue files root sessions name through context.queue_file.

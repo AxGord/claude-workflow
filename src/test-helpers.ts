@@ -1,6 +1,7 @@
 import type { SessionState, WorkflowDefinition } from "./types.js";
 import type { Storage } from "./storage.js";
 import { prunePolicy } from "./storage.js";
+import { EventLog } from "./event-log.js";
 import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
@@ -16,7 +17,15 @@ export class InMemoryStorage implements Storage {
     return this._data.get(sessionId) ?? null;
   }
 
+  /** Memory-only event log, fed like Storage feeds its own. */
+  readonly events = new EventLog();
+
+  #parent(s: SessionState): SessionState | null {
+    return s.parent_session_id ? this.read(s.parent_session_id) : null;
+  }
+
   async write(sessionId: string, state: SessionState): Promise<void> {
+    this.events.observe(this.read(sessionId), state, this.#parent(state));
     this._data.set(sessionId, state);
   }
 
@@ -25,7 +34,10 @@ export class InMemoryStorage implements Storage {
     change: (current: SessionState | null) => SessionState | null,
   ): Promise<SessionState | null> {
     const next = change(this.read(sessionId));
-    if (next) this._data.set(sessionId, next);
+    if (next) {
+      this.events.observe(this.read(sessionId), next, this.#parent(next));
+      this._data.set(sessionId, next);
+    }
     return next;
   }
 

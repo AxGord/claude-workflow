@@ -3,6 +3,7 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 import type { SessionState } from "./types.js";
 import { LOCK_STALE_MS } from "./types.js";
+import { EventLog } from "./event-log.js";
 
 export const LEDGER_FILE = "ledger.jsonl";
 // A contended lock waits its turn instead of failing: a session file is
@@ -12,9 +13,13 @@ const LOCK_RETRIES = { retries: 100, minTimeout: 5, maxTimeout: 50, randomize: t
 
 export class Storage {
   private readonly _stateDir: string;
+  /** What sessions did in this server run: derived from every session write. */
+  public readonly events: EventLog;
 
-  constructor(stateDir: string) {
+  /** `eventLog: false` = a short-lived reader (session-cli): memory-only log, no files, no pruning. */
+  constructor(stateDir: string, options: { readonly eventLog?: boolean } = {}) {
     this._stateDir = stateDir;
+    this.events = new EventLog(options.eventLog === false ? undefined : stateDir);
     fs.mkdirSync(this._stateDir, { recursive: true });
   }
 
@@ -53,6 +58,16 @@ export class Storage {
     });
   }
 
+  /** The stored session; null when absent, unreadable or the `{}` placeholder of one being created. */
+  private _current(sessionId: string): SessionState | null {
+    try {
+      const cur = this.read(sessionId);
+      return cur?.session_id ? cur : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async _locked(
     sessionId: string,
     next: () => SessionState | null,
@@ -65,11 +80,18 @@ export class Storage {
     let release: (() => Promise<void>) | undefined;
     try {
       release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: LOCK_RETRIES });
+      const prev = this._current(sessionId);
       const state = next();
       if (state) {
         const tmp = fp + ".tmp";
         fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
         fs.renameSync(tmp, fp);
+        if (state.session_id)
+          this.events.observe(
+            prev,
+            state,
+            state.parent_session_id ? this._current(state.parent_session_id) : null,
+          );
       }
       return state;
     } finally {

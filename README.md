@@ -388,6 +388,10 @@ fix:
 
 The route applies to every move into the state — an agent `transition`, an action state's `on_success`/`on_error`/`cases`, a skill gate's auto-transition; a pop's `on_complete`/`on_fail` does not check `max_visits`. Chained routes are followed (an exhausted `escalate` with its own route goes on), a cycle is an error, and the history entry's `detail` names the exhausted states. A rerouted action move shows the routed-to state's own prompt, not the action's `success_prompt`/`error_prompt` (written for the default target); the result stays readable there as `{{stdout}}`/`{{exit_code}}`. `on_exhausted` without `max_visits`, or to an unknown state, fails the load. `{{visits.<state>}}` counts visits in the active frame, so the routed-to state can say how many tries ran.
 
+### Question states — `ask: parent`
+
+A state tagged `ask: parent` asks its parent session a question: entering it logs an `ask` event in the event log, leaving it an `answer` (the dashboard's live map draws the pair). The log is `GET /api/events?since=<run>:<seq>` and the SSE stream `/api/events/stream` (ids are `<run>:<seq>`; a position from another run — a server restart — restarts from 0). It covers only the server process that holds the dashboard port; other Claude Code servers write their own `events/run-*.jsonl` under the state dir, which the dashboard does not serve.
+
 ### Stall detection — `stale_after`
 
 A session whose state saw no engine call (no `transition`, `context_set`, … — any write) for longer than the state's `stale_after` seconds is **STALE**: its agent may be dead or stuck. Unset, the state's type decides: a prompt state 1800 s (its agent calls the engine as it works), an `exec` / `fetch` 3600 s, a heavy exec (`resource:` or `fanout:`) 14400 s — an exec's default is never below its own `timeout` + 300 s, before which the timeout bounds it. `stale_after: 0` = never (a state that waits for the user); on a terminal or `sub_workflow` state it is a load error (never read). Never stale: an ended or suspended session (suspension is its own mark), a session with an active child (it waits for its children, each judged on its own), and a `resource:` / `fanout:` exec waiting for its pool lease (before its run began, or marked `pool_starved`) while the process that owns the session is alive — the pool's wait, reported as `POOL STARVED`; a dead owner's wait counts. The clock runs from the session's last write, or from the start of the state's run when that is later (`running_exec`, else `pending_action.run_at`, written when the step's first lease is granted — a `fanout:` has no `running_exec`), so a takeover, resume or `context_set` during a run resets it. A fetch or a light exec is timed from its last write.
@@ -935,6 +939,8 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/sessions` | List all sessions |
+| `GET` | `/api/events?since=<run>:<seq>` | Event log of the dashboard-holding server process's run after that position (a bare seq = this run; another run's = from 0): `{run, events: [{seq, run, ts, kind, session, data}]}` (kinds: session_start, transition, exec_start, exec_end, agent_link, agent_respawn, agent_stop, rescore, ask, answer, session_end) |
+| `GET` | `/api/events/stream` | Server-sent events of the same log; resumes from `?since=N` or `Last-Event-ID`, then streams live |
 | `GET` | `/api/session/:id` | Get session detail |
 | `POST` | `/api/session/:id/abandon` | Abandon a session |
 | `GET` | `/api/workflows` | List all workflow definitions |

@@ -121,6 +121,8 @@ latest exec, `{{context.*}}`). Use it when a revisit must carry per-visit data w
 resending the whole prompt. `full_on_revisit` takes precedence; `status()` still returns the
 full prompt. Absent = the generic line. Needs an engine that knows the field.
 
+**ask: parent** (per-state tag): the state asks its parent a question. Entering it logs an `ask` event (the state name), leaving it an `answer`; the dashboard's event log (`/api/events`) carries the pair. Needs an engine that knows the key.
+
 **digest_on_repeat** (per-state flag, prompt states): after the state's full
 prompt was delivered once in the agent's current context, later deliveries send a
 2-line digest ("already delivered earlier — status() for the full text")

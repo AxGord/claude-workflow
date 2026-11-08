@@ -121,7 +121,7 @@ async function main(argv: readonly string[]): Promise<void> {
     throw new Error(
       `usage: session-cli.js pickup|active <state-dir> … <claude-pid>, got: ${argv.join(" ")}`,
     );
-  const storage = new Storage(stateDir);
+  const storage = new Storage(stateDir, { eventLog: false });
   let text: string;
   if (command === "pickup" && rest.length === 2) text = await pickupReport(storage, rest[0], pid);
   else if (command === "active" && rest.length === 1) text = activeReport(storage, pid);

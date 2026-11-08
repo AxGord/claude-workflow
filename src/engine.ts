@@ -165,6 +165,13 @@ export class Engine {
     this._loader = loader;
     this._executor = executor;
     this._options = options;
+    storage.events?.setStateResolver((session, workflow, state) => {
+      try {
+        return this._resolveState(session, workflow, state);
+      } catch {
+        return undefined;
+      }
+    });
   }
 
   /** The id of the Claude Code conversation this server's process runs, as the SessionStart hook recorded it. */

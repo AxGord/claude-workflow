@@ -150,6 +150,10 @@ export const StateDefinitionSchema = z
     on_fail: z.string().optional(),
     task: z.string().optional(),
 
+    // The state asks its parent a question: entering it logs an `ask` event, leaving it an `answer`
+    // (the live workflow map draws the pair)
+    ask: z.literal("parent").optional(),
+
     // Skill gate: require skills to be loaded before proceeding
     skills: z.array(z.string()).optional(),
 
