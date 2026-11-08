@@ -374,6 +374,10 @@ dispatch:
   revisit_prompt: "Admitted:\n{{stdout}}\nSame steps as your first visit."
 ```
 
+### Stations — the columns of the live workflow map
+
+`/api/workflows` returns per workflow `stations: [{name, script, terminal}]`: the states on the shortest route from `initial` to the success terminal, in order; `script` is an exec state. The route follows the happy moves (`transitions`, `on_success`, `on_complete`, `cases["0"]`; every move when the terminal is out of their reach). The success terminal is the farthest terminal whose `outcome` is not `fail`, or a terminal with `station: true`. A state's `station: false` leaves it out (an exec helper such as `prepare` or a `*_route`); `station: true` adds a reachable state that lies off the route, placed by its distance from `initial`. Computed in `src/stations.ts`.
+
 ### Guards and the exhausted route
 
 `max_transitions` (per workflow, per stack frame, default 50) and a state's `max_visits` refuse a move past them with an error. A state may instead name where a move past its `max_visits` goes:
@@ -943,7 +947,7 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 | `GET` | `/api/events/stream` | Server-sent events of the same log; resumes from `?since=N` or `Last-Event-ID`, then streams live |
 | `GET` | `/api/session/:id` | Get session detail |
 | `POST` | `/api/session/:id/abandon` | Abandon a session |
-| `GET` | `/api/workflows` | List all workflow definitions |
+| `GET` | `/api/workflows` | List all workflow definitions, each with its `stations` (the live map's columns) |
 | `GET` | `/api/queues` | Queue files named by sessions' `context.queue_file` |
 | `GET` | `/api/queue?file=<path>` | Every line of that queue with the picker's reason per pending line |
 

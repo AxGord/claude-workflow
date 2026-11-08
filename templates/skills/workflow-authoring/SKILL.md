@@ -123,6 +123,14 @@ full prompt. Absent = the generic line. Needs an engine that knows the field.
 
 **ask: parent** (per-state tag): the state asks its parent a question. Entering it logs an `ask` event (the state name), leaving it an `answer`; the dashboard's event log (`/api/events`) carries the pair. Needs an engine that knows the key.
 
+**station** (per-state flag, any state): the live workflow map draws a workflow's band with one
+column per *station* — the states on the shortest happy-path route (`transitions`, `on_success`,
+`on_complete`, `cases["0"]`) from `initial` to the success terminal; exec states draw as scripts.
+The success terminal is the farthest terminal that is not `outcome: fail` (the early exits —
+released, closed — are nearer), or a terminal marked `station: true`. `station: false` keeps a helper
+(`prepare`, a `*_route` exec) out of the columns; `station: true` adds a reachable state off the
+path. `/api/workflows` returns the result as `stations: [{name, script, terminal}]`.
+
 **digest_on_repeat** (per-state flag, prompt states): after the state's full
 prompt was delivered once in the agent's current context, later deliveries send a
 2-line digest ("already delivered earlier — status() for the full text")

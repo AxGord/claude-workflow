@@ -1,0 +1,155 @@
+# Routing shape of the anyparse slice-worker (prompts and commands dropped): a fixture for src/stations.test.ts, not the live file.
+name: slice-worker
+initial: orient
+states:
+  orient:
+    transitions:
+      isolate: sync_start
+      rescore: rescore_wip
+      blocked: blocked
+  sync_start:
+    type: exec
+    cases:
+      "0": baseline_kept
+      "7": sync_conflict
+    default: sync_failed
+    station: false
+  sync_gate:
+    type: exec
+    cases:
+      "0": gate_baseline
+      "7": sync_conflict
+    default: sync_failed
+    station: false
+  sync_conflict:
+    transitions:
+      resume: sync_resume
+      blocked: blocked
+  sync_resume:
+    type: exec
+    cases:
+      "10": baseline_kept
+      "20": gate_baseline
+    default: sync_conflict
+  sync_failed:
+    transitions:
+      commit: commit
+      retry: sync_resume
+      blocked: blocked
+  gate_baseline:
+    type: exec
+    cases:
+      "0": gate
+      "10": rebaseline
+    default: rebaseline
+  baseline_kept:
+    type: exec
+    cases:
+      "0": implement
+      "10": isolate
+      "11": rebaseline_start
+    default: isolate
+    station: false
+  isolate:
+    type: exec
+    cases:
+      "0": implement
+    default: isolate_failed
+  rebaseline:
+    type: exec
+    cases:
+      "0": gate
+    default: isolate_failed
+  rebaseline_start:
+    type: exec
+    cases:
+      "0": implement
+    default: isolate_failed
+  isolate_failed:
+    transitions:
+      retry: isolate
+      blocked: blocked
+  implement:
+    transitions:
+      check: check
+      gate: commit
+      rescore: rescore_wip
+      blocked: blocked
+  check:
+    type: exec
+    on_success: implement
+    on_error: implement
+    station: false
+  gate:
+    type: exec
+    cases:
+      "0": report
+      "90": gate_exhausted
+    default: fix
+    on_timeout: gate_timeout
+  gate_timeout:
+    transitions:
+      retry: gate
+    on_exhausted: blocked
+  fix:
+    transitions:
+      gate: commit
+      rescore: rescore_wip
+      blocked: blocked
+  commit:
+    type: exec
+    cases:
+      "0": sync_gate
+    default: commit_failed
+    station: false
+  commit_failed:
+    transitions:
+      commit: commit
+      blocked: blocked
+  report:
+    transitions:
+      done: write_report
+  write_report:
+    type: exec
+    on_success: finish
+    on_error: finish
+    station: false
+  gate_exhausted:
+    transitions:
+      stop: blocked_tree
+  blocked:
+    transitions:
+      stop: blocked_tree
+  blocked_tree:
+    type: exec
+    on_success: failed
+    on_error: blocked_dirty
+  blocked_dirty:
+    transitions:
+      commit: blocked_commit
+      recheck: blocked_tree
+    on_exhausted: failed
+  blocked_commit:
+    type: exec
+    cases:
+      "0": blocked_tree
+    default: blocked_dirty
+  finish:
+    terminal: true
+    outcome: complete
+  rescore_wip:
+    type: exec
+    cases:
+      "0": rescored
+      "5": rescore_refused
+    default: blocked
+  rescore_refused:
+    transitions:
+      rescore: rescore_wip
+      blocked: blocked
+  rescored:
+    terminal: true
+    outcome: complete
+  failed:
+    terminal: true
+    outcome: fail

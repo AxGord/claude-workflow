@@ -154,6 +154,10 @@ export const StateDefinitionSchema = z
     // (the live workflow map draws the pair)
     ask: z.literal("parent").optional(),
 
+    // Live workflow map: `false` keeps the state out of the band's stations (an exec helper), `true`
+    // makes it one off the shortest path, and on a terminal picks the success end (src/stations.ts)
+    station: z.boolean().optional(),
+
     // Skill gate: require skills to be loaded before proceeding
     skills: z.array(z.string()).optional(),
 

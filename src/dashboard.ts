@@ -6,6 +6,7 @@ import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
 import type { WfEvent } from "./event-log.js";
+import { computeStations } from "./stations.js";
 import { ledgerEntry } from "./ledger.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
 
@@ -40,6 +41,7 @@ export function buildApp(storage: Storage, loader: Loader): express.Express {
         initial: wf.initial,
         max_transitions: wf.max_transitions,
         states: wf.states,
+        stations: computeStations(wf),
       };
     }
     res.json(result);

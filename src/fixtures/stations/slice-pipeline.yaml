@@ -1,0 +1,215 @@
+# Routing shape of the anyparse slice-pipeline (prompts and commands dropped): a fixture for src/stations.test.ts, not the live file.
+name: slice-pipeline
+initial: claim
+states:
+  claim:
+    transitions:
+      prepare: prepare
+  prepare:
+    type: exec
+    on_success: recon_route
+    on_error: prepare_failed
+    station: false
+  prepare_failed:
+    transitions:
+      retry: prepare
+      release: released
+  recon_route:
+    type: exec
+    cases:
+      "0": work
+      "10": recon_end
+      "20": recon
+    default: work
+    station: false
+  recon:
+    transitions:
+      done: recon_end
+    on_exhausted: work
+  recon_end:
+    type: exec
+    cases:
+      "0": recon_scored
+      "11": recon_blocked
+      "12": recon_blocked
+      "30": recon_missing
+    default: recon_missing
+  recon_scored:
+    transitions:
+      plan: work
+  recon_blocked:
+    transitions:
+      close: mark_closed
+      stop: mark_stopped
+      proceed: work
+  recon_missing:
+    transitions:
+      recheck: recon_end
+      again: recon
+      skip: work
+    on_exhausted: work
+  work:
+    transitions:
+      started: plan_route
+  plan_route:
+    type: exec
+    cases:
+      "0": plan_spawn
+      "10": work_spawn
+      "20": work
+    default: plan_spawn
+    station: false
+  plan_spawn:
+    transitions:
+      worker_done: worker_end
+  work_spawn:
+    transitions:
+      worker_done: worker_end
+  review:
+    transitions:
+      started: review_route
+      land: land
+      fixes: fixes
+      reject: reject
+  review_route:
+    type: exec
+    cases:
+      "0": review_spawn
+      "10": review_warm
+      "20": review
+    default: review_spawn
+    station: false
+  review_spawn:
+    transitions:
+      land: land
+      fixes: fixes
+      reject: reject
+  review_warm:
+    transitions:
+      land: land
+      fixes: fixes
+      reject: reject
+      no_verdict: review_spawn
+  fixes:
+    transitions:
+      worker_done: worker_end
+      reject: reject
+    on_exhausted: reject
+  land:
+    type: exec
+    cases:
+      "0": mark_landed
+    default: triage
+    on_timeout: land_timeout
+  land_timeout:
+    transitions:
+      retry: land
+      stop: stopped
+    on_exhausted: stopped
+  triage:
+    transitions:
+      land: land
+      fixes: fixes
+      reject: reject
+      bookkeeping: mark_landed
+      stop: stopped
+  mark_landed:
+    type: exec
+    on_success: bookkeeping
+    on_error: mark_landed_by_hand
+  mark_landed_by_hand:
+    transitions:
+      bookkeeping: bookkeeping
+  bookkeeping:
+    transitions:
+      cleanup: cleanup
+  cleanup:
+    type: exec
+    on_success: done
+    on_error: cleanup_failed
+  cleanup_failed:
+    transitions:
+      done: done
+  reject:
+    transitions:
+      close: closed
+      stop: stopped
+  blocked:
+    transitions:
+      close: mark_closed
+      stop: mark_stopped
+      regate: regate
+      rebase_regate: rebase_regate
+      decided: decided
+  decided:
+    transitions:
+      worker_done: worker_end
+    on_exhausted: stopped
+  mark_closed:
+    type: exec
+    on_success: closed
+    on_error: mark_by_hand
+  mark_stopped:
+    type: exec
+    on_success: stopped
+    on_error: mark_by_hand
+  mark_by_hand:
+    transitions:
+      close: closed
+      stop: stopped
+  rebase_regate:
+    type: exec
+    on_success: regate
+    on_error: regate_failed
+  regate:
+    type: exec
+    cases:
+      "0": review
+    default: regate_failed
+  regate_failed:
+    transitions:
+      gate_fix: gate_fix
+      close: closed
+      stop: stopped
+  gate_fix:
+    transitions:
+      worker_done: worker_end
+    on_exhausted: stopped
+  worker_end:
+    type: exec
+    cases:
+      "0": review
+      "1": blocked
+      "3": worker_running
+      "4": rescored
+      "5": round_not_started
+    default: worker_end_unknown
+  round_not_started:
+    transitions:
+      worker_done: worker_end
+    on_exhausted: blocked
+  rescored:
+    transitions:
+      execute: work
+    on_exhausted: blocked
+  worker_running:
+    transitions:
+      recheck: worker_end
+    on_exhausted: worker_end_unknown
+  worker_end_unknown:
+    transitions:
+      review: review
+      blocked: blocked
+      recheck: worker_end
+  done:
+    terminal: true
+    outcome: complete
+  closed:
+    terminal: true
+    outcome: complete
+  released:
+    terminal: true
+    outcome: complete
+  stopped:
+    terminal: true
+    outcome: fail

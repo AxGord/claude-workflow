@@ -1,0 +1,103 @@
+# Routing shape of the engine-task workflow merged over batch-task (prompts and commands dropped): a fixture for src/stations.test.ts, not the live file.
+name: engine-task
+initial: claim
+states:
+  claim:
+    transitions:
+      prepare: project_prepare
+  project_prepare:
+    type: exec
+    on_success: project_branch
+    on_error: prepare_failed
+  prepare_failed:
+    transitions:
+      retry: project_prepare
+      release: released
+      close: closed
+  work:
+    transitions:
+      gate: project_gate
+      blocked: blocked
+    on_exhausted: blocked
+  review_scope:
+    type: exec
+    on_success: review
+    on_error: review
+    station: false
+  review:
+    transitions:
+      merge: project_land
+      fixes: work
+    on_exhausted: blocked
+  project_land:
+    type: exec
+    cases:
+      "0": mark_done
+      "5": project_rebase
+    default: land_failed
+    on_timeout: land_failed
+  land_failed:
+    transitions:
+      retry: project_land
+      fix: work
+      rebase_fix: rebase_fix
+      close: blocked
+      stop: stopped
+  mark_done:
+    type: exec
+    on_success: cleanup
+    on_error: cleanup_failed
+  cleanup:
+    type: exec
+    on_success: done
+    on_error: cleanup_failed
+  cleanup_failed:
+    transitions:
+      done: done
+  blocked:
+    transitions:
+      close: closed
+      stop: stopped
+  done:
+    terminal: true
+    outcome: complete
+  closed:
+    terminal: true
+    outcome: complete
+  released:
+    terminal: true
+    outcome: complete
+  stopped:
+    terminal: true
+    outcome: fail
+  project_branch:
+    type: exec
+    on_success: work
+    on_error: prepare_failed
+    station: false
+  project_gate:
+    type: exec
+    cases:
+      "0": review
+    default: gate_failed
+    on_timeout: gate_failed
+  project_gate_rebased:
+    type: exec
+    cases:
+      "0": project_land
+    default: gate_failed
+    on_timeout: gate_failed
+  gate_failed:
+    transitions:
+      fix: work
+      retry: project_gate
+      close: blocked
+  project_rebase:
+    type: exec
+    on_success: project_gate_rebased
+    on_error: land_failed
+  rebase_fix:
+    transitions:
+      gate: project_gate
+      blocked: blocked
+    on_exhausted: blocked
