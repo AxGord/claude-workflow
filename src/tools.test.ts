@@ -484,6 +484,39 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
     }
   });
 
+  it("start with reply: id answers the session id and state without the prompt or the rules", async () => {
+    const { storage, call } = mount({
+      simple: SIMPLE_WORKFLOW,
+      task: {
+        initial: "claim",
+        driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+        states: {
+          claim: { prompt: "claim {{context.task}} body", transitions: { go: "done" } },
+          done: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const full = await call("start", { workflow: "simple", parent_session_id: "p" });
+    const short = await call("start", { workflow: "simple", parent_session_id: "p", reply: "id" });
+    expect(short.isError).toBeUndefined();
+    const sid = /^SESSION: (\w+) @ (\w+)$/.exec(short.text)!;
+    expect(sid).not.toBeNull();
+    expect(storage.read(sid[1])!.stack.at(-1)!.current_state).toBe(sid[2]);
+    expect(short.text).not.toContain("WORKFLOW RULES");
+    expect(short.text).not.toContain("TRANSITIONS");
+    expect(full.text).toContain("WORKFLOW RULES");
+    const driven = await call("start", {
+      workflow: "task",
+      parent_session_id: "p",
+      context: { task: "T1" },
+      reply: "id",
+    });
+    const dsid = /^SESSION: (\w+) @ claim\n\n/.exec(driven.text)!;
+    expect(dsid).not.toBeNull();
+    expect(driven.text).not.toContain("body");
+    expect(driven.text.endsWith(String(storage.read(dsid[1])!.context.driver_call))).toBe(true);
+  });
+
   it("start with a context on a driver: workflow stores the keys, ends with the DRIVER block, refuses cwd", async () => {
     const { storage, call } = mount({
       task: {

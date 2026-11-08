@@ -171,6 +171,8 @@ for (const withQueue of [true, false])
 test('movedTo names the active frame of a nested reply, the flat line otherwise, else nothing', () => {
   expect(movedTo('slice-dispatch @ collect (visit 304)\n\nbody')).toBe('collect')
   expect(movedTo('SESSION: S\npipe @ plan\n\nPlan')).toBe('plan')
+  expect(movedTo('SESSION: S @ claim')).toBe('claim')
+  expect(movedTo('SESSION: S @ claim\n\n---\nDRIVER — body')).toBe('claim')
   expect(movedTo('  [0] master @ run_bug_fix (waiting)\n  [1] bug-fix @ classify ← ACTIVE\n\nbody')).toBe('classify')
   expect(movedTo('  [0] master @ a (waiting)\n  [1] mid @ b (waiting)\n  [2] leaf @ c (visit 2) ← ACTIVE\n\nx')).toBe('c')
   expect(movedTo('done, nothing here')).toBeUndefined()

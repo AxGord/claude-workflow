@@ -747,6 +747,10 @@ driver:
 - `start({ …, context: { task, queue_file, difficulty } })` starts the session with those context keys
   (`difficulty` goes through the `model_table`, outside 1..10 refused; `cwd` / `claude_code_pid` are
   the engine's), so the dispatcher spends no calls on the claim's bookkeeping.
+- `start({ …, reply: "id" })` answers `SESSION: <id> @ <state>` and nothing else (a `driver:` workflow's
+  DRIVER block still follows): the state's prompt and the workflow rules are left out, for a parent that
+  starts a child only to hand its id on; the child's own agent reads the prompt with `status`. Without
+  `reply` the answer is the full prompt as before. Only the value `id` exists.
 - The shipped `task-driver` instructions (a message after its last line means P still holds the step: `status` on P once and continue): one `status` at the start, after that every transition
   reply is the next prompt; spawn the prompts' agents exactly as written and wait for their
   notification; hand back with one line `NEEDS-PARENT task=… session=… reason=… see=<file>` on a
@@ -907,7 +911,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list` | List all available workflow definitions | — |
-| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree), `priority` (`low`/`normal`/`high`/`urgent`; default: the parent's level, else `normal`), `context` (string map the session starts with; not `cwd`) — a workflow with `driver:` ends the answer with the driver's Agent call |
+| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree), `priority` (`low`/`normal`/`high`/`urgent`; default: the parent's level, else `normal`), `context` (string map the session starts with; not `cwd`), `reply: "id"` (answer only `SESSION: <id> @ <state>`, no prompt or rules) — a workflow with `driver:` ends the answer with the driver's Agent call |
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
 | `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |

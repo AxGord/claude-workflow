@@ -340,12 +340,12 @@ function outputText(o: unknown): string {
   return ''
 }
 
-/** The state a `transition` / `start` reply names: the `← ACTIVE` frame when a stack is printed, else the flat `<workflow> @ <state>` line. */
+/** The state a `transition` / `start` reply names: the `← ACTIVE` frame when a stack is printed, else the flat `<workflow> @ <state>` line or the one-line `SESSION: <id> @ <state>` of `start({ reply: "id" })`. */
 export function movedTo(o: unknown): string | undefined {
   const t = outputText(o)
   const frame = /^\s*\[\d+\]\s+[A-Za-z0-9_.-]+ @ ([A-Za-z0-9_.-]+)[^\n]*←\s*ACTIVE/m.exec(t)
   if (frame) return frame[1]
-  return /^([A-Za-z0-9_.-]+) @ ([A-Za-z0-9_.-]+)/m.exec(t)?.[2]
+  return /^(?:SESSION: )?([A-Za-z0-9_.-]+) @ ([A-Za-z0-9_.-]+)/m.exec(t)?.[2]
 }
 
 function age(ms: number): string {

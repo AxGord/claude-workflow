@@ -172,6 +172,9 @@ function syncContextEpoch(): void {
   deliveredFullPrompts.clear();
 }
 
+const START_REPLY_DESCRIPTION =
+  "Reply shape. \"id\": answer `SESSION: <id> @ <state>` only (plus a driver workflow's DRIVER block), without the state's prompt and the rules; the session's own agent reads the prompt with status. For a parent that starts a child only to pass the id on.";
+
 /** One context value whole, as status({ key }) returns it: a string as is, anything else as JSON. */
 export function formatContextValue(context: Record<string, unknown>, key: string): string {
   if (!Object.hasOwn(context, key)) {
@@ -444,6 +447,7 @@ export function registerTools(
             .describe(
               "Context keys the session starts with (e.g. a dispatched task's `task`, `queue_file`, `difficulty`); not `cwd`",
             ),
+          reply: z.literal("id").optional().describe(START_REPLY_DESCRIPTION),
         })
         .strict(),
     },
@@ -464,14 +468,17 @@ export function registerTools(
           // route) digests on repeat start() calls in the same process — the
           // main ceremony saving. status() still always returns the full text.
           const text =
-            formatStatus(status, { showSessionId: true }) +
-            "\n\n---\nWORKFLOW RULES:\n" +
-            "- Transitions in real-time only — never batch multiple transitions in one step.\n" +
-            "- Complete each state fully before transitioning to the next.\n" +
-            "- On tool errors: stop and investigate before continuing.\n" +
-            '- To advance: transition({ transition: "<name>" })\n' +
-            "---" +
-            (status.driverCall ? `\n\n${status.driverCall}` : "");
+            args.reply === "id"
+              ? `SESSION: ${status.sessionId} @ ${status.currentStateName}` +
+                (status.driverCall ? `\n\n${status.driverCall}` : "")
+              : formatStatus(status, { showSessionId: true }) +
+                "\n\n---\nWORKFLOW RULES:\n" +
+                "- Transitions in real-time only — never batch multiple transitions in one step.\n" +
+                "- Complete each state fully before transitioning to the next.\n" +
+                "- On tool errors: stop and investigate before continuing.\n" +
+                '- To advance: transition({ transition: "<name>" })\n' +
+                "---" +
+                (status.driverCall ? `\n\n${status.driverCall}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {
