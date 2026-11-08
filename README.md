@@ -939,6 +939,9 @@ no model call, no tokens:
   unknown), start from the ledger's `started_at` of the line's task session (matched by its `task`, which the
   ledger records from the session context; `?` for a land with no ledger row, a `DD.MM` prefix when the run began
   the day before). Lands of other repos do not appear: the list is the queue repo's log. Each section and day folds on a click.
+  `✗ Failed (n)` follows, folded until a click: every `failed` line of the queue, newest first, `bar id DD.MM reason`
+  — the reason is the first line of the line's last note (`no note` without one), cut to the pane body width, the date that
+  note's (`date unknown` for a line with no dated note, listed last).
 - **Sessions** — the workflow sessions of THIS Claude Code session as a tree (`◆` a root with children, bright `⚙`
   a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
   or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's

@@ -32,6 +32,9 @@ export type QueueLine = {
   priority?: string
 }
 
+/** A `failed` queue line: its reason is the first line of its last note (`''` none), its date that note's (`''` unknown). */
+export type FailedLine = { id: string; difficulty: string; date: string; reason: string }
+
 export type QueueView = {
   file: string
   window: number
@@ -43,6 +46,8 @@ export type QueueView = {
   ready: QueueLine[]
   /** pending tasks waiting (not parked), with the picker's own reason */
   waiting: { id: string; why: string; difficulty: string }[]
+  /** every failed line, newest first (an undated one after the dated, the later in the file first) */
+  failedLines: FailedLine[]
 }
 
 /** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown). */

@@ -67,7 +67,47 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 1,
       "lastNoteDate": "2026-11-07",
+      "lastNote": "landed abc",
       "text": "d"
+    },
+    {
+      "id": "FAIL-LONG",
+      "status": "failed",
+      "exclusive": false,
+      "paused": false,
+      "notes": 1,
+      "lastNoteDate": "2026-11-08",
+      "lastNote": "a reason that runs on and on well past the width of any plan pane a person would open beside the chat",
+      "text": "f4"
+    },
+    {
+      "id": "FAIL-OLD",
+      "status": "failed",
+      "difficulty": "4",
+      "exclusive": false,
+      "paused": false,
+      "notes": 1,
+      "lastNoteDate": "2026-11-06",
+      "lastNote": "gate red: the suite",
+      "text": "f"
+    },
+    {
+      "id": "FAIL-NEW",
+      "status": "failed",
+      "exclusive": false,
+      "paused": false,
+      "notes": 1,
+      "lastNoteDate": "2026-11-07",
+      "lastNote": "closed as a split",
+      "text": "f2"
+    },
+    {
+      "id": "FAIL-BARE",
+      "status": "failed",
+      "exclusive": false,
+      "paused": false,
+      "notes": 0,
+      "text": "f3"
     }
   ]
 };

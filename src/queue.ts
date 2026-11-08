@@ -542,6 +542,8 @@ export interface QueueLineView {
   readonly notes: number;
   /** The date of the task's last note (a land writes one), when it has one. */
   readonly lastNoteDate?: string;
+  /** The first line of the task's last note (a failed mark writes its reason there), when it has one. */
+  readonly lastNote?: string;
   readonly text: string;
   /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
   readonly reason?: string;
@@ -554,6 +556,11 @@ export interface QueueLineView {
 const prioOf = (l: QueueLine): Priority | undefined => {
   const p = priorityOf(l);
   return p === null || p === "normal" ? undefined : p;
+};
+
+const lastNoteOf = (l: QueueLine): { lastNote?: string } => {
+  const first = (l.notes.at(-1)?.text ?? "").trim().split("\n")[0]?.trim() ?? "";
+  return first === "" ? {} : { lastNote: first };
 };
 
 /** Every line of a queue with, for each pending one, the picker's reason evaluated without the window. */
@@ -580,6 +587,7 @@ export function describeQueue(queue: Queue): {
       paused: l.paused,
       notes: l.notes.length,
       ...(l.notes.at(-1)?.date !== undefined ? { lastNoteDate: l.notes.at(-1)?.date } : {}),
+      ...lastNoteOf(l),
       text: l.text,
       ...(l.status === "pending"
         ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }

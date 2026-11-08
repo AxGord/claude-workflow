@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { AgentSeen, Land, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
+import type { AgentSeen, FailedLine, Land, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
 
 const PANE = 'workflow-plan'
 const PERIOD_MS = 15000
@@ -9,15 +9,17 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-4' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-5' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
-/** The Plan tab sections the person folded (running, next, lands); none by default. */
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
 /** Agents seen linked to a workflow session, kept after the session ends (its file is removed): the end
  * notification of a driver, worker or reviewer is drawn from this. */
 const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, { shape: 'agents-seen-1' })
+/** The Plan tab sections whose fold the person flipped (running, next, lands, failed): none by default, so all sections show but FOLDED_BY_DEFAULT ones. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-1' })
+/** Sections that start folded: a click on one unfolds it. */
+const FOLDED_BY_DEFAULT = new Set(['failed'])
 /** The session whose card is open in the Sessions tab ('' none). */
 const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { shape: 'expanded-1' })
 
@@ -116,7 +118,7 @@ function parseSession(text: string): Parsed | null {
 }
 
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }): QueueView {
@@ -132,6 +134,12 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     reason: l.reason ?? '',
   }))
   const order = new Map(api.lines.map(l => [l.id, l.pickOrder ?? 0]))
+  // newest first by the date of the last note; an undated line after the dated; ties: the later in the file first
+  const failedLines: FailedLine[] = api.lines
+    .map((l, i) => ({ l, i }))
+    .filter(x => x.l.status === 'failed')
+    .sort((a, b) => (b.l.lastNoteDate ?? '').localeCompare(a.l.lastNoteDate ?? '') || b.i - a.i)
+    .map(({ l }) => ({ id: l.id, difficulty: l.difficulty ?? '', date: l.lastNoteDate ?? '', reason: l.lastNote ?? '' }))
   const strip = ({ reason: _r, ...l }: QueueLine & { reason: string }): QueueLine => l
   const pending = lines.filter(l => l.status === 'pending')
   return {
@@ -145,6 +153,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     waiting: pending
       .filter(l => l.reason !== 'ready' && !l.isParked)
       .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty })),
+    failedLines,
   }
 }
 
@@ -664,8 +673,8 @@ export const register: Register = on => {
     const tab: View = s.queue ? ((await read($, view)) ?? 'plan') : 'sessions'
     const open: string = (await read($, expanded)) ?? ''
     const foldedNow: string[] = (await read($, folded)) ?? []
-    const isOpen = (key: string) => !foldedNow.includes(key)
-    // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default)
+    const isOpen = (key: string) => foldedNow.includes(key) === FOLDED_BY_DEFAULT.has(key)
+    // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones)
     const header = (key: string, color: string, title: string) => (
       <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => (f.includes(key) ? f.filter(k => k !== key) : [...f, key]))}>
         <Text color={color} weight="bold">{isOpen(key) ? '▾' : '▸'} {title}</Text>
@@ -817,6 +826,20 @@ export const register: Register = on => {
                     ))
                   : []),
               ]
+            })}
+          {header('failed', 'red', `✗ Failed (${q.failedLines.length})`)}
+          {isOpen('failed') && q.failedLines.length === 0 && <Text dimColor>  nothing</Text>}
+          {isOpen('failed') &&
+            q.failedLines.map(l => {
+              // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
+              const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(l.date)
+              const stamp = when ? `${when[2]}.${when[1]}` : 'date unknown'
+              const lead = `${' '.repeat(10)}${l.id} ${stamp} `
+              const fit = Math.max(10, (e.props?.bodyColumns ?? 100) - lead.length)
+              const reason = l.reason === '' ? 'no note' : l.reason.length > fit ? l.reason.slice(0, fit - 1) + '…' : l.reason
+              return (
+                <Text>{'    '}{level(l.difficulty)} {l.id} <Text dimColor>{stamp} {reason}</Text></Text>
+              )
             })}
         </Box>
       )

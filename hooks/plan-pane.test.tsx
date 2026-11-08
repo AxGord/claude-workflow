@@ -219,3 +219,42 @@ test('ready lines come in the picker\'s order, the priority named', () => {
   expect(view.ready.map(l => l.id)).toEqual(['NEXT-2', 'NEXT-1'])
   expect(view.ready[0].priority).toBe('high')
 })
+
+test('failed lines come newest first, undated last, each with its reason', () => {
+  const view = queueView('/proj/q.yaml', API_QUEUE as never)
+  expect(view.failedLines.map(l => l.id)).toEqual(['FAIL-LONG', 'FAIL-NEW', 'FAIL-OLD', 'FAIL-BARE'])
+  expect(view.failedLines.slice(1)).toEqual([
+    { id: 'FAIL-NEW', difficulty: '', date: '2026-11-07', reason: 'closed as a split' },
+    { id: 'FAIL-OLD', difficulty: '4', date: '2026-11-06', reason: 'gate red: the suite' },
+    { id: 'FAIL-BARE', difficulty: '', date: '', reason: '' },
+  ])
+})
+
+test('Failed is folded by default, shows its count, and unfolds on a click with bar, id, date and reason per row', async ($, on) => {
+  engine(on, true)
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /▸ ✗ Failed \(4\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /FAIL-NEW/ })).toBeUndefined()
+  await ui.press({ key: 'fold-failed' })
+  expect(await ui.find({ type: 'Text', text: /▾ ✗ Failed \(4\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ FAIL-OLD 06\.11 gate red: the suite/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? FAIL-NEW 07\.11 closed as a split/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? FAIL-BARE date unknown no note/ })).toBeDefined()
+  const order = (await ui.findAll({ type: 'Text', text: /FAIL-/ })).map(t => /FAIL-\w+/.exec(t.text)?.[0])
+  expect(order).toEqual(['FAIL-LONG', 'FAIL-NEW', 'FAIL-OLD', 'FAIL-BARE'])
+  await ui.press({ key: 'fold-failed' })
+  expect(await ui.find({ type: 'Text', text: /FAIL-NEW/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a failed row\'s reason is cut with an ellipsis to the pane body width, not the viewport', async ($, on) => {
+  engine(on, true)
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 50 }, surface: 'terminal' })
+  await ui.press({ key: 'fold-failed' })
+  const text = (await ui.find({ type: 'Text', text: /FAIL-LONG/ }))?.text ?? ''
+  expect(text).toMatch(/FAIL-LONG 08\.11 a reason that.*…$/)
+  expect(text.length).toBeLessThanOrEqual(50)
+  await ui.unmount()
+})
