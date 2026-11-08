@@ -27,7 +27,13 @@ export interface MapOptions {
   /** a lane to highlight (`/map/<session id>`) */
   readonly highlight?: string;
   /** the queue's ready lines, for the `next:` row */
-  readonly next?: readonly { readonly id: string; readonly difficulty?: unknown }[];
+  readonly next?: readonly {
+    readonly id: string;
+    readonly difficulty?: unknown;
+    readonly kind?: unknown;
+  }[];
+  /** every queue line's kind by id: a lane's task names its line; a task with no line here keeps a blank mark */
+  readonly kinds?: Readonly<Record<string, string>>;
   /** sessions whose exec waits for a pool lease (`pool_starved`) */
   readonly pool?: readonly string[];
   /** ended lanes older than this fold into `landed earlier:` (default one hour) */
@@ -150,6 +156,8 @@ export interface MapPlaque {
   /** the difficulty bar drawn first inside the plaque (`""` when the lane has no known difficulty: its width stays blank), and its colour token */
   readonly bar: string;
   readonly barC: string;
+  /** the kind mark right after the bar (a blank when the lane's task has no queue line) */
+  readonly kind: string;
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -200,6 +208,8 @@ export interface MapStrip {
     /** the difficulty bar drawn before the plaque, and its colour token */
     readonly bar: string;
     readonly barC: string;
+    /** the kind mark right after the bar */
+    readonly kind: string;
   }[];
   readonly more: number;
 }
@@ -313,6 +323,30 @@ export function difficultyBar(d: unknown): { readonly text: string; readonly tok
   return { text: "▰".repeat(full) + "▱".repeat(5 - full), token: difficultyToken(d) };
 }
 
+/** The glyph of each task kind: text, none an emoji. */
+export const KIND_MARKS = { bug: "※", research: "⚑", feature: "◆" } as const;
+
+/**
+ * The kind mark every view draws right after the difficulty bar, one cell wide: the glyph of the line's
+ * `kind` (a line with no `kind`, or one that is not a kind, reads as feature), a blank of the same width
+ * when there is no task line at all (`undefined`).
+ */
+export function kindMark(line: { readonly kind?: unknown } | undefined): string {
+  if (line === undefined) return " ";
+  const k = typeof line.kind === "string" ? line.kind.trim().toLowerCase() : "";
+  return k in KIND_MARKS ? KIND_MARKS[k as keyof typeof KIND_MARKS] : KIND_MARKS.feature;
+}
+
+/** The queue line a session's `task` names: its id is the text up to the first space or colon. */
+function taskLineOf(
+  task: unknown,
+  kinds: Readonly<Record<string, string>> | undefined,
+): { readonly kind: string } | undefined {
+  if (typeof task !== "string" || kinds === undefined) return undefined;
+  const id = /^[^\s:]+/.exec(task)?.[0] ?? "";
+  return Object.hasOwn(kinds, id) ? { kind: kinds[id] } : undefined;
+}
+
 /** `slice-worker` → `worker` */
 export function roleOf(workflow: string | undefined): string {
   const w = workflow ?? "";
@@ -334,6 +368,12 @@ function localClock(ms: number): string {
 
 /** The room a difficulty bar takes in front of a plaque's id: five cells and a gap, drawn or blank. */
 const BAR_W = textWidth("?????") + 6;
+
+/** The room the kind mark takes after the bar: one cell and a gap, drawn or blank. */
+const KIND_W = textWidth("◆") + 6;
+
+/** The room both take in front of an id. */
+const LEAD_W = BAR_W + KIND_W;
 
 const time = (ts: string | undefined): number => (ts ? Date.parse(ts) : NaN);
 
@@ -741,7 +781,7 @@ function layLane(
   }
   // the difficulty bar leads the plaque; a lane without one keeps the width blank so ids stay aligned
   const bar = difficultyKnown(s.difficulty) ? difficultyBar(s.difficulty).text : "";
-  const room = G.plaqueMax - BAR_W - textWidth(sub) - 3 * 10;
+  const room = G.plaqueMax - LEAD_W - textWidth(sub) - 3 * 10;
   const full = laneTitle(s);
   let title = full;
   if (textWidth(title, G.titleW) > room) {
@@ -750,7 +790,7 @@ function layLane(
   }
   const width = Math.min(
     G.plaqueMax,
-    BAR_W + textWidth(title, G.titleW) + G.charW * 2 + textWidth(sub) + 3 * 10,
+    LEAD_W + textWidth(title, G.titleW) + G.charW * 2 + textWidth(sub) + 3 * 10,
   );
 
   // the driver chip: the lane's own agent, on the workflow's driver model when it declares one
@@ -802,6 +842,7 @@ function layLane(
     plaque: {
       bar,
       barC: difficultyToken(s.difficulty),
+      kind: kindMark(taskLineOf(s.task, opts.kinds)),
       x: plaqueX,
       y: endY,
       width,
@@ -1080,6 +1121,7 @@ export function layout(
             c: l.s.outcome === "completed" ? "--ok" : "--bad",
             bar: difficultyBar(l.s.difficulty).text,
             barC: difficultyToken(l.s.difficulty),
+            kind: kindMark(taskLineOf(l.s.task, opts.kinds)),
           })),
           more: Math.max(0, newest.length - G.earlierShown),
         };
@@ -1182,6 +1224,7 @@ export function layout(
             c: difficultyToken(l.difficulty),
             bar: difficultyBar(l.difficulty).text,
             barC: difficultyToken(l.difficulty),
+            kind: kindMark(l),
           })),
           more: Math.max(0, ready.length - G.nextShown),
         }
@@ -1236,6 +1279,18 @@ function plaqueEls(key: string, p: MapPlaque): SceneEl[] {
             c: p.barC,
           },
         ];
+  const kind: SceneEl[] =
+    p.kind.trim() === ""
+      ? []
+      : [
+          {
+            key: `${key}:kind`,
+            tag: "text",
+            cls: "m-kind",
+            attrs: { x: x + 10 + BAR_W, y: y + 4 },
+            text: p.kind,
+          },
+        ];
   return [
     {
       key: `${key}:box`,
@@ -1245,11 +1300,12 @@ function plaqueEls(key: string, p: MapPlaque): SceneEl[] {
       ...(c ? { c } : {}),
     },
     ...bar,
+    ...kind,
     {
       key: `${key}:text`,
       tag: "text",
       cls: "m-plaque-text",
-      attrs: { x: x + 10 + BAR_W, y: y + 4 },
+      attrs: { x: x + 10 + LEAD_W, y: y + 4 },
       text: title,
       ...(full !== undefined ? { title: full } : {}),
     },
@@ -1257,7 +1313,7 @@ function plaqueEls(key: string, p: MapPlaque): SceneEl[] {
       key: `${key}:sub`,
       tag: "text",
       cls: "m-plaque-sub",
-      attrs: { x: x + 10 + BAR_W + textWidth(title, G.titleW) + 10, y: y + 4 },
+      attrs: { x: x + 10 + LEAD_W + textWidth(title, G.titleW) + 10, y: y + 4 },
       text: sub,
     },
   ];
@@ -1293,7 +1349,7 @@ function stripEls(key: string, s: MapStrip, x: number): SceneEl[] {
   let at = x + textWidth(s.lead) + 10;
   for (const it of s.items) {
     const w = textWidth(it.id, G.titleW) + 20;
-    const barW = BAR_W;
+    const barW = LEAD_W;
     els.push(
       {
         key: `${key}:${it.key}:bar`,
@@ -1303,6 +1359,17 @@ function stripEls(key: string, s: MapStrip, x: number): SceneEl[] {
         text: it.bar,
         c: it.barC,
       },
+      ...(it.kind.trim() === ""
+        ? []
+        : [
+            {
+              key: `${key}:${it.key}:kind`,
+              tag: "text" as const,
+              cls: "m-kind",
+              attrs: { x: at + BAR_W, y: s.y + 17 },
+              text: it.kind,
+            },
+          ]),
       {
         key: `${key}:${it.key}:box`,
         tag: "rect",

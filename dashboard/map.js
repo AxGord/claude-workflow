@@ -27,6 +27,7 @@ export function createMap({ root, fetchJSON }) {
   let sessions = [];
   let workflows = {};
   let next = [];
+  let kinds = {}; // every queue line's kind by id, for the plaques
   let lane = null; // the lane /map/<id> highlights
   let shown = false;
   let follow = true;
@@ -67,11 +68,16 @@ export function createMap({ root, fetchJSON }) {
     if (s) sessions = s;
     if (w) workflows = w;
     const ready = [];
+    const byId = {};
     for (const file of queues || []) {
       const q = await fetchJSON('/api/queue?file=' + encodeURIComponent(file));
-      for (const l of q?.lines || []) if (l.status === 'pending' && l.reason === 'ready') ready.push({ id: l.id, difficulty: l.difficulty });
+      for (const l of q?.lines || []) {
+        byId[l.id] = l.kind;
+        if (l.status === 'pending' && l.reason === 'ready') ready.push({ id: l.id, difficulty: l.difficulty, kind: l.kind });
+      }
     }
     next = ready;
+    kinds = byId;
     schedule();
   }
 
@@ -124,7 +130,7 @@ export function createMap({ root, fetchJSON }) {
   function render() {
     const folded = fold([...seedEvents(sessions), ...events]);
     const pool = sessions.filter(s => s.pool_starved).map(s => s.session_id);
-    const map = layout(folded, workflows, { now: Date.now(), width: root.clientWidth || 1200, highlight: lane || undefined, next, pool });
+    const map = layout(folded, workflows, { now: Date.now(), width: root.clientWidth || 1200, highlight: lane || undefined, next, kinds, pool });
     const sc = scene(map);
     // what the reader sees before anything moves: the lane at the top of the view stays where it is, and
     // only a reader who is at the bottom now is carried to a new lane

@@ -48,6 +48,8 @@ export type QueueView = {
   waiting: { id: string; why: string; difficulty: string }[]
   /** every failed line, newest first (an undated one after the dated, the later in the file first) */
   failedLines: FailedLine[]
+  /** every queue line's kind glyph by id (`kindMark`, from /api/queue), drawn right after the difficulty bar; absent id = blank */
+  marks: Record<string, string>
 }
 
 /** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown). */

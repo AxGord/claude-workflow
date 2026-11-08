@@ -9,7 +9,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-5' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-6' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -118,7 +118,7 @@ function parseSession(text: string): Parsed | null {
 }
 
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }): QueueView {
@@ -154,6 +154,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
       .filter(l => l.reason !== 'ready' && !l.isParked)
       .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty })),
     failedLines,
+    marks: Object.fromEntries(api.lines.map(l => [l.id, l.mark ?? ' '])),
   }
 }
 
@@ -714,6 +715,9 @@ export const register: Register = on => {
         </Text>
       )
     }
+    // the kind glyph the engine's /api/queue gives each line (`kindMark`), right after the bar; a blank cell when the
+    // line is not in the queue
+    const kindOf = (id: string) => <Text dimColor>{q && Object.hasOwn(q.marks, id) ? q.marks[id] : ' '}</Text>
     const tabRow = (
       <Box flexDirection="row" gap={2}>
         {tabs.map(t => (
@@ -778,7 +782,7 @@ export const register: Register = on => {
       body = (
         <Box flexDirection="column">
           {q.waiting.length === 0 && <Text dimColor>Nothing waits.</Text>}
-          {q.waiting.slice(0, room).map(w => <Text>{level(w.difficulty)} {w.id}<Text dimColor> {w.why}</Text></Text>)}
+          {q.waiting.slice(0, room).map(w => <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}<Text dimColor> {w.why}</Text></Text>)}
           {q.waiting.length > room && <Text dimColor>+{q.waiting.length - room} more</Text>}
         </Box>
       )
@@ -801,14 +805,14 @@ export const register: Register = on => {
             const where = !p ? 'no pipeline' : leaf && leaf.id !== p.id ? `${p.state} › ${leaf.state}` : p.state
             return (
               <Text>
-                {'  '}{level(l.difficulty)} {l.id}  <Text color={p ? 'cyan' : 'yellow'}>{where}</Text>
+                {'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}  <Text color={p ? 'cyan' : 'yellow'}>{where}</Text>
                 <Text dimColor> {p ? age(now - (leaf ?? p).since) : ''}</Text>
               </Text>
             )
           })}
           {header('next', 'blue', `⏭ Next (${q.ready.length})`)}
           {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
-          {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{level(l.difficulty)} {l.id}{l.priority ? ` [${l.priority}]` : ''}</Text>)}
+          {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}{l.priority ? ` [${l.priority}]` : ''}</Text>)}
           {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in the picker's order</Text>}
           {header('lands', 'green', `✓ Landed · 24h (${s.lands.length})`)}
           {isOpen('lands') &&
@@ -822,7 +826,7 @@ export const register: Register = on => {
                 </Button>,
                 ...(isOpen(key)
                   ? mine.map(l => (
-                      <Text>{'    '}{level(l.difficulty)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
+                      <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
                     ))
                   : []),
               ]
@@ -834,11 +838,11 @@ export const register: Register = on => {
               // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
               const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(l.date)
               const stamp = when ? `${when[2]}.${when[1]}` : 'date unknown'
-              const lead = `${' '.repeat(10)}${l.id} ${stamp} `
+              const lead = `${' '.repeat(12)}${l.id} ${stamp} `
               const fit = Math.max(10, (e.props?.bodyColumns ?? 100) - lead.length)
               const reason = l.reason === '' ? 'no note' : l.reason.length > fit ? l.reason.slice(0, fit - 1) + '…' : l.reason
               return (
-                <Text>{'    '}{level(l.difficulty)} {l.id} <Text dimColor>{stamp} {reason}</Text></Text>
+                <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {l.id} <Text dimColor>{stamp} {reason}</Text></Text>
               )
             })}
         </Box>

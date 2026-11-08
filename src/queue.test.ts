@@ -16,10 +16,12 @@ import {
   parseQueue,
   pickQueue,
   planPick,
+  KINDS,
   readQueue,
   resolveQueueFile,
   setQueueWindow,
 } from "./queue.js";
+import { kindMark } from "./map-layout.js";
 import { formatQueueNext } from "./tools.js";
 import { convertLine, markdownToYaml } from "./queue-convert.js";
 
@@ -1307,6 +1309,38 @@ describe("describeQueue", () => {
     );
     const ids = Object.fromEntries(describeQueue(aq).lines.map(l => [l.id, l.afterIds]));
     expect(ids).toEqual({ A: [], B: [], C: ["B"] });
+  });
+
+  it("carries each line's kind and its glyph: feature when absent, one glyph per kind", () => {
+    const kq = parseQueue(
+      YAML.stringify({
+        batch_size: 1,
+        tasks: [
+          { id: "A", status: "pending", repo: "/tmp", text: "a" },
+          { id: "B", status: "pending", kind: "bug", repo: "/tmp", text: "b" },
+          { id: "C", status: "pending", kind: "research", repo: "/tmp", text: "c" },
+          { id: "D", status: "pending", kind: "feature", repo: "/tmp", text: "d" },
+          { id: "E", status: "pending", kind: "-", repo: "/tmp", text: "e" },
+          { id: "F", status: "pending", kind: "nonsense", repo: "/tmp", text: "f" },
+        ],
+      }),
+      "/tmp/kq.yaml",
+    );
+    const lines = describeQueue(kq).lines;
+    expect(lines.map(l => [l.id, l.kind, l.mark])).toEqual([
+      ["A", "feature", "◆"],
+      ["B", "bug", "※"],
+      ["C", "research", "⚑"],
+      ["D", "feature", "◆"],
+      ["E", "feature", "◆"],
+      ["F", "feature", "◆"],
+    ]);
+  });
+
+  it("every kind the queue accepts has its own glyph in the views' helper", () => {
+    const marks = KINDS.map(k => kindMark({ kind: k }));
+    expect(new Set(marks).size).toBe(KINDS.length);
+    expect(marks).not.toContain(" ");
   });
 
   it("keeps the window reason in the real pick", () => {

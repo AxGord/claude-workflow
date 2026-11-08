@@ -106,6 +106,10 @@ const ui = {
     const b = Layout.difficultyBar(d);
     return `<span class="diffbar${b.token === '--text-4' ? ' unknown' : ''}" style="--c:var(${b.token})">${b.text}</span>`;
   },
+  // The kind mark, right after the difficulty bar: Layout.kindMark answers it (a blank cell for no line).
+  kind(line) {
+    return `<span class="kindmark">${Layout.kindMark(line)}</span>`;
+  },
   // model ▮▮▮▯ effort · role
   chip(model, effort, role) {
     const n = EFFORT_BARS[String(effort || '').toLowerCase()];
@@ -830,7 +834,7 @@ function planRow(l, extra, stateCls) {
   const sess = l.status === 'running' ? planSession(l.id) : null;
   const asking = sess && sessionState(sess).cls === 'st-wait';
   const title = [
-    ui.difficulty(l.difficulty),
+    ui.difficulty(l.difficulty) + ui.kind(l),
     ui.dot(asking ? 'st-wait' : stateCls + (l.status === 'running' ? ' ' + modelClass(l.model) + ' live' : '')),
     ui.plaque(escapeHtml(l.id)),
     l.priority ? `<span class="flags mono">${escapeHtml(l.priority)}</span>` : '',
@@ -874,7 +878,7 @@ function renderPlanCard() {
   if (!l) { el.style.display = 'none'; return; }
   el.style.display = '';
   const kind = Layout.queueNodeKind(l);
-  put('plan-card', ui.label(ui.difficulty(l.difficulty) + ' ' + ui.plaque(escapeHtml(l.id)) + ` <span class="flags">${kind}</span>`
+  put('plan-card', ui.label(ui.difficulty(l.difficulty) + ui.kind(l) + ' ' + ui.plaque(escapeHtml(l.id)) + ` <span class="flags">${kind}</span>`
     + ' <a class="close" href="#" data-plan-id="">close</a>')
     + (l.after ? ui.kv('after', escapeHtml(l.after)) : '')
     + `<div class="plan-text">${escapeHtml(l.text)}</div>`
@@ -896,7 +900,7 @@ document.addEventListener('click', ev => {
 // `next: … +N` / `landed earlier: … +N` over a group of lines (the first few, then the count).
 function planStrip(lead, lines, cls) {
   const shown = lines.slice(0, 6);
-  return ui.strip(lead, shown.map(l => ui.difficulty(l.difficulty) + ui.plaque(escapeHtml(l.id))),
+  return ui.strip(lead, shown.map(l => ui.difficulty(l.difficulty) + ui.kind(l) + ui.plaque(escapeHtml(l.id))),
     lines.length - shown.length, cls);
 }
 

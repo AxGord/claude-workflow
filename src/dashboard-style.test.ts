@@ -203,6 +203,13 @@ describe("GET /routes.js", () => {
     expect(MAP).toContain("from '/stable.js'");
   });
 
+  it("the map hands the layout every queue line's kind and each ready line's own", () => {
+    // /api/queue's `kind` per id feeds the lanes' marks; a ready line carries its own into `next:`
+    expect(MAP).toContain("byId[l.id] = l.kind;");
+    expect(MAP).toContain("kind: l.kind });");
+    expect(MAP).toMatch(/highlight: lane \|\| undefined, next, kinds, pool/);
+  });
+
   it("is a 404, not the page, when the compiled module is missing", async () => {
     const res = await fetch(
       `${await serve(path.join(os.tmpdir(), "wf-no-such-routes.js"))}/routes.js`,
@@ -343,6 +350,7 @@ const QUEUE = {
       id: "RUN-1",
       status: "running",
       difficulty: 6,
+      kind: "bug",
       model: "opus",
       exclusive: false,
       paused: false,
@@ -363,6 +371,7 @@ const QUEUE = {
       status: "pending",
       reason: "after RUN-1",
       difficulty: 9,
+      kind: "research",
       exclusive: false,
       paused: true,
       text: "t",
@@ -517,16 +526,30 @@ describe("every view renders with the shared components", () => {
     expect(PAGE).not.toContain("planDifficulty");
     // RUN-1 is difficulty 6: three of five cells, in its token, before the state dot
     expect(html).toMatch(
-      /<span class="diffbar" style="--c:var\(--diff-6\)">▰▰▰▱▱<\/span> <span class="dot st-run opus live">/,
+      /<span class="diffbar" style="--c:var\(--diff-6\)">▰▰▰▱▱<\/span><span class="kindmark">※<\/span> <span class="dot st-run opus live">/,
     );
-    // the strip item: bar, then the plaque
+    // the strip item: bar, the kind mark (a line with no kind reads as feature), then the plaque
     expect(html).toMatch(
-      /<span class="diffbar" style="--c:var\(--diff-3\)">▰▰▱▱▱<\/span><span class="plaque">NEXT-1/,
+      /<span class="diffbar" style="--c:var\(--diff-3\)">▰▰▱▱▱<\/span><span class="kindmark">◆<\/span><span class="plaque">NEXT-1/,
     );
+    // a research line shows its glyph in the plan row
+    expect(html).toMatch(/<span class="kindmark">⚑<\/span> <span class="dot st-wait">/);
     // unknown difficulty: five wide placeholder
     const page = loadPage();
     expect(page.run("ui.difficulty(undefined)")).toBe(
       '<span class="diffbar unknown" style="--c:var(--text-4)">?????</span>',
+    );
+    // no queue line: a blank of the mark's width
+    expect(page.run("ui.kind(undefined)")).toBe('<span class="kindmark"> </span>');
+  });
+
+  it("the plan card's heading carries the bar and the kind mark of the selected line", () => {
+    const page = loadPage();
+    page.run(
+      `planLines = ${JSON.stringify(QUEUE.lines.map(l => ({ ...l, afterIds: [] })))}; planSelected = "RUN-1"; renderPlanCard();`,
+    );
+    expect(page.els.get("plan-card")?.innerHTML).toMatch(
+      /<span class="diffbar" style="--c:var\(--diff-6\)">▰▰▰▱▱<\/span><span class="kindmark">※<\/span> <span class="plaque">RUN-1/,
     );
   });
 

@@ -15,6 +15,7 @@ import {
   type SceneEl,
   type SceneGroup,
   difficultyBar,
+  kindMark,
 } from "./map-layout.js";
 
 // --- a fixture event log: a dispatcher, a landed lane with a review loop, a stop and a land; an older
@@ -888,6 +889,122 @@ describe("the difficulty bar", () => {
     expect(p.width).toBeLessThanOrEqual(G.plaqueMax);
     const els = plaqueOf(m, "W1");
     expect(Number(els.sub.attrs.x) + textWidthOf(p.sub)).toBeLessThanOrEqual(p.x + p.width);
+  });
+});
+
+describe("the kind mark", () => {
+  it("is one text glyph per kind, none an emoji; an absent or unknown kind reads as feature, no line is blank", () => {
+    expect(kindMark({ kind: "bug" })).toBe("※");
+    expect(kindMark({ kind: "research" })).toBe("⚑");
+    expect(kindMark({ kind: "feature" })).toBe("◆");
+    expect(kindMark({})).toBe("◆");
+    expect(kindMark({ kind: undefined })).toBe("◆");
+    expect(kindMark({ kind: "nonsense" })).toBe("◆");
+    expect(kindMark(undefined)).toBe(" ");
+    for (const k of ["bug", "research", "feature"])
+      expect(kindMark({ kind: k })).not.toMatch(/\p{Emoji_Presentation}/u);
+  });
+
+  const KINDS = { "BUG-1": "bug", "RES-1": "research", "FEA-1": "feature" };
+  const events = scenario(() => {
+    start("K1", "bare", "10:00", null, { task: "BUG-1", difficulty: 4 });
+    start("K2", "bare", "10:00", null, { task: "RES-1: text", difficulty: 4 });
+    start("K3", "bare", "10:00", null, { task: "FEA-1", difficulty: 4 });
+    start("K4", "bare", "10:00", null, { task: "NO-L1", difficulty: 4 });
+    start("K5", "bare", "10:00", null, { task: "__proto__", difficulty: 4 });
+  });
+  const m = layout(fold(events), {}, { now: NOW, clock: () => "hh:mm", kinds: KINDS });
+  const plaque = (id: string) => m.bands[0].lanes.find(l => l.session === id)!.plaque;
+  const els = (id: string) => {
+    const k = `${id}:plaque`;
+    return Object.fromEntries(
+      flatEls(scene(m))
+        .filter(e => e.key.includes(`${k}:`))
+        .map(e => [e.key.slice(e.key.lastIndexOf(":") + 1), e]),
+    );
+  };
+  const flatEls = (g: SceneGroup): SceneEl[] => [...g.els, ...g.groups.flatMap(flatEls)];
+
+  it("follows the difficulty bar on every lane plaque, from the queue line the lane's task names", () => {
+    expect([plaque("K1").kind, plaque("K2").kind, plaque("K3").kind]).toEqual(["※", "⚑", "◆"]);
+    const e = els("K1");
+    expect(e.kind).toMatchObject({ cls: "m-kind", text: "※" });
+    expect(Number(e.kind.attrs.x)).toBeGreaterThan(
+      Number(e.bar.attrs.x) + textWidthOf("▰▰▰▱▱") - 1,
+    );
+    expect(Number(e.text.attrs.x)).toBeGreaterThan(Number(e.kind.attrs.x));
+  });
+
+  it("a lane with no known task line keeps a blank of the same width, so the ids stay in one column", () => {
+    expect(plaque("K4").kind).toBe(" ");
+    expect(plaque("K5").kind).toBe(" ");
+    expect(els("K4").kind).toBeUndefined();
+    expect(els("K4").text.attrs.x).toBe(els("K1").text.attrs.x);
+    expect(plaque("K4").width).toBe(plaque("K3").width);
+  });
+
+  it("starts the id of a long plaque after the bar and the mark, inside the limit", () => {
+    for (let n = 30; n <= 60; n++) {
+      const task = "X".repeat(n);
+      const long = scenario(() => start("W1", "bare", "10:00", null, { task, difficulty: 5 }));
+      const lm = layout(
+        fold(long),
+        {},
+        { now: NOW, clock: () => "hh:mm", kinds: { [task]: "bug" } },
+      );
+      const p = lm.bands[0].lanes[0].plaque;
+      expect(p.kind).toBe("※");
+      expect(p.width).toBeLessThanOrEqual(G.plaqueMax);
+      const els = flatEls(scene(lm));
+      const sub = els.find(e => e.key === "W1:plaque:sub")!;
+      expect(Number(sub.attrs.x) + textWidthOf(p.sub)).toBeLessThanOrEqual(p.x + p.width);
+      // the cut reserved the room of everything before the id (bar and mark), so the uncut width fits the limit
+      const lead = Number(els.find(e => e.key === "W1:plaque:text")!.attrs.x) - p.x - 10;
+      const titleW = Math.ceil([...p.title].length * G.titleW);
+      const subW = Math.ceil([...p.sub].length * G.charW);
+      expect(lead + titleW + subW + 3 * 10).toBeLessThanOrEqual(G.plaqueMax);
+    }
+  });
+
+  it("leads the items of the next: row and the landed earlier: row after their bars", () => {
+    const nm = layout(
+      fold([]),
+      {},
+      {
+        now: NOW,
+        next: [
+          { id: "N-1", difficulty: 4, kind: "research" },
+          { id: "N-2", difficulty: 4 },
+        ],
+      },
+    );
+    expect(nm.next!.items.map(i => i.kind)).toEqual(["⚑", "◆"]);
+    const els = flatEls(scene(nm));
+    const marks = els.filter(e => e.cls === "m-kind");
+    expect(marks.map(e => e.text)).toEqual(["⚑", "◆"]);
+    // the plaque box starts after the mark's cell, not under it
+    const box = els.find(e => e.key.endsWith(":box") && e.key.includes("next"))!;
+    expect(Number(box.attrs.x)).toBeGreaterThanOrEqual(Number(marks[0].attrs.x) + 7);
+    // the landed earlier: row: a lane folded away keeps the glyph of the line its task names, a blank if none
+    const old = scenario(() => {
+      for (const [id, task] of [
+        ["O1", "BUG-1"],
+        ["O2", "NO-L1"],
+      ] as const) {
+        start(id, "bare", "08:00", null, { task, difficulty: 2 });
+        ev("session_end", id, "08:30", { outcome: "completed" });
+      }
+    });
+    const om = layout(fold(old), {}, { now: NOW, clock: () => "hh:mm", kinds: KINDS });
+    expect(om.bands[0].earlier!.items.map(i => [i.id, i.kind])).toEqual([
+      ["NO-L1", " "],
+      ["BUG-1", "※"],
+    ]);
+    expect(
+      flatEls(scene(om))
+        .filter(e => e.cls === "m-kind")
+        .map(e => e.text),
+    ).toEqual(["※"]);
   });
 });
 

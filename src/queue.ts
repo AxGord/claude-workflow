@@ -24,6 +24,7 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 import YAML, { type Document, isMap, isScalar, isSeq, Scalar, type YAMLMap, YAMLSeq } from "yaml";
 import { projectRoot } from "./pool.js";
+import { kindMark } from "./map-layout.js";
 import { difficultyError, parseDifficulty } from "./model-table.js";
 import { DIFFICULTY_MAX } from "./types.js";
 
@@ -668,6 +669,10 @@ export interface QueueLineView {
   readonly id: string;
   readonly status: Status;
   readonly difficulty?: string;
+  /** The line's kind, `feature` when it has none. */
+  readonly kind: Kind;
+  /** The kind's glyph (`kindMark`), the one the dashboard's views and the plan pane draw after the difficulty bar. */
+  readonly mark: string;
   readonly model?: string;
   readonly after?: string;
   /** The queue ids `after` names, as the picker resolves them. */
@@ -718,6 +723,8 @@ export function describeQueue(queue: Queue): {
       afterIds: afterIdsOf(l.meta.after, byId),
       status: l.status,
       ...(l.meta.difficulty !== undefined ? { difficulty: l.meta.difficulty } : {}),
+      kind: kindOf(l) ?? "feature",
+      mark: kindMark({ kind: kindOf(l) }),
       ...(l.meta.model !== undefined ? { model: l.meta.model } : {}),
       ...(l.meta.after !== undefined ? { after: l.meta.after } : {}),
       ...(l.meta.owner !== undefined ? { owner: l.meta.owner } : {}),

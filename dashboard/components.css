@@ -32,6 +32,9 @@ h1 { color: var(--text); margin-bottom: 16px; font-size: 24px; font-weight: 700;
 .diffbar { --c: var(--text-4); display: inline-block; width: 5ch; margin-right: 8px; font-size: 11px; letter-spacing: 0; color: var(--c); white-space: nowrap; }
 .diffbar.unknown { opacity: 0.5; }
 
+/* kind mark: right after the difficulty bar, one cell wide (blank when the line is unknown) */
+.kindmark { display: inline-block; width: 1ch; margin-right: 8px; font-size: 11px; color: var(--text-3); white-space: pre; }
+
 /* states read the same in every view */
 .st-run { --c: var(--model-sonnet); box-shadow: 0 0 10px -2px var(--c); }
 .st-run.haiku { --c: var(--model-haiku); }
@@ -187,6 +190,7 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .m-plaque-text { font-size: 12px; font-weight: 600; fill: var(--text); }
 .m-plaque-sub { font-size: 12px; fill: var(--text-3); }
 .m-bar { font-size: 11px; fill: var(--c); }
+.m-kind { font-size: 11px; fill: var(--text-3); }
 .m-lead { font-size: 11px; fill: var(--text-4); }
 .m-rail { fill: none; stroke: var(--text-2); stroke-width: 1.5; }
 .m-rail-label { font-size: 10px; font-weight: 600; fill: var(--text); }
