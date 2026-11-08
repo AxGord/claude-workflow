@@ -157,11 +157,22 @@ export function buildApp(storage: Storage, loader: Loader): express.Express {
     res.sendFile(dagrePath);
   });
 
-  // Serve dashboard HTML
-  const dashboardDir = path.resolve(__dirname, "..", "dashboard");
-  app.use(express.static(dashboardDir));
+  // The route table the page's router imports (src/dashboard-routes.ts, compiled beside this file).
+  app.get("/routes.js", (_req, res) => {
+    res.sendFile(path.join(__dirname, "dashboard-routes.js"));
+  });
 
-  app.get("/", (_req, res) => {
+  // An unknown /api path is a JSON 404, never the page.
+  app.use("/api", (_req, res) => {
+    res.status(404).json({ error: "Unknown API endpoint" });
+  });
+
+  // Serve dashboard HTML: every view has a real path (src/dashboard-routes.ts), so any GET that is
+  // not a static file answers the page and the page's router picks the view.
+  const dashboardDir = path.resolve(__dirname, "..", "dashboard");
+  app.use(express.static(dashboardDir, { index: false }));
+
+  app.get("*", (_req, res) => {
     res.sendFile(path.join(dashboardDir, "index.html"));
   });
 

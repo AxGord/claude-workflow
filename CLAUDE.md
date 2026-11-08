@@ -82,7 +82,7 @@ Project-local workflows load from `./.claude/workflows/` (relative to server CWD
 | `queue-convert.ts` | The one-time converters: the old Markdown queue line parser (only here) → YAML tasks (`markdownToYaml`, `appendMarkdown` with a chosen status), and a JSON config → YAML (`jsonToYaml`) |
 | `event-log.ts` | `EventLog` (one per `Storage`/server run): `observe(prev, next)` derives events from a session write (history lines, agent link changes, difficulty, `running_exec`, ask-tagged states via the engine's resolver), global `seq`, `events/run-*.jsonl` file + bounded memory tail, `subscribe`, `since`; pure `fold` |
 | `stations.ts` | `computeStations(workflow)`: the live map's columns — the shortest happy-path route from `initial` to the success terminal (farthest non-`fail` terminal, or one marked `station: true`), exec states as scripts, per-state `station: true|false` overrides; `/api/workflows` carries it as `stations` |
-| `dashboard.ts` | Express REST API (`/api/sessions`, `/api/session/:id`, `/api/workflows`, `/api/events`, SSE `/api/events/stream`) + static file serving |
+| `dashboard.ts` | Express REST API (`/api/sessions`, `/api/session/:id`, `/api/workflows`, `/api/events`, SSE `/api/events/stream`) + static file serving; every non-`/api` path answers the page (the router is `dashboard-routes.ts`, served as `/routes.js`) |
 
 ### Key Design Patterns
 

@@ -41,6 +41,9 @@
   .graph-container { margin-top: 16px; }
   .graph-container svg { display: block; width: 100%; height: auto; }
   svg text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; pointer-events: none; user-select: none; }
+  a.session-item { display: block; color: inherit; text-decoration: none; }
+  .tabs a { color: #58a6ff; text-decoration: none; }
+  .tabs a.tab-active { color: #e6edf3; font-weight: 600; }
   .empty-state { text-align: center; padding: 40px; color: #484f58; }
   .refresh-indicator { position: fixed; top: 10px; right: 10px; font-size: 11px; color: #484f58; }
   #context-panel { margin-top: 12px; }
@@ -59,9 +62,10 @@
 <body>
 <div class="container">
   <h1>MCP Workflow Engine</h1>
-  <div style="margin-bottom:12px">
-    <a href="#" id="tab-sessions" onclick="showTab('sessions');return false">Sessions</a> |
-    <a href="#" id="tab-plan" onclick="showTab('plan');return false">Plan</a>
+  <div class="tabs" style="margin-bottom:12px">
+    <a href="/sessions" id="tab-sessions">Sessions</a> |
+    <a href="/workflows" id="tab-workflows">Workflows</a> |
+    <a href="/plan" id="tab-plan">Plan</a>
   </div>
   <div id="plan-view" style="display:none"><div class="panel"><h2>Plan</h2><div id="plan-content"><div class="empty-state">No queue</div></div></div></div>
   <div id="main-view">
@@ -71,7 +75,7 @@
         <h2>Sessions</h2>
         <div id="sessions-list"><div class="empty-state">No active sessions</div></div>
       </div>
-      <div class="panel" id="workflows-panel" style="margin-top: 16px;">
+      <div class="panel" id="workflows-panel">
         <h2>Workflows</h2>
         <div id="workflows-list"><div class="empty-state">No workflows loaded</div></div>
       </div>
@@ -90,6 +94,9 @@
 <script src="/dagre.min.js"></script>
 <script>
 let selectedSessionId = null;
+let Routes = null; // /routes.js (src/dashboard-routes.ts), imported before the first render
+let route = { view: 'sessions' };
+let shownWorkflow = null;
 let allWorkflows = {};
 let allSessions = [];
 
@@ -140,6 +147,9 @@ async function refresh() {
     const session = (sessions || []).find(s => s.session_id === selectedSessionId);
     if (session) renderDetail(session);
     else document.getElementById('detail-content').innerHTML = '<div class="empty-state">Session not found</div>';
+  } else if (route.view === 'workflow' && shownWorkflow !== route.name && workflows) {
+    if (allWorkflows[route.name]) showWorkflowGraph(route.name);
+    else document.getElementById('detail-content').innerHTML = '<div class="empty-state">Workflow not found</div>';
   }
 }
 
@@ -177,11 +187,11 @@ function renderSessionItem(s, depth = 0) {
   const agentBadge = getAgentBadge(s);
   const indent = depth > 0 ? `margin-left:${depth * 20}px` : '';
 
-  return `<div class="session-item${selected}" style="${indent}" onclick="selectSession('${escapeHtml(s.session_id)}')">
+  return `<a class="session-item${selected}" style="${indent}" href="/session/${encodeURIComponent(s.session_id)}">
     <div class="session-name">${escapeHtml(displayName)} ${statusBadge}${agentBadge}${depthBadge}${childBadge}</div>
     <div class="session-uuid">${escapeHtml(s.session_id)}</div>
     <div class="session-info">${escapeHtml(stateInfo)}</div>
-  </div>`;
+  </a>`;
 }
 
 function buildChildrenMap(sessions) {
@@ -254,17 +264,46 @@ function renderWorkflows(workflows) {
     const wf = workflows[name];
     const stateCount = Object.keys(wf.states).length;
     const desc = wf.description ? ` — ${escapeHtml(wf.description)}` : '';
-    return `<div class="session-item" onclick="showWorkflowGraph('${escapeHtml(name)}')">
+    return `<a class="session-item" href="/workflow/${encodeURIComponent(name)}">
       <div class="session-id">${escapeHtml(name)}</div>
       <div class="session-info">${stateCount} states${desc}</div>
-    </div>`;
+    </a>`;
   }).join('');
 }
 
-function selectSession(id) {
-  selectedSessionId = id;
+// Every view is a real path (src/dashboard-routes.ts): links are plain anchors, history drives the back button.
+function navigate(path) {
+  if (path !== location.pathname) history.pushState(null, '', path);
+  applyRoute();
+}
+
+function applyRoute() {
+  route = Routes.parseRoute(location.pathname) || { view: 'sessions' };
+  const canonical = Routes.routePath(route);
+  if (location.pathname !== canonical) history.replaceState(null, '', canonical);
+  const tab = Routes.routeTab(route);
+  selectedSessionId = route.view === 'session' ? route.id : null;
+  shownWorkflow = null;
+  document.getElementById('plan-view').style.display = tab === 'plan' ? '' : 'none';
+  document.getElementById('main-view').style.display = tab === 'plan' ? 'none' : '';
+  document.getElementById('sessions-panel').style.display = tab === 'sessions' ? '' : 'none';
+  document.getElementById('workflows-panel').style.display = tab === 'workflows' ? '' : 'none';
+  for (const t of ['sessions', 'workflows', 'plan'])
+    document.getElementById('tab-' + t).classList.toggle('tab-active', t === tab);
+  document.getElementById('detail-content').innerHTML =
+    `<div class="empty-state">Select a ${tab === 'workflows' ? 'workflow' : 'session'}</div>`;
+  if (tab === 'plan') refreshPlan();
   refresh();
 }
+
+document.addEventListener('click', e => {
+  if (!Routes || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest ? e.target.closest('a[href]') : null;
+  if (!a || (a.target && a.target !== '_self') || a.origin !== location.origin) return;
+  if (!Routes.parseRoute(a.pathname)) return;
+  e.preventDefault();
+  navigate(a.pathname);
+});
 
 function renderDetail(session) {
   const container = document.getElementById('detail-content');
@@ -274,12 +313,12 @@ function renderDetail(session) {
 
   // Parent/child links
   if (session.parent_session_id) {
-    html += `<div style="margin-bottom:12px"><span style="color:#8b949e">Parent:</span> <span class="parent-link" onclick="selectSession('${escapeHtml(session.parent_session_id)}')">${escapeHtml(session.parent_session_id)}</span></div>`;
+    html += `<div style="margin-bottom:12px"><span style="color:#8b949e">Parent:</span> <a class="parent-link" href="/session/${encodeURIComponent(session.parent_session_id)}">${escapeHtml(session.parent_session_id)}</a></div>`;
   }
   const children = allSessions.filter(s => s.parent_session_id === session.session_id);
   if (children.length > 0) {
     html += '<div style="margin-bottom:12px"><span style="color:#8b949e">Children:</span> ';
-    html += children.map(c => `<span class="parent-link" onclick="selectSession('${escapeHtml(c.session_id)}')">${escapeHtml(c.session_id)}</span>`).join(', ');
+    html += children.map(c => `<a class="parent-link" href="/session/${encodeURIComponent(c.session_id)}">${escapeHtml(c.session_id)}</a>`).join(', ');
     html += '</div>';
   }
 
@@ -660,6 +699,7 @@ let selectedWorkflowState = null;
 
 function showWorkflowGraph(name) {
   selectedSessionId = null;
+  shownWorkflow = name;
   selectedWorkflowState = null;
   const container = document.getElementById('detail-content');
   container.innerHTML = '<h2>Workflow: ' + escapeHtml(name) + '</h2><div class="graph-container">' + renderGraph(name, null, []) + '</div>';
@@ -710,7 +750,7 @@ function selectGraphNode(stateName) {
   if (wf) {
     const state = wf.states[stateName];
     if (state && state.sub_workflow && allWorkflows[state.sub_workflow]) {
-      showWorkflowGraph(state.sub_workflow);
+      navigate(Routes.routePath({ view: 'workflow', name: state.sub_workflow }));
       return;
     }
   }
@@ -779,14 +819,6 @@ function toggleStatePrompt(el, workflowName, stateName) {
 }
 
 // Plan tab: queue lines grouped by what they are now; reasons come from the picker via /api/queue.
-let currentTab = 'sessions';
-function showTab(t) {
-  currentTab = t;
-  document.getElementById('main-view').style.display = t === 'sessions' ? '' : 'none';
-  document.getElementById('plan-view').style.display = t === 'plan' ? '' : 'none';
-  if (t === 'plan') refreshPlan();
-}
-
 function timeIn(iso) {
   const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
   return sec < 60 ? sec + 's' : sec < 3600 ? Math.floor(sec / 60) + 'm' : Math.floor(sec / 3600) + 'h';
@@ -818,7 +850,7 @@ function renderPlan(q) {
     const f = s.stack[s.active_frame];
     const entered = s.history.filter(e => e.frame === s.active_frame && e.to === f.current_state);
     const at = entered.length ? entered[entered.length - 1].at : s.started_at;
-    return `<a href="#session=${encodeURIComponent(s.session_id)}" onclick="showTab('sessions')">${escapeHtml(f.workflow + ' @ ' + f.current_state)}</a> · ${timeIn(at)}`;
+    return `<a href="/session/${encodeURIComponent(s.session_id)}">${escapeHtml(f.workflow + ' @ ' + f.current_state)}</a> · ${timeIn(at)}`;
   });
   group('Ready', by(l => l.status === 'pending' && l.reason === 'ready'), () => '');
   group('Waiting', by(l => l.status === 'pending' && l.reason !== 'ready'), l => escapeHtml(l.reason));
@@ -841,17 +873,13 @@ async function refreshPlan() {
   document.getElementById('plan-content').innerHTML = ok.map(renderPlan).join('');
 }
 
-// Deep link: `#session=<id>` opens that session (the status-line pane links here).
-function selectFromHash() {
-  const m = /^#session=([A-Za-z0-9-]+)$/.exec(location.hash);
-  if (m) selectedSessionId = m[1];
-}
-window.addEventListener('hashchange', () => { selectFromHash(); refresh(); });
-selectFromHash();
-
-// Auto-refresh
-setInterval(() => { refresh(); if (currentTab === 'plan') refreshPlan(); }, 2000);
-refresh();
+// The page opens on the view its path names (the status-line pane links to /session/<id>).
+import('/routes.js').then(m => {
+  Routes = m;
+  window.addEventListener('popstate', applyRoute);
+  applyRoute();
+  setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); }, 2000);
+});
 </script>
 </body>
 </html>

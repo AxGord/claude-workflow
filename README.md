@@ -922,7 +922,7 @@ no model call, no tokens:
 - **Sessions** — the workflow sessions of THIS Claude Code session as a tree (`◆` a root with children, bright `⚙`
   a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
   or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's
-  `/api/workflows`), and a link to its graph in the dashboard (`#session=<id>`).
+  `/api/workflows`), and a link to its graph in the dashboard (`/session/<id>`).
 - **Waiting** — pending tasks (not parked) with the picker's own reason, from the dashboard's `/api/queue`.
 
 Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier. A session with
@@ -937,6 +937,18 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 - **Workflow list** — all loaded workflows with state counts
 - **Session detail** — state history, stack depth, context data
 - **Workflow graphs** — interactive DAG visualization rendered with dagre
+
+Every view has a real path, driven by the History API (links are plain anchors; back and forward work, a path can be opened or shared directly):
+
+| Path | View |
+|------|------|
+| `/`, `/sessions` | Sessions list |
+| `/session/<id>` | One session's detail |
+| `/workflows` | Workflow list |
+| `/workflow/<name>` | One workflow's graph and states |
+| `/plan` | Plan tab |
+
+The server answers every `GET` that is not an `/api` call or a static file with the page; an unknown `/api/...` path is a JSON 404. The route table is `src/dashboard-routes.ts`, served to the page as `/routes.js`.
 
 ### REST API
 
@@ -1035,6 +1047,7 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/stale.ts` | Stall detection: a state's `stale_after` (type defaults) and whether a session is STALE |
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |
+| `src/dashboard-routes.ts` | The dashboard's route table (path <-> view), shared by the page and the tests |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 
 ## Calibration report

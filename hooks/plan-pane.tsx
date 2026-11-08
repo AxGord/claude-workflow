@@ -682,7 +682,7 @@ export const register: Register = on => {
           <Text dimColor>{pad}from  {path.length > 1 ? '… ' + path.slice(0, -1).join(' → ') : '(start)'}{from ? `  (${age(now - from.at)} ago)` : ''}</Text>
           <Text>{pad}<Text dimColor>now   </Text><Text weight="bold">{r.state}</Text><Text dimColor>{r.visit > 1 ? `  visit ${r.visit}` : ''}{r.isWorking ? '  working' : '  waiting'}</Text></Text>
           <Text>{pad}<Text dimColor>next  </Text>{r.next.length > 0 ? r.next.join('  ') : <Text dimColor>(the dashboard at {DASHBOARD} is not answering)</Text>}</Text>
-          <Text>{pad}<Link href={`${DASHBOARD}/#session=${r.id}`} label="open the graph in the dashboard" /></Text>
+          <Text>{pad}<Link href={`${DASHBOARD}/session/${r.id}`} label="open the graph in the dashboard" /></Text>
         </Box>
       )
     }

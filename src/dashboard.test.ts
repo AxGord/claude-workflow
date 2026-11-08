@@ -118,3 +118,38 @@ describe("the plan pane's recorded /api/queue answer", () => {
     expect(body).toEqual(API_QUEUE);
   });
 });
+
+describe("dashboard paths", () => {
+  it("answers the page for every view's path", async () => {
+    const base = await setup(undefined);
+    for (const p of [
+      "/",
+      "/sessions",
+      "/session/abc",
+      "/workflows",
+      "/workflow/engine-task",
+      "/plan",
+      "/session/a%20b",
+    ]) {
+      const res = await fetch(`${base}${p}`);
+      expect(res.status, p).toBe(200);
+      expect(res.headers.get("content-type"), p).toMatch(/text\/html/);
+      expect(await res.text(), p).toContain("<title>MCP Workflow Engine</title>");
+    }
+  });
+
+  it("an unknown /api path is a JSON 404, never the page", async () => {
+    const base = await setup(undefined);
+    const res = await fetch(`${base}/api/unknown`);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Unknown API endpoint" });
+  });
+
+  it("the page carries no hash routing", () => {
+    const html = fs.readFileSync(
+      path.join(path.dirname(new URL(import.meta.url).pathname), "..", "dashboard", "index.html"),
+      "utf8",
+    );
+    expect(html).not.toMatch(/hashchange|location\.hash|#session=/);
+  });
+});
