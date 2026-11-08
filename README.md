@@ -617,7 +617,7 @@ The bundled `batch` drives a queue: `plan_queue` (write or resume it; context `q
 `paused`) → `dispatch` starts one child session per admitted line in its repo → `collect` advances them
 on agent notifications and re-picks on every freed slot → one `cross_check` of the combined diff. The
 child is `batch-task`: `claim` → `project_prepare` (worktree) → `work` (one worker agent, its session
-linked) → `review_scope` (exec: the diff's class) → `review` (one reviewer agent; FIXES → `work`) →
+linked) → `review_scope` (exec: the diff's class) → `review` (one `workflow:reviewer` agent, read-only, no session of its own; FIXES → `work`) →
 `project_land` (merge + `land_test` under the repo's land lock) → `mark_done` → `cleanup`.
 **From a plan.** A plan has two levels. A TASK can be tested, reviewed and landed on its own and leaves
 main green; a STEP cannot, or is too small to pay for its own gate, and shares its task's check, review and
@@ -758,8 +758,11 @@ driver:
   choice; finish with `LANDED <sha> task=… tokens worker=… review=… rounds=… lessons=<phrase (file)>; …|none`
   (or `CLOSED … lessons=…`): up to two follow-ups COPIED, not judged, from the agents' files; a decided choice appends ` decided=<file>` for the dispatcher to audit.
 - Agents' outputs are files: in bundled `batch-task` the worker writes `report.md` (and `handoff.md`
-  when it stops unfinished), the reviewer `review.md`, in the task's log dir `<worktree>.log` (beside
-  the worktree, kept after cleanup), and each answers with ONE line naming its file (`DONE <sha>
+  when it stops unfinished) in the task's log dir `<worktree>.log` (beside the worktree, kept after
+  cleanup); the reviewer is spawned as `workflow:reviewer` (its Write tool is limited to a `<task>.log` /
+  `<task>-logs` directory in scratch space, which the log dir beside the repo is not), so its `review.md`
+  is `/tmp/wf-batch-logs/<ID>/review.md`, and it ends with a `SubagentHandback` call instead of following a
+  session. Each answers with ONE line naming its file (`DONE <sha>
   report=…`, `BLOCKED …`, `VERDICT MERGE|FIXES|REJECT … review=… design=yes|no`); a fix round sends
   that line plus "read <file> whole", never the text. The spawn prompts also say once that a
   transition reply IS the next prompt — never `status` after it. The files hold named sections the

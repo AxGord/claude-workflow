@@ -132,10 +132,11 @@ describe("batch-task links (template text)", () => {
     expect(def().states.work.prompt).not.toMatch(/worker_visit|review_visit/);
   });
 
-  it("review links its reviewer and records no visit key", () => {
+  it("review spawns the sessionless read-only reviewer, links nothing and records no visit key", () => {
     expect(flat("review")).toContain(
-      "`link_agent({session_id: R, agent_id: <its id>})` (the engine records it as this visit's agent). END your turn on this task.",
+      "END your turn on this task (the reviewer has no session to `link_agent` to).",
     );
+    expect(def().states.review.prompt).not.toContain("link_agent({session_id: R");
     expect(def().states.review.prompt).not.toMatch(/review_agent|review_visit/);
   });
 
@@ -214,8 +215,9 @@ describe("batch-task links (template text)", () => {
     expect(md).toContain(
       "Gone → at `work`, check the tree: its commit on `batch/<ID>` and a clean worktree",
     );
+    expect(md).not.toContain("At `review`");
     expect(md).toContain(
-      "At `review`: `<wt>.log/review.md` newer than the branch's last commit (so not an earlier round's) holding a `VERDICT` line → route by that verdict",
+      "at `review` none is ever current: always spawn a fresh reviewer, whatever review.md holds",
     );
     expect(md).toContain(
       "3. Otherwise spawn a fresh agent with the prompt's text on the SAME session the current agent is linked to",

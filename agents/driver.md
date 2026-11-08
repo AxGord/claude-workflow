@@ -42,13 +42,11 @@ state: `link_agent` records the state's visit beside the agent, and the engine m
 a `current` agent is this visit's. None current → follow the prompt from its first step, as for a new
 visit. Its own steps still apply — a fix round's SendMessage of the cause to `worker_agent`, then its
 `link_agent`, included — but never ask an earlier visit's agent where it stands, never take it as this
-visit's, and never reuse an earlier visit's `review_session`.
-With a current agent, never start a new W/R session or agent at once:
+visit's. The reviewer has no session or link, so at `review` none is ever current: always spawn a fresh reviewer, whatever review.md holds (it may be an earlier round's).
+With a current agent, never start a new W session or agent at once:
 1. SendMessage the current agent asking where it stands; its answer is its notification.
 2. Gone → at `work`, check the tree: its commit on `batch/<ID>` and a clean worktree → follow the
-   prompt's verify step (as if it had just answered). At `review`: `<wt>.log/review.md` newer than the
-   branch's last commit (so not an earlier round's) holding a `VERDICT` line → route by that verdict
-   as the prompt says (as if the reviewer had just answered).
+   prompt's verify step (as if it had just answered).
 3. Otherwise spawn a fresh agent with the prompt's text on the SAME session the current agent is
    linked to (it continues from `status`), `link_agent` it, update `worker_agent` at `work` — never a
    second `start`.
@@ -58,7 +56,7 @@ Round cap: a THIRD FIXES verdict (the Nth when P's context key `max_fixes` is N)
 Agent, model opus, effort high, `run_in_background: false`, prompt exactly (fill `<wt>`, `<ID>`, `<queue_file>`
 from P's context; `<memory_index>` = P's context key `memory_index`, else omit that file from the list):
 
-    You decide the open design choice(s) of task <ID>, read-only. Read whole: <wt>.log/review.md,
+    You decide the open design choice(s) of task <ID>, read-only. Read whole: /tmp/wf-batch-logs/<ID>/review.md,
     <wt>.log/handoff.md and <wt>.log/report.md (whichever exist), the task's line in <queue_file>
     (`grep -n '<ID>'`), and the project memory index <memory_index> (open only the topic files that bear on
     the choice). Decide each choice from the project's standing principles and earlier decisions; probe the

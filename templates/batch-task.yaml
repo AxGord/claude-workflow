@@ -49,8 +49,10 @@ driver:
   prompt_ref: task-driver
 
 # Agents' outputs are FILES in the task's log dir ({{context.wt}}.log, beside the worktree, kept after
-# cleanup): the worker writes report.md (handoff.md when it stops unfinished), the reviewer review.md;
-# each answers with ONE line naming its file, so the driver and the dispatcher stay small.
+# cleanup): the worker writes report.md (handoff.md when it stops unfinished); each answers with ONE line
+# naming its file, so the driver and the dispatcher stay small. The reviewer is the read-only type
+# `workflow:reviewer`: its Write tool is limited to a `<task>.log` / `<task>-logs` directory in scratch space,
+# and the log dir sits beside the repo, so its review.md is `/tmp/wf-batch-logs/<ID>/review.md` (not kept).
 
 # Extension points (a heir replaces a state whole and keeps its routes):
 #   project_prepare — stdout = the worktree path alone (→ context.wt); on_success: work, on_error: prepare_failed
@@ -178,27 +180,23 @@ states:
     prompt: |-
       {{stderr}}
       Review {{visits.review}} of 3 of {{context.task}} (branch `batch/{{context.task}}`, worktree {{context.wt}}).
-      1. `start({workflow: "file-review", parent_session_id: "{{session_id}}", cwd: "{{context.wt}}"})` → R;
-         context_set `review_session` = R.
-      2. Spawn ONE reviewer: Agent, model {{context.review_model}}, effort {{context.review_effort}} (both
+      1. Spawn ONE reviewer: Agent, `subagent_type: "workflow:reviewer"` (the read-only type: no workflow tools,
+         so it has no session of its own), model {{context.review_model}}, effort {{context.review_effort}} (both
          empty → {{context.model}}, {{context.effort}}); from review 2 on (a verification of the fixes)
          model {{context.model_review_verify}}, effort {{context.effort_review_verify}} instead (empty =
          keep the above); `run_in_background: true`, prompt:
 
            You review task {{context.task}} of {{context.queue_file}}, read-only: its line is the brief, the
-           change is `git -C {{context.cwd}} diff HEAD...batch/{{context.task}}` (scope `diff`, your batch =
-           every file it touches). Your workflow session is R, already started — do NOT call start(): first
-           `status({session_id: "R"})`, then follow it to its terminal, passing session_id R in every call;
-           every `transition` reply IS the next prompt — never call `status` after it. Your review is a
-           FILE: write {{context.wt}}.log/review.md (the verdict, the reasons; for FIXES the full fix list;
-           a section `## Notes (non-blocking)` with the follow-ups you saw, `none` when empty; when review.md already exists (an earlier round), carry its `## Notes (non-blocking)` items into the new file; mkdir -p the dir). Answer with ONE line: `VERDICT MERGE|FIXES|REJECT <one-line summary>
-           review={{context.wt}}.log/review.md design=yes|no` (design=yes: a fix needs a design choice).
+           change is `git -C {{context.cwd}} diff HEAD...batch/{{context.task}}`; the change's working tree is
+           {{context.wt}}: read the sources there. You have no workflow session: call no workflow tool. Your review is a
+           FILE: write, with the Write tool, /tmp/wf-batch-logs/{{context.task}}/review.md (the verdict, the reasons; for FIXES the full fix list;
+           a section `## Notes (non-blocking)` with the follow-ups you saw, `none` when empty; when review.md already exists (an earlier round), carry its `## Notes (non-blocking)` items into the new file; the Write tool creates the dir). Your LAST step is ONE SubagentHandback call with ONE line: `VERDICT MERGE|FIXES|REJECT <one-line summary>
+           review=/tmp/wf-batch-logs/{{context.task}}/review.md design=yes|no` (design=yes: a fix needs a design choice).
 
-      3. `link_agent({session_id: R, agent_id: <its id>})` (the engine records it as this visit's agent).
-         END your turn on this task.
+      2. END your turn on this task (the reviewer has no session to `link_agent` to).
       On its notification: context_set `tokens_review` = the value already set ({{context.tokens_review}},
       empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the
-      worker's cause = the verdict line + "read {{context.wt}}.log/review.md whole"; with design=yes the driver first asks its decider, see its instructions, and adds "read {{context.wt}}.log/decisions.md whole"); REJECT → `reject`. The context_set first, the transition after
+      worker's cause = the verdict line + "read /tmp/wf-batch-logs/{{context.task}}/review.md whole"; with design=yes the driver first asks its decider, see its instructions, and adds "read {{context.wt}}.log/decisions.md whole"); REJECT → `reject`. The context_set first, the transition after
       it returned.
     transitions:
       land: project_land

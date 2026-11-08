@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Executor } from "./executor.js";
 import { Loader } from "./loader.js";
+import { writeToolReason } from "./read-only-gate.js";
 import type { StateDefinition } from "./types.js";
 
 // The bundled batch-task's default extension points, run as shell against a real repo. The pool is
@@ -197,5 +198,29 @@ describe("bundled batch: stale tasks", () => {
     const batch = new Loader(TEMPLATES, tmp(), null).get("batch")!;
     expect(batch.states.collect.prompt).toContain("{{stale_sessions}}");
     expect(batch.states.paused.stale_after).toBe(0);
+  });
+});
+
+describe("bundled batch-task: the reviewer is the read-only type", () => {
+  const review = (): string =>
+    new Loader(TEMPLATES, tmp(), null).get("batch-task")!.states.review.prompt;
+
+  it("review spawns workflow:reviewer, starts no session for it and names no workflow tool use", () => {
+    const p = review().replace(/\s+/g, " ");
+    expect(p).toContain('Spawn ONE reviewer: Agent, `subagent_type: "workflow:reviewer"`');
+    expect(p).toContain("call no workflow tool");
+    expect(p).toContain("the change's working tree is {{context.wt}}: read the sources there");
+    expect(p).not.toContain("your batch");
+    expect(p).toContain("Your LAST step is ONE SubagentHandback call");
+    expect(p).not.toMatch(/file-review|review_session|session_id: "?R/);
+  });
+
+  it("the review file the prompt names is a path the read-only Write gate accepts; a log dir beside the worktree is not", () => {
+    const m = review().match(/(\/tmp\/wf-batch-logs\/\{\{context\.task\}\}\/review\.md)/);
+    expect(m).not.toBeNull();
+    const file = m![1].replace("{{context.task}}", "T1");
+    expect(writeToolReason(file)).toBeUndefined();
+    expect(writeToolReason("/Users/x/dev/.wt/repo/T1.log/review.md")).toMatch(/outside the report/);
+    expect(review()).not.toContain("{{context.wt}}.log/review.md");
   });
 });
