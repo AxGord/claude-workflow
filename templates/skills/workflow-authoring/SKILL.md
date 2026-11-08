@@ -127,7 +127,7 @@ full prompt. Absent = the generic line. Needs an engine that knows the field.
 column per *station* — the states on the shortest happy-path route (`transitions`, `on_success`,
 `on_complete`, `cases["0"]`) from `initial` to the success terminal; exec states draw as scripts.
 The success terminal is the farthest terminal that is not `outcome: fail` (the early exits —
-released, closed — are nearer), or a terminal marked `station: true`. `station: false` keeps a helper
+released, closed — are nearer), or the one terminal marked `station: true` (a mark on a failure terminal or on several terminals is ignored; the loader warns). `station: false` keeps a helper
 (`prepare`, a `*_route` exec) out of the columns; `station: true` adds a reachable state off the
 path. `/api/workflows` returns the result as `stations: [{name, script, terminal}]`.
 

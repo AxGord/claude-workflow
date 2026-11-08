@@ -54,6 +54,31 @@ function distances(
   return seen;
 }
 
+/** The terminals whose `station: true` counts: exactly one non-failing terminal; any other mark is ignored. */
+function stationMarkedEnds(wf: WorkflowDefinition): string[] {
+  const marked = Object.entries(wf.states)
+    .filter(([, s]) => s.terminal && s.outcome !== "fail" && s.station === true)
+    .map(([name]) => name);
+  return marked.length === 1 ? marked : [];
+}
+
+/** One line per misplaced `station: true` on a terminal: on a failure terminal, or on more than one terminal. */
+export function stationWarnings(wf: WorkflowDefinition): string[] {
+  const marks = Object.entries(wf.states).filter(([, s]) => s.terminal && s.station === true);
+  const failing = marks.filter(([, s]) => s.outcome === "fail").map(([name]) => name);
+  const warnings: string[] = [];
+  if (failing.length > 0)
+    warnings.push(
+      `workflow ${wf.name}: station: true on a failure terminal (${failing.join(", ")}) is ignored`,
+    );
+  const good = marks.filter(([, s]) => s.outcome !== "fail");
+  if (good.length > 1)
+    warnings.push(
+      `workflow ${wf.name}: station: true on several terminals (${good.map(([n]) => n).join(", ")}) is ignored`,
+    );
+  return warnings;
+}
+
 /**
  * The columns of a workflow's band: the shortest path from `initial` to its success terminal, over
  * the happy moves (all moves when that terminal is out of their reach). The success terminal is a
@@ -75,7 +100,7 @@ export function computeStations(wf: WorkflowDefinition): Station[] {
     return best;
   };
   const ends = Object.entries(wf.states).filter(([, s]) => s.terminal && s.outcome !== "fail");
-  const marked = ends.filter(([, s]) => s.station === true).map(([name]) => name);
+  const marked = stationMarkedEnds(wf);
   const unmarked = ends.map(([name]) => name);
   // a marked terminal is the end whenever any move reaches it; the happy moves route to it when they can
   let reach = happy;
@@ -103,7 +128,9 @@ export function computeStations(wf: WorkflowDefinition): Station[] {
   return order
     .filter(name => {
       const station = wf.states[name].station;
-      return station === true ? all.has(name) : station !== false && onPath.has(name);
+      const isEnd = wf.states[name].terminal === true;
+      if (station === true && (!isEnd || marked.includes(name))) return all.has(name);
+      return station !== false && onPath.has(name);
     })
     .sort((a, b) => distance(a) - distance(b))
     .map(name => ({

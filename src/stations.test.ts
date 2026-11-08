@@ -7,8 +7,8 @@ import YAML from "yaml";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./dashboard.js";
 import { Storage } from "./storage.js";
-import type { Loader } from "./loader.js";
-import { computeStations } from "./stations.js";
+import { Loader } from "./loader.js";
+import { computeStations, stationWarnings } from "./stations.js";
 import { WorkflowDefinitionSchema, type WorkflowDefinition } from "./types.js";
 
 function fixture(name: string): WorkflowDefinition {
@@ -147,6 +147,68 @@ describe("stations rules", () => {
         wf({ a: { transitions: { go: "bad" } }, bad: { terminal: true, outcome: "fail" } }),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("station: true on a terminal that cannot be the end", () => {
+  const line = { a: { transitions: { go: "end" } } };
+  it("a failure terminal: warns and does not become the end", () => {
+    const def = wf({
+      ...line,
+      end: { terminal: true, outcome: "complete" },
+      bad: { terminal: true, outcome: "fail", station: true },
+    });
+    expect(stationWarnings(def)).toEqual([expect.stringContaining("failure terminal (bad)")]);
+    expect(shape(def)).toBe("(a > (end");
+  });
+  it("several terminals: warns and the marks are ignored", () => {
+    const def = wf({
+      a: { transitions: { x: "near", y: "m" } },
+      near: { terminal: true, outcome: "complete", station: true },
+      m: { transitions: { go: "far" } },
+      far: { terminal: true, outcome: "complete", station: true },
+    });
+    expect(stationWarnings(def)).toEqual([
+      expect.stringContaining("several terminals (near, far)"),
+    ]);
+    expect(shape(def)).toBe("(a > (m > (far");
+  });
+  it("a failure mark beside a good one: one line naming the failure, no column for it", () => {
+    const def = wf({
+      a: { transitions: { go: "end", no: "bad" } },
+      end: { terminal: true, outcome: "complete", station: true },
+      bad: { terminal: true, outcome: "fail", station: true },
+    });
+    expect(stationWarnings(def)).toEqual([expect.stringContaining("failure terminal (bad)")]);
+    expect(shape(def)).toBe("(a > (end");
+  });
+  it("one good mark: no warning", () => {
+    expect(
+      stationWarnings(wf({ ...line, end: { terminal: true, outcome: "complete", station: true } })),
+    ).toEqual([]);
+  });
+  it("the loader writes the warning to stderr", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "stw-"));
+    fs.writeFileSync(
+      path.join(dir, "w.yaml"),
+      YAML.stringify({
+        name: "w",
+        initial: "a",
+        states: {
+          a: { type: "prompt", prompt: "x", transitions: { go: "bad" } },
+          bad: { terminal: true, outcome: "fail", station: true },
+        },
+      }),
+    );
+    const seen: string[] = [];
+    const orig = console.error;
+    console.error = (m: string) => void seen.push(String(m));
+    try {
+      new Loader(null, dir, null);
+    } finally {
+      console.error = orig;
+    }
+    expect(seen.join("\n")).toContain("station: true on a failure terminal");
   });
 });
 

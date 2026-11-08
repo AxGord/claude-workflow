@@ -16,6 +16,7 @@ import {
   ModelRowObjectSchema,
   ModelChoiceObjectSchema,
 } from "./types.js";
+import { stationWarnings } from "./stations.js";
 import { driverRefError } from "./driver.js";
 import { modelTableErrors } from "./model-table.js";
 
@@ -239,6 +240,7 @@ export class Loader {
           );
           const errors = this._validate(merged);
           if (errors.length === 0) {
+            for (const w of stationWarnings(merged)) console.error(w);
             next.set(name, merged);
             if (found.tier === projectTier) own.add(name);
             break;

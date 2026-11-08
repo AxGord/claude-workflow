@@ -376,7 +376,7 @@ dispatch:
 
 ### Stations — the columns of the live workflow map
 
-`/api/workflows` returns per workflow `stations: [{name, script, terminal}]`: the states on the shortest route from `initial` to the success terminal, in order; `script` is an exec state. The route follows the happy moves (`transitions`, `on_success`, `on_complete`, `cases["0"]`; every move when the terminal is out of their reach). The success terminal is the farthest terminal whose `outcome` is not `fail`, or a terminal with `station: true`. A state's `station: false` leaves it out (an exec helper such as `prepare` or a `*_route`); `station: true` adds a reachable state that lies off the route, placed by its distance from `initial`. Computed in `src/stations.ts`.
+`/api/workflows` returns per workflow `stations: [{name, script, terminal}]`: the states on the shortest route from `initial` to the success terminal, in order; `script` is an exec state. The route follows the happy moves (`transitions`, `on_success`, `on_complete`, `cases["0"]`; every move when the terminal is out of their reach). The success terminal is the farthest terminal whose `outcome` is not `fail`, or the one terminal with `station: true` (a mark on a failure terminal, or on several terminals, is ignored and the loader warns on stderr). A state's `station: false` leaves it out (an exec helper such as `prepare` or a `*_route`); `station: true` adds a reachable state that lies off the route, placed by its distance from `initial`. Computed in `src/stations.ts`.
 
 ### Guards and the exhausted route
 
