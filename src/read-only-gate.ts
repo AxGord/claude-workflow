@@ -26,6 +26,8 @@ export interface ReadOnlyConfig {
   readonly read: readonly string[];
   /** Variables exported before the command of a read-only agent (`APQ_READ_ONLY=1`). */
   readonly env: Readonly<Record<string, string>>;
+  /** Variable names a `NAME=value cmd` prefix may set (`APQ_TEST`); GIT_*, PAGER, LD_* stay refused even when listed. */
+  readonly envAllowed: readonly string[];
   readonly agents: readonly string[];
 }
 
@@ -43,11 +45,13 @@ export function parseReadOnlyConfig(text: string): ReadOnlyConfig {
   const raw = parseYaml(text);
   if (!isObject(raw))
     throw new Error("expected an object with `write` / `read` / `env` / `agents`");
-  const { write = [], read = [], env = {}, agents } = raw;
+  const { write = [], read = [], env = {}, envAllowed = [], agents } = raw;
   const strings = (v: unknown): v is string[] =>
     Array.isArray(v) && v.every(s => typeof s === "string" && s.trim() !== "");
   if (!strings(write)) throw new Error("`write` must be a list of non-empty strings");
   if (!strings(read)) throw new Error("`read` must be a list of non-empty strings");
+  if (!strings(envAllowed) || !envAllowed.every(n => /^[A-Za-z_][A-Za-z0-9_]*$/.test(n)))
+    throw new Error("`envAllowed` must be a list of variable names");
   if (agents !== undefined && !strings(agents))
     throw new Error("`agents` must be a list of agent type names");
   if (
@@ -62,6 +66,7 @@ export function parseReadOnlyConfig(text: string): ReadOnlyConfig {
     write,
     read,
     env: env as Record<string, string>,
+    envAllowed,
     agents: agents ?? DEFAULT_READ_ONLY_AGENTS,
   };
 }
@@ -342,17 +347,35 @@ function startsWithProjectReader(command: string, config: ReadOnlyConfig | undef
   return false;
 }
 
+const ENV_REDIRECTS = /^(GIT_|LD_|DYLD_|PAGER$|PATH$|BASH_ENV$|ENV$|IFS$)/;
+
+const ENV_REFUSAL = "a NAME=value assignment can redirect a reader (GIT_*, PAGER, LD_*)";
+
+/** Why these assignments are refused, or undefined when each is listed in `envAllowed` and cannot redirect a reader. */
+function envReason(
+  names: Iterable<string>,
+  config: ReadOnlyConfig | undefined,
+): string | undefined {
+  for (const n of names)
+    if (ENV_REDIRECTS.test(n) || !(config?.envAllowed ?? []).includes(n)) return ENV_REFUSAL;
+  return undefined;
+}
+
 /** Why this segment's command is not a declared reader, or undefined. */
 function readerReason(cmd: Command, config: ReadOnlyConfig | undefined): string | undefined {
   let c = cmd;
   let viaXargs = false;
-  if (c.env.size > 0) return "a NAME=value assignment can redirect a reader (GIT_*, PAGER, LD_*)";
+  const own = envReason(c.env.keys(), config);
+  if (own) return own;
   for (let d = 0; d < 5; d++) {
     const inner = unwrap(c);
     if (!inner) break;
     const skipped = c.words.slice(0, c.words.length - inner.words.length).map(w => w.value);
-    if (skipped.some(v => /^[A-Za-z_][A-Za-z0-9_]*=/.test(v)))
-      return "a NAME=value assignment can redirect a reader (GIT_*, PAGER, LD_*)";
+    const wrapped = envReason(
+      skipped.filter(v => /^[A-Za-z_][A-Za-z0-9_]*=/.test(v)).map(v => v.slice(0, v.indexOf("="))),
+      config,
+    );
+    if (wrapped) return wrapped;
     if (skipped.some(v => basename(v) === "xargs")) viaXargs = true;
     c = inner;
   }
@@ -613,7 +636,10 @@ export function rewriteIsHarmless(command: string, config: ReadOnlyConfig | unde
 export interface ReadOnlyPayload {
   readonly agent_type?: unknown;
   readonly tool_name?: string;
-  readonly tool_input?: { readonly command?: unknown; readonly file_path?: unknown };
+  readonly tool_input?: {
+    readonly command?: unknown;
+    readonly file_path?: unknown;
+  };
 }
 
 /**
@@ -649,7 +675,10 @@ export function decideReadOnly(
     const why = writeToolReason(payload.tool_input?.file_path);
     return why === undefined
       ? { kind: "pass" }
-      : { kind: "deny", reason: `read-only: ${why}; this agent type writes only its report` };
+      : {
+          kind: "deny",
+          reason: `read-only: ${why}; this agent type writes only its report`,
+        };
   }
   const command = payload.tool_input?.command;
   if (payload.tool_name !== "Bash" || typeof command !== "string") return { kind: "pass" };

@@ -247,8 +247,13 @@ describe("read-only gate", () => {
       kind: "deny",
       reason: expect.stringContaining("not a declared reader") as string,
     });
-    expect(call("workflow:recon", "hxq lint a.hx")).toMatchObject({ kind: "env" });
-    expect(call("workflow:recon", "cat hxq")).toEqual({ kind: "env", command: "cat hxq" });
+    expect(call("workflow:recon", "hxq lint a.hx")).toMatchObject({
+      kind: "env",
+    });
+    expect(call("workflow:recon", "cat hxq")).toEqual({
+      kind: "env",
+      command: "cat hxq",
+    });
   });
 
   it("a redirect into a git work tree under scratch is refused", () => {
@@ -271,8 +276,12 @@ describe("read-only gate", () => {
     const w = (agent: string | undefined, file_path: string) =>
       decideReadOnly({ tool_name: "Write", agent_type: agent, tool_input: { file_path } }, config);
     try {
-      expect(w("workflow:recon", `${d}/wf-T.log/recon.md`)).toEqual({ kind: "pass" });
-      expect(w("workflow:reviewer", `${d}/wf-T-logs/review.md`)).toEqual({ kind: "pass" });
+      expect(w("workflow:recon", `${d}/wf-T.log/recon.md`)).toEqual({
+        kind: "pass",
+      });
+      expect(w("workflow:reviewer", `${d}/wf-T-logs/review.md`)).toEqual({
+        kind: "pass",
+      });
       expect(w("workflow:reviewer", `${wt}/src/x.ts`)).toMatchObject(DENY);
       expect(w("workflow:reviewer", `${wt}/wf-T.log/x.md`)).toMatchObject(DENY);
       expect(w("workflow:recon", `${d}/other/x.md`)).toMatchObject(DENY);
@@ -342,7 +351,10 @@ describe("composition with the pool gate", () => {
         env: { PATH: path.dirname(process.execPath) },
       });
     const out = JSON.parse(hook("read-only-gate-hook", "workflow:recon").stdout) as {
-      hookSpecificOutput: { permissionDecision: string; updatedInput: { command: string } };
+      hookSpecificOutput: {
+        permissionDecision: string;
+        updatedInput: { command: string };
+      };
     };
     expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(out.hookSpecificOutput.updatedInput.command).toContain("wf-run");
@@ -355,7 +367,10 @@ describe("composition with the pool gate", () => {
     const reader = JSON.parse(
       hook("read-only-gate-hook", "workflow:recon", "hxq lint a.hx").stdout,
     ) as {
-      hookSpecificOutput: { permissionDecision: string; updatedInput: { command: string } };
+      hookSpecificOutput: {
+        permissionDecision: string;
+        updatedInput: { command: string };
+      };
     };
     expect(reader.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(reader.hookSpecificOutput.updatedInput.command).toBe(
@@ -420,6 +435,42 @@ describe("hooks/read-only-gate.sh", () => {
   });
 });
 
+describe("envAllowed", () => {
+  const cfg = parseReadOnlyConfig(
+    JSON.stringify({
+      read: ["node"],
+      envAllowed: [
+        "APQ_TEST",
+        "GIT_DIR",
+        "PAGER",
+        "LD_PRELOAD",
+        "DYLD_X",
+        "PATH",
+        "BASH_ENV",
+        "ENV",
+        "IFS",
+      ],
+    }),
+  );
+  it("passes a listed assignment and judges the reader behind it", () => {
+    expect(call("workflow:reviewer", "APQ_TEST=unit.x cat a", cfg)).not.toMatchObject(DENY);
+    expect(call("workflow:reviewer", "APQ_TEST=unit.x node bin/test.js", cfg)).not.toMatchObject(
+      DENY,
+    );
+    expect(call("workflow:reviewer", "env APQ_TEST=unit.x cat a", cfg)).not.toMatchObject(DENY);
+    expect(call("workflow:reviewer", "APQ_TEST=unit.x rm a", cfg)).toMatchObject(DENY);
+  });
+  it("refuses an unlisted assignment and GIT_*/PAGER/LD_* even when listed", () => {
+    expect(call("workflow:reviewer", "OTHER=1 cat a", cfg)).toMatchObject(DENY);
+    expect(call("workflow:reviewer", "GIT_DIR=x cat a", cfg)).toMatchObject(DENY);
+    expect(call("workflow:reviewer", "PAGER=x cat a", cfg)).toMatchObject(DENY);
+    expect(call("workflow:reviewer", "env GIT_DIR=x cat a", cfg)).toMatchObject(DENY);
+    for (const n of ["LD_PRELOAD", "DYLD_X", "PATH", "BASH_ENV", "ENV", "IFS"])
+      expect(call("workflow:reviewer", `${n}=x cat a`, cfg)).toMatchObject(DENY);
+    expect(() => parseReadOnlyConfig(JSON.stringify({ envAllowed: ["a b"] }))).toThrow();
+  });
+});
+
 describe("shipped agent types", () => {
   const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "agents");
   const front = (n: string) =>
@@ -456,7 +507,9 @@ describe("shipped agent types", () => {
 describe("hook registration", () => {
   it("hooks.json registers read-only-gate.sh for Bash and for Write", () => {
     const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, "hooks", "hooks.json"), "utf8")) as {
-      hooks: { PreToolUse: { matcher: string; hooks: { command: string }[] }[] };
+      hooks: {
+        PreToolUse: { matcher: string; hooks: { command: string }[] }[];
+      };
     };
     for (const m of ["Bash", "Write"])
       expect(
