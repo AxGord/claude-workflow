@@ -147,6 +147,9 @@ export interface MapLoop {
 }
 
 export interface MapPlaque {
+  /** the difficulty bar drawn first inside the plaque (`""` when the lane has no known difficulty: its width stays blank), and its colour token */
+  readonly bar: string;
+  readonly barC: string;
   readonly x: number;
   readonly y: number;
   readonly width: number;
@@ -297,10 +300,15 @@ export function difficultyToken(d: unknown): string {
   return Number.isFinite(n) && n >= 1 ? `--diff-${Math.min(10, Math.round(n))}` : "--text-4";
 }
 
+function difficultyKnown(d: unknown): boolean {
+  const n = Number(d);
+  return Number.isFinite(n) && n >= 1;
+}
+
 /** The one difficulty plaque every dashboard view draws, first in its row: five cells wide, `?????` when unknown. */
 export function difficultyBar(d: unknown): { readonly text: string; readonly token: string } {
   const n = Number(d);
-  if (!Number.isFinite(n) || n < 1) return { text: "?????", token: difficultyToken(d) };
+  if (!difficultyKnown(d)) return { text: "?????", token: difficultyToken(d) };
   const full = Math.min(5, Math.max(1, Math.round(n / 2)));
   return { text: "▰".repeat(full) + "▱".repeat(5 - full), token: difficultyToken(d) };
 }
@@ -323,6 +331,9 @@ function localClock(ms: number): string {
   const d = new Date(ms);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
+
+/** The room a difficulty bar takes in front of a plaque's id: five cells and a gap, drawn or blank. */
+const BAR_W = textWidth("?????") + 6;
 
 const time = (ts: string | undefined): number => (ts ? Date.parse(ts) : NaN);
 
@@ -728,7 +739,9 @@ function layLane(
     sub = status === "landed" ? `✓${at}` : `✗ ${String(s.outcome)}${at}`;
     cls = status === "landed" ? "st-done" : "st-stop";
   }
-  const room = G.plaqueMax - textWidth(sub) - 3 * 10;
+  // the difficulty bar leads the plaque; a lane without one keeps the width blank so ids stay aligned
+  const bar = difficultyKnown(s.difficulty) ? difficultyBar(s.difficulty).text : "";
+  const room = G.plaqueMax - BAR_W - textWidth(sub) - 3 * 10;
   const full = laneTitle(s);
   let title = full;
   if (textWidth(title, G.titleW) > room) {
@@ -737,7 +750,7 @@ function layLane(
   }
   const width = Math.min(
     G.plaqueMax,
-    textWidth(title, G.titleW) + G.charW * 2 + textWidth(sub) + 3 * 10,
+    BAR_W + textWidth(title, G.titleW) + G.charW * 2 + textWidth(sub) + 3 * 10,
   );
 
   // the driver chip: the lane's own agent, on the workflow's driver model when it declares one
@@ -787,6 +800,8 @@ function layLane(
     end: { x1: lastX, x2: plaqueX, y: endY, faint: status === "running" },
     ahead,
     plaque: {
+      bar,
+      barC: difficultyToken(s.difficulty),
       x: plaqueX,
       y: endY,
       width,
@@ -1206,17 +1221,21 @@ export interface SceneGroup {
 
 const r = (n: number): number => Math.round(n * 10) / 10;
 
-function plaqueEls(
-  key: string,
-  x: number,
-  y: number,
-  title: string,
-  sub: string,
-  cls: string,
-  c: string,
-  width: number,
-  full?: string,
-): SceneEl[] {
+function plaqueEls(key: string, p: MapPlaque): SceneEl[] {
+  const { x, y, title, full, sub, cls, c, width } = p;
+  const bar: SceneEl[] =
+    p.bar === ""
+      ? []
+      : [
+          {
+            key: `${key}:bar`,
+            tag: "text",
+            cls: "m-bar",
+            attrs: { x: x + 10, y: y + 4 },
+            text: p.bar,
+            c: p.barC,
+          },
+        ];
   return [
     {
       key: `${key}:box`,
@@ -1225,11 +1244,12 @@ function plaqueEls(
       attrs: { x, y: y - G.plaqueH / 2, width, height: G.plaqueH, rx: G.plaqueH / 2 },
       ...(c ? { c } : {}),
     },
+    ...bar,
     {
       key: `${key}:text`,
       tag: "text",
       cls: "m-plaque-text",
-      attrs: { x: x + 10, y: y + 4 },
+      attrs: { x: x + 10 + BAR_W, y: y + 4 },
       text: title,
       ...(full !== undefined ? { title: full } : {}),
     },
@@ -1237,7 +1257,7 @@ function plaqueEls(
       key: `${key}:sub`,
       tag: "text",
       cls: "m-plaque-sub",
-      attrs: { x: x + 10 + textWidth(title, G.titleW) + 10, y: y + 4 },
+      attrs: { x: x + 10 + BAR_W + textWidth(title, G.titleW) + 10, y: y + 4 },
       text: sub,
     },
   ];
@@ -1273,7 +1293,7 @@ function stripEls(key: string, s: MapStrip, x: number): SceneEl[] {
   let at = x + textWidth(s.lead) + 10;
   for (const it of s.items) {
     const w = textWidth(it.id, G.titleW) + 20;
-    const barW = textWidth(it.bar) + 6;
+    const barW = BAR_W;
     els.push(
       {
         key: `${key}:${it.key}:bar`,
@@ -1449,19 +1469,7 @@ function laneScene(lane: MapLane): SceneGroup {
           text: st.label,
         });
     }
-  els.push(
-    ...plaqueEls(
-      `${k}:plaque`,
-      lane.plaque.x,
-      lane.plaque.y,
-      lane.plaque.title,
-      lane.plaque.sub,
-      lane.plaque.cls,
-      lane.plaque.c,
-      lane.plaque.width,
-      lane.plaque.full,
-    ),
-  );
+  els.push(...plaqueEls(`${k}:plaque`, lane.plaque));
   if (lane.driver) els.push(...chipEls(`${k}:driver`, lane.driver, " m-driver"));
   return {
     key: `lane:${k}`,

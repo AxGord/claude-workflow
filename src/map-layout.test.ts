@@ -833,6 +833,62 @@ describe("the difficulty bar", () => {
     expect(bars.map(e => e.text)).toEqual(["▰▰▱▱▱", "?????"]);
     expect(bars[0]?.c).toBe("--diff-4");
   });
+
+  /** Every element of a scene, flattened with the group keys dropped. */
+  const allEls = (g: SceneGroup): SceneEl[] => [...g.els, ...g.groups.flatMap(allEls)];
+  const plaqueOf = (m: MapLayout, session: string): Record<string, SceneEl> => {
+    const k = `${session}:plaque`;
+    const found = allEls(scene(m)).filter(e => e.key.includes(`${k}:`));
+    return Object.fromEntries(found.map(e => [e.key.slice(e.key.lastIndexOf(":") + 1), e]));
+  };
+
+  it("leads every lane plaque, in the difficulty colour whatever the plaque's own colour", () => {
+    for (const [id, text, token, cls] of [
+      ["A", "▰▰▰▱▱", "--diff-6", "st-done"],
+      ["C", "▰▰▱▱▱", "--diff-3", ""],
+      ["E", "▰▰▰▰▰", "--diff-9", "st-wait"],
+    ] as const) {
+      const l = lane(id);
+      expect(l.plaque).toMatchObject({ bar: text, barC: token, cls });
+      const p = plaqueOf(M, l.key);
+      expect(p.bar).toMatchObject({ cls: "m-bar", text, c: token });
+      expect(Number(p.bar.attrs.x)).toBe(l.plaque.x + 10);
+      // the id starts after the bar, inside the box
+      expect(Number(p.text.attrs.x)).toBeGreaterThan(Number(p.bar.attrs.x) + textWidthOf(text));
+      // the state text follows the id by its width and a gap, so it moves with the bar's room too
+      expect(Number(p.sub.attrs.x)).toBe(
+        Number(p.text.attrs.x) + Math.ceil([...l.plaque.title].length * G.titleW) + 10,
+      );
+      expect(Number(p.box.attrs.x) + Number(p.box.attrs.width)).toBeGreaterThanOrEqual(
+        Number(p.sub.attrs.x) + textWidthOf(l.plaque.sub),
+      );
+    }
+  });
+
+  it("a lane without a known difficulty draws no bar and keeps its width blank", () => {
+    const events = scenario(() => {
+      start("U1", "bare", "10:00", null, { task: "SAME-1" });
+      start("U2", "bare", "10:00", null, { task: "SAME-2", difficulty: 4 });
+    });
+    const m = layout(fold(events), {}, { now: NOW, clock: () => "hh:mm" });
+    const [u1, u2] = ["U1", "U2"].map(id => m.bands[0].lanes.find(l => l.session === id)!);
+    expect(u1.plaque.bar).toBe("");
+    expect(plaqueOf(m, "U1").bar).toBeUndefined();
+    expect(plaqueOf(m, "U2").bar).toBeDefined();
+    expect(plaqueOf(m, "U1").text.attrs.x).toBe(plaqueOf(m, "U2").text.attrs.x);
+    expect(u1.plaque.width).toBe(u2.plaque.width);
+  });
+
+  it("a long id is cut so the bar and the id stay inside the plaque's limit", () => {
+    const events = scenario(() => {
+      start("W1", "bare", "10:00", null, { task: "X".repeat(80), difficulty: 5 });
+    });
+    const m = layout(fold(events), {}, { now: NOW, clock: () => "hh:mm" });
+    const p = m.bands[0].lanes[0].plaque;
+    expect(p.width).toBeLessThanOrEqual(G.plaqueMax);
+    const els = plaqueOf(m, "W1");
+    expect(Number(els.sub.attrs.x) + textWidthOf(p.sub)).toBeLessThanOrEqual(p.x + p.width);
+  });
 });
 
 describe("what is cut or moved to avoid a collision keeps its full text", () => {
@@ -1083,6 +1139,34 @@ describe("the steps of a crowded branch", () => {
       const gap = (placed[k + 1].x - s.x) / 1;
       expect(textWidthOf(s.label)).toBeLessThanOrEqual(gap);
     }
+  });
+
+  it("every step stays when they all fit: the count shrinks only as far as it must", () => {
+    const few = steps.slice(0, 5).map(s => ({ ...s, name: s.name.replace("step-number-", "s") }));
+    const placed = placeSteps("b", few, 0, 600);
+    expect(placed.map(s => s.name)).toEqual(few.map(s => s.name));
+  });
+
+  it("shows as many as fit: the widest count whose middle names clear their neighbours", () => {
+    // short ends (the edge budget is 52 px) and 13-character middle names (77 px each)
+    const mixed = [
+      { name: "a", kind: "done" as const },
+      ...Array.from({ length: 8 }, (_, i) => ({ name: `middle-step-${i}`, kind: "done" as const })),
+      { name: "z", kind: "live" as const },
+    ];
+    // n shown need (width - 2 * stepPad) / (n - 1) - 4 >= 77: 300 px -> 4, 400 -> 5, 500 -> 6, 600 -> 7, 700 -> 9
+    for (const [width, count] of [
+      [300, 4],
+      [400, 5],
+      [500, 6],
+      [600, 7],
+      [700, 9],
+    ] as const)
+      expect(placeSteps("b", mixed, 0, width), `${width} px`).toHaveLength(count);
+    expect(
+      placeSteps("b", mixed, 0, 600).map(s => s.name),
+      "the first, `…`, then the latest",
+    ).toEqual(["a", "…", ...[4, 5, 6, 7].map(k => `middle-step-${k}`), "z"]);
   });
 });
 
