@@ -9,7 +9,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-3' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-4' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** The Plan tab sections the person folded (running, next, lands); none by default. */
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
@@ -158,7 +158,55 @@ async function loadQueue($: any, file: string): Promise<{ queue: QueueView | nul
   }
 }
 
-async function lands($: any, queueFile: string): Promise<Land[]> {
+/** A finished task's run, from the ledger: when its pipeline began and the difficulty it ended at. */
+type Run = { start: number; difficulty: string }
+let ledgerSeen = ''
+let ledgerRuns = new Map<string, Run>()
+const TASK_WORKFLOWS = new Set(['slice-pipeline', 'engine-task'])
+
+/** The task runs of the ledger by queue line id (the latest run of a line wins); rows without `task` are skipped. */
+export function ledgerRunsOf(text: string): Map<string, Run> {
+  const out = new Map<string, Run>()
+  for (const line of text.split('\n')) {
+    if (!line.includes('"task"')) continue
+    try {
+      const j = JSON.parse(line) as Record<string, unknown>
+      const start = Date.parse(String(j.started_at ?? ''))
+      if (typeof j.task !== 'string' || j.task === '' || !TASK_WORKFLOWS.has(String(j.workflow)) || !Number.isFinite(start)) continue
+      const old = out.get(j.task)
+      if (!old || old.start < start) out.set(j.task, { start, difficulty: typeof j.difficulty === 'number' ? String(j.difficulty) : '' })
+    } catch {
+      // a torn or foreign line is not a run
+    }
+  }
+  return out
+}
+
+/** The ledger's runs, re-read only when the file's size or mtime moved (the pane refreshes often). */
+async function ledgerRunsAt($: any, dir: string): Promise<Map<string, Run>> {
+  const entries = await $.fs.list(dir).catch(() => [])
+  const f = entries.find((x: any) => x.name === 'ledger.jsonl')
+  if (!f) return new Map()
+  const stamp = `${f.size}:${f.mtimeMs}`
+  if (stamp !== ledgerSeen) {
+    const text = await $.fs.read(`${dir}/ledger.jsonl`).catch(() => '')
+    ledgerRuns = ledgerRunsOf(String(text))
+    ledgerSeen = stamp
+  }
+  return ledgerRuns
+}
+
+const two = (n: number) => String(n).padStart(2, '0')
+
+/** `HH:MM` of a start, with its `DD.MM ` when it fell on another day than the land (a run across midnight). */
+export function startText(start: number, endAt: string): string {
+  const d = new Date(start)
+  const day = `${two(d.getDate())}.${two(d.getMonth() + 1)}`
+  const hm = `${two(d.getHours())}:${two(d.getMinutes())}`
+  return day === endAt.slice(0, 5) ? hm : `${day} ${hm}`
+}
+
+async function lands($: any, queueFile: string, dir: string): Promise<Land[]> {
   const repo = queueFile.replace(/\/\.claude\/batch\/[^/]+$/, '')
   if (repo === queueFile) return []
   const run = await $.process
@@ -167,11 +215,17 @@ async function lands($: any, queueFile: string): Promise<Land[]> {
       { timeoutMs: 10000 })
     .catch(() => undefined)
   if (!run || run.exitCode !== 0) return []
+  const runs = await ledgerRunsAt($, dir)
   return String(run.stdout)
     .split('\n')
     .map(l => l.split('\t'))
     .filter(p => p.length >= 3 && (p[2] ?? '').trim() !== '')
-    .map(p => ({ sha: p[0] ?? '', at: p[1] ?? '', slice: (p[2] ?? '').trim() }))
+    .map(p => {
+      const slice = (p[2] ?? '').trim()
+      const r = runs.get(slice)
+      const at = p[1] ?? ''
+      return { sha: p[0] ?? '', at, slice, start: r ? startText(r.start, at) : '?'.padEnd(5), difficulty: r?.difficulty ?? '' }
+    })
 }
 
 async function build($: any): Promise<Snapshot> {
@@ -203,7 +257,7 @@ async function build($: any): Promise<Snapshot> {
     if (p.queueFile !== '') queueFile = p.queueFile
   }
   const { queue, error } = queueFile !== '' ? await loadQueue($, queueFile) : { queue: null, error: '' }
-  return { at: now, sessions, queue, lands: queue ? await lands($, queueFile) : [], error }
+  return { at: now, sessions, queue, lands: queue ? await lands($, queueFile, dir) : [], error }
 }
 
 /** The role an agent plays for the workflow its session runs. */
@@ -217,6 +271,9 @@ function roleOf(workflow: string): string {
 async function refresh($: any): Promise<Snapshot> {
   const s = await build($)
   await update($, snap, () => s)
+  // a day's fold key leaves with the day: the folded atom does not grow
+  const days = new Set(s.lands.map(l => l.at.slice(0, 5)))
+  await update($, folded, f => (f.some(k => k.startsWith('lands-') && !days.has(k.slice(6))) ? f.filter(k => !k.startsWith('lands-') || days.has(k.slice(6))) : f))
   // remember each linked agent's slice and where it stood: its session file is gone once the pipeline ends
   const seen: Record<string, AgentSeen> = {}
   for (const r of s.sessions) {
@@ -710,7 +767,7 @@ export const register: Register = on => {
       body = (
         <Box flexDirection="column">
           {q.waiting.length === 0 && <Text dimColor>Nothing waits.</Text>}
-          {q.waiting.slice(0, room).map(w => <Text>{w.id} {level(w.difficulty)}<Text dimColor> {w.why}</Text></Text>)}
+          {q.waiting.slice(0, room).map(w => <Text>{level(w.difficulty)} {w.id}<Text dimColor> {w.why}</Text></Text>)}
           {q.waiting.length > room && <Text dimColor>+{q.waiting.length - room} more</Text>}
         </Box>
       )
@@ -733,24 +790,31 @@ export const register: Register = on => {
             const where = !p ? 'no pipeline' : leaf && leaf.id !== p.id ? `${p.state} › ${leaf.state}` : p.state
             return (
               <Text>
-                {'  '}{l.id} {level(l.difficulty)}  <Text color={p ? 'cyan' : 'yellow'}>{where}</Text>
+                {'  '}{level(l.difficulty)} {l.id}  <Text color={p ? 'cyan' : 'yellow'}>{where}</Text>
                 <Text dimColor> {p ? age(now - (leaf ?? p).since) : ''}</Text>
               </Text>
             )
           })}
           {header('next', 'blue', `⏭ Next (${q.ready.length})`)}
           {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
-          {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{l.id} {level(l.difficulty)}</Text>)}
+          {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{level(l.difficulty)} {l.id}</Text>)}
           {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in file order</Text>}
           {header('lands', 'green', `✓ Landed · 24h (${s.lands.length})`)}
           {isOpen('lands') &&
-            s.lands.flatMap((l, i) => {
-              // `at` is `DD.MM HH:MM` (numeric: locale-free): a dim date row where the day changes (the window spans midnight)
-              const day = l.at.slice(0, 5)
-              const prev = i > 0 ? (s.lands[i - 1]?.at ?? '').slice(0, 5) : ''
-              const days = new Set(s.lands.map(x => x.at.slice(0, 5)))
-              const row = <Text>{'  '}<Text dimColor>{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
-              return days.size > 1 && day !== prev ? [<Text dimColor>{'  — '}{day}{' —'}</Text>, row] : [row]
+            [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
+              // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day, its lands one level deeper
+              const mine = s.lands.filter(l => l.at.slice(0, 5) === day)
+              const key = 'lands-' + day
+              return [
+                <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => (f.includes(key) ? f.filter(k => k !== key) : [...f, key]))}>
+                  <Text dimColor>{'  '}{isOpen(key) ? '▾' : '▸'} ▦ {day} ({mine.length})</Text>
+                </Button>,
+                ...(isOpen(key)
+                  ? mine.map(l => (
+                      <Text>{'    '}{level(l.difficulty)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
+                    ))
+                  : []),
+              ]
             })}
         </Box>
       )

@@ -40,7 +40,13 @@ const ledger: LedgerEntry[] = [
     verdict: "pass",
     counts: { findings: 4 },
   }),
-  line("b", { project: "/p1", difficulty: 5, model: "haiku", effort: "low", outcome: "failed" }),
+  line("b", {
+    project: "/p1",
+    difficulty: 5,
+    model: "haiku",
+    effort: "low",
+    outcome: "failed",
+  }),
   line("c", {
     project: "/p2",
     difficulty: 9,
@@ -108,7 +114,9 @@ describe("wf-calibration bin", () => {
     writeFileSync(f, JSON.stringify(ledger[0]) + "\n");
     const link = path.join(dir, "wf-calibration");
     symlinkSync(path.resolve("build/calibration-cli.js"), link);
-    const out = execFileSync("node", [link, "--ledger", f], { encoding: "utf8" });
+    const out = execFileSync("node", [link, "--ledger", f], {
+      encoding: "utf8",
+    });
     expect(out).toContain("/p1");
   });
 });
@@ -127,6 +135,7 @@ describe("ledgerEntry fields", () => {
       overrides: {},
       context: {
         cwd: repo,
+        slice: "LINE-1",
         review_verdict: "pass",
         agent_id_execute: "ag1",
         plan_handoff: "true",
@@ -141,6 +150,10 @@ describe("ledgerEntry fields", () => {
     } as unknown as SessionState;
     const e = ledgerEntry(session);
     expect(e.project).toBe(repo);
+    expect(e.task).toBe("LINE-1");
+    expect(
+      ledgerEntry({ ...session, context: { task: "free text with spaces" } }).task,
+    ).toBeUndefined();
     expect(e.visits).toEqual({ work: 2, review: 2 });
     expect(e.verdict).toBe("pass");
     expect(e.agent_ids).toEqual({ execute: "ag1" });

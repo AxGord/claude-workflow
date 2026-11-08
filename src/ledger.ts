@@ -42,6 +42,8 @@ export interface LedgerEntry {
   readonly exec_ms_total: number;
   readonly wait_ms_total: number;
   readonly execs: LedgerExec[];
+  /** The queue line the session runs: its context's `slice`, else `task` (the plan pane matches landed lines by it). */
+  readonly task?: string;
   /** The task's `difficulty` (1..10), as its context held it at the end. */
   readonly difficulty?: number;
   /** The difficulty the task first ran under (before any rescore): what a calibration report bands by. */
@@ -138,6 +140,14 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
   return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
 }
 
+/** The queue line a session runs, when its context names one. */
+function taskField(context: Readonly<Record<string, unknown>>): {
+  task?: string;
+} {
+  const t = typeof context.slice === "string" ? context.slice : context.task;
+  return typeof t === "string" && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(t) ? { task: t } : {};
+}
+
 /**
  * Build the ledger line for a session that has just ended (empty stack). The
  * root workflow comes from the `start` history event, since the stack is gone.
@@ -168,6 +178,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
     exec_ms_total: execs.reduce((sum, e) => sum + e.duration_ms, 0),
     wait_ms_total: execs.reduce((sum, e) => sum + (e.wait_ms ?? 0), 0),
     execs,
+    ...taskField(session.context),
     ...(typeof session.context.cwd === "string" && session.context.cwd !== ""
       ? { project: projectRoot(session.context.cwd) }
       : {}),

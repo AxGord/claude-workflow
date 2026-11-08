@@ -43,7 +43,8 @@ export type QueueView = {
   waiting: { id: string; why: string; difficulty: string }[]
 }
 
-export type Land = { sha: string; slice: string; at: string }
+/** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown). */
+export type Land = { sha: string; slice: string; at: string; start: string; difficulty: string }
 
 /** An agent seen linked to a workflow session: its slice (or workflow), role and last step. */
 export type AgentSeen = { label: string; role: string; state: string; at: number }

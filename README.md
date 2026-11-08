@@ -933,8 +933,12 @@ that loads plugin `modules`; older ones simply have no pane). It refreshes every
 no model call, no tokens:
 
 - **Plan** — for a session whose root workflow has a work queue (`context.queue_file`): `▶ Running n/window` (each
-  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in file order), `✓ Landed today`
-  (the queue repo's `git log` lines carrying a `Slice:` trailer). Each section folds on a click.
+  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in file order), `✓ Landed · 24h`
+  (the queue repo's `git log` lines carrying a `Slice:` trailer) as a tree: one foldable `▦ DD.MM (n)` row per day,
+  under it `▰▰▱▱▱ start-end sha id` per land — the difficulty bar first on every row that has one (`?????` when
+  unknown), start from the ledger's `started_at` of the line's task session (matched by its `task`, which the
+  ledger records from the session context; `?` for a land with no ledger row, a `DD.MM` prefix when the run began
+  the day before). Lands of other repos do not appear: the list is the queue repo's log. Each section and day folds on a click.
 - **Sessions** — the workflow sessions of THIS Claude Code session as a tree (`◆` a root with children, bright `⚙`
   a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
   or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's
@@ -1092,7 +1096,7 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 
 ## Calibration report
 
-`wf-calibration [--since DATE] [--project PATH] [--findings-key KEY] [--json]` folds `ledger.jsonl` per project × workflow × difficulty band (1-3, 4-6, 7-10, `-`) × stage × model/effort: tasks, review rounds (entries into `review*` states), escalations, tokens, outcomes, verdicts. Lines without stage data count under stage `-`. Task-level figures count once per task, on its first stage row. The ledger line carries `project`, `visits`, `verdict`, `plan_handoff`, `agent_ids` (`agent_id_<stage>`) and `counts` (length of each context list; `--findings-key` sums one).
+`wf-calibration [--since DATE] [--project PATH] [--findings-key KEY] [--json]` folds `ledger.jsonl` per project × workflow × difficulty band (1-3, 4-6, 7-10, `-`) × stage × model/effort: tasks, review rounds (entries into `review*` states), escalations, tokens, outcomes, verdicts. Lines without stage data count under stage `-`. Task-level figures count once per task, on its first stage row. The ledger line carries `project`, `task` (the queue line id), `visits`, `verdict`, `plan_handoff`, `agent_ids` (`agent_id_<stage>`) and `counts` (length of each context list; `--findings-key` sums one).
 
 ## License
 
