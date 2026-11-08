@@ -13,6 +13,7 @@ const TABLE: [string, Route][] = [
   ["/timeline", { view: "timeline" }],
   ["/timeline/2026-11-08", { view: "timeline", day: "2026-11-08" }],
   ["/pool", { view: "pool" }],
+  ["/cost", { view: "cost" }],
   ["/map", { view: "map" }],
   ["/map/abc-1", { view: "map", lane: "abc-1" }],
 ];
@@ -45,7 +46,7 @@ describe("dashboard route table", () => {
     expect(routePath({ view: "sessions" })).toBe("/sessions");
   });
 
-  it("every view lives under one of the six tabs", () => {
+  it("every view lives under one of the seven tabs", () => {
     expect(TABLE.map(([, r]) => routeTab(r))).toEqual([
       "sessions",
       "sessions",
@@ -58,6 +59,7 @@ describe("dashboard route table", () => {
       "timeline",
       "timeline",
       "pool",
+      "cost",
       "map",
       "map",
     ]);

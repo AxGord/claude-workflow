@@ -9,6 +9,8 @@ export type Route =
   | { view: "plan" }
   /** the day's task pipelines as bars; `day` = YYYY-MM-DD, today when absent */
   | { view: "timeline"; day?: string }
+  /** tokens and USD per finished task pipeline of a day range, from the ledger */
+  | { view: "cost" }
   /** the machine-wide thread pool: budget, leases, waiters */
   | { view: "pool" }
   /** the live workflow map; `lane` = a session whose lane is scrolled to and highlighted */
@@ -19,7 +21,7 @@ export type RouteView = Route["view"];
 /** The tab a view lives under. */
 export function routeTab(
   route: Route,
-): "sessions" | "workflows" | "plan" | "timeline" | "pool" | "map" {
+): "sessions" | "workflows" | "plan" | "timeline" | "pool" | "cost" | "map" {
   switch (route.view) {
     case "session":
     case "sessions":
@@ -33,6 +35,8 @@ export function routeTab(
       return "timeline";
     case "pool":
       return "pool";
+    case "cost":
+      return "cost";
     case "map":
       return "map";
   }
@@ -61,6 +65,7 @@ export function parseRoute(pathname: string): Route | null {
     if (head === "plan") return { view: "plan" };
     if (head === "timeline") return { view: "timeline" };
     if (head === "pool") return { view: "pool" };
+    if (head === "cost") return { view: "cost" };
     if (head === "map") return { view: "map" };
     return null;
   }
@@ -92,6 +97,8 @@ export function routePath(route: Route): string {
       return route.day === undefined ? "/timeline" : `/timeline/${route.day}`;
     case "pool":
       return "/pool";
+    case "cost":
+      return "/cost";
     case "map":
       return route.lane === undefined ? "/map" : `/map/${encodeURIComponent(route.lane)}`;
   }

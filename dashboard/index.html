@@ -16,9 +16,11 @@
     <a href="/plan" id="tab-plan">Plan</a>
     <a href="/timeline" id="tab-timeline">Timeline</a>
     <a href="/pool" id="tab-pool">Pool</a>
+    <a href="/cost" id="tab-cost">Cost</a>
     <a href="/map" id="tab-map">Map</a>
   </div>
   <div id="map-view" style="display:none"></div>
+  <div id="cost-view" style="display:none"><div class="panel"><h2 class="label">Cost</h2><div id="cost-content"><div class="empty">No cost</div></div></div></div>
   <div id="pool-view" style="display:none"><div class="panel"><h2 class="label">Pool</h2><div id="pool-content"><div class="empty">No pool</div></div></div></div>
   <div id="timeline-view" style="display:none"><div class="panel"><h2 class="label">Timeline</h2><div id="timeline-content"><div class="empty">No pipelines</div></div></div></div>
   <div id="plan-view" style="display:none"><div class="plan-cols" id="plan-cols"><div class="panel"><h2 class="label">Plan</h2><div id="plan-content"><div class="empty">No queue</div></div></div><div class="panel plan-card" id="plan-card" style="display:none"></div></div></div>
@@ -319,10 +321,11 @@ function applyRoute() {
   document.getElementById('map-view').style.display = tab === 'map' ? '' : 'none';
   document.getElementById('timeline-view').style.display = tab === 'timeline' ? '' : 'none';
   document.getElementById('pool-view').style.display = tab === 'pool' ? '' : 'none';
-  document.getElementById('main-view').style.display = tab === 'plan' || tab === 'map' || tab === 'timeline' || tab === 'pool' ? 'none' : '';
+  document.getElementById('cost-view').style.display = tab === 'cost' ? '' : 'none';
+  document.getElementById('main-view').style.display = tab === 'plan' || tab === 'map' || tab === 'timeline' || tab === 'pool' || tab === 'cost' ? 'none' : '';
   document.getElementById('sessions-panel').style.display = tab === 'sessions' ? '' : 'none';
   document.getElementById('workflows-panel').style.display = tab === 'workflows' ? '' : 'none';
-  for (const t of ['sessions', 'workflows', 'plan', 'timeline', 'pool', 'map'])
+  for (const t of ['sessions', 'workflows', 'plan', 'timeline', 'pool', 'cost', 'map'])
     document.getElementById('tab-' + t).classList.toggle('tab-active', t === tab);
   document.getElementById('detail-content').innerHTML =
     ui.empty(`Select a ${tab === 'workflows' ? 'workflow' : 'session'}`);
@@ -330,6 +333,7 @@ function applyRoute() {
   if (tab === 'plan') loaded.push(refreshPlan());
   if (tab === 'timeline') loaded.push(refreshTimeline());
   if (tab === 'pool') loaded.push(refreshPool());
+  if (tab === 'cost') loaded.push(refreshCost());
   return Promise.all(loaded);
 }
 
@@ -1022,6 +1026,31 @@ async function refreshPool() {
   if (p) put('pool-content', renderPool(p));
 }
 
+// Cost tab: tokens and USD per finished task pipeline (GET /api/cost?from=&to=), the range's totals and a 14-day $/landed trend.
+// The range inputs keep their value across the 2 s tick; the price table is the calibration module's (noted in the tab).
+const usd = n => '$' + n.toFixed(2);
+function renderCost(c) {
+  const t = c.totals;
+  const range = `<div class="cost-range"><label>from <input type="date" id="cost-from" value="${escapeHtml(c.from)}"></label><label>to <input type="date" id="cost-to" value="${escapeHtml(c.to)}"></label></div>`;
+  const head = `<div class="pool-head"><span>tasks <b>${t.tasks}</b></span><span>landed <b>${t.landed}</b> (${t.measured_landed} with tokens)</span><span>tokens <b>${Math.round(t.tokens)}</b></span><span>spent <b>${usd(t.usd)}</b></span><span>per landed <b>${t.usd_per_landed === null ? 'n/a' : usd(t.usd_per_landed)}</b></span></div>`;
+  const max = Math.max(0, ...c.trend.map(d => d.usd_per_landed || 0));
+  const trend = ui.label('$ per landed, last 14 days', true) + `<div class="cost-trend">${c.trend.map(d => `<div class="cost-bar" title="${escapeHtml(d.day)} · ${d.usd_per_landed === null ? 'nothing landed' : usd(d.usd_per_landed)} · ${d.landed} landed · ${usd(d.usd)}"><i style="height:${max ? Math.round((d.usd_per_landed || 0) / max * 100) : 0}%"></i></div>`).join('')}</div>`;
+  const stages = k => k.stages.map(s => `${escapeHtml(s.stage)} ${escapeHtml(s.model)} ${Math.round(s.tokens)}${s.usd === undefined ? ' (no price)' : ' ' + usd(s.usd)}`).join('<br>');
+  const rows = c.tasks.map(k => `<tr><td>${escapeHtml(k.task)}</td><td>${ui.plaque(k.outcome, k.outcome === 'landed' ? 'st-done' : k.outcome === 'failed' ? 'st-stop' : 'st-wait')}</td><td class="mono">${k.rounds}</td><td class="mono">${k.measured ? Math.round(k.tokens) : 'n/a'}</td><td class="mono">${k.measured ? usd(k.usd) : 'n/a'}</td><td class="cost-stages">${stages(k)}</td></tr>`).join('');
+  const table = c.tasks.length === 0 ? ui.empty('no finished task in the range', true)
+    : `<div class="pool-scroll"><table class="pool-table"><thead><tr><th>task</th><th>outcome</th><th>rounds</th><th>tokens</th><th>usd</th><th>by stage and model</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const prices = Object.entries(c.prices.usd_per_mtok).map(([m, p]) => `${escapeHtml(m)} $${p}`).join(', ');
+  const note = `<div class="pool-note">Per landed counts landed tasks that recorded tokens; <i>n/a</i> = no tokens recorded, <i>unknown</i> = no visits recorded. Prices (blended USD per million tokens): ${prices}; updated ${escapeHtml(c.prices.updated)}; source: ${escapeHtml(c.prices.source)}.</div>`;
+  return range + head + trend + table + note;
+}
+
+async function refreshCost() {
+  const f = document.getElementById('cost-from'), t = document.getElementById('cost-to');
+  const q = f && t && f.value && t.value ? `?from=${f.value}&to=${t.value}` : '';
+  const c = await fetchJSON('/api/cost' + q);
+  if (c) put('cost-content', renderCost(c));
+}
+
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
 Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js')]).then(([m, s, l]) => {
   Routes = m;
@@ -1035,7 +1064,7 @@ Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js'
     const at = route.view === 'map' ? null : Stable.takeScroll();
     if (at) Stable.restoreScroll(at);
   });
-  setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); if (route.view === 'timeline') refreshTimeline(); if (route.view === 'pool') refreshPool(); }, 2000);
+  setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); if (route.view === 'timeline') refreshTimeline(); if (route.view === 'pool') refreshPool(); if (route.view === 'cost') refreshCost(); }, 2000);
 });
 </script>
 </body>

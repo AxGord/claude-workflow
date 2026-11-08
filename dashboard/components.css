@@ -251,6 +251,11 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .tl-legend .tl-seg { position: static; display: inline-block; width: 14px; height: 10px; vertical-align: middle; margin-right: 4px; }
 .tl-days { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 12px; }
 
+.cost-range { display: flex; gap: 12px; margin-bottom: 8px; font-size: 12px; color: var(--text-3); }
+.cost-trend { display: flex; align-items: flex-end; gap: 3px; height: 60px; margin: 4px 0 12px; }
+.cost-bar { flex: 1; height: 100%; display: flex; align-items: flex-end; background: var(--panel-border); }
+.cost-bar i { display: block; width: 100%; background: var(--ok); min-height: 1px; }
+.cost-stages { font-size: 11px; color: var(--text-3); white-space: nowrap; }
 .pool-head { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-3); font-size: 12px; margin-bottom: 8px; }
 .pool-head b { color: var(--text); }
 .pool-note { color: var(--warn-text); font-size: 12px; margin-bottom: 8px; }

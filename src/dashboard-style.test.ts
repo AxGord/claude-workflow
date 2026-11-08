@@ -659,6 +659,53 @@ describe("every view renders with the shared components", () => {
     expect(PAGE).toContain("/api/timeline");
   });
 
+  it("cost: totals, the price table's source and date, a trend bar per day", () => {
+    const stage = (stage: string, model: string, tokens: number, usd: number) => ({
+      stage,
+      model,
+      effort: "high",
+      tokens,
+      usd,
+    });
+    const c = {
+      from: "2026-11-08",
+      to: "2026-11-08",
+      prices: { usd_per_mtok: { sonnet: 6 }, updated: "2026-11-08", source: "src/calibration.ts" },
+      tasks: [
+        {
+          task: "LINE-1",
+          outcome: "landed",
+          rounds: 2,
+          tokens: 1000,
+          usd: 0.5,
+          stages: [stage("execute", "sonnet", 1000, 0.5)],
+        },
+      ],
+      totals: {
+        tasks: 1,
+        landed: 1,
+        measured_landed: 1,
+        tokens: 1000,
+        usd: 0.5,
+        usd_per_landed: 0.5,
+      },
+      trend: [
+        { day: "2026-11-07", tasks: 0, landed: 0, tokens: 0, usd: 0, usd_per_landed: null },
+        { day: "2026-11-08", tasks: 1, landed: 1, tokens: 1000, usd: 0.5, usd_per_landed: 0.5 },
+      ],
+    };
+    const html = loadPage().run(`renderCost(${JSON.stringify(c)})`) as string;
+    expect(html).toContain("per landed <b>$0.50</b>");
+    expect(html).toContain("LINE-1");
+    expect(html).toContain("execute sonnet 1000 $0.50");
+    expect(html).toContain("nothing landed");
+    expect(html).toContain("updated 2026-11-08");
+    expect(html).toContain("src/calibration.ts");
+    expect(literals(html)).toEqual([]);
+    expect(PAGE).toContain('id="tab-cost"');
+    expect(PAGE).toContain("/api/cost");
+  });
+
   it("plan: an overlaps reason that names a ready line says it is only admitted ahead", () => {
     const q = {
       ...QUEUE,

@@ -149,6 +149,7 @@ describe("dashboard paths", () => {
       "/workflow/engine-task",
       "/plan",
       "/pool",
+      "/cost",
       "/session/a%20b",
     ]) {
       const res = await fetch(`${base}${p}`);
@@ -206,5 +207,43 @@ describe("GET /api/pool", () => {
     await held.lease.release();
     const next = await waiting;
     if (next.status === "granted") await next.lease.release();
+  });
+});
+
+describe("GET /api/cost", () => {
+  it("answers the ledger's tasks with prices; a bad range is a 400", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashcost-"));
+    dirs.push(dir);
+    const storage = new Storage(dir);
+    await storage.appendLedger({
+      session_id: "s1",
+      parent_session_id: null,
+      root_session_id: "s1",
+      workflow: "w",
+      outcome: "completed",
+      started_at: "2026-11-08T10:00:00",
+      ended_at: "2026-11-08T11:00:00",
+      transitions: 1,
+      exec_ms_total: 0,
+      wait_ms_total: 0,
+      execs: [],
+      task: "T-1",
+      tokens: { total: 1_000_000 },
+      model: "sonnet",
+      visits: { project_land: 1 },
+    });
+    const server = buildApp(storage, {} as Loader).listen(0, "127.0.0.1");
+    servers.push(server);
+    await new Promise(r => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const body = (await (await fetch(`${base}/api/cost?from=2026-11-08&to=2026-11-08`)).json()) as {
+      totals: { landed: number; usd: number };
+      prices: { updated: string };
+      trend: unknown[];
+    };
+    expect(body.totals).toMatchObject({ landed: 1, usd: 6 });
+    expect(body.prices.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(body.trend).toHaveLength(14);
+    expect((await fetch(`${base}/api/cost?from=2026-11-09&to=2026-11-08`)).status).toBe(400);
   });
 });

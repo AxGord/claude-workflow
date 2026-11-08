@@ -9,6 +9,7 @@ import type { WfEvent } from "./event-log.js";
 import { computeStations } from "./stations.js";
 import { Pool, poolSnapshot, projectNameOf, resolvePoolDir } from "./pool.js";
 import { ledgerEntry } from "./ledger.js";
+import { buildCost } from "./calibration.js";
 import { buildTimeline, localDay } from "./timeline.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
 
@@ -167,6 +168,23 @@ export function buildApp(
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
+  });
+
+  // The Cost tab: tokens and USD per finished task pipeline in a day range, from the ledger and the calibration price table.
+  app.get("/api/cost", (req, res) => {
+    const day = /^\d{4}-\d{2}-\d{2}$/;
+    const today = localDay(Date.now());
+    const q = (k: string): string => {
+      const v = req.query[k];
+      return typeof v === "string" ? v : "";
+    };
+    const from = q("from") || today;
+    const to = q("to") || from;
+    if (!day.test(from) || !day.test(to) || from > to) {
+      res.status(400).json({ error: "from and to must be YYYY-MM-DD, from <= to" });
+      return;
+    }
+    res.json(buildCost(storage.readLedger(), from, to));
   });
 
   // Abandon a session via REST (used by SessionEnd hook)

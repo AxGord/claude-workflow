@@ -152,3 +152,183 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
     )
     .join("\n");
 }
+
+/**
+ * The price table: blended USD per million tokens by model family (the ledger holds a token count per task or role,
+ * not an input/output split, so a price is one estimate over the usual mix). The one owner of a price: the Cost tab
+ * reads it here. Edit a price and `PRICES_UPDATED` together.
+ */
+export const PRICES_USD_PER_MTOK: Readonly<Record<string, number>> = {
+  opus: 30,
+  sonnet: 6,
+  haiku: 2,
+};
+export const PRICES_UPDATED = "2026-11-08";
+
+/** The price of a model name (`claude-opus-4`, `sonnet`): the first family its name contains; undefined when none. */
+export function priceOf(model: string): number | undefined {
+  const m = model.toLowerCase();
+  const family = Object.keys(PRICES_USD_PER_MTOK).find(k => m.includes(k));
+  return family === undefined ? undefined : PRICES_USD_PER_MTOK[family];
+}
+
+export interface CostStage {
+  readonly stage: string;
+  readonly model: string;
+  readonly effort: string;
+  readonly tokens: number;
+  /** undefined when the model has no price. */
+  readonly usd: number | undefined;
+}
+
+export type CostOutcome = "landed" | "failed" | "closed" | "unknown";
+
+export interface CostTask {
+  readonly session_id: string;
+  readonly task: string;
+  readonly workflow: string;
+  readonly day: string;
+  readonly ended_at: string;
+  readonly outcome: CostOutcome;
+  readonly rounds: number;
+  /** false when the line recorded no tokens: its cost is unknown, not $0. */
+  readonly measured: boolean;
+  readonly tokens: number;
+  readonly usd: number;
+  readonly stages: CostStage[];
+}
+
+export interface CostDay {
+  readonly day: string;
+  readonly tasks: number;
+  readonly landed: number;
+  /** landed tasks that recorded tokens: the $/landed denominator. */
+  readonly measured_landed: number;
+  readonly tokens: number;
+  readonly usd: number;
+  /** usd / landed; null when nothing landed that day. */
+  readonly usd_per_landed: number | null;
+}
+
+export interface CostReport {
+  readonly from: string;
+  readonly to: string;
+  readonly prices: {
+    readonly usd_per_mtok: Readonly<Record<string, number>>;
+    readonly updated: string;
+    readonly source: string;
+  };
+  readonly tasks: CostTask[];
+  readonly totals: {
+    readonly tasks: number;
+    readonly landed: number;
+    readonly measured_landed: number;
+    readonly tokens: number;
+    readonly usd: number;
+    readonly usd_per_landed: number | null;
+  };
+  /** The last 14 days up to `to`, oldest first. */
+  readonly trend: CostDay[];
+}
+
+/**
+ * Landed = completed through a `land` state (`project_land`; `land_failed` is not one); failed = any other ending than
+ * completed; closed = completed without landing; unknown = completed on a line that recorded no visits.
+ */
+export function costOutcome(e: LedgerEntry): CostOutcome {
+  if (e.outcome !== "completed") return "failed";
+  if (e.visits === undefined) return "unknown";
+  const landed = Object.entries(e.visits).some(([n, v]) => v > 0 && /(^|_)land$/.test(n));
+  return landed ? "landed" : "closed";
+}
+
+/**
+ * A task's tokens as run, one row per token key: `tokens_<stage>` is that stage at its model; `tokens_worker` is one
+ * unsplit `worker` row at the task's model (else the execute stage's); any other role at the task's model; whatever
+ * the total holds beyond the roles is a `-` row at the task's model. No tokens, no rows.
+ */
+export function costStages(e: LedgerEntry): CostStage[] {
+  const t = e.tokens ?? {};
+  const roles = Object.entries(t).filter(([k, n]) => k !== "total" && n > 0);
+  const total = tokensOf(e.tokens);
+  const rest = total - roles.reduce((sum, [, n]) => sum + n, 0);
+  const rows: Array<[string, number]> = [...roles];
+  if (rest > 0) rows.push(["-", rest]);
+  return rows.map(([stage, tokens]) => {
+    const own = e.stages?.[stage];
+    const model = own?.model ?? e.model ?? e.stages?.execute?.model ?? "-";
+    const effort = own?.effort ?? e.effort ?? e.stages?.execute?.effort ?? "-";
+    const price = priceOf(model);
+    return {
+      stage,
+      model,
+      effort,
+      tokens,
+      usd: price === undefined ? undefined : (tokens * price) / 1e6,
+    };
+  });
+}
+
+function localDayOf(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const perLanded = (usd: number, landed: number): number | null =>
+  landed === 0 ? null : usd / landed;
+
+/** The cost report over a day range (`from`..`to` inclusive, YYYY-MM-DD, local days) plus the 14-day $/landed trend ending at `to`. */
+export function buildCost(entries: readonly LedgerEntry[], from: string, to: string): CostReport {
+  const tasks: CostTask[] = [];
+  for (const e of entries) {
+    if (e.task === undefined) continue;
+    if (Object.keys(e.tokens ?? {}).length === 0 && Object.keys(e.stages ?? {}).length === 0)
+      continue;
+    const ended = Date.parse(e.ended_at);
+    if (Number.isNaN(ended)) continue;
+    const stages = costStages(e);
+    tasks.push({
+      session_id: e.session_id,
+      task: e.task,
+      workflow: e.workflow ?? "-",
+      day: localDayOf(ended),
+      ended_at: e.ended_at,
+      outcome: costOutcome(e),
+      rounds: reviewRounds(e.visits),
+      measured: stages.length > 0,
+      tokens: stages.reduce((s, x) => s + x.tokens, 0),
+      usd: stages.reduce((s, x) => s + (x.usd ?? 0), 0),
+      stages,
+    });
+  }
+  tasks.sort((a, b) => a.ended_at.localeCompare(b.ended_at));
+  const inRange = tasks.filter(t => t.day >= from && t.day <= to);
+  const sum = (ts: readonly CostTask[]) => ({
+    tasks: ts.length,
+    landed: ts.filter(t => t.outcome === "landed").length,
+    measured_landed: ts.filter(t => t.outcome === "landed" && t.measured).length,
+    tokens: ts.reduce((s, t) => s + t.tokens, 0),
+    usd: ts.reduce((s, t) => s + t.usd, 0),
+  });
+  const totals = sum(inRange);
+  const [y, m, d] = to.split("-").map(Number);
+  const trend: CostDay[] = [];
+  for (let i = 13; i >= 0; i--) {
+    const day = localDayOf(new Date(y, m - 1, d - i).getTime());
+    const s = sum(tasks.filter(t => t.day === day));
+    trend.push({ day, ...s, usd_per_landed: perLanded(s.usd, s.measured_landed) });
+  }
+  return {
+    from,
+    to,
+    prices: {
+      usd_per_mtok: PRICES_USD_PER_MTOK,
+      updated: PRICES_UPDATED,
+      source:
+        "src/calibration.ts PRICES_USD_PER_MTOK: blended USD per million tokens by model family",
+    },
+    tasks: inRange,
+    totals: { ...totals, usd_per_landed: perLanded(totals.usd, totals.measured_landed) },
+    trend,
+  };
+}

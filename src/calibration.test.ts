@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { calibrate, formatCalibration } from "./calibration.js";
+import {
+  buildCost,
+  calibrate,
+  costStages,
+  formatCalibration,
+  PRICES_UPDATED,
+} from "./calibration.js";
 import { runCalibration } from "./calibration-cli.js";
 import { ledgerEntry, type LedgerEntry } from "./ledger.js";
 import type { SessionState } from "./types.js";
@@ -187,5 +193,91 @@ describe("ledgerEntry fields", () => {
     expect(closedAtPlan.stages).toEqual({ plan: { model: "sonnet", effort: "high" } });
     const noRecord = ledgerEntry(withContext(ctx));
     expect(Object.keys(noRecord.stages ?? {}).sort()).toEqual(["execute", "plan", "review"]);
+  });
+});
+
+describe("buildCost", () => {
+  const staged = (id: string, over: Partial<LedgerEntry>): LedgerEntry =>
+    line(id, {
+      ended_at: "2026-11-08T12:00:00",
+      task: `T-${id}`,
+      model: "opus",
+      stages: {
+        recon: { model: "sonnet", effort: "high" },
+        execute: { model: "opus", effort: "high" },
+        review: { model: "opus", effort: "high" },
+      },
+      visits: { review: 1, project_land: 1 },
+      ...over,
+    });
+
+  it("a worker count is one unsplit row at the task's model; a stage key at that stage's", () => {
+    const stages = costStages(
+      staged("x", { tokens: { total: 3_000_000, worker: 2_000_000, review: 500_000 } }),
+    );
+    expect(stages.map(s => [s.stage, s.model, s.tokens, s.usd])).toEqual([
+      ["worker", "opus", 2_000_000, 60],
+      ["review", "opus", 500_000, 15],
+      ["-", "opus", 500_000, 15],
+    ]);
+  });
+
+  it("totals, outcomes and $ per landed over the range; the trend is 14 days to `to`", () => {
+    const r = buildCost(
+      [
+        staged("a", { tokens: { total: 2_000_000 } }),
+        staged("b", { tokens: { total: 1_000_000 }, visits: { review: 2 } }),
+        staged("c", { tokens: { total: 1_000_000 }, outcome: "abandoned" }),
+        staged("old", {
+          tokens: { total: 9 },
+          ended_at: "2026-11-01T12:00:00",
+          visits: { work: 1 },
+        }),
+        line("none", { ended_at: "2026-11-08T12:00:00" }),
+      ],
+      "2026-11-08",
+      "2026-11-08",
+    );
+    expect(r.tasks.map(t => [t.session_id, t.outcome, t.rounds])).toEqual([
+      ["a", "landed", 1],
+      ["b", "closed", 2],
+      ["c", "failed", 1],
+    ]);
+    expect(r.totals.landed).toBe(1);
+    expect(r.totals.usd_per_landed).toBe(r.totals.usd);
+    expect(r.trend).toHaveLength(14);
+    expect(r.trend[13].day).toBe("2026-11-08");
+    expect(r.trend[6]).toMatchObject({ day: "2026-11-01", tasks: 1, usd_per_landed: null });
+    expect(r.prices.updated).toBe(PRICES_UPDATED);
+  });
+
+  it("a landed line without tokens is unmeasured: out of the $/landed denominator", () => {
+    const r = buildCost(
+      [staged("m", { tokens: { total: 1_000_000 } }), staged("u", {})],
+      "2026-11-08",
+      "2026-11-08",
+    );
+    expect(r.tasks.map(t => [t.session_id, t.measured])).toEqual([
+      ["m", true],
+      ["u", false],
+    ]);
+    expect(r.totals).toMatchObject({ landed: 2, measured_landed: 1, usd_per_landed: 30 });
+    expect(r.trend[13]).toMatchObject({ measured_landed: 1, usd_per_landed: 30 });
+  });
+
+  it("no visits is unknown, land_failed is not a landing, a line without a task is no pipeline", () => {
+    const r = buildCost(
+      [
+        staged("v", { tokens: { total: 1 }, visits: undefined }),
+        staged("f", { tokens: { total: 1 }, visits: { land_failed: 1 } }),
+        staged("n", { tokens: { total: 1 }, task: undefined }),
+      ],
+      "2026-11-08",
+      "2026-11-08",
+    );
+    expect(r.tasks.map(t => [t.session_id, t.outcome])).toEqual([
+      ["v", "unknown"],
+      ["f", "closed"],
+    ]);
   });
 });
