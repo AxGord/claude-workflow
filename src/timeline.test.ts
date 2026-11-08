@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./dashboard.js";
 import { Storage } from "./storage.js";
-import { ledgerEntry } from "./ledger.js";
+import { ledgerEntry, type LedgerEntry } from "./ledger.js";
 import { buildTimeline, sessionSegments, stageGroupOf, dayStart } from "./timeline.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
@@ -117,7 +117,11 @@ describe("sessionSegments", () => {
 describe("sessionSegments edge cases", () => {
   it("a session that has not moved is on its initial state; its first exec keeps the pool-wait hatch", () => {
     const frame = { workflow: "w", current_state: "gate" };
-    const base = { started_at: T("10:00:00"), updated_at: T("10:00:00"), active_frame: 0 };
+    const base = {
+      started_at: T("10:00:00"),
+      updated_at: T("10:00:00"),
+      active_frame: 0,
+    };
     const idle = sessionSegments({ ...base, history: [], stack: [frame] } as never, ms("10:10:00"));
     expect(idle.map(x => [x.state, x.start, x.end])).toEqual([
       ["gate", ms("10:00:00"), ms("10:10:00")],
@@ -185,8 +189,12 @@ describe("sessionSegments edge cases", () => {
 
   it("buildTimeline skips the placeholder record of a session being created", () => {
     expect(
-      buildTimeline({ sessions: [{} as never], ledger: [], day: "2026-11-08", now: ms("12:00:00") })
-        ?.bars,
+      buildTimeline({
+        sessions: [{} as never],
+        ledger: [],
+        day: "2026-11-08",
+        now: ms("12:00:00"),
+      })?.bars,
     ).toEqual([]);
   });
 });
@@ -273,6 +281,54 @@ describe("buildTimeline", () => {
       now: ms("12:00:00"),
     })!;
     expect(nextDay.bars).toEqual([]);
+  });
+
+  it("a pruned session with recorded segments draws them; an old line stays one bar", () => {
+    const base = ledgerEntry(
+      session("gone2", {
+        parent_session_id: "root2",
+        root_session_id: "root2",
+        history: [],
+      }),
+    );
+    const mk = (id: string, segs?: LedgerEntry["segs"]): LedgerEntry => ({
+      ...base,
+      session_id: id,
+      workflow: "engine-task",
+      started_at: T("09:00:00"),
+      ended_at: T("09:20:00"),
+      ...(segs ? { segs } : {}),
+    });
+    const tl = buildTimeline({
+      sessions: [],
+      ledger: [
+        mk("seg", [
+          {
+            s: "work",
+            a: ms("09:00:00"),
+            b: ms("09:10:00"),
+            w: [ms("09:01:00"), ms("09:02:00")],
+          },
+          { s: "review", a: ms("09:10:00"), b: ms("09:20:00") },
+        ]),
+        mk("old"),
+      ],
+      day: "2026-11-08",
+      now: ms("12:00:00"),
+    })!;
+    const seg = tl.bars.find(b => b.id === "seg")!;
+    expect(seg.rows[0]?.segments.map(g => [g.state, g.group, g.waits.length])).toEqual([
+      ["work", "work", 1],
+      ["review", "review", 0],
+    ]);
+    expect(tl.bars.find(b => b.id === "old")!.rows[0]?.segments.map(g => g.state)).toEqual([
+      "engine-task",
+    ]);
+  });
+
+  it("ledgerEntry records the state segments", () => {
+    const e = ledgerEntry(task);
+    expect(e.segs?.map(g => g.s)).toContain("work");
   });
 
   it("a malformed day is no timeline", () => {

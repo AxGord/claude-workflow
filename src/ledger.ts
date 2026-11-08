@@ -1,5 +1,6 @@
 import type { SessionState, ShardResult } from "./types.js";
 import { projectRoot } from "./pool.js";
+import { sessionSegments } from "./timeline.js";
 import { MODEL_KEYS, parseDifficulty, stageKeys, stageOfKey } from "./model-table.js";
 
 /**
@@ -36,6 +37,16 @@ export interface LedgerExec {
   readonly shards?: readonly ShardResult[];
 }
 
+/** One stretch of a state in a ledger line (epoch ms): the Timeline tab draws a pruned session from them. */
+export interface LedgerSegment {
+  /** The state. */
+  readonly s: string;
+  readonly a: number;
+  readonly b: number;
+  /** Pool-lease waits inside it, flat `[start, end, start, end, ...]`. */
+  readonly w?: readonly number[];
+}
+
 /** One line of `$STATE_DIR/ledger.jsonl`: a finished session's accounting. */
 export interface LedgerEntry {
   readonly session_id: string;
@@ -49,6 +60,8 @@ export interface LedgerEntry {
   readonly exec_ms_total: number;
   readonly wait_ms_total: number;
   readonly execs: LedgerExec[];
+  /** The session's state stretches; absent on a line from before the record (drawn as one bar). */
+  readonly segs?: readonly LedgerSegment[];
   /** The queue line the session runs: its context's `slice`, else `task` (the plan pane matches landed lines by it). */
   readonly task?: string;
   /** The task's `difficulty` (1..10), as its context held it at the end. */
@@ -159,6 +172,17 @@ function taskField(context: Readonly<Record<string, unknown>>): {
   return typeof t === "string" && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(t) ? { task: t } : {};
 }
 
+/** The state stretches of an ended session, for the Timeline tab. */
+function segsField(session: SessionState): { segs?: LedgerSegment[] } {
+  const segs = sessionSegments(session, Date.parse(session.updated_at)).map(g => ({
+    s: g.state,
+    a: g.start,
+    b: g.end,
+    ...(g.waits.length > 0 ? { w: g.waits.flatMap(w => [w.start, w.end]) } : {}),
+  }));
+  return segs.length > 0 ? { segs } : {};
+}
+
 /**
  * Build the ledger line for a session that has just ended (empty stack). The
  * root workflow comes from the `start` history event, since the stack is gone.
@@ -189,6 +213,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
     exec_ms_total: execs.reduce((sum, e) => sum + e.duration_ms, 0),
     wait_ms_total: execs.reduce((sum, e) => sum + (e.wait_ms ?? 0), 0),
     execs,
+    ...segsField(session),
     ...taskField(session.context),
     ...(typeof session.context.cwd === "string" && session.context.cwd !== ""
       ? { project: projectRoot(session.context.cwd) }

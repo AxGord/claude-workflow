@@ -75,7 +75,11 @@ export function sessionSegments(
   groups: Readonly<Record<string, string>> = {},
 ): TimelineSegment[] {
   const out: TimelineSegment[] = [];
-  type Open = { state: string; start: number; waits: { start: number; end: number }[] };
+  type Open = {
+    state: string;
+    start: number;
+    waits: { start: number; end: number }[];
+  };
   const cur: { open: Open | null } = { open: null };
   const close = (end: number): void => {
     const open = cur.open;
@@ -129,6 +133,23 @@ export function sessionSegments(
   return out;
 }
 
+/** The segments a ledger line recorded, in the same shape a live history cuts. */
+function ledgerSegments(
+  e: LedgerEntry,
+  groups: Readonly<Record<string, string>>,
+): TimelineSegment[] {
+  return (e.segs ?? []).map(g => ({
+    state: g.s,
+    group: stageGroupOf(g.s, groups),
+    start: g.a,
+    end: g.b,
+    waits: Array.from({ length: Math.floor((g.w?.length ?? 0) / 2) }, (_, i) => ({
+      start: g.w![2 * i],
+      end: g.w![2 * i + 1],
+    })),
+  }));
+}
+
 /** Local midnight of YYYY-MM-DD, or null for a malformed day. */
 export function dayStart(day: string): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
@@ -168,7 +189,7 @@ export interface TimelineInput {
 /**
  * The pipelines of a day: a root session's children, or the root itself when it has none; a
  * pipeline is in the day when its span overlaps it. A session the ledger has and the store does
- * not (pruned) is one undivided bar.
+ * not (pruned) is drawn from the segments its line recorded, else as one undivided bar.
  */
 export function buildTimeline(input: TimelineInput): Timeline | null {
   const from = dayStart(input.day);
@@ -212,16 +233,18 @@ export function buildTimeline(input: TimelineInput): Timeline | null {
     const s = byId.get(id);
     const led = ledgerOf.get(id);
     const rows: TimelineRow[] = [];
-    if (s) {
+    if (s || led?.segs) {
       for (const [i, sid] of [id, ...descendants(id)].entries()) {
         const x = byId.get(sid);
-        if (!x) continue;
-        const segs = sessionSegments(x, input.now, groups)
+        const l = ledgerOf.get(sid);
+        if (!x && !l?.segs) continue;
+        const own = x ? sessionSegments(x, input.now, groups) : ledgerSegments(l!, groups);
+        const segs = own
           .map(g => clip(g, from, to))
           .filter((g): g is TimelineSegment => g !== null);
         rows.push({
           session: sid,
-          workflow: x.history.find(h => h.event === "start")?.workflow ?? null,
+          workflow: x ? (x.history.find(h => h.event === "start")?.workflow ?? null) : l!.workflow,
           depth: i === 0 ? 0 : 1,
           segments: segs,
         });
