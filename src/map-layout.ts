@@ -201,6 +201,8 @@ export interface MapAsk {
   readonly label: string;
   /** the full question when `label` was cut */
   readonly title?: string;
+  /** the question a driver passed with its hand-back (`ask_parent`); the tooltip carries it */
+  readonly text?: string;
   readonly answer: string | null;
   /** the text rows above the rail the question and the answer sit on (0 = next to the rail) */
   readonly qRow: number;
@@ -826,6 +828,8 @@ interface AskDraft {
   rel: number;
   label: string;
   title?: string;
+  /** the question a driver passed with its hand-back, shown as the tooltip */
+  text?: string;
   answer: string | null;
   qRow: number;
   aRow: number;
@@ -858,6 +862,8 @@ function draftRail(
   const asks: AskDraft[] = [];
   const answerOf = (a: FoldedSession["asks"][number]): string | null =>
     a.answered !== undefined ? `→ ${a.to ?? ""} · ${age(time(a.answered) - time(a.at))}` : null;
+  const textOf = (a: FoldedSession["asks"][number]): { text?: string } =>
+    a.text !== undefined ? { text: a.text } : {};
   body.forEach((lane, li) => {
     const input = live[li];
     const { visits } = walk(input.s, index);
@@ -871,6 +877,7 @@ function draftRail(
         lane: lane.session,
         rel: pass?.y ?? 0,
         label: `? ${String(a.state)}`,
+        ...textOf(a),
         answer: answerOf(a),
         qRow: 0,
         aRow: 0,
@@ -886,6 +893,7 @@ function draftRail(
           lane: lane.session,
           rel: b.stepY,
           label: `? ${String(a.state)}`,
+          ...textOf(a),
           answer: answerOf(a),
           qRow: 0,
           aRow: 0,
@@ -896,8 +904,9 @@ function draftRail(
   // cut what would leave the band, then measure
   for (const a of asks) {
     const fit = fitText(a.label, a.x - 6 - 4);
+    const full = a.text !== undefined ? `${a.label}: ${a.text}` : fit.title;
     a.label = fit.text;
-    if (fit.title !== undefined) a.title = fit.title;
+    if (full !== undefined) a.title = full;
   }
   const label = `parent agent · ${p.workflow ?? ""} · ${p.id.slice(0, 8)}`;
   const userAsk = p.asks.filter(a => a.answered === undefined).at(-1);
@@ -1468,7 +1477,7 @@ function bandScene(band: MapBand): SceneGroup {
         {
           key: `${a.key}:up`,
           tag: "path",
-          cls: "m-ask",
+          cls: a.answer === null ? "m-ask m-open" : "m-ask",
           attrs: { d: `M${a.x},${a.y2}V${a.y1}` },
         },
         {

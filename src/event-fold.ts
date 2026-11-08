@@ -60,8 +60,8 @@ export interface FoldedSession {
     duration_ms?: unknown;
   }[];
   agents: FoldedAgent[];
-  /** `to` = the state the answer moved to */
-  asks: { state: unknown; at: string; answered?: string; to?: string }[];
+  /** `to` = the state the answer moved to; `text` = the question a driver passed (`ask_parent`) */
+  asks: { state: unknown; at: string; answered?: string; to?: string; text?: string }[];
   outcome?: unknown;
 }
 
@@ -76,6 +76,36 @@ function emptySession(id: string): FoldedSession {
     agents: [],
     asks: [],
   };
+}
+
+/** The context key a driver sets at a hand-back to ask its parent, and clears when the parent has answered. */
+export const ASK_KEY = "ask_parent";
+
+/**
+ * A driver's open question to its parent: the key holds text AND no move or end came after the
+ * `context_set` that wrote it (that write is the history line whose `detail` is the key). Read off the
+ * session alone, so a stale copy of it, a restart or the parent's own `transition` on the child
+ * (a regate, a close) cannot leave a question open or ask it twice.
+ */
+export function openAsk(s: {
+  readonly stack: readonly unknown[];
+  readonly context: Record<string, unknown>;
+  readonly history: readonly {
+    readonly at: string;
+    readonly from?: string;
+    readonly to?: string;
+    readonly event?: string;
+    readonly detail?: string;
+  }[];
+}): { text: string; at: string } | null {
+  const text = s.context[ASK_KEY];
+  if (typeof text !== "string" || text.trim() === "" || s.stack.length === 0) return null;
+  for (let i = s.history.length - 1; i >= 0; i--) {
+    const h = s.history[i];
+    if (h.from !== undefined && h.to !== undefined) return null;
+    if (h.event === "context_set" && h.detail === ASK_KEY) return { text, at: h.at };
+  }
+  return null;
 }
 
 const known = (v: unknown): boolean => v !== null && v !== undefined && v !== "";
@@ -188,9 +218,22 @@ export function fold(events: readonly WfEvent[]): Map<string, FoldedSession> {
       case "rescore":
         s.difficulty = d.to;
         break;
-      case "ask":
-        s.asks.push({ state: d.state, at: e.ts });
+      case "ask": {
+        const text = typeof d.text === "string" && d.text !== "" ? d.text : undefined;
+        // a driver's `ask_parent` made in an `ask: parent` state is the question the state's entry
+        // logged (the text joins it), and a seeded question logged again is one question
+        const open = s.asks.find(a => a.answered === undefined && a.state === d.state);
+        if (
+          open &&
+          ((text === undefined) !== (open.text === undefined) ||
+            (text !== undefined && text === open.text))
+        ) {
+          open.text ??= text;
+          break;
+        }
+        s.asks.push({ state: d.state, at: e.ts, ...(text !== undefined ? { text } : {}) });
         break;
+      }
       case "answer": {
         const open = [...s.asks].reverse().find(a => a.answered === undefined);
         if (open) {
@@ -233,6 +276,7 @@ export interface SeedSession {
     readonly to?: string;
     readonly via?: string;
     readonly event?: string;
+    readonly detail?: string;
     readonly workflow?: string;
     readonly exit_code?: number;
     readonly duration_ms?: number;
@@ -294,6 +338,11 @@ export function seedEvents(sessions: readonly SeedSession[]): WfEvent[] {
         effort: ctx.effort ?? null,
         step: s.agent_step ?? null,
       });
+    // a driver's open question to the parent (`ask_parent`)
+    const asking = openAsk(s);
+    const here = s.stack[Math.min(s.active_frame ?? 0, s.stack.length - 1)];
+    if (asking && here)
+      add("ask", s.session_id, asking.at, { state: here.current_state, text: asking.text });
     if (s.stack.length === 0)
       add("session_end", s.session_id, s.updated_at, { outcome: s.outcome ?? "completed" });
   }

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { buildApp } from "./dashboard.js";
-import { EventLog, fold, pruneRuns, MEMORY_TAIL } from "./event-log.js";
+import { ASK_KEY, EventLog, fold, pruneRuns, seedEvents, MEMORY_TAIL } from "./event-log.js";
 import { Storage } from "./storage.js";
 import { InMemoryStorage, createTestLoader, cleanupDir } from "./test-helpers.js";
 import type { Loader } from "./loader.js";
@@ -66,6 +66,75 @@ describe("event log", () => {
     const asks = fold(storage.events.since(0)).get(sessionId)!.asks;
     expect(asks).toHaveLength(1);
     expect(asks[0].answered).toBeDefined();
+  });
+
+  describe("a driver's question to its parent (`ask_parent`), from any state", () => {
+    it("the key set is an ask in the state the session stands in; the next move answers it", async () => {
+      const { engine, storage } = setup();
+      const { sessionId } = await engine.start("wf");
+      await engine.setContext(sessionId, ASK_KEY, "regate the gate: needs a decision");
+      const open = fold(storage.events.since(0)).get(sessionId)!.asks;
+      expect(open).toMatchObject([{ state: "work", text: "regate the gate: needs a decision" }]);
+      expect(open[0].answered).toBeUndefined();
+      // the parent's own transition on the child is the answer
+      await engine.transition(sessionId, "done");
+      const [asked] = fold(storage.events.since(0)).get(sessionId)!.asks;
+      expect(asked).toMatchObject({ state: "work", to: "end" });
+      expect(asked.answered).toBeDefined();
+      expect(storage.events.since(0).filter(e => e.kind === "answer")).toHaveLength(1);
+      // the key outlives the question, ignored: a later write neither re-asks nor re-answers
+      expect(storage.read(sessionId)!.context[ASK_KEY]).toBeDefined();
+      expect(storage.events.since(0).filter(e => e.kind === "ask")).toHaveLength(1);
+    });
+
+    it("the driver clearing the key is the answer, and the session stays where it is", async () => {
+      const { engine, storage } = setup();
+      const { sessionId } = await engine.start("wf");
+      await engine.setContext(sessionId, ASK_KEY, "which way?");
+      await engine.setContext(sessionId, "other", "x");
+      expect(fold(storage.events.since(0)).get(sessionId)!.asks[0].answered).toBeUndefined();
+      await engine.setContext(sessionId, ASK_KEY, "");
+      const [asked] = fold(storage.events.since(0)).get(sessionId)!.asks;
+      expect(asked).toMatchObject({ state: "work", to: "work" });
+      expect(asked.answered).toBeDefined();
+      await engine.setContext(sessionId, ASK_KEY, "which way, again?");
+      expect(fold(storage.events.since(0)).get(sessionId)!.asks).toHaveLength(2);
+    });
+
+    it("the same text written again while open is one ask; an abort answers it", async () => {
+      const { engine, storage } = setup();
+      const { sessionId } = await engine.start("wf");
+      await engine.setContext(sessionId, ASK_KEY, "stuck");
+      await engine.setContext(sessionId, ASK_KEY, "stuck");
+      expect(storage.events.since(0).filter(e => e.kind === "ask")).toHaveLength(1);
+      await engine.abort(sessionId);
+      const [asked] = fold(storage.events.since(0)).get(sessionId)!.asks;
+      expect(asked.answered).toBeDefined();
+    });
+
+    it("asked inside an `ask: parent` state it is the one question that state logged, with its text", async () => {
+      const { engine, storage } = setup();
+      const { sessionId } = await engine.start("wf");
+      await engine.transition(sessionId, "ask");
+      await engine.setContext(sessionId, ASK_KEY, "which of the two?");
+      await engine.transition(sessionId, "answered");
+      const asks = fold(storage.events.since(0)).get(sessionId)!.asks;
+      expect(asks).toMatchObject([{ state: "question", text: "which of the two?", to: "work" }]);
+      expect(asks[0].answered).toBeDefined();
+    });
+
+    it("a session file holding the key seeds an open ask, so a restart keeps the lane lit", async () => {
+      const { engine, storage } = setup();
+      const { sessionId } = await engine.start("wf");
+      await engine.setContext(sessionId, ASK_KEY, "waiting on the parent");
+      const file = storage.read(sessionId)!;
+      const seeded = fold(seedEvents([file])).get(sessionId)!.asks;
+      expect(seeded).toMatchObject([{ state: "work", text: "waiting on the parent" }]);
+      expect(seeded[0].answered).toBeUndefined();
+      // the logged ask over the seeded one is not a second question
+      const both = fold([...seedEvents([file]), ...storage.events.since(0)]).get(sessionId)!.asks;
+      expect(both).toHaveLength(1);
+    });
   });
 
   it("link, respawn, stop and rescore", async () => {

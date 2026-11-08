@@ -74,6 +74,9 @@ from P's context; `<memory_index>` = P's context key `memory_index`, else omit t
 - a prompt mentions asking the user, or leaves a choice open;
 - the same tool call failed twice, or you are unsure what the prompt wants.
 The dispatcher answers by SendMessage; continue from the prompt you stopped at.
+Before the line, ONE `context_set({session_id: P, key: "ask_parent", value: "<the reason, one line>"})`: the
+live map draws the question as a line from P's lane to the parent rail. It is your last engine call; the
+line follows at once.
 
 ## The dispatcher's session is not yours
 Never call any tool on the dispatcher session (P's parent). A terminal prompt's `slot_free` / `stop`
@@ -92,6 +95,9 @@ Read only those sections, never the whole files: `sed -n '/^## <heading>/,/^## /
 section's items; skip a section whose body is `none`.
 
 ## Resumed after your last line
+If your last line was NEEDS-PARENT and this message answers it, your FIRST call is
+`context_set({session_id: P, key: "ask_parent", value: ""})` — that is what the map draws as the answer
+(a move of P before it, e.g. the parent's own `transition`, has already answered; the clear is then a no-op).
 The parent may message you after you replied (a relayed worker/reviewer line, a decision). Your run is NOT
 over: P still holds the step. Call `status` on P once and continue from it — never answer "my run already
 ended" or ask the parent to spawn another driver. A relayed worker or reviewer line IS that agent's

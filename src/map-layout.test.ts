@@ -882,3 +882,62 @@ describe("a cut text's tooltip can be reached", () => {
     for (const e of titled) expect(e.text).not.toBe(e.title);
   });
 });
+
+describe("a question asked from a state no workflow tags", () => {
+  // C stands at `recon` and passed a question with its hand-back; E's `ask` log is untouched
+  const asked = (answered: boolean): MapLayout =>
+    map([
+      ...log,
+      {
+        seq: 900,
+        run: "r1",
+        ts: at("11:22"),
+        kind: "ask",
+        session: "C",
+        data: { state: "recon", text: "gate regate: which base?" },
+      },
+      ...(answered
+        ? [
+            {
+              seq: 901,
+              run: "r1",
+              ts: at("11:26"),
+              kind: "answer" as const,
+              session: "C",
+              data: { state: "recon", to: "work" },
+            },
+          ]
+        : []),
+    ]);
+  const ask = (m: MapLayout) => m.bands[0].rail!.asks.find(a => a.key.startsWith("C:"))!;
+
+  it("is a line to the parent rail from the lane, lit while open, carrying the question", () => {
+    const m = asked(false);
+    const a = ask(m);
+    expect([a.x, a.label, a.answer, a.text]).toEqual([
+      x("recon"),
+      "? recon",
+      null,
+      "gate regate: which base?",
+    ]);
+    expect(a.title).toBe("? recon: gate regate: which base?");
+    expect(m.bands[0].lanes.find(l => l.session === "C")!.plaque.sub).toContain("asks the parent");
+    const els = scene(m).groups[0].els.filter(e => e.key.startsWith("C:ask0"));
+    expect(els.map(e => [e.tag, e.cls])).toEqual([
+      ["path", "m-ask m-open"],
+      ["text", "m-ask-label m-end"],
+    ]);
+  });
+
+  it("the answer draws the line back, no longer lit", () => {
+    const m = asked(true);
+    expect(ask(m).answer).toBe("→ work · 4m");
+    const els = scene(m).groups[0].els.filter(e => e.key.startsWith("C:ask0"));
+    expect(els.map(e => e.cls)).toEqual([
+      "m-ask",
+      "m-ask-label m-end",
+      "m-answer",
+      "m-answer-label",
+    ]);
+  });
+});

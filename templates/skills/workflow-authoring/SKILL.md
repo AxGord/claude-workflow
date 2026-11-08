@@ -121,7 +121,7 @@ latest exec, `{{context.*}}`). Use it when a revisit must carry per-visit data w
 resending the whole prompt. `full_on_revisit` takes precedence; `status()` still returns the
 full prompt. Absent = the generic line. Needs an engine that knows the field.
 
-**ask: parent** (per-state tag): the state asks its parent a question. Entering it logs an `ask` event (the state name), leaving it an `answer`; the dashboard's event log (`/api/events`) carries the pair. Needs an engine that knows the key.
+**ask: parent** (per-state tag): the state asks its parent a question. Entering it logs an `ask` event (the state name), leaving it an `answer`; the dashboard's event log (`/api/events`) carries the pair. Needs an engine that knows the key. A question from ANY state: a driver sets the context key `ask_parent` (one `context_set`) at a hand-back — it is OPEN while the key holds text and the session has not moved or ended since that write; the session's next move or end (the parent's own `transition` on it) or the key cleared to `""` is the `answer`. A stale key is ignored.
 
 **station** (per-state flag, any state): the live workflow map draws a workflow's band with one
 column per *station* — the states on the shortest happy-path route (`transitions`, `on_success`,

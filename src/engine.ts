@@ -959,13 +959,14 @@ export class Engine {
       updated_at: now,
       history: [
         ...session.history,
-        { frame: session.active_frame, event: "context_set", at: now, actor },
+        { frame: session.active_frame, event: "context_set", at: now, actor, detail: key },
       ],
     };
     const updated = this._withModel(set, new Set([key]));
 
     await this._storage.write(sessionId, updated);
-    return updated === set ? undefined : updated.history[updated.history.length - 1].detail;
+    const last = updated.history[updated.history.length - 1];
+    return updated === set || last.event !== "model" ? undefined : last.detail;
   }
 
   /** The `model_table` the session runs under — the nearest frame's workflow down the stack that declares one — and that frame's visits. */

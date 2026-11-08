@@ -186,6 +186,7 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .m-rail { fill: none; stroke: var(--text-2); stroke-width: 1.5; }
 .m-rail-label { font-size: 10px; font-weight: 600; fill: var(--text); }
 .m-ask { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 4 3; }
+.m-ask.m-open { filter: drop-shadow(0 0 6px var(--warn)); animation: m-glow 2s ease-in-out infinite; }
 .m-answer { fill: none; stroke: var(--ok); stroke-width: 2; }
 .m-ask-label { font-size: 10px; fill: var(--warn-text); }
 .m-answer-label { font-size: 10px; fill: var(--ok-text); }

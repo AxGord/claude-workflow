@@ -10,9 +10,10 @@ import path from "node:path";
 import { stagesRead } from "./model-table.js";
 import { isPidAlive } from "./process.js";
 import type { HistoryEntry, SessionState } from "./types.js";
+import { openAsk } from "./event-fold.js";
 import type { EventKind, WfEvent } from "./event-fold.js";
 
-export { fold, seedEvents } from "./event-fold.js";
+export { ASK_KEY, fold, openAsk, seedEvents } from "./event-fold.js";
 export type { EventKind, FoldedSession, WfEvent } from "./event-fold.js";
 
 export const MEMORY_TAIL = 5000;
@@ -168,6 +169,7 @@ export class EventLog {
       // the run ended without a routed result (unroutable, cleared): close the pair
       this.append("exec_end", id, { state: was.state, exit_code: null, aborted: true });
     }
+    this._parentAsk(prev, next, before);
     if (next.agent_id && (prev?.agent_id !== next.agent_id || sameStep(prev, next) === false)) {
       this._link(prev, next);
     }
@@ -177,6 +179,27 @@ export class EventLog {
       }
       this.append("session_end", id, { outcome: next.outcome ?? "completed" }, next.updated_at);
     }
+  }
+
+  /**
+   * A driver's open `ask_parent` (see `openAsk`): its appearance is an ask, its end — cleared by the
+   * driver, or the session's next move or end, e.g. the parent's own `transition` — the answer.
+   */
+  private _parentAsk(prev: SessionState | null, next: SessionState, before: number): void {
+    const was = prev ? openAsk(prev) : null;
+    const now = openAsk(next);
+    // the same question written again while it is open stays one question
+    if (was?.text === now?.text) return;
+    const id = next.session_id;
+    if (was !== null && prev) {
+      const last = next.history
+        .slice(before)
+        .filter(h => h.from !== undefined && h.to !== undefined)
+        .at(-1);
+      const to = last?.to ?? (next.stack.length === 0 ? (next.outcome ?? "ended") : stateOf(next));
+      this.append("answer", id, { state: stateOf(prev), to }, last?.at ?? next.updated_at);
+    }
+    if (now !== null) this.append("ask", id, { state: stateOf(next), text: now.text }, now.at);
   }
 
   private _link(prev: SessionState | null, next: SessionState): void {
@@ -248,6 +271,11 @@ export class EventLog {
       this.append("ask", id, { state: h.to }, h.at);
     }
   }
+}
+
+/** The state of the session's active frame ("" once it has ended). */
+function stateOf(s: SessionState): string {
+  return s.stack[Math.min(s.active_frame, s.stack.length - 1)]?.current_state ?? "";
 }
 
 /** A running exec of the session: a recorded detached run, or a fanout / leased run past its first lease. */
