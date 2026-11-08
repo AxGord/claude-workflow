@@ -120,23 +120,28 @@ describe("read-only gate", () => {
     "ls 2>&1 | head",
     "ls > /dev/null 2>&1",
     "ls > /tmp/out.txt",
-    "apq get a.json x.y",
     "git branch --list",
     "git branch -a -v",
     "git tag -l",
     "git config --get user.name",
     "git config --list",
     "rtk git log -3",
-    "hxq lint a.hx",
     "sed -n 1,20p f",
     "sed -n '/x/p' f",
     "sort -u f | uniq -c",
-  ])("lets %s through with the env exported", command => {
-    expect(call("wf-recon", command)).toEqual({
-      kind: "env",
-      command: `export APQ_READ_ONLY='1'; ${command}`,
-    });
+  ])("lets %s through unchanged: no project reader reads the env", command => {
+    expect(call("wf-recon", command)).toEqual({ kind: "env", command });
   });
+
+  it.each(["hxq lint a.hx", "cd d && hxq lint a.hx | head", "rtk proxy hxq lint a.hx", "make all"])(
+    "%s starts with a project reader: the env is exported in front",
+    command => {
+      expect(call("wf-recon", command)).toEqual({
+        kind: "env",
+        command: `export APQ_READ_ONLY='1'; ${command}`,
+      });
+    },
+  );
 
   it("without a config the built-in write list still holds and nothing is exported", () => {
     expect(call("wf-recon", "git commit -m x", null)).toMatchObject(DENY);
@@ -166,6 +171,7 @@ describe("read-only gate", () => {
       reason: expect.stringContaining("not a declared reader") as string,
     });
     expect(call("wf-recon", "hxq lint a.hx")).toMatchObject({ kind: "env" });
+    expect(call("wf-recon", "cat hxq")).toEqual({ kind: "env", command: "cat hxq" });
   });
 
   it("a redirect into a git work tree under scratch is refused", () => {
@@ -222,24 +228,37 @@ describe("composition with the pool gate", () => {
     );
     fs.writeFileSync(
       path.join(proj, ".claude", "read-only-commands.yaml"),
-      JSON.stringify({ env: { APQ_READ_ONLY: "1" }, read: ["make"] }),
+      JSON.stringify({ env: { APQ_READ_ONLY: "1" }, read: ["make", "hxq"] }),
     );
-    const hook = (name: string, agent: string) =>
+    const hook = (name: string, agent: string, command = "make all") =>
       spawnSync("node", [path.join(plugin, "build", `${name}.js`)], {
         input: JSON.stringify({
           tool_name: "Bash",
           agent_type: agent,
           cwd: proj,
-          tool_input: { command: "make all" },
+          tool_input: { command },
         }),
         encoding: "utf8",
         env: { PATH: path.dirname(process.execPath) },
       });
     const out = JSON.parse(hook("read-only-gate-hook", "wf-recon").stdout) as {
-      hookSpecificOutput: { updatedInput: { command: string } };
+      hookSpecificOutput: { permissionDecision: string; updatedInput: { command: string } };
     };
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(out.hookSpecificOutput.updatedInput.command).toContain("wf-run");
     expect(out.hookSpecificOutput.updatedInput.command).toContain("APQ_READ_ONLY");
+    // An allowed call that no project reader reads the env for passes UNCHANGED: no hook output.
+    const plain = hook("read-only-gate-hook", "wf-recon", "cat x");
+    expect(plain.stdout).toBe("");
+    expect(plain.status).toBe(0);
+    // A project reader gets the env, and the rewrite is allowed (auto mode refuses an unallowed one).
+    const reader = JSON.parse(hook("read-only-gate-hook", "wf-recon", "hxq lint a.hx").stdout) as {
+      hookSpecificOutput: { permissionDecision: string; updatedInput: { command: string } };
+    };
+    expect(reader.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(reader.hookSpecificOutput.updatedInput.command).toBe(
+      "export APQ_READ_ONLY='1'; hxq lint a.hx",
+    );
     expect(hook("pool-gate-hook", "wf-recon").stdout).toBe("");
     expect(hook("pool-gate-hook", "wf-driver").stdout).toContain("wf-run");
   });

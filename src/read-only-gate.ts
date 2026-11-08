@@ -27,7 +27,7 @@ export interface ReadOnlyConfig {
 export type ReadOnlyDecision =
   | { readonly kind: "pass" }
   | { readonly kind: "deny"; readonly reason: string }
-  /** Allowed: run `command` (the env exported in front of it, when the project names any). */
+  /** Allowed: run `command` — the call itself unless a segment starts with a project `read` CLI, then with the project's env exported in front. */
   | { readonly kind: "env"; readonly command: string };
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -322,6 +322,22 @@ function sedReadsOnly(args: readonly string[]): boolean {
 }
 const FIND_WRITES = /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/;
 
+/** Does a segment of `command` start with a project `read` CLI — the only readers that read the exported env? */
+function startsWithProjectReader(command: string, config: ReadOnlyConfig | undefined): boolean {
+  const rules = config?.read ?? [];
+  if (rules.length === 0) return false;
+  for (const seg of splitSegments(command) ?? []) {
+    let c = commandOf(seg);
+    for (let d = 0; d < 5; d++) {
+      const inner = unwrap(c);
+      if (!inner) break;
+      c = inner;
+    }
+    if (rules.some(rule => matchesWrite(rule, c))) return true;
+  }
+  return false;
+}
+
 /** Why this segment's command is not a declared reader, or undefined. */
 function readerReason(cmd: Command, config: ReadOnlyConfig | undefined): string | undefined {
   let c = cmd;
@@ -476,8 +492,9 @@ export interface ReadOnlyPayload {
 
 /**
  * The decision for one PreToolUse(Bash) payload. Only a call made by a read-only agent type is
- * touched (the main session and every other subagent pass): a write is denied, else the
- * project's read-only env is exported in front of the command.
+ * touched (the main session and every other subagent pass): a write is denied, else the call is
+ * allowed UNCHANGED — a rewritten call is refused by auto mode unless the hook also allows it, so
+ * the env is exported only in front of a command that starts a segment with a project reader.
  */
 export function decideReadOnly(
   payload: ReadOnlyPayload,
@@ -493,7 +510,8 @@ export function decideReadOnly(
       reason: `read-only: ${reason}; this agent type does not edit`,
     };
   const env = Object.entries(config?.env ?? {});
-  if (env.length === 0) return { kind: "env", command };
+  if (env.length === 0 || !startsWithProjectReader(command, config))
+    return { kind: "env", command };
   const exports = env.map(([k, v]) => `${k}='${v.replace(/'/g, `'\\''`)}'`).join(" ");
   return { kind: "env", command: `export ${exports}; ${command}` };
 }
