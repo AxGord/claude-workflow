@@ -1,8 +1,8 @@
 // A task queue in a YAML file, shared by every project: the top-level keys are the header —
 // `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
-// `{id, status, difficulty, model, effort, repo, workflow, after, touches, owner, exclusive, parked,
-// text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// `{id, status, difficulty, model, effort, repo, workflow, after, touches, owner, exclusive, breaking,
+// parked, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
 //
@@ -11,7 +11,7 @@
 // done, its `repo:` resolves, and it overlaps neither a running task nor one admitted earlier in the
 // same pick (`touches:` path prefixes on a `/` boundary, compared only between tasks of one repo,
 // where a task without `touches:` overlaps every task; `owner:` equal or a `.`-prefix, across repos;
-// `exclusive: true` overlaps every task of every repo). The header's `overlap: files` narrows
+// `exclusive: true` overlaps every task of every repo; `breaking: true` is admitted only into an empty window and nothing is admitted while it runs). The header's `overlap: files` narrows
 // `touches:` to its FILE entries (a regular file under the task's repo, or a path that does not
 // exist whose last segment holds a `.`): a directory or glob entry is a hint that conflicts with
 // nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
@@ -61,6 +61,7 @@ export const TASK_KEYS = [
   "touches",
   "owner",
   "exclusive",
+  "breaking",
   "parked",
   "text",
   "notes",
@@ -70,7 +71,7 @@ export const EDIT_KEYS: ReadonlySet<string> = new Set(
   TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes"),
 );
 const LIST_KEYS: ReadonlySet<string> = new Set(["after", "touches"]);
-const BOOL_KEYS: ReadonlySet<string> = new Set(["exclusive", "parked"]);
+const BOOL_KEYS: ReadonlySet<string> = new Set(["exclusive", "breaking", "parked"]);
 const NOTE_KEYS: ReadonlySet<string> = new Set(["from", "date", "text"]);
 /** The header's `overlap:` values; `paths` (the default) = every `touches:` entry is a path prefix. */
 const OVERLAP_MODES = ["paths", "files"] as const;
@@ -220,6 +221,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     if (o[k] !== undefined && o[k] !== null && typeof o[k] !== "boolean")
       throw new QueueError(`${at} (${id}): ${k}: is true or false`);
   if (o.exclusive === true) meta.exclusive = "yes";
+  if (o.breaking === true) meta.breaking = "yes";
   return {
     index,
     status,
@@ -327,6 +329,11 @@ function ownerOf(line: QueueLine): string | null {
 function exclusiveOf(line: QueueLine): boolean {
   const v = line.meta.exclusive?.trim();
   return v !== undefined && v !== "" && v !== "-" && v !== "—";
+}
+
+/** `breaking: true`: a format or protocol change running processes cannot follow; it runs alone in an empty window. */
+function breakingOf(line: QueueLine): boolean {
+  return line.meta.breaking?.trim() === "yes";
 }
 
 const pathOverlap = (a: string, b: string): boolean =>
@@ -471,7 +478,11 @@ export function planPick(
       }
       if (why === null) {
         const key = repoKey(repo);
-        for (const t of taken) {
+        const brk = taken.find(breakingOf);
+        if (brk !== undefined) why = `breaking ${brk.id} runs alone`;
+        else if (breakingOf(l) && taken.length > 0)
+          why = `breaking: window not empty (${taken[0]?.id})`;
+        for (const t of why === null ? taken : []) {
           const c = conflict(l, t, queue.overlap, key, repoKeys.get(t) ?? null);
           if (c !== null) {
             why = `overlaps ${t.id} (${c})`;
@@ -914,7 +925,7 @@ export function splitList(v: string): string[] {
 
 /**
  * A task field's value as written: `after`/`touches` a list (a string is split on its commas),
- * `exclusive`/`parked` a boolean (`no`/`false`/`""` false), `difficulty` a number when it is one,
+ * `exclusive`/`breaking`/`parked` a boolean (`no`/`false`/`""` false), `difficulty` a number when it is one,
  * `text` a block scalar; null removes the field (`""`, null, or a false flag).
  */
 function fieldValue(e: Editable, key: string, raw: unknown): unknown {

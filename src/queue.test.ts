@@ -296,6 +296,34 @@ describe("queue overlap: files, exclusive:, repos", () => {
     expect(admittedIds(body, header)).toEqual(expected);
   });
 
+  describe("breaking:", () => {
+    const pick = (tasks: string) =>
+      planPick(parseQueue(`batch_size: 5\ntasks:\n${tasks}`, "/tmp/q.yaml"));
+    const t = (id: string, extra = "", status = "pending") =>
+      `  - {id: ${id}, status: ${status}, touches: [${id.toLowerCase()}]${extra}}\n`;
+    it("is admitted into an empty window and nothing joins it in the same pick", () => {
+      const r = pick(t("A", ", breaking: true") + t("B"));
+      expect(r.admitted.map(a => a.id)).toEqual(["A"]);
+      expect(r.reasons[0]?.why).toMatch(/breaking A runs alone/);
+    });
+    it("waits for a running line, whatever its position", () => {
+      const r = pick(t("R", "", "running") + t("A", ", breaking: true"));
+      expect(r.admitted).toEqual([]);
+      expect(r.reasons[0]?.why).toMatch(/window not empty/);
+    });
+    it("waits behind lines admitted earlier in the same pick", () => {
+      const r = pick(t("B") + t("A", ", breaking: true"));
+      expect(r.admitted.map(a => a.id)).toEqual(["B"]);
+    });
+    it("a running breaking line admits nothing", () => {
+      const r = pick(t("R", ", breaking: true", "running") + t("A"));
+      expect(r.admitted).toEqual([]);
+    });
+    it("must be true or false", () => {
+      expect(() => pick(t("A", ", breaking: maybe"))).toThrow(/breaking/);
+    });
+  });
+
   it("the reasons name an exclusive line and a file overlap", () => {
     const r = plan(
       `- [>] R | ${T}a.ts | exclusive: yes\n- [ ] A | ${T}b`,
