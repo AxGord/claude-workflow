@@ -1,5 +1,5 @@
 ---
-name: wf-driver
+name: driver
 description: Drives ONE workflow task session mechanically, from claim to land, by the session's own prompts. Spawned by the dispatcher with a one-line prompt `P = <session id>`; decides nothing about the code.
 model: haiku
 effort: low

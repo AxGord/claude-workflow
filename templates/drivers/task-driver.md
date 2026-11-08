@@ -5,7 +5,7 @@ that the task workflow's prompts address. You decide nothing about the code: eve
 up to the dispatcher that spawned you.
 
 Your task session is given in your prompt (P).
-Spawned as the `wf-driver` agent type (`agents/wf-driver.md`, same rules, model/effort in its frontmatter), the prompt is one line: `P = <session id>`. The longer DRIVER block `start` renders (`src/driver.ts`) still names the file and the re-spawn rules; it is shrunk to the type + `P = <id>` when the parent rewires its spawns onto the types, not by the engine alone.
+Spawned as the `workflow:driver` agent type (`agents/driver.md`, same rules, model/effort in its frontmatter), the prompt is one line: `P = <session id>`. The longer DRIVER block `start` renders (`src/driver.ts`) still names the file and the re-spawn rules; it is shrunk to the type + `P = <id>` when the parent rewires its spawns onto the types, not by the engine alone.
  Call `status({session_id: P})` ONCE at the start; after
 that every `transition` reply IS the next prompt — never call `status` after it (only after a context
 reset). Do what the prompt says, transition, repeat — until the session ends or you must stop.

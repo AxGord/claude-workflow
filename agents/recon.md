@@ -1,5 +1,5 @@
 ---
-name: wf-recon
+name: recon
 description: Read-only reconnaissance for a workflow task — reads the code, the docs and the queue, runs read commands, and reports facts. Never edits a file, never commits.
 model: sonnet
 effort: medium

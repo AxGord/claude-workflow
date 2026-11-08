@@ -30,15 +30,22 @@ const DENY = { kind: "deny" };
 
 describe("read-only gate", () => {
   it("touches only the read-only agent types", () => {
-    expect(isReadOnlyAgent("wf-recon")).toBe(true);
+    expect(isReadOnlyAgent("workflow:recon")).toBe(true);
+    expect(isReadOnlyAgent("workflow:reviewer")).toBe(true);
+    expect(isReadOnlyAgent("reviewer")).toBe(false);
+    expect(isReadOnlyAgent("recon")).toBe(false);
+    expect(isReadOnlyAgent("other:reviewer")).toBe(false);
+    expect(isReadOnlyAgent("other:reviewer", ["other:reviewer"])).toBe(true);
+    expect(isReadOnlyAgent("other:reviewer", ["reviewer"])).toBe(false);
+    expect(isReadOnlyAgent("workflow:wf-recon")).toBe(true);
     expect(isReadOnlyAgent("workflow:wf-reviewer")).toBe(true);
-    expect(isReadOnlyAgent("wf-driver")).toBe(false);
+    expect(isReadOnlyAgent("workflow:driver")).toBe(false);
     expect(isReadOnlyAgent(undefined)).toBe(false);
     expect(call(undefined, "git commit -m x")).toEqual({ kind: "pass" });
     expect(call("general-purpose", "git commit -m x")).toEqual({
       kind: "pass",
     });
-    expect(call("wf-driver", "rm -rf x")).toEqual({ kind: "pass" });
+    expect(call("workflow:driver", "rm -rf x")).toEqual({ kind: "pass" });
   });
 
   it.each([
@@ -109,7 +116,7 @@ describe("read-only gate", () => {
     "ls; curl x",
     "make clean > src/x",
   ])("denies %s", command => {
-    expect(call("wf-reviewer", command)).toMatchObject(DENY);
+    expect(call("workflow:reviewer", command)).toMatchObject(DENY);
   });
 
   it.each([
@@ -130,13 +137,13 @@ describe("read-only gate", () => {
     "sed -n '/x/p' f",
     "sort -u f | uniq -c",
   ])("lets %s through unchanged: no project reader reads the env", command => {
-    expect(call("wf-recon", command)).toEqual({ kind: "env", command });
+    expect(call("workflow:recon", command)).toEqual({ kind: "env", command });
   });
 
   it.each(["hxq lint a.hx", "cd d && hxq lint a.hx | head", "rtk proxy hxq lint a.hx", "make all"])(
     "%s starts with a project reader: the env is exported in front",
     command => {
-      expect(call("wf-recon", command)).toEqual({
+      expect(call("workflow:recon", command)).toEqual({
         kind: "env",
         command: `export APQ_READ_ONLY='1'; ${command}`,
       });
@@ -144,8 +151,8 @@ describe("read-only gate", () => {
   );
 
   it("without a config the built-in write list still holds and nothing is exported", () => {
-    expect(call("wf-recon", "git commit -m x", null)).toMatchObject(DENY);
-    expect(call("wf-recon", "git status", null)).toEqual({
+    expect(call("workflow:recon", "git commit -m x", null)).toMatchObject(DENY);
+    expect(call("workflow:recon", "git status", null)).toEqual({
       kind: "env",
       command: "git status",
     });
@@ -154,7 +161,7 @@ describe("read-only gate", () => {
   it("the config can name its own read-only types", () => {
     const c = parseReadOnlyConfig(JSON.stringify({ agents: ["curator"] }));
     expect(call("curator", "rm a", c)).toMatchObject(DENY);
-    expect(call("wf-recon", "rm a", c)).toEqual({ kind: "pass" });
+    expect(call("workflow:recon", "rm a", c)).toEqual({ kind: "pass" });
   });
 
   it("redirectsToFile ignores quotes, fd duplication and scratch targets", () => {
@@ -166,12 +173,12 @@ describe("read-only gate", () => {
   });
 
   it("the config `read` list declares a project reader; unlisted commands are refused with the rule", () => {
-    expect(call("wf-recon", "hxq lint a.hx", null)).toMatchObject({
+    expect(call("workflow:recon", "hxq lint a.hx", null)).toMatchObject({
       kind: "deny",
       reason: expect.stringContaining("not a declared reader") as string,
     });
-    expect(call("wf-recon", "hxq lint a.hx")).toMatchObject({ kind: "env" });
-    expect(call("wf-recon", "cat hxq")).toEqual({ kind: "env", command: "cat hxq" });
+    expect(call("workflow:recon", "hxq lint a.hx")).toMatchObject({ kind: "env" });
+    expect(call("workflow:recon", "cat hxq")).toEqual({ kind: "env", command: "cat hxq" });
   });
 
   it("a redirect into a git work tree under scratch is refused", () => {
@@ -241,26 +248,28 @@ describe("composition with the pool gate", () => {
         encoding: "utf8",
         env: { PATH: path.dirname(process.execPath) },
       });
-    const out = JSON.parse(hook("read-only-gate-hook", "wf-recon").stdout) as {
+    const out = JSON.parse(hook("read-only-gate-hook", "workflow:recon").stdout) as {
       hookSpecificOutput: { permissionDecision: string; updatedInput: { command: string } };
     };
     expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(out.hookSpecificOutput.updatedInput.command).toContain("wf-run");
     expect(out.hookSpecificOutput.updatedInput.command).toContain("APQ_READ_ONLY");
     // An allowed call that no project reader reads the env for passes UNCHANGED: no hook output.
-    const plain = hook("read-only-gate-hook", "wf-recon", "cat x");
+    const plain = hook("read-only-gate-hook", "workflow:recon", "cat x");
     expect(plain.stdout).toBe("");
     expect(plain.status).toBe(0);
     // A project reader gets the env, and the rewrite is allowed (auto mode refuses an unallowed one).
-    const reader = JSON.parse(hook("read-only-gate-hook", "wf-recon", "hxq lint a.hx").stdout) as {
+    const reader = JSON.parse(
+      hook("read-only-gate-hook", "workflow:recon", "hxq lint a.hx").stdout,
+    ) as {
       hookSpecificOutput: { permissionDecision: string; updatedInput: { command: string } };
     };
     expect(reader.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(reader.hookSpecificOutput.updatedInput.command).toBe(
       "export APQ_READ_ONLY='1'; hxq lint a.hx",
     );
-    expect(hook("pool-gate-hook", "wf-recon").stdout).toBe("");
-    expect(hook("pool-gate-hook", "wf-driver").stdout).toContain("wf-run");
+    expect(hook("pool-gate-hook", "workflow:recon").stdout).toBe("");
+    expect(hook("pool-gate-hook", "workflow:driver").stdout).toContain("wf-run");
   });
 });
 
@@ -285,7 +294,7 @@ describe("hooks/read-only-gate.sh", () => {
     if (!fs.existsSync(path.join(ROOT, "build", "read-only-gate-hook.js"))) return;
     const r = run({
       tool_name: "Bash",
-      agent_type: "wf-reviewer",
+      agent_type: "workflow:reviewer",
       cwd: os.tmpdir(),
       tool_input: { command: "git commit -m x" },
     });
@@ -306,24 +315,24 @@ describe("shipped agent types", () => {
     );
 
   it.each([
-    ["wf-driver", "haiku", "low"],
-    ["wf-recon", "sonnet", "medium"],
-    ["wf-reviewer", "opus", "high"],
+    ["driver", "haiku", "low"],
+    ["recon", "sonnet", "medium"],
+    ["reviewer", "opus", "high"],
   ])("%s is %s/%s", (name, model, effort) => {
     expect(front(name)).toMatchObject({ name, model, effort });
   });
 
-  it("wf-driver lists every workflow tool the server registers, by name", () => {
+  it("driver lists every workflow tool the server registers, by name", () => {
     const src = fs.readFileSync(path.join(dir, "..", "src", "tools.ts"), "utf8");
     const names = [...src.matchAll(/server\.registerTool\(\s*"([a-z_]+)"/g)].map(m => m[1]);
-    const tools = front("wf-driver").tools.split(", ");
+    const tools = front("driver").tools.split(", ");
     expect(names.length).toBeGreaterThan(15);
     for (const n of names) expect(tools).toContain(`mcp__plugin_workflow_wf__${n}`);
   });
 
   it("read-only types carry no edit tool; the driver no Edit/Write/Bash", () => {
-    for (const n of ["wf-recon", "wf-reviewer"])
+    for (const n of ["recon", "reviewer"])
       expect(front(n).tools).not.toMatch(/Edit|Write|NotebookEdit/);
-    expect(front("wf-driver").tools).not.toMatch(/Edit|Write|Bash|NotebookEdit/);
+    expect(front("driver").tools).not.toMatch(/Edit|Write|Bash|NotebookEdit/);
   });
 });

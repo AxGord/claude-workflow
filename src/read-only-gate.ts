@@ -1,4 +1,4 @@
-// The read-only gate: a Bash call made by a read-only agent type (wf-recon, wf-reviewer) is refused
+// The read-only gate: a Bash call made by a read-only agent type (workflow:recon, workflow:reviewer) is refused
 // when it would write. Read-only holds by two layers — the type's tool list has no Edit/Write, and
 // this decision covers the Bash a project edits through (a CLI's write ops, git, redirects). Pure but
 // for `fs` in `findReadOnlyConfig`; `hooks/read-only-gate.sh` → `build/read-only-gate-hook.js` is the entry.
@@ -11,8 +11,16 @@ import { basename, commandOf, splitSegments, type Command } from "./pool-gate.js
 
 export const READ_ONLY_CONFIG = path.join(".claude", "read-only-commands.yaml");
 
-/** The agent types that are read-only when the project's config names none (bare names; a plugin-qualified `workflow:wf-recon` matches too). */
-export const DEFAULT_READ_ONLY_AGENTS: readonly string[] = ["wf-recon", "wf-reviewer"];
+/**
+ * The agent types that are read-only when the project's config names none: plugin-qualified names, compared exactly.
+ * The `workflow:wf-*` entries are the pre-rename names, kept so sessions that started before the restart stay gated.
+ */
+export const DEFAULT_READ_ONLY_AGENTS: readonly string[] = [
+  "workflow:recon",
+  "workflow:reviewer",
+  "workflow:wf-recon",
+  "workflow:wf-reviewer",
+];
 
 export interface ReadOnlyConfig {
   /** Extra write commands: leading words (`apq patch`) or `/regex/flags` on the simple command's text. */
@@ -77,14 +85,13 @@ export function findReadOnlyConfig(cwd: string): ReadOnlyConfig | undefined {
   }
 }
 
-/** Is this payload `agent_type` one of the read-only types? A plugin prefix (`workflow:`) is ignored. */
+/** Is this payload `agent_type` exactly one of the read-only types? No prefix is dropped: `reviewer` and `other:reviewer` are not `workflow:reviewer`. */
 export function isReadOnlyAgent(
   agentType: unknown,
   agents: readonly string[] = DEFAULT_READ_ONLY_AGENTS,
 ): boolean {
   if (typeof agentType !== "string" || agentType === "") return false;
-  const bare = agentType.slice(agentType.lastIndexOf(":") + 1);
-  return agents.includes(agentType) || agents.includes(bare);
+  return agents.includes(agentType);
 }
 
 function regexOf(pattern: string, strict = false): RegExp | null {

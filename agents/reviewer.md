@@ -1,5 +1,5 @@
 ---
-name: wf-reviewer
+name: reviewer
 description: Read-only reviewer of a workflow task's change — reads the diff and the working tree, runs read commands, and returns a verdict with findings. Never edits a file, never commits.
 model: opus
 effort: high
