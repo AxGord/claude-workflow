@@ -7,7 +7,7 @@ description: hxq — structural Haxe READ/query CLI (every agent that reads .hx)
 
 `hxq <subcommand> [opts] <file-or-dir-or-glob>...` parses `.hx` files with anyparse's own parser. Invoke as bare `hxq` (on PATH) — never `./bin/hxq`. Auto-adds `--lang haxe`.
 
-> **ONE command for EVERYTHING — `hxq`.** `hxq` runs BOTH the read/query subcommands AND the write/mutation ops below (it forwards every subcommand to the engine). **`apq` is a documentation label, NOT an installed command** — wherever this skill writes `apq <op>`, RUN it as `hxq <op>`. **Never `node bin/apq.js`** (bypasses the shim and needs cwd=project). **Never `cd`** — `hxq` is on PATH and cwd-independent; pass project-relative paths (default cwd = project root) or absolute paths, and use `hxq probe '<code>'` for throwaway snippets instead of `/tmp` scratch files. (USER decision; root cause = the `apq`/`hxq` dual-naming where only `hxq` is installed.)
+> **`hxq` runs every read and write op; `apq` is the same engine (installed beside it, the docs' name).** Never `node bin/apq.js`; never `cd` (hxq is on PATH, cwd-independent; scratch probes: `hxq probe '<code>'`).
 
 **Path arguments: prefer relative.** `hxq` respects CWD; relative paths give shorter hit lines (`<file>:line:col`) than absolute. Use absolute only for files outside the current project.
 
@@ -33,19 +33,7 @@ A `--select` that matches nothing says WHY: an unknown kind (with did-you-mean o
 
 ## Gate rules — when grep is forbidden
 
-**Per statement-segment** (split on `&&`/`||`/`;`/newline, NOT on `|` pipes). Two questions:
-
-1. Does the file parse? (skip-parse fixture → NO; normal `src/`/`test/` `.hx` → YES)
-2. Is the question structural? ("where defined", "what shape", "which decls carry @:meta") → YES
-
-**BOTH yes ⇒ hxq MANDATORY**, grep/Grep/rg/sed/cat/head/tail/awk on the `.hx` path is **denied**. Two families gate: grep-family AND read-family (use Read tool or hxq to view a parseable `.hx`).
-
-**Pipes don't bypass.** `hxq … | grep` or `cat foo.hx | grep` stays gated — pipelines containing a `.hx` path are caught. Narrow inside hxq instead: `--limit N` (walkers), `--kind <K>` (search), precise subcommand (`refs <name> --decls` for decl, `ast --select <path>` for subtree).
-
-**Pipe-after-hxq warning** (`| head`/`| tail`/`| sed`/`| awk`) is **allowed but nudged** — the hook surfaces a suggestion:
-- `_LIST` subcommands (refs/uses/meta/search/blast/lit/mentions) — use `--limit N` instead.
-- `_BOUNDED` (ast/diff/strip/writer-equals) — drop the pipe, read full output, or narrow with `--depth N` / `--select`.
-
+**The hook denies grep/sed/cat on a parseable .hx (per statement segment, pipes included) and names the hxq replacement; `| head` after hxq is nudged toward `--limit N`.** `# HXQ_OK:prose` is the only unconditional bypass, for a real string/comment search; plain `# HXQ_OK` only passes when every target genuinely skip-parses.
 
 **Bypass tokens (last resort):**
 - `# HXQ_OK` — machine-verified; only takes effect when EVERY targeted `.hx` is genuinely skip-parse / missing. Bare `# HXQ_OK` on a parseable file = denied.
@@ -56,7 +44,7 @@ A `--select` that matches nothing says WHY: an unknown kind (with did-you-mean o
 
 **Anti-reflex (READ THIS): a tool that SEEMS not to work = assume you're using it wrong, not that it's broken.** Bypass tokens are LAST RESORT — reach for them ONLY after CONFIRMING the target genuinely skip-parses (`recon --probe <file>` / `self-status`). Never `node -e readFileSync` / `git show` / grep a `.hx` reflexively: `hxq source <file> --range L:L2` reads the lines of ANY `.hx` (project or fork, parseable or skip-parse) and is gate-blessed. Its output is **dedented by the smallest indentation in the printed window** — widen the range to include a column-0 line (the type header, a module-level decl) before concluding anything about a member's real nesting, or the same file will look like it declares members at column 0 in one window and at one tab in another. Verify a claimed tool-limitation with one command before acting on it; never propagate "tool X can't do Y" (yours or a sub-agent's) without checking.
 
-**Reading a specific NAMED function / decl → `hxq source <f> --select 'FnMember:<name>'`** (or `--select 'ClassDecl:<Name>'`, or `--at <l>:<c>`). It prints exactly that node's raw source — full lines, dedented, flush-left, in ONE step, gate-blessed. Do **NOT**: (a) use the **`Read` tool** on a `.hx` — it can fabricate content past the first lines AND neither gate blocks it (the gates match `Bash|Grep` / `Edit|Write`, not `Read`), so the discipline there rests entirely on you; (b) `refs --decls` then `source --range` — that's the two-step path the `--select` form collapses; (c) `ast --select … --source` when you only want the TEXT — it prepends the whole S-expr tree (the source slice is appended after, indented). Use `ast --select --source` only when you actually want AST + source together. **`--select` is REPEATABLE**: `hxq source <f> --select 'FnMember:a' --select 'FnMember:b'` prints both in DOCUMENT order under `=== <selector> ===` banners — one selector prints exactly as before, no banner.
+**Reading a specific NAMED function / decl → `hxq source <f> --select 'FnMember:<name>'`** (or `--select 'ClassDecl:<Name>'`, or `--at <l>:<c>`). It prints exactly that node's raw source — full lines, dedented, flush-left, in ONE step, gate-blessed. Do **NOT**: (a) `refs --decls` then `source --range` — that's the two-step path the `--select` form collapses; (b) `ast --select … --source` when you only want the TEXT — it prepends the whole S-expr tree (the source slice is appended after, indented). Use `ast --select --source` only when you actually want AST + source together. **`--select` is REPEATABLE**: `hxq source <f> --select 'FnMember:a' --select 'FnMember:b'` prints both in DOCUMENT order under `=== <selector> ===` banners — one selector prints exactly as before, no banner.
 
 **Multi-file IS native.** `meta`/`refs`/`uses`/`search`/`blast`/`mentions`/`lit` all accept dir/glob/multiple paths (recursive walk, union+deduped). `ast` stays single-file. Glob is resolved in-process: `*`, `**`, `?`, `[...]`. **Quote globs** so the shell doesn't pre-expand: `'src/**/Hx*.hx'`. "Grep first to locate, hxq next" is the forbidden reflex — hxq IS the locator.
 
@@ -102,7 +90,7 @@ A `--select` that matches nothing says WHY: an unknown kind (with did-you-mean o
 | **A file's or type's MAP — headers + line windows, no bodies** (read this before any body) | `source <file> --outline` / `source <file> --outline --select 'ClassDecl:<T>'` — one row per decl/member: `<from>-<to>  <selector>  <header>`; a member's outline is its signature |
 | **Read ONE node's raw source BY NAME / position** | `source <file> --select 'FnMember:<name>'` / `--at <l>:<c>` (inside a sandbox: alias `show`). A node over the read budget prints its first lines and names the rest on stderr (`--full` for all, `--range L1:L2` for the tail). A file >120 lines with no `--range/--select/--at` is REFUSED with a selector menu; `--all` for the whole file |
 | Decls carrying `@:tag(arg)` (exact arg, NOT substring) | `meta '@:tag(arg)' <dir>` |
-**A 0-hit `callers` is not proof of absence — and it now SAYS so.** With no edge resolved and unresolved sites in scope, the note reads `no callers resolved, but N call site(s) in scope are unresolved — this is NOT proof "X" has none`, and `--exit-on-empty` exits non-zero; with edges shown it stays the plain approximate-graph note. Read that distinction rather than the raw count, and note the graph resolves receivers by NAME, not by a typer: an un-annotated local, a `using` extension, a `Null<T>`/`Dynamic` return, a `new T().m()` receiver all leave the site unresolved and therefore silent. Before turning a thin `callers` result into "only tests call this" / "dead code", cross-check with `hxq mentions <name> <dir>`, and for a member that may be inherited or overridden also query the SUPERTYPE's declaration (`hxq refs <name> <dir> --decls` lists every declaration of the name — an `abstract` one has no body, so it terminates a chain even though it IS the call target).
+**A 0-hit `callers` is not proof of absence — and it SAYS so.** Note the graph resolves receivers by NAME, not by a typer: an un-annotated local, a `using` extension, a `Null<T>`/`Dynamic` return, a `new T().m()` receiver all leave the site unresolved and therefore silent. Before turning a thin `callers` result into "only tests call this" / "dead code", cross-check with `hxq mentions <name> <dir>`, and for a member that may be inherited or overridden also query the SUPERTYPE's declaration (`hxq refs <name> <dir> --decls` lists every declaration of the name — an `abstract` one has no body, so it terminates a chain even though it IS the call target).
 
 **Confusion-buster:** `refs` = VALUE bindings, `uses` = TYPE positions, `search` = AST SHAPES, `lit` = CAPTURED STRING CONTENT in leaves. They are not interchangeable. **Neither `refs` nor `uses` catches `expr.field` on a value of type T** — use `blast <Type>` (union + heuristic field-access; `--all` to disable smart 20-hit cap on heuristic section).
 

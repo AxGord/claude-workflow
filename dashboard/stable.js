@@ -87,13 +87,19 @@ export function atBottom() {
 }
 
 const SCROLL_KEY = 'wf-dash-scroll';
+let note = null;
+
+/** A view that can name what the reader is looking at (the map: a lane key and its offset) adds it to the remembered position. */
+export function noteScroll(fn) {
+  note = fn;
+}
 
 /** Remember where the reader is when the page goes away (reload, close, navigation). */
 export function rememberScroll() {
   history.scrollRestoration = 'manual';
   window.addEventListener('pagehide', () => {
     try {
-      const at = { path: location.pathname, y: Math.round(window.scrollY), bottom: atBottom() };
+      const at = { path: location.pathname, y: Math.round(window.scrollY), bottom: atBottom(), ...(note ? note() : {}) };
       sessionStorage.setItem(SCROLL_KEY, JSON.stringify(at));
     } catch {
       // storage can be blocked: the page then opens at the top, as before

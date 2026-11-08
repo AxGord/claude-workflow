@@ -81,12 +81,12 @@ async function move(storage: Storage, id: string, to: string): Promise<void> {
   await storage.write(id, s);
 }
 
-async function serve(storage: Storage, routes: string): Promise<string> {
+async function serve(storage: Storage, routes: string, logDelayMs = 300): Promise<string> {
   const loader = { getAll: () => new Map([["w", LINE]]) } as unknown as Loader;
   // the first read of the event log is slow: the map draws its first scene before it returns, as on a loaded machine
   const outer = express();
   outer.use("/api/events", (req, _res, next) => {
-    if (req.path === "/" && req.query.since === "0") setTimeout(next, 300);
+    if (req.path === "/" && req.query.since === "0") setTimeout(next, logDelayMs);
     else next();
   });
   outer.use(buildApp(storage, loader, routes));
@@ -99,6 +99,8 @@ async function serve(storage: Storage, routes: string): Promise<string> {
 interface Page {
   eval(expr: string): Promise<unknown>;
   reload(): Promise<void>;
+  /** The reader's input (a wheel event on the window), which a script's `scrollTo` is not; a real wheel would also start a scroll animation of its own. */
+  wheel(): Promise<void>;
 }
 
 /** A page of a headless Chrome driven over the DevTools protocol. */
@@ -170,6 +172,11 @@ async function openPage(url: string): Promise<Page> {
     },
     async reload() {
       await send("Page.reload");
+    },
+    async wheel() {
+      await send("Runtime.evaluate", {
+        expression: "window.dispatchEvent(new WheelEvent('wheel', { deltaY: 1 }))",
+      });
     },
   };
 }
@@ -335,6 +342,9 @@ describe.skipIf(!HAVE_CHROME)("the live map in a real browser", () => {
     await sleep(300);
     await page.reload();
     await until(page, `${view}.lanes === ${lanes} && ${view}.y === 400`, "back at 400");
+    // the event log lands a moment after the first scene and the page puts the position back once more: a
+    // scroll made by the script before that cannot be told from the page's own (a reader's input can)
+    await sleep(1200);
     await page.eval("scrollTo({ top: 1e6, behavior: 'instant' })");
     await sleep(600);
     const end = await look(page);
@@ -342,5 +352,218 @@ describe.skipIf(!HAVE_CHROME)("the live map in a real browser", () => {
     await until(page, `${view}.lanes === ${lanes} && ${view}.y === ${end.y}`, "back at the bottom");
     await sleep(1500);
     expect(await look(page)).toMatchObject({ y: end.y, bottom: true });
+  }, 90_000);
+
+  // Sessions that landed and were pruned have no file any more, but their events are in the log: the first
+  // scene (drawn from the session files) is shorter than the one the log completes, and the landed lanes
+  // come on top of the running ones, so the lanes the reader looks at move down. 12 + 30 lanes.
+  const prunedLanes = async (storage: Storage) => {
+    for (let i = 0; i < 12; i++) {
+      await storage.write(`d${i}`, session(`d${i}`, "a"));
+      await move(storage, `d${i}`, "b");
+      const ended = storage.read(`d${i}`) as SessionState;
+      ended.stack = [];
+      ended.outcome = "completed";
+      ended.updated_at = new Date().toISOString();
+      await storage.write(`d${i}`, ended);
+    }
+    for (let i = 0; i < 12; i++) storage.delete(`d${i}`);
+    for (let i = 0; i < 30; i++) await storage.write(id(i), session(id(i), "a"));
+  };
+  const tempState = (what: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `wf-dash${what}-`));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    return { dir, storage: new Storage(path.join(dir, "state")) };
+  };
+
+  // the distance of a lane's middle from the middle of the view
+  const laneOffset = (key: string) => `(() => {
+    const e = document.querySelector('g.m-lane[data-key="lane:${key}"]');
+    if (!e) return null;
+    const r = e.getBoundingClientRect();
+    return Math.round(r.top + r.height / 2 - innerHeight / 2);
+  })()`;
+
+  it("F5 returns to the same lane when the event log makes the scene taller than the first one", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashmap-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const storage = new Storage(path.join(dir, "state"));
+    await prunedLanes(storage);
+    const base = await serve(storage, routesModule(dir));
+
+    const page = await openPage(`${base}/map`);
+    await until(page, `${view}.lanes === 42`, "42 lanes");
+    await sleep(1500);
+    const full = await look(page);
+    const y = full.h - 1000;
+    await page.eval(`scrollTo({ top: ${y}, behavior: 'instant' })`);
+    await sleep(600);
+    const left = await look(page);
+    expect(left.bottom).toBe(false);
+
+    await page.reload();
+    let first = await look(page);
+    for (let i = 0; i < 200 && first.lanes === 0; i++) {
+      await sleep(10);
+      first = await look(page);
+    }
+    // the premise: the first scene is too short to hold the position by its pixel offset
+    expect(first.lanes).toBe(30);
+    expect(first.h - 700).toBeLessThan(y);
+    // ... yet the view is on the lane the reader left from the first scene on, not on whatever the clamped offset shows
+    expect(first.top?.k).toBe(left.top?.k);
+
+    await until(page, `${view}.lanes === 42`, "the log's lanes drawn");
+    await sleep(1500);
+    const back = await look(page);
+    expect(back.top?.k).toBe(left.top?.k);
+    expect(Math.abs((back.top?.t ?? 1e9) - (left.top?.t ?? 0))).toBeLessThanOrEqual(1);
+  }, 60_000);
+
+  it("F5 returns to a lane that only the event log has: the position is held until the log lands", async () => {
+    const { dir, storage } = tempState("map");
+    await prunedLanes(storage);
+    const base = await serve(storage, routesModule(dir));
+    const page = await openPage(`${base}/map`);
+    await until(page, `${view}.lanes === 42`, "42 lanes");
+    await sleep(1500);
+    // the landed lanes of the pruned sessions are on top: the reader is looking at one of them
+    await page.eval("scrollTo({ top: 300, behavior: 'instant' })");
+    await sleep(600);
+    const left = await look(page);
+    expect(left.top?.k).toMatch(/^lane:d/);
+
+    await page.reload();
+    await until(page, `${view}.lanes === 42`, "the log's lanes drawn");
+    await sleep(1500);
+    const back = await look(page);
+    expect(back.top?.k).toBe(left.top?.k);
+    expect(Math.abs((back.top?.t ?? 1e9) - (left.top?.t ?? 0))).toBeLessThanOrEqual(1);
+  }, 60_000);
+
+  it("/map/<id> with lanes only the log has above the target ends with the lane centred", async () => {
+    const { dir, storage } = tempState("map");
+    await prunedLanes(storage);
+    const base = await serve(storage, routesModule(dir));
+    const page = await openPage(`${base}/map/${id(12)}`);
+    await until(page, `${view}.lanes === 42`, "42 lanes");
+    await sleep(2000);
+    expect(Math.abs(((await page.eval(laneOffset(id(12)))) as number) ?? 1e9)).toBeLessThanOrEqual(
+      2,
+    );
+  }, 60_000);
+
+  it("a reader's input ends what the page does by itself: nothing glides back to the lane, nothing is put back", async () => {
+    // /map/<id> under a stream of events: the glide to the lane is a second long and never renewed by a
+    // scene that lands in it, and the reader's input ends it at once
+    const one = tempState("map");
+    for (let i = 0; i < 30; i++) await one.storage.write(id(i), session(id(i), "a"));
+    const base = await serve(one.storage, routesModule(one.dir));
+    const stream = async (to: string) => {
+      for (let i = 0; i < 20; i++) {
+        await sleep(120);
+        await move(one.storage, id(i), to);
+      }
+    };
+    const holds = async (input: boolean, to: string, wait: number) => {
+      const page = await openPage(`${base}/map/${id(12)}`);
+      await until(page, `${view}.lanes === 30`, "30 lanes");
+      const events = stream(to);
+      await sleep(wait);
+      if (input) await page.wheel();
+      await page.eval("scrollTo({ top: 1200, behavior: 'instant' })");
+      const put = await look(page);
+      await events;
+      await sleep(600);
+      const after = await look(page);
+      expect(after.top?.k).toBe(put.top?.k);
+      expect(Math.abs((after.top?.t ?? 1e9) - (put.top?.t ?? 0))).toBeLessThanOrEqual(1);
+    };
+    await holds(false, "b", 1500); // no input: the window ended a second after the glide began
+    await holds(true, "c", 650); // input inside the window: the glide ends with it
+
+    // F5 puts the reader back until the event log lands, unless the reader takes the view first
+    const two = tempState("map");
+    for (let i = 0; i < 30; i++) await two.storage.write(id(i), session(id(i), "a"));
+    const slow = await serve(two.storage, routesModule(two.dir), 1500);
+    const map = await openPage(`${slow}/map`);
+    await until(map, `${view}.lanes === 30`, "30 lanes");
+    await sleep(2500);
+    await map.eval("scrollTo({ top: 800, behavior: 'instant' })");
+    await sleep(600);
+    await map.reload();
+    let first = await look(map);
+    for (let i = 0; i < 300 && first.lanes === 0; i++) {
+      await sleep(10);
+      first = await look(map);
+    }
+    expect(first.lanes).toBe(30);
+    await map.wheel();
+    await map.eval("scrollTo({ top: 100, behavior: 'instant' })");
+    await sleep(2500);
+    expect((await look(map)).y).toBe(100);
+  }, 90_000);
+
+  it("on /map/<id>: opens at the lane, never follows a new lane, counts events in the pill, F5 keeps the reader's place", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashmap-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const storage = new Storage(path.join(dir, "state"));
+    for (let i = 0; i < 30; i++) await storage.write(id(i), session(id(i), "a"));
+    const base = await serve(storage, routesModule(dir));
+    let lanes = 30;
+    const addLane = async () => {
+      await storage.write(id(lanes), session(id(lanes), "a"));
+      lanes++;
+      await until(page, `${view}.lanes === ${lanes}`, `${lanes} lanes`);
+    };
+    // the lane's centre against the view's centre, and whether it carries the highlight
+    const lane = `(() => {
+      const e = document.querySelector('g.m-lane[data-key="lane:${id(12)}"]');
+      const r = e.getBoundingClientRect();
+      return { off: Math.round(r.top + r.height / 2 - innerHeight / 2),
+        hl: document.querySelectorAll('g.m-lane.m-hl').length,
+        pill: document.querySelector('.m-pill.on')?.textContent ?? null };
+    })()`;
+
+    const page = await openPage(`${base}/map/${id(12)}`);
+    await until(page, `${view}.lanes === 30`, "30 lanes");
+    await sleep(1500);
+    // the lane the path names is in the middle of the view and highlighted
+    expect(await page.eval(lane)).toMatchObject({ hl: 1, pill: null });
+    expect(Math.abs(((await page.eval(lane)) as { off: number }).off)).toBeLessThanOrEqual(2);
+
+    // the status line takes its room before it has text: "live" arriving moves no lane (it shifted the lane off the middle)
+    expect(
+      await page.eval(`(() => { const s = document.getElementById('map-status'), t = s.textContent;
+        s.textContent = ''; const a = s.offsetHeight; s.textContent = 'live'; const b = s.offsetHeight;
+        s.textContent = t; return a === b && a > 0; })()`),
+    ).toBe(true);
+
+    // a reader at the bottom is not carried to a new lane: this view does not follow
+    await page.eval("scrollTo({ top: 1e6, behavior: 'instant' })");
+    await sleep(600);
+    const atEnd = await look(page);
+    expect(atEnd.bottom).toBe(true);
+    await addLane();
+    await sleep(1500);
+    const held = await look(page);
+    expect(held.h).toBeGreaterThan(atEnd.h);
+    expect(held.y).toBe(atEnd.y);
+    // ... and the pill counts the event; it leaves the lane view and goes to the end
+    expect(await page.eval(lane)).toMatchObject({ hl: 1, pill: "↓ 1 new event" });
+    await page.eval("document.querySelector('.m-pill').click()");
+    await sleep(1500);
+    expect(await look(page)).toMatchObject({ bottom: true });
+    expect(await page.eval(lane)).toMatchObject({ hl: 0, pill: null });
+
+    // F5 returns to where the reader was, and the lane is not scrolled to again
+    await page.eval("scrollTo({ top: 200, behavior: 'instant' })");
+    await sleep(300);
+    const left = await look(page);
+    await page.reload();
+    await until(page, `${view}.lanes === ${lanes} && ${view}.y === ${left.y}`, "back at 200");
+    await sleep(2000);
+    expect(await look(page)).toMatchObject({ y: left.y });
+    expect(await page.eval(lane)).toMatchObject({ hl: 1 });
   }, 90_000);
 });

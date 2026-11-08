@@ -13,3 +13,14 @@
 **`lint --fix` is oracle-verified ONLY for RiskyFix rules.** With a `compilerOracle` configured, only rules implementing RiskyFix (e.g. prefer-inline) go through the typecheck-and-revert pipeline ("risky-fix verified: N applied, M reverted" in the output). Every OTHER rule's fix lands in the safe loop UNVERIFIED — e.g. trivial-getter's property collapse shipped a type-changing rewrite (property typed as a read-only wrapper, backing field typed as the mutable base; the getter was an implicit upcast) that broke the build while the run reported success. The report-time line "compiler oracle confirmed — build typechecks" refers to the nullSafety-trust BASELINE of the report run, NOT to fix verification. Discipline: after ANY `lint --fix` batch, run the project's oracle hxml explicitly (`haxe <oracle>.hxml`) and read ITS exit code directly — `haxe … | tail; echo $?` reads tail's exit code, not haxe's (redirect to a file instead). Fixed at root since: trivial-getter now refuses a collapse when the property's declared type differs from the backing field's (`declaredTypesMatch`), and runs full-scope on later --fix passes — but the "safe loop is unverified" contract still holds for other rules.
 
 **Reading a metric score that's BELOW its configured threshold needs its own probe.** A metric check (e.g. `complexity`) prints nothing when a function is under the limit, so a normal lint run can't answer "what is the score now?" — exactly what a before/after refactor report needs. Recipe: copy the file(s) to a scratch directory, write an `apqlint.json` there with a lowered limit (`{"rules": {"complexity": {"max": 12}}}`), and lint that directory — each message then carries the exact score. Works because config discovery walks up from the linted file, so the scratch config wins; and because the metric is layout-independent, the scratch dir needing no `hxformat.json` doesn't distort it.
+
+## `--baseline` and `--verbose` (moved from hxq-write SKILL.md)
+
+**`hxq lint --baseline <path>`** (S197) reports only the findings a previous `--format json`
+snapshot at `<path>` does not already carry, then refreshes `<path>` with every finding of this
+run. Multiset over `(file, rule, severity, message)`, so a line shift is not a delta. Narrows
+the report, the summary and `--fail-on` alike; REFUSED with `--fix`. A `<path>` that does not
+exist starts a fresh snapshot; one that exists and is not a report is reported on and LEFT
+ALONE, so a mistyped path cannot cost you a file. **`hxq lint --verbose`** brings back the two
+blocks a quiet run withholds: the `--fix` rule census (silent when the run wrote nothing) and
+the `--no-oracle` net notice.

@@ -4,10 +4,12 @@
 // events but the live step's glow and the age counters (re-laid once a minute). The view holds still:
 // follow mode (the reader is at the bottom) scrolls only when a NEW lane appears; a reader who has
 // scrolled away keeps the lane at the top of the view where it is while content above it grows, and
-// a pill counts the new events.
+// a pill counts the new events. A reload puts the reader back by lane key (the lane at the top of the
+// view and its offset), not by pixels: the first scene is drawn from the session files and grows when
+// the event log arrives, so a pixel offset is clamped by the shorter page and lands on another lane.
 import { fold, seedEvents } from '/event-fold.js';
 import { layout, scene } from '/map-layout.js';
-import { atBottom, restoreScroll, takeScroll } from '/stable.js';
+import { atBottom, noteScroll, restoreScroll, takeScroll } from '/stable.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const MS = 300;
@@ -35,6 +37,9 @@ export function createMap({ root, fetchJSON }) {
   let bottomAt = 0; // when a scroll to the bottom was last started (it may still be under way)
   let pending = false;
   let drawn = false; // the first scene stands
+  let loaded = false; // the event log's first answer is in, so scenes from here on are the full ones
+  let placing = null; // where a reload left the reader, kept until the full scene stands
+  let glide = 0; // when the smooth scroll to the lane /map/<id> names was last started
   const known = new Set(); // lane keys already on the map
 
   function accept(list) {
@@ -124,13 +129,21 @@ export function createMap({ root, fetchJSON }) {
     // what the reader sees before anything moves: the lane at the top of the view stays where it is, and
     // only a reader who is at the bottom now is carried to a new lane
     const wasBottom = atBottom() || Date.now() - bottomAt < 1000;
-    const anchor = drawn ? anchorOf(sc) : null;
+    const settling = drawn && placing !== null;
+    // a scene that lands while the view glides to its lane moves the lane: aim again instead of holding
+    const gliding = drawn && Date.now() - glide < 1000;
+    const anchor = drawn && !settling && !gliding ? anchorOf(sc) : null;
     svg.setAttribute('width', map.width);
     svg.setAttribute('height', Math.max(80, map.height));
     svg.setAttribute('viewBox', `0 0 ${map.width} ${Math.max(80, map.height)}`);
-    if (anchor) svg.classList.add('m-still');
+    if (anchor || settling || gliding) svg.classList.add('m-still');
     reconcile(svg, [sc]);
     if (anchor) holdAnchor(anchor);
+    else if (settling || gliding) {
+      if (settling) place();
+      else aim(svg.querySelector(`[data-key="${CSS.escape('lane:' + lane)}"]`));
+      requestAnimationFrame(() => svg.classList.remove('m-still'));
+    }
     if (map.bands.length === 0) status.textContent = 'No workflow session to draw yet';
     pill.textContent = `↓ ${unseen} new event${unseen === 1 ? '' : 's'}`;
     pill.classList.toggle('on', !follow && unseen > 0);
@@ -142,8 +155,8 @@ export function createMap({ root, fetchJSON }) {
       // opening the map: back where a reload left it, else at the lane /map/<id> names, else at the running lanes
       const at = takeScroll();
       if (at) {
-        ownScroll = Date.now();
-        restoreScroll(at);
+        placing = at;
+        place();
         follow = at.bottom && !lane;
         if (laneEl) laneEl.dataset.shown = '1';
       } else if (laneEl) {
@@ -162,6 +175,16 @@ export function createMap({ root, fetchJSON }) {
     }
   }
 
+  // puts the reader back where the reload left them: at the end, else the remembered lane at its offset
+  // in the view, else (no lane was named, or it is gone) the pixel offset; done once the full scene stands
+  function place() {
+    ownScroll = Date.now();
+    const el = placing.key ? svg.querySelector(`[data-key="${CSS.escape(placing.key)}"]`) : null;
+    if (placing.bottom || !el) restoreScroll(placing);
+    else window.scrollBy({ top: el.getBoundingClientRect().top - placing.top, behavior: 'instant' });
+    if (loaded) placing = null;
+  }
+
   // true when a lane key is on the map that was not there at the last scene (the first scene excepted)
   function newLanes() {
     let fresh = false;
@@ -176,7 +199,12 @@ export function createMap({ root, fetchJSON }) {
   function showLane(el) {
     el.dataset.shown = '1';
     follow = false;
-    scrollTo(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+    glide = Date.now(); // only the start opens the window: a re-aim must not renew it
+    aim(el);
+  }
+
+  function aim(el) {
+    if (el) scrollTo(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }));
   }
 
   function scrollTo(go) {
@@ -201,14 +229,20 @@ export function createMap({ root, fetchJSON }) {
     return y;
   }
 
-  // the topmost lane with any part in the view, and how far its origin moves with the next scene (null: not at all)
-  function anchorOf(target) {
+  // the topmost lane with any part in the view, and where its top edge is in the view
+  function topLane() {
     let top = null;
     for (const el of svg.querySelectorAll('g.m-lane')) {
       if (el.dataset.leaving) continue;
       const r = el.getBoundingClientRect();
       if (r.bottom > 0 && (!top || r.top < top.top)) top = { el, top: r.top };
     }
+    return top;
+  }
+
+  // the lane at the top of the view and how far its origin moves with the next scene (null: not at all)
+  function anchorOf(target) {
+    const top = topLane();
     if (!top) return null;
     const to = sceneY(target, top.el.dataset.key);
     const delta = to === null ? 0 : to - shownY(top.el);
@@ -223,12 +257,20 @@ export function createMap({ root, fetchJSON }) {
     requestAnimationFrame(() => svg.classList.remove('m-still'));
   }
 
+  // the reader takes the view (wheel, touch, keys, a click on the scrollbar): nothing is put back or aimed at any more
+  for (const ev of ['wheel', 'touchstart', 'keydown', 'pointerdown']) window.addEventListener(ev, () => { placing = null; glide = 0; }, { passive: true });
+
   // a scroll the reader makes leaves follow mode; scrolling back to the bottom returns to it
   window.addEventListener('scroll', () => {
     if (!shown || Date.now() - ownScroll < 800) return;
     follow = atBottom() && !lane;
     if (follow) unseen = 0;
     pill.classList.toggle('on', !follow && unseen > 0);
+  });
+  // what the page remembers of this view across a reload, besides the pixel offset
+  noteScroll(() => {
+    const top = shown && !placing ? topLane() : null;
+    return top ? { key: top.el.dataset.key, top: Math.round(top.top) } : {};
   });
   pill.addEventListener('click', () => {
     lane = null;
@@ -350,6 +392,7 @@ export function createMap({ root, fetchJSON }) {
           run = r.run;
           accept(r.events);
         }
+        loaded = true;
         unseen = 0; // what was there when the map opened is not news
         connect();
       }

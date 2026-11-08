@@ -207,4 +207,4 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 @keyframes m-glow { 50% { opacity: 0.55; } }
 .m-pill { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: none; padding: 6px 16px; border-radius: 14px; border: 1px solid var(--text-4); background: var(--raised); color: var(--text); font: 600 12px var(--font); cursor: pointer; }
 .m-pill.on { display: block; }
-.map-status { color: var(--text-4); font-size: 11px; margin-bottom: 8px; }
+.map-status { color: var(--text-4); font-size: 11px; margin-bottom: 8px; line-height: 13px; min-height: 13px; }

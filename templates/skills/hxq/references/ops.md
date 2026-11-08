@@ -192,3 +192,38 @@ Two traps while establishing which formatter owns a file:
 ## `new` — full flag contract (moved from SKILL.md)
 
 | `hxq new <path> (--kind class\|interface\|enum\|typedef\|abstract \| --implements <iface> \| --raw -) [--extends <T>]... [--open] [--underlying <T>] [--from <T>]... [--to <T>]... [--field <m>]... [--bodies -] [--write]` | CREATE a new module deterministically — parses-or-rejects + byte-canonical + atomic (the writer round-trip IS the validator). | `--kind` (default `class`) picks class / interface / enum / typedef / abstract (`--class` = shorthand for `--kind class`). Package + name derived from `<path>` (under a `src/`/`test/` root). `--implements` (class only) slices each interface method signature exactly (`[FnMember, NoBody)` drops the `;`) and CARRIES the imports the signatures need — the iface file's own imports verbatim + an import per sibling sub-module type (e.g. `Violation` next to `Check`) + the iface itself when cross-package — so the result TYPE-CHECKS, not just parses. `--extends <T>` adds a superclass (class, ≤1), super-interfaces (interface, repeatable), or struct extensions (typedef → `{ > Base, … }`, repeatable); only `enum` / `abstract` reject it. A qualified `pkg.T` is imported, a simple name is assumed same-package. `--kind abstract` needs `--underlying <T>` (+ optional `--from <T>` / `--to <T>`, repeatable), each imported when qualified → `abstract N(U) from .. to ..`. `--open` emits a non-final class (default `final`). Auto-emits `public function new() {}` ONLY for a class with NO `extends` and no caller ctor (a subclass inherits its super's ctor — auto-emitting would skip a parameterised `super(...)`). **Create-only** (refuses an existing path; modify via the ops / `fmt`). `--bodies -` reads `@@ <method>` sections from stdin; reserved `@@ imports` (one entry per line: a bare module path like `haxe.ds.StringMap` OR a whole `import …;` / `using …;` statement — both accepted since `e8ec6cc1`; anything else is refused BY NAME before assembly), `@@ doc` (the type doc-comment), and `@@ members` (a free-form member block — works for ANY kind, and adds helpers alongside `--implements` stubs without the "names no method" Err); an unfilled interface method → a `NotImplementedException` stub (reported); a section naming an unknown method, or an unparseable body, → non-zero exit, **nothing written**. `--field` = verbatim member text (repeatable). `NewFile.create` is pure. **`--raw -`** bypasses the spec — stdin = the COMPLETE file → `writeRoundTrip` (parse-or-Err, canonicalise) → atomic write (`NewFile.createRaw`), the validated equivalent of a raw Write for files no `--kind` shape covers (multi-type / free-form). |
+
+## Build / auto-rebuild (moved from hxq-write SKILL.md)
+
+`haxe bin/apq-js.hxml` builds the JS runner. **The `hxq` shim AUTO-REBUILDS by default** when `find -newer` detects stale `.hx` under `src/`; aborts on build failure. Opt-out:
+- `HXQ_AUTO_REBUILD=0` — legacy warn-once-per-mtime mode (cache at `$XDG_CACHE_HOME/hxq/warned`).
+- `HXQ_QUIET=1` — skip stale check entirely. Takes precedence.
+  ⚠️ NEVER use it for a VERIFICATION probe right after src/ edits — it runs the STALE binary and can "refute" a fix that actually landed (or "confirm" one that didn't). Verification probes need an explicit `haxe bin/apq-js.hxml` first, or a bare `hxq` call (auto-rebuild on).
+
+**Rebuild matrix — `apq.js` and `test.js` are SEPARATE binaries.** `haxe bin/apq-js.hxml` builds `apq.js`; `haxe test-js.hxml` builds `test.js`. Edits to macro-driven src (`WriterLowering`/`ShapeBuilder`/`Codegen`/`Build`/`Lowering`/`TriviaTypeSynth`…) require rebuilding BOTH before trusting results: a stale `apq.js` makes probes/ops lie, a stale `test.js` makes the sweep lie. Quick staleness check: `grep -c <newSymbol> bin/apq.js`.
+
+**Worktree nuance:** the shim keys off `git rev-parse --show-toplevel` — run `hxq` with CWD *inside* the worktree AND build the worktree's engine, else it silently falls back to the main-tree baseline binary.
+
+**PARALLEL WORKERS — `HXQ_BIN=<path>/apq.js` pins the engine** (checked before the shared-`bin/` selection, so it works even in a tree whose `bin/` is empty; `.n` ⇒ neko, else node) and SKIPS the stale check entirely — the caller owns its build. This is the only way several agents can work one repo at once: the shared `bin/apq.js` / `bin/test.js` are single artifacts, so each build truncates the binary the others are executing (failures then read as flaky tests, not as a build race). Each worker runs `node bin/dev.js worker-build <workdir>` for a private `apq.js` + `test.js`, then `HXQ_BIN=<workdir>/apq.js hxq …` and `node <workdir>/test.js`. Two limits: this parallelizes the TOOL, not the source tree — concurrent mutation ops on the same files still need coordination (real isolation = a worktree per worker, which `node bin/dev.js mutation-check` does); and a private engine is a snapshot that goes stale with NO warning when another agent lands a `src/` change, so rebuild your own before trusting a probe. Full recipe: `docs/testing.md` § "Parallel tracks".
+
+## Doc edits (moved from hxq-write SKILL.md)
+
+- **`patch` reaches a TYPE's own leading doc (since 2026-10-17, anyparse N5).** The doc is
+  trivia outside the type's node, so `patch --select 'ClassDecl:X'` first searches the
+  declaration as before; ONLY when the fragment is not there does it search the declaration's
+  own doc block (old payloads behave byte-identically). Before N5 this failed with "the old
+  fragment does not occur in the resolved ClassForm node". Inserting text ABOVE a documented
+  declaration via patch is still refused (the doc would land on the wrong owner) — extend the
+  fragment to include the doc on the same address instead. Other doc tools: `hxq
+  comment-rewrite '<find>' '<replace>' <f> --write` — a LITERAL `<find>` is matched against the
+  normalized body (each line break, plus the ` * ` continuation after it, collapsed to one
+  space; the find is normalized the SAME way), a `--regex` find against the RAW body (needs
+  `\s+\*\s+` to cross a line); a multi-line `<replace>` gets the block's own continuation on
+  every line it adds, so write PLAIN lines with real newlines and a ` * ` you add yourself is
+  stripped, not doubled; long lines are reflowed into the configured width (see the
+  `comment-rewrite` bullet below); a find that matches nothing SAYS so on stderr. `set-doc`
+  replaces the WHOLE block — use it only when replacing the entire doc.
+
+## Lint config note (moved from hxq-write SKILL.md)
+
+**`hxq lint` in a repo with no `apqlint.json` runs the builtin defaults, which that project never opted into.** Read the findings, never `--fix` them: a `naming` rule will happily rename identifiers that deliberately mirror foreign-language symbols (C prims, JNI methods), and `unused-parameter` fires on every per-platform no-op stub by construction.
