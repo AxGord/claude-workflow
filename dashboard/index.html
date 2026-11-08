@@ -50,6 +50,12 @@ let shownWorkflow = null;
 let allWorkflows = {};
 let allSessions = [];
 let liveMap = null; // /map.js (the live workflow map), imported when the Map tab first opens
+let Stable = null; // /stable.js (in-place refresh, scroll memory), imported before the first render
+
+// Every refresh on a timer takes its markup into the live node in place: scroll, focus and selection stay.
+function put(id, html) {
+  Stable.patchHtml(document.getElementById(id), html);
+}
 
 async function fetchJSON(url) {
   try {
@@ -165,10 +171,10 @@ async function refresh() {
   if (selectedSessionId) {
     const session = (sessions || []).find(s => s.session_id === selectedSessionId);
     if (session) renderDetail(session);
-    else document.getElementById('detail-content').innerHTML = ui.empty('Session not found');
+    else put('detail-content', ui.empty('Session not found'));
   } else if (route.view === 'workflow' && shownWorkflow !== route.name && workflows) {
     if (allWorkflows[route.name]) showWorkflowGraph(route.name);
-    else document.getElementById('detail-content').innerHTML = ui.empty('Workflow not found');
+    else put('detail-content', ui.empty('Workflow not found'));
   }
 }
 
@@ -225,9 +231,8 @@ function renderSessionTree(session, childrenMap, depth) {
 }
 
 function renderSessions(sessions) {
-  const container = document.getElementById('sessions-list');
   if (sessions.length === 0) {
-    container.innerHTML = ui.empty('No active sessions');
+    put('sessions-list', ui.empty('No active sessions'));
     return;
   }
 
@@ -261,18 +266,17 @@ function renderSessions(sessions) {
     html += recentCompleted.map(s => renderSessionTree(s, childrenMap, 0)).join('');
   }
 
-  container.innerHTML = html;
+  put('sessions-list', html);
 }
 
 function renderWorkflows(workflows) {
-  const container = document.getElementById('workflows-list');
   const names = Object.keys(workflows);
   if (names.length === 0) {
-    container.innerHTML = ui.empty('No workflows loaded');
+    put('workflows-list', ui.empty('No workflows loaded'));
     return;
   }
 
-  container.innerHTML = names.map(name => {
+  put('workflows-list', names.map(name => {
     const wf = workflows[name];
     const stateCount = Object.keys(wf.states).length;
     const desc = wf.description ? ` — ${escapeHtml(wf.description)}` : '';
@@ -281,7 +285,7 @@ function renderWorkflows(workflows) {
       title: `<span class="workflow-name">${escapeHtml(name)}</span>`,
       info: `${stateCount} states${desc}`,
     });
-  }).join('');
+  }).join(''));
 }
 
 // Every view is a real path (src/dashboard-routes.ts): links are plain anchors, history drives the back button.
@@ -306,9 +310,9 @@ function applyRoute() {
     document.getElementById('tab-' + t).classList.toggle('tab-active', t === tab);
   document.getElementById('detail-content').innerHTML =
     ui.empty(`Select a ${tab === 'workflows' ? 'workflow' : 'session'}`);
-  if (tab === 'plan') refreshPlan();
-  showMap(tab === 'map' ? route : null);
-  refresh();
+  const loaded = [refresh(), showMap(tab === 'map' ? route : null)];
+  if (tab === 'plan') loaded.push(refreshPlan());
+  return Promise.all(loaded);
 }
 
 // The Map tab: /map draws every workflow session as a live map, /map/<id> scrolls to and highlights one lane.
@@ -338,7 +342,6 @@ function sessionLink(id) {
 }
 
 function renderDetail(session) {
-  const container = document.getElementById('detail-content');
   const isActive = session.stack.length > 0;
 
   let html = '';
@@ -442,7 +445,7 @@ function renderDetail(session) {
     return `<div class="entry">[${h.frame}] ${escapeHtml(h.from || '')} → ${escapeHtml(h.to || '')} via "${escapeHtml(h.via || '')}"${actorHtml}</div>`;
   }).join('');
 
-  container.innerHTML = html;
+  put('detail-content', html);
 }
 
 function pointsToPath(points) {
@@ -856,14 +859,21 @@ async function refreshPlan() {
   const qs = await Promise.all(files.map(f => fetchJSON('/api/queue?file=' + encodeURIComponent(f))));
   const ok = qs.filter(Boolean);
   if (ok.length === 0) return;
-  document.getElementById('plan-content').innerHTML = ok.map(renderPlan).join('');
+  put('plan-content', ok.map(renderPlan).join(''));
 }
 
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
-import('/routes.js').then(m => {
+Promise.all([import('/routes.js'), import('/stable.js')]).then(([m, s]) => {
   Routes = m;
+  Stable = s;
+  Stable.rememberScroll();
   window.addEventListener('popstate', applyRoute);
-  applyRoute();
+  // the content is built after load, so the browser has nothing to restore: put the page back where F5 left it
+  // (the map restores itself once its first scene stands)
+  applyRoute().then(() => {
+    const at = route.view === 'map' ? null : Stable.takeScroll();
+    if (at) Stable.restoreScroll(at);
+  });
   setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); }, 2000);
 });
 </script>

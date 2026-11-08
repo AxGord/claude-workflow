@@ -200,6 +200,7 @@ describe("GET /routes.js", () => {
     expect(await page.text()).toBe(MAP);
     expect(MAP).toContain("from '/event-fold.js'");
     expect(MAP).toContain("from '/map-layout.js'");
+    expect(MAP).toContain("from '/stable.js'");
   });
 
   it("is a 404, not the page, when the compiled module is missing", async () => {
@@ -276,6 +277,8 @@ function loadPage(): Page {
   });
   // the bootstrap tail imports /routes.js and starts the timer: a render test runs the rest
   vm.runInContext(SCRIPT.slice(0, SCRIPT.indexOf(marker)), context);
+  // /stable.js morphs real nodes (src/dashboard-browser.test.ts runs it in a browser); here it just writes the markup
+  vm.runInContext("Stable = { patchHtml(el, html) { el.innerHTML = html; } };", context);
   return { els, run: code => vm.runInContext(code, context) as unknown };
 }
 

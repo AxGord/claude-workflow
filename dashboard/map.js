@@ -1,10 +1,13 @@
 // The live workflow map's page side: keeps the event log (SSE, a 2 s poll when the stream fails), folds
 // it over the sessions it seeds from, lays it out with src/map-layout.ts (served as /map-layout.js) and
 // reconciles the keyed scene into one SVG: every change animates over ~300 ms, nothing moves between
-// events but the live step's glow and the age counters (re-laid once a minute). Follow mode keeps the
-// running lanes in view until the reader scrolls away; a pill then counts the new events.
+// events but the live step's glow and the age counters (re-laid once a minute). The view holds still:
+// follow mode (the reader is at the bottom) scrolls only when a NEW lane appears; a reader who has
+// scrolled away keeps the lane at the top of the view where it is while content above it grows, and
+// a pill counts the new events.
 import { fold, seedEvents } from '/event-fold.js';
 import { layout, scene } from '/map-layout.js';
+import { atBottom, restoreScroll, takeScroll } from '/stable.js';
 
 const NS = 'http://www.w3.org/2000/svg';
 const MS = 300;
@@ -29,7 +32,10 @@ export function createMap({ root, fetchJSON }) {
   let source = null;
   let pollTimer = null;
   let ownScroll = 0;
+  let bottomAt = 0; // when a scroll to the bottom was last started (it may still be under way)
   let pending = false;
+  let drawn = false; // the first scene stands
+  const known = new Set(); // lane keys already on the map
 
   function accept(list) {
     let added = 0;
@@ -114,37 +120,113 @@ export function createMap({ root, fetchJSON }) {
     const folded = fold([...seedEvents(sessions), ...events]);
     const pool = sessions.filter(s => s.pool_starved).map(s => s.session_id);
     const map = layout(folded, workflows, { now: Date.now(), width: root.clientWidth || 1200, highlight: lane || undefined, next, pool });
+    const sc = scene(map);
+    // what the reader sees before anything moves: the lane at the top of the view stays where it is, and
+    // only a reader who is at the bottom now is carried to a new lane
+    const wasBottom = atBottom() || Date.now() - bottomAt < 1000;
+    const anchor = drawn ? anchorOf(sc) : null;
     svg.setAttribute('width', map.width);
     svg.setAttribute('height', Math.max(80, map.height));
     svg.setAttribute('viewBox', `0 0 ${map.width} ${Math.max(80, map.height)}`);
-    reconcile(svg, [scene(map)]);
+    if (anchor) svg.classList.add('m-still');
+    reconcile(svg, [sc]);
+    if (anchor) holdAnchor(anchor);
     if (map.bands.length === 0) status.textContent = 'No workflow session to draw yet';
     pill.textContent = `↓ ${unseen} new event${unseen === 1 ? '' : 's'}`;
     pill.classList.toggle('on', !follow && unseen > 0);
-    if (lane) {
-      const el = svg.querySelector(`[data-key="${CSS.escape('lane:' + lane)}"]`);
-      if (el && !el.dataset.shown) {
-        el.dataset.shown = '1';
-        follow = false;
-        scrollTo(el, 'center');
+    const fresh = newLanes();
+    const first = !drawn && map.bands.length > 0;
+    if (first) drawn = true;
+    const laneEl = lane ? svg.querySelector(`[data-key="${CSS.escape('lane:' + lane)}"]`) : null;
+    if (first) {
+      // opening the map: back where a reload left it, else at the lane /map/<id> names, else at the running lanes
+      const at = takeScroll();
+      if (at) {
+        ownScroll = Date.now();
+        restoreScroll(at);
+        follow = at.bottom && !lane;
+        if (laneEl) laneEl.dataset.shown = '1';
+      } else if (laneEl) {
+        showLane(laneEl);
+      } else if (follow) {
+        const live = svg.querySelectorAll('g.m-lane.running');
+        const last = live[live.length - 1];
+        if (last) scrollTo(() => last.scrollIntoView({ block: 'end', behavior: 'smooth' }));
       }
-    } else if (follow) {
-      const live = svg.querySelectorAll('g.m-lane.running');
-      const last = live[live.length - 1];
-      if (last) scrollTo(last, 'end');
+    } else if (lane) {
+      if (laneEl && !laneEl.dataset.shown) showLane(laneEl);
+    } else if (follow && wasBottom && fresh) {
+      // the one thing that moves the view by itself: a new lane, for a reader who was at the bottom
+      bottomAt = Date.now();
+      scrollTo(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
     }
   }
 
-  function scrollTo(el, block) {
+  // true when a lane key is on the map that was not there at the last scene (the first scene excepted)
+  function newLanes() {
+    let fresh = false;
+    for (const el of svg.querySelectorAll('g.m-lane')) {
+      if (el.dataset.leaving || known.has(el.dataset.key)) continue;
+      known.add(el.dataset.key);
+      fresh = true;
+    }
+    return fresh && drawn;
+  }
+
+  function showLane(el) {
+    el.dataset.shown = '1';
+    follow = false;
+    scrollTo(() => el.scrollIntoView({ block: 'center', behavior: 'smooth' }));
+  }
+
+  function scrollTo(go) {
     ownScroll = Date.now();
-    el.scrollIntoView({ block, behavior: 'smooth' });
+    go();
+  }
+
+  // where a group stands inside the svg, from the scene's own numbers (the target) or from what is drawn now
+  function sceneY(g, key, base = 0) {
+    const y = base + g.y;
+    if (g.key === key) return y;
+    for (const c of g.groups) {
+      const found = sceneY(c, key, y);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+
+  function shownY(el) {
+    let y = 0;
+    for (let e = el; e && e !== svg; e = e.parentNode) y += new DOMMatrix(getComputedStyle(e).transform).m42;
+    return y;
+  }
+
+  // the topmost lane with any part in the view, and how far its origin moves with the next scene (null: not at all)
+  function anchorOf(target) {
+    let top = null;
+    for (const el of svg.querySelectorAll('g.m-lane')) {
+      if (el.dataset.leaving) continue;
+      const r = el.getBoundingClientRect();
+      if (r.bottom > 0 && (!top || r.top < top.top)) top = { el, top: r.top };
+    }
+    if (!top) return null;
+    const to = sceneY(target, top.el.dataset.key);
+    const delta = to === null ? 0 : to - shownY(top.el);
+    return Math.abs(delta) >= 1 ? { delta } : null;
+  }
+
+  // the lanes jumped to their new places without a slide (m-still), so the view can move with the anchor lane
+  function holdAnchor(a) {
+    void svg.getBoundingClientRect();
+    ownScroll = Date.now();
+    window.scrollBy({ top: a.delta, behavior: 'instant' });
+    requestAnimationFrame(() => svg.classList.remove('m-still'));
   }
 
   // a scroll the reader makes leaves follow mode; scrolling back to the bottom returns to it
   window.addEventListener('scroll', () => {
     if (!shown || Date.now() - ownScroll < 800) return;
-    const atBottom = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 80;
-    follow = atBottom && !lane;
+    follow = atBottom() && !lane;
     if (follow) unseen = 0;
     pill.classList.toggle('on', !follow && unseen > 0);
   });
@@ -153,6 +235,8 @@ export function createMap({ root, fetchJSON }) {
     follow = true;
     unseen = 0;
     render();
+    bottomAt = Date.now();
+    scrollTo(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }));
   });
 
   // --- keyed reconciliation: a group per band and lane, an element per primitive ---
@@ -256,6 +340,8 @@ export function createMap({ root, fetchJSON }) {
       lane = id || null;
       follow = !lane;
       unseen = 0;
+      drawn = false; // the view is placed afresh when the tab opens: ahead of the first load, so it has one first scene
+      svg.querySelectorAll('[data-shown]').forEach(el => delete el.dataset.shown);
       if (!started) {
         started = true;
         await loadSessions();
@@ -267,7 +353,6 @@ export function createMap({ root, fetchJSON }) {
         unseen = 0; // what was there when the map opened is not news
         connect();
       }
-      svg.querySelectorAll('[data-shown]').forEach(el => delete el.dataset.shown);
       schedule();
     },
     hide() {

@@ -192,6 +192,7 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .m-answer-label { font-size: 10px; fill: var(--ok-text); }
 .m-user { fill: var(--warn); filter: drop-shadow(0 0 8px var(--warn)); animation: m-glow 2s ease-in-out infinite; }
 .m-band, .m-lane { transition: transform 300ms ease-out, opacity 300ms ease-out; }
+.m-still .m-band, .m-still .m-lane { transition: none; }
 .m-lane.running { opacity: 1; }
 .m-lane.landed, .m-lane.stopped { opacity: 0.7; }
 .m-lane.m-hl .m-plaque { stroke-width: 3; filter: drop-shadow(0 0 8px var(--c)); }
