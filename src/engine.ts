@@ -1,3 +1,4 @@
+import { isClosingMove } from "./stations.js";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -86,6 +87,8 @@ export interface StatusResult {
   readonly taskOps: TaskOp[];
   readonly visitCount: number;
   readonly forcePrompt?: boolean;
+  /** Set when the active frame is within 5% of its workflow's `max_transitions`. */
+  readonly capWarning?: string;
   /** `revisit_prompt` of the state, rendered with the same variables as `prompt`. */
   readonly revisitPrompt?: string;
   /** `start` of a workflow with a `driver:` — the Agent call that spawns it (src/driver.ts). */
@@ -428,9 +431,10 @@ export class Engine {
 
     // Check max_transitions
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
-    if (frame.total_transitions >= maxTransitions) {
+    if (frame.total_transitions >= maxTransitions && !isClosingMove(wf, requested)) {
       throw new Error(
-        `Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`,
+        `Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"` +
+          ` — only a move that closes the run is accepted now`,
       );
     }
 
@@ -1091,7 +1095,10 @@ export class Engine {
     const frame = session.stack[session.active_frame];
     const wf = this._getWorkflow(session.session_id, frame.workflow);
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
-    if (frame.total_transitions >= maxTransitions) {
+    if (
+      frame.total_transitions >= maxTransitions &&
+      !isClosingMove(wf, transitions[transitionName])
+    ) {
       throw new Error(
         `Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`,
       );
@@ -1472,7 +1479,7 @@ export class Engine {
     // Check max_transitions
     const wf = this._getWorkflow(session.session_id, frame.workflow);
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
-    if (frame.total_transitions >= maxTransitions) {
+    if (frame.total_transitions >= maxTransitions && !isClosingMove(wf, routedName)) {
       return unroutable(
         new Error(`Max transitions (${maxTransitions}) reached for workflow "${frame.workflow}"`),
       );
@@ -2050,6 +2057,21 @@ export class Engine {
     return `${head}: not running — its last run was not routed; resume({ session_id: "${session.session_id}" }) runs it again]`;
   }
 
+  private _capWarning(session: SessionState, frame: StackFrame): string | undefined {
+    const wf = this._getWorkflow(session.session_id, frame.workflow);
+    const max = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
+    const left = max - frame.total_transitions;
+    if (left > max * 0.05) return undefined;
+    if (this._resolveState(session, frame.workflow, frame.current_state)?.terminal)
+      return undefined;
+    return (
+      `${frame.total_transitions} of ${max} transitions used in "${frame.workflow}"` +
+      (left > 0 ? `, ${left} left` : `, none left`) +
+      `. At the cap only a move that closes the run (into a terminal, or a state that leads on to one without a way back) is accepted: ` +
+      `end the run cleanly now (a stop / report route), or raise max_transitions in the workflow file and start a new session.`
+    );
+  }
+
   private _buildStatus(
     session: SessionState,
     taskOps?: TaskOp[],
@@ -2119,6 +2141,7 @@ export class Engine {
         frame.state_visits[frame.current_state] ??
         0,
       forcePrompt: actionPrompt !== undefined,
+      capWarning: this._capWarning(session, frame),
       revisitPrompt:
         state?.revisit_prompt === undefined ? undefined : render(state.revisit_prompt, vars),
     };

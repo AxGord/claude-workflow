@@ -380,7 +380,7 @@ dispatch:
 
 ### Guards and the exhausted route
 
-`max_transitions` (per workflow, per stack frame, default 50) and a state's `max_visits` refuse a move past them with an error. A state may instead name where a move past its `max_visits` goes:
+`max_transitions` (per workflow, per stack frame, default 50) and a state's `max_visits` refuse a move past them with an error. A move that only closes the run is exempt from `max_transitions`: one into a terminal, or into a state no route leads back to that leads on to a terminal (batch's `stop` -> `report` -> `finish`), so a run at its cap can still end cleanly. Within 5% of the cap every status / transition reply carries a `WARNING:` line naming what to do. The bundled `batch` sets 100000 (a queue loop takes about 3 transitions per task). A state may instead name where a move past its `max_visits` goes:
 
 ```yaml
 fix:

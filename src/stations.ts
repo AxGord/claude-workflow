@@ -19,7 +19,7 @@ function happyTargets(s: StateDefinition): string[] {
 }
 
 /** Every move a state can make, the happy ones first. */
-function allTargets(s: StateDefinition): string[] {
+export function allTargets(s: StateDefinition): string[] {
   return [
     ...happyTargets(s),
     ...Object.values(s.cases ?? {}),
@@ -138,4 +138,29 @@ export function computeStations(wf: WorkflowDefinition): Station[] {
       script: wf.states[name].type === "exec",
       terminal: wf.states[name].terminal === true,
     }));
+}
+
+/**
+ * A move into `target` that only closes the run: the state is terminal, or no route leads back to it
+ * and one leads on to a terminal. The `max_transitions` cap refuses every other move, so a run at its
+ * cap can still end cleanly (`stop` -> `report` -> `finish`) but not take another turn of its loop.
+ */
+export function isClosingMove(wf: WorkflowDefinition, target: string): boolean {
+  const start = wf.states[target];
+  if (!start) return false;
+  if (start.terminal === true) return true;
+  const seen = new Set<string>();
+  const queue = allTargets(start);
+  let terminal = false;
+  for (let i = 0; i < queue.length; i++) {
+    const name = queue[i];
+    if (name === target) return false;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const state = wf.states[name];
+    if (!state) continue;
+    if (state.terminal === true) terminal = true;
+    queue.push(...allTargets(state));
+  }
+  return terminal;
 }

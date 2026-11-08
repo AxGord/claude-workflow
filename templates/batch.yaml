@@ -1,7 +1,7 @@
 name: batch
 description: "Long-running batch orchestration — a queue file of tasks; the engine admits the next lines into the window (wf-queue / queue_next: batch_size, after:, touches:, owner:, parked), each admitted task runs as a child session (`batch-task`: worktree → worker → merge + tests under the repo's land lock) driven by this agent, and every freed slot re-runs the pick; one fresh-eyes review of the combined diff."
 initial: load_skills
-max_transitions: 1000
+max_transitions: 100000
 
 # A project's heir (`extends: batch`) usually overrides `plan_queue` with an exec that names its fixed
 # queue and its own task workflow (context_set `queue_file`, `task_workflow`); the per-task steps a

@@ -230,6 +230,11 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
     if (digestable) deliveredFullPrompts.add(digestKey);
   }
 
+  if (status.capWarning) {
+    parts.push("");
+    parts.push(`WARNING: ${status.capWarning}`);
+  }
+
   const transitionNames = Object.keys(status.availableTransitions);
   if (transitionNames.length > 0) {
     parts.push("");

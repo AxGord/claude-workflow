@@ -93,6 +93,92 @@ describe("Engine", () => {
       await expect(engine.transition(sessionId, "go")).rejects.toThrow("Max transitions");
     });
 
+    it("at the cap only a move that closes the run is accepted, and the status warns within 5%", async () => {
+      setup({
+        looped: {
+          initial: "a",
+          max_transitions: 20,
+          states: {
+            a: { prompt: "A", transitions: { go: "b", stop: "report" } },
+            b: { prompt: "B", transitions: { go: "a" } },
+            report: { prompt: "R", transitions: { done: "end" } },
+            end: { terminal: true, prompt: "Done", outcome: "complete" },
+          },
+        },
+      });
+      const { sessionId } = await engine.start("looped");
+      for (let i = 0; i < 17; i++) await engine.transition(sessionId, "go");
+      expect((await engine.transition(sessionId, "go")).capWarning).toBeUndefined(); // 18 of 20: 2 left
+      const near = await engine.transition(sessionId, "go"); // 19 of 20: 1 left
+      expect(near.capWarning).toContain("19 of 20");
+      const at = await engine.transition(sessionId, "go"); // 20 of 20
+      expect(at.capWarning).toContain("none left");
+      expect(formatStatus(at)).toContain("WARNING: 20 of 20");
+      await expect(engine.transition(sessionId, "go")).rejects.toThrow("Max transitions");
+      await engine.transition(sessionId, "stop");
+      const closed = await engine.transition(sessionId, "done");
+      expect(closed.capWarning).toBeUndefined();
+      expect(engine.getStatus(sessionId).capWarning).toBeUndefined();
+    });
+
+    const gateAtCap = (to: string) => ({
+      gated: {
+        initial: "a",
+        max_transitions: 3,
+        states: {
+          a: { prompt: "A", transitions: { go: "g1" } },
+          g1: { skills: ["s"], transitions: { continue: "a2" } },
+          a2: { prompt: "A2", transitions: { go: "g2" } },
+          g2: { skills: ["s"], transitions: { continue: to } },
+          end: { terminal: true, prompt: "Done", outcome: "complete" },
+        },
+      },
+    });
+
+    it("a skill gate's auto-move at the cap proceeds into a closing target", async () => {
+      setup(gateAtCap("end"));
+      const { sessionId } = await engine.start("gated");
+      await engine.transition(sessionId, "go");
+      await engine.transition(sessionId, "continue");
+      const r = await engine.transition(sessionId, "go"); // 3 of 3, g2 auto-passes
+      expect(r.stack).toHaveLength(0);
+    });
+
+    it("a skill gate's auto-move at the cap into a loop state is refused", async () => {
+      setup(gateAtCap("a"));
+      const { sessionId } = await engine.start("gated");
+      await engine.transition(sessionId, "go");
+      await engine.transition(sessionId, "continue");
+      await expect(engine.transition(sessionId, "go")).rejects.toThrow("Max transitions");
+    });
+
+    it("an exec route at the cap: into a terminal proceeds, into a loop state is refused", async () => {
+      const wf = (to: string) => ({
+        act: {
+          initial: "a",
+          max_transitions: 1,
+          states: {
+            a: { prompt: "A", transitions: { go: "run" } },
+            run: { type: "exec", command: "true", on_success: to, on_error: to },
+            again: { prompt: "again", transitions: { back: "a" } },
+            end: { terminal: true, prompt: "Done", outcome: "complete" },
+          },
+        },
+      });
+      setup(wf("end"));
+      let { sessionId } = await engine.start("act");
+      expect((await engine.transition(sessionId, "go")).stack).toHaveLength(0);
+      setup(wf("again"));
+      ({ sessionId } = await engine.start("act"));
+      await expect(engine.transition(sessionId, "go")).rejects.toThrow("Max transitions");
+    });
+
+    it("no warning far from the cap", async () => {
+      setup({ multi: MULTI_STATE_WORKFLOW });
+      const { sessionId } = await engine.start("multi");
+      expect(engine.getStatus(sessionId).capWarning).toBeUndefined();
+    });
+
     it("enforces max_visits", async () => {
       setup({
         visits: {
