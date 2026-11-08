@@ -1,7 +1,10 @@
-// The read-only gate: a Bash call made by a read-only agent type (workflow:recon, workflow:reviewer) is refused
-// when it would write. Read-only holds by two layers — the type's tool list has no Edit/Write, and
-// this decision covers the Bash a project edits through (a CLI's write ops, git, redirects). Pure but
-// for `fs` in `findReadOnlyConfig`; `hooks/read-only-gate.sh` → `build/read-only-gate-hook.js` is the entry.
+// The read-only gate: a Bash call made by a read-only agent type (workflow:recon, workflow:reviewer) is allowed
+// only when every pipeline segment starts with a declared reader, and refused when it would write. It guards
+// a reviewer / recon against ACCIDENTAL writes, not an adversary: shell parsing cannot close every path
+// (out of scope, named in the README: a path-prefixed reader such as `./ls`, a flag injected by an
+// inherited variable, a reader that is itself scripted). The guarantees are the type's tool list (no
+// Edit/Write), the project's CLI read-only env, and this allow list. Pure but for `fs` in
+// `findReadOnlyConfig`; `hooks/read-only-gate.sh` → `build/read-only-gate-hook.js` is the entry.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -354,6 +357,8 @@ function readerReason(cmd: Command, config: ReadOnlyConfig | undefined): string 
     c = inner;
   }
   if (c.words.length === 0) return undefined;
+  if (c.words[0].value.includes("$"))
+    return "a variable in the command word cannot be verified (`$D/ls` runs whatever D names)";
   const name = basename(c.words[0].value);
   const args = c.words.slice(1).map(w => w.value);
   if ((config?.read ?? []).some(rule => matchesWrite(rule, c))) return undefined;
@@ -398,6 +403,8 @@ function readerReason(cmd: Command, config: ReadOnlyConfig | undefined): string 
   if (name === "sed" && !sedReadsOnly(args))
     return "sed is allowed only as `sed -n '<addresses>p' [file]`";
   if (name === "rg" && args.some(a => a.startsWith("--pre"))) return "rg --pre runs a command";
+  if (name === "printf" && args[0]?.startsWith("-v"))
+    return "printf -v assigns a variable (a later redirect or command word could read it)";
   return undefined;
 }
 
@@ -414,6 +421,24 @@ function hasSubstitution(command: string): boolean {
     else if (quote === '"') {
       if (c === '"') quote = "";
     } else if (c === "'" || c === '"') quote = c;
+  }
+  return false;
+}
+
+/** An unquoted `{a,b}` / `{1..3}`: brace expansion builds words the flag checks never saw (`sed -n 1p {-i,f}`). */
+function hasBraceExpansion(command: string): boolean {
+  let quote = "";
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      if (c === quote) quote = "";
+      else if (c === "\\" && quote === '"') i++;
+    } else if (c === "\\") i++;
+    else if (c === "'" || c === '"') quote = c;
+    else if (c === "{" && command[i - 1] !== "$") {
+      const close = command.indexOf("}", i + 1);
+      if (close > 0 && /,|\.\./.test(command.slice(i + 1, close))) return true;
+    }
   }
   return false;
 }
@@ -439,16 +464,22 @@ export function redirectsToFile(command: string): string | undefined {
     }
     if (c === "\\") i++;
     else if (c === "'" || c === '"') quote = c;
+    else if (c === "<" && command[i + 1] === ">") return "redirect <> opens a file for writing";
     else if (c === ">") {
       let j = i + 1;
       if (command[j] === ">" || command[j] === "|") j++;
+      // `>&2` / `>&-` duplicate or close a descriptor; `>&file` writes the file.
       if (command[j] === "&") {
-        i = j;
-        continue;
+        j++;
+        if (/[0-9-]/.test(command[j] ?? "")) {
+          i = j;
+          continue;
+        }
       }
       while (command[j] === " " || command[j] === "\t") j++;
       const m = /^[^\s;&|()<>]+/.exec(command.slice(j));
       const raw = (m?.[0] ?? "").replace(/^["']|["']$/g, "");
+      if (/[$*?[{~`]/.test(raw)) return `redirect > ${raw} has a variable or glob target`;
       const target = raw.startsWith("/") ? path.posix.normalize(raw) : raw;
       i = j;
       if (
@@ -477,12 +508,106 @@ function commandReason(
   if (redirect) return redirect;
   if (hasSubstitution(command))
     return "command substitution ($( ), backticks) cannot be verified read-only";
+  if (hasBraceExpansion(command))
+    return "brace expansion ({a,b}, {1..3}) builds words that cannot be verified read-only";
   for (const seg of segments) {
     const cmd = commandOf(seg);
     const reason = writeReason(cmd, config, depth) ?? readerReason(cmd, config);
     if (reason) return reason;
   }
   return undefined;
+}
+
+/** Defaults that read no file at all, whatever their arguments. */
+const NO_FILE_READERS = new Set([
+  "cd",
+  "pwd",
+  "echo",
+  "printf",
+  "true",
+  "false",
+  "test",
+  "[",
+  "date",
+  "basename",
+  "dirname",
+]);
+/** Pipe filters that read only stdin when no file operand is given (grep's one operand is its pattern). */
+const STDIN_FILTERS = new Map<string, number>([
+  ["head", 0],
+  ["tail", 0],
+  ["wc", 0],
+  ["sort", 0],
+  ["uniq", 0],
+  ["cut", 0],
+  ["rg", 1],
+  ["nl", 0],
+  ["tac", 0],
+  ["tr", Infinity],
+  ["grep", 1],
+  ["egrep", 1],
+  ["fgrep", 1],
+]);
+
+function isHarmlessDefault(cmd: Command, afterPipe: boolean): boolean {
+  const name = basename(cmd.words[0]?.value ?? "");
+  if (NO_FILE_READERS.has(name)) return true;
+  const operands = STDIN_FILTERS.get(name);
+  if (!afterPipe || operands === undefined) return false;
+  const args = cmd.words.slice(1).map(w => w.value);
+  if (args.some(a => a.startsWith("--files0-from"))) return false;
+  const searcher = name.endsWith("grep") || name === "rg";
+  if (searcher && args.some(a => /^-[A-Za-z]*[rRf]|^--(file|recursive|dereference|pre)/.test(a)))
+    return false;
+  // A numeric word is an option value (`head -n 5`) for a filter, but may be a grep pattern.
+  const isOperand = (a: string): boolean =>
+    !a.startsWith("-") && (searcher || !/^[+-]?\d+$/.test(a));
+  return args.filter(isOperand).length <= operands;
+}
+
+/**
+ * The first segment of this ALLOWED call that is not a project `read` CLI, a default that reads no
+ * file, or a stdin filter behind a pipe without a file operand (xargs looked through = unjudged);
+ * undefined when every segment is one. The rewrite of a call (env export, pool wrap) is only emitted
+ * with `permissionDecision: "allow"`, which skips the permission system for the WHOLE call, so a
+ * file-reading default riding on a project reader (`hxq lint a.hx; cat ~/.ssh/key`) is not one.
+ */
+export function unharmlessSegment(
+  command: string,
+  config: ReadOnlyConfig | undefined,
+): string | undefined {
+  const segments = splitSegments(command);
+  if (!segments) return command;
+  for (const [k, seg] of segments.entries()) {
+    let c = commandOf(seg);
+    let viaXargs = false;
+    for (let d = 0; d < 5; d++) {
+      const inner = unwrap(c);
+      if (!inner) break;
+      if (
+        c.words
+          .slice(0, c.words.length - inner.words.length)
+          .some(w => basename(w.value) === "xargs")
+      )
+        viaXargs = true;
+      c = inner;
+    }
+    if (c.words.length === 0) continue;
+    const text = c.words
+      .slice(0, 3)
+      .map(w => w.value)
+      .join(" ");
+    if (viaXargs) return `xargs ${text}`;
+    if ((config?.read ?? []).some(rule => matchesWrite(rule, c))) continue;
+    const afterPipe = k > 0 && (segments[k - 1].op === "|" || segments[k - 1].op === "|&");
+    if (!isHarmlessDefault(c, afterPipe)) return text;
+  }
+  return undefined;
+}
+
+/** May the rewrite of this allowed call carry `permissionDecision: "allow"`? See `unharmlessSegment`. */
+export function rewriteIsHarmless(command: string, config: ReadOnlyConfig | undefined): boolean {
+  return unharmlessSegment(command, config) === undefined;
 }
 
 export interface ReadOnlyPayload {
@@ -494,8 +619,9 @@ export interface ReadOnlyPayload {
 /**
  * The decision for one PreToolUse(Bash) payload. Only a call made by a read-only agent type is
  * touched (the main session and every other subagent pass): a write is denied, else the call is
- * allowed UNCHANGED — a rewritten call is refused by auto mode unless the hook also allows it, so
- * the env is exported only in front of a command that starts a segment with a project reader.
+ * allowed UNCHANGED, except that the env is exported in front of a command that starts a segment
+ * with a project reader; the hook allows that rewrite only for a call `unharmlessSegment` clears,
+ * and denies the rest (auto mode refuses a rewritten call that is not allowed).
  */
 export function decideReadOnly(
   payload: ReadOnlyPayload,

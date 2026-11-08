@@ -12,6 +12,7 @@ import {
   parseReadOnlyConfig,
   type ReadOnlyConfig,
   redirectsToFile,
+  rewriteIsHarmless,
 } from "./read-only-gate.js";
 
 const config = parseReadOnlyConfig(
@@ -115,6 +116,25 @@ describe("read-only gate", () => {
     "cat <(rm a)",
     "ls; curl x",
     "make clean > src/x",
+    "sed -n 1p {-i,f}",
+    "cat f{1,2}",
+    "cat {1..3}",
+    "git log {--output=x,HEAD}",
+    "printf -v x hello",
+    "printf -vx hello",
+    "cat a > $OUT",
+    "cat a > /tmp/$X",
+    "cat a > /tmp/*",
+    "cat a > ~/x",
+    "cat a > ${HOME}/x",
+    "cat a >& out.txt",
+    "cat a &> out.txt",
+    "cat a >&out.txt",
+    "cat <> out.txt",
+    "$D/ls",
+    "$CMD log",
+    '"$D/cat" f',
+    "env $X ls",
   ])("denies %s", command => {
     expect(call("workflow:reviewer", command)).toMatchObject(DENY);
   });
@@ -136,6 +156,15 @@ describe("read-only gate", () => {
     "sed -n 1,20p f",
     "sed -n '/x/p' f",
     "sort -u f | uniq -c",
+    "git log HEAD@{1}",
+    "git log 'HEAD@{2 days ago}'",
+    "grep -E 'a{1,2}' f",
+    "echo '{a,b}' \"{c,d}\"",
+    "ls 2>&1",
+    "ls >&2",
+    "ls 2>&-",
+    "printf '%s' x",
+    "echo $HOME",
   ])("lets %s through unchanged: no project reader reads the env", command => {
     expect(call("workflow:recon", command)).toEqual({ kind: "env", command });
   });
@@ -149,6 +178,47 @@ describe("read-only gate", () => {
       });
     },
   );
+
+  it("the allow on a rewritten call covers only project readers and provably harmless defaults", () => {
+    const yes = [
+      "hxq lint a.hx",
+      "cd d && hxq lint a.hx | head",
+      "hxq lint a.hx | head -n 5 | wc -l",
+      "hxq lint a.hx | grep error | sort | uniq -c",
+      "rtk proxy hxq lint a.hx",
+      "echo start; make all",
+      "make all 2>&1 | tail -n +3",
+      "hxq lint a.hx | rg x",
+      "hxq lint a.hx | cut -c1-80",
+      "hxq lint a.hx | cut -d: -f1",
+    ];
+    const no = [
+      "hxq lint a.hx; cat ~/.ssh/id_rsa",
+      "hxq lint a.hx && git log",
+      "hxq lint a.hx | head f",
+      "hxq lint a.hx | grep -r x",
+      "hxq lint a.hx | grep -f pats",
+      "hxq lint a.hx | grep a b",
+      "head f | hxq lint -",
+      "ls | hxq lint -",
+      "cat f | head",
+      "hxq lint a.hx | rg x f",
+      "hxq lint a.hx | rg -f pats x",
+      "hxq lint a.hx | cut -c1-80 f",
+      "hxq lint a.hx | sort -o f",
+      "hxq lint a.hx | xargs head",
+      "hxq lint a.hx | xargs grep secret",
+      "hxq lint a.hx | xargs -n 1 hxq lint",
+      "hxq lint a.hx | grep 5 secret.txt",
+      "hxq lint a.hx | grep -m 5 x",
+      "hxq lint a.hx | sort --files0-from=list",
+      "hxq lint a.hx | wc --files0-from=list",
+    ];
+    for (const c of yes) expect([c, rewriteIsHarmless(c, config)]).toEqual([c, true]);
+    for (const c of no) expect([c, rewriteIsHarmless(c, config)]).toEqual([c, false]);
+    expect(rewriteIsHarmless("make all", undefined)).toBe(false);
+    expect(rewriteIsHarmless("cat <<EOF\nx\nEOF", config)).toBe(false);
+  });
 
   it("without a config the built-in write list still holds and nothing is exported", () => {
     expect(call("workflow:recon", "git commit -m x", null)).toMatchObject(DENY);
@@ -268,6 +338,29 @@ describe("composition with the pool gate", () => {
     expect(reader.hookSpecificOutput.updatedInput.command).toBe(
       "export APQ_READ_ONLY='1'; hxq lint a.hx",
     );
+    // A project reader beside a file-reading default cannot carry the env export without an allow:
+    // it is denied with a "own call" reason, never rewritten without the allow nor passed without env.
+    for (const c of [
+      "hxq lint a.hx; cat ~/.ssh/id_rsa",
+      "hxq lint a.hx; git log",
+      "make all; cat f",
+      "hxq lint a.hx | xargs head",
+    ]) {
+      const denied = JSON.parse(hook("read-only-gate-hook", "workflow:recon", c).stdout) as {
+        hookSpecificOutput: {
+          permissionDecision: string;
+          permissionDecisionReason: string;
+          updatedInput?: unknown;
+        };
+      };
+      expect([c, denied.hookSpecificOutput.permissionDecision]).toEqual([c, "deny"]);
+      expect(denied.hookSpecificOutput.permissionDecisionReason).toContain("its own call");
+      expect(denied.hookSpecificOutput.updatedInput).toBeUndefined();
+    }
+    const piped = JSON.parse(
+      hook("read-only-gate-hook", "workflow:recon", "hxq lint a.hx | rg x | cut -c1-80").stdout,
+    ) as { hookSpecificOutput: { permissionDecision: string } };
+    expect(piped.hookSpecificOutput.permissionDecision).toBe("allow");
     expect(hook("pool-gate-hook", "workflow:recon").stdout).toBe("");
     expect(hook("pool-gate-hook", "workflow:driver").stdout).toContain("wf-run");
   });

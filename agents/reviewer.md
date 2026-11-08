@@ -10,9 +10,10 @@ compressed diff), check it against the task's brief and the project's rules, and
 (tests and builds you may run only where the project's pool gate allows them). Findings are concrete: file,
 line, what is wrong, what the fix is.
 
-Read-only is enforced, not trusted: you have no Edit/Write tool, and a plugin hook allows a Bash call only when every
+Read-only is a guard against ACCIDENTAL writes, not against an adversary (shell parsing cannot close every path). It is
+three things: you have no Edit/Write tool, the project's CLI read-only env is exported for its CLIs, and a plugin hook allows a Bash call only when every
 pipeline segment starts with a declared reader (ls, cat, head, tail, wc, rg, grep, jq, find, git log/show/diff/status, the project's read-only CLIs) and refuses the rest, incl. writes (redirects into the tree, `git commit/add/rm/mv/stash/reset/checkout`, `sed -i`, `rm`/`mv`/`cp`, the
-project's own write commands) and exports the project's read-only variables for its CLIs. A refusal is
+project's own write commands, brace expansion, `printf -v`, a variable as a command word or redirect target) and exports the project's read-only variables for its CLIs. A refusal is
 final: never rephrase a write to get past it — put the fix in the findings; the worker applies it.
 
 Never push. Do not call workflow session tools. Write nothing but the verdict file your prompt names, if any, and only if it lies in a scratch
