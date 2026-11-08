@@ -567,3 +567,63 @@ describe.skipIf(!HAVE_CHROME)("the live map in a real browser", () => {
     expect(await page.eval(lane)).toMatchObject({ hl: 1 });
   }, 90_000);
 });
+
+describe.skipIf(!HAVE_CHROME)("the Plan tab in a real browser", () => {
+  it("a row opens the card beside the list and lights at once; a node selects; a session link does not", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashplan-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const file = path.join(dir, "q.yaml");
+    const task = (id: string, status: string, extra = "") =>
+      `  - id: ${id}\n    status: ${status}\n    repo: /tmp\n${extra}    text: text of ${id}\n`;
+    fs.writeFileSync(
+      file,
+      `batch_size: 1\ntasks:\n${task("RUN-A", "running")}${task("RDY-B", "pending")}${task("WAIT-C", "pending", "    after: [ RDY-B ]\n")}`,
+    );
+    const storage = new Storage(path.join(dir, "state"), { eventLog: false });
+    await storage.write("s1", session("s1", "a", { queue_file: file, task: "RUN-A" }));
+    const base = await serve(storage, routesModule(dir));
+    const page = await openPage(`${base}/plan`);
+    const row = (id: string) => `document.querySelector('#plan-content [data-plan-id="${id}"]')`;
+    await until(page, `${row("RDY-B")} !== null`, "the plan rows");
+
+    // before any selection the list spans the whole view (no empty column)
+    expect(
+      await page.eval(
+        "document.getElementById('plan-content').parentElement.getBoundingClientRect().right >= innerWidth - 40",
+      ),
+    ).toBe(true);
+
+    // a click opens the card beside the list and lights the row at once (not at the next poll)
+    await page.eval(`${row("RDY-B")}.click()`);
+    expect(
+      await page.eval(`(() => {
+        const c = document.getElementById('plan-card').getBoundingClientRect();
+        const l = document.getElementById('plan-content').getBoundingClientRect();
+        return { beside: c.width > 0 && c.left >= l.right - 1 && c.top < l.bottom,
+          lit: ${row("RDY-B")}.classList.contains('active'),
+          nodes: document.querySelectorAll('#plan-card g.qnode').length };
+      })()`),
+    ).toEqual({ beside: true, lit: true, nodes: 2 });
+
+    // a node of the graph selects that line
+    await page.eval(
+      `document.querySelector('#plan-card g.qnode[data-plan-id="WAIT-C"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))`,
+    );
+    expect(
+      await page.eval(`({ lit: ${row("WAIT-C")}.classList.contains('active'),
+        old: ${row("RDY-B")}.classList.contains('active'),
+        title: document.querySelector('#plan-card .plaque').textContent })`),
+    ).toEqual({ lit: true, old: false, title: "WAIT-C" });
+
+    // the running row's session link follows its link: it selects nothing
+    expect(
+      await page.eval(`(() => {
+        const a = ${row("RUN-A")}.querySelector('a[href^="/session/"]');
+        a.addEventListener('click', e => e.preventDefault());
+        a.click();
+        return { lit: ${row("RUN-A")}.classList.contains('active'),
+          still: ${row("WAIT-C")}.classList.contains('active') };
+      })()`),
+    ).toEqual({ lit: false, still: true });
+  }, 60_000);
+});

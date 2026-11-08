@@ -5,6 +5,7 @@ export const API_QUEUE = {
   "lines": [
     {
       "id": "RUN-1",
+      "afterIds": [],
       "status": "running",
       "difficulty": "7",
       "touches": "r",
@@ -15,6 +16,7 @@ export const API_QUEUE = {
     },
     {
       "id": "NEXT-1",
+      "afterIds": [],
       "status": "pending",
       "difficulty": "3",
       "touches": "n",
@@ -27,6 +29,7 @@ export const API_QUEUE = {
     },
     {
       "id": "NEXT-2",
+      "afterIds": [],
       "status": "pending",
       "difficulty": "2",
       "touches": "n2",
@@ -40,6 +43,9 @@ export const API_QUEUE = {
     },
     {
       "id": "WAIT-1",
+      "afterIds": [
+        "NEXT-1"
+      ],
       "status": "pending",
       "difficulty": "5",
       "after": "NEXT-1",
@@ -52,6 +58,7 @@ export const API_QUEUE = {
     },
     {
       "id": "PARK-1",
+      "afterIds": [],
       "status": "pending",
       "touches": "p",
       "exclusive": false,
@@ -62,6 +69,7 @@ export const API_QUEUE = {
     },
     {
       "id": "DONE-1",
+      "afterIds": [],
       "status": "done",
       "exclusive": false,
       "paused": false,
@@ -72,6 +80,7 @@ export const API_QUEUE = {
     },
     {
       "id": "FAIL-LONG",
+      "afterIds": [],
       "status": "failed",
       "exclusive": false,
       "paused": false,
@@ -82,6 +91,7 @@ export const API_QUEUE = {
     },
     {
       "id": "FAIL-OLD",
+      "afterIds": [],
       "status": "failed",
       "difficulty": "4",
       "exclusive": false,
@@ -93,6 +103,7 @@ export const API_QUEUE = {
     },
     {
       "id": "FAIL-NEW",
+      "afterIds": [],
       "status": "failed",
       "exclusive": false,
       "paused": false,
@@ -103,6 +114,7 @@ export const API_QUEUE = {
     },
     {
       "id": "FAIL-BARE",
+      "afterIds": [],
       "status": "failed",
       "exclusive": false,
       "paused": false,

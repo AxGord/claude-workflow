@@ -628,6 +628,8 @@ export interface QueueLineView {
   readonly difficulty?: string;
   readonly model?: string;
   readonly after?: string;
+  /** The queue ids `after` names, as the picker resolves them. */
+  readonly afterIds: readonly string[];
   readonly exclusive: boolean;
   readonly paused: boolean;
   readonly owner?: string;
@@ -665,11 +667,13 @@ export function describeQueue(queue: Queue): {
   const plan = planPick(queue, { ignoreWindow: true });
   const why = new Map(plan.reasons.map(r => [r.id, r.why]));
   const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
+  const byId = new Map(queue.lines.map(l => [l.id, l]));
   return {
     file: queue.file,
     batchSize: queue.batchSize,
     lines: queue.lines.map(l => ({
       id: l.id,
+      afterIds: afterIdsOf(l.meta.after, byId),
       status: l.status,
       ...(l.meta.difficulty !== undefined ? { difficulty: l.meta.difficulty } : {}),
       ...(l.meta.model !== undefined ? { model: l.meta.model } : {}),
@@ -986,13 +990,16 @@ function unknownAfterIds(after: string, byId: ReadonlyMap<string, QueueLine>): s
   return unknown;
 }
 
+/** The queue ids an `after:` text names, as the picker reads it (text in parentheses is prose). */
+function afterIdsOf(after: string | undefined, byId: ReadonlyMap<string, QueueLine>): string[] {
+  const toks = stripParens(after ?? "").match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g) ?? [];
+  return [...new Set(toks)].filter(t => byId.has(t));
+}
+
 /** A dependency path from `id` back to itself through `after:` ids, or null. */
 function afterCycle(queue: Queue, id: string): string[] | null {
   const byId = new Map(queue.lines.map(l => [l.id, l]));
-  const deps = (l: QueueLine): string[] =>
-    (stripParens(l.meta.after ?? "").match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g) ?? []).filter(
-      t => byId.has(t),
-    );
+  const deps = (l: QueueLine): string[] => afterIdsOf(l.meta.after, byId);
   const seen = new Set<string>();
   const walk = (cur: string, trail: string[]): string[] | null => {
     for (const d of deps(byId.get(cur) as QueueLine)) {

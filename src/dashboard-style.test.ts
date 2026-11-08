@@ -631,4 +631,13 @@ describe("every view renders with the shared components", () => {
     const missing = [...used].filter(c => !defined.has(c) && !extra.includes(c));
     expect(missing).toEqual([]);
   });
+
+  it("a Plan-tab row selects its line: the side card draws the queueGraph of /map-layout.js", () => {
+    expect(PAGE).toContain("data-plan-id");
+    expect(PAGE).toContain('id="plan-card"');
+    expect(PAGE).toContain("Layout.queueGraph(");
+    expect(PAGE).toContain("Layout.queueNodeKind(");
+    for (const k of ["done", "running", "ready", "waiting", "failed"])
+      expect(COMPONENTS).toContain(`.qnode.${k} `);
+  });
 });

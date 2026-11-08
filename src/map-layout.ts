@@ -1606,3 +1606,53 @@ export function scene(map: MapLayout): SceneGroup {
   const els: SceneEl[] = map.next ? stripEls("next", map.next, 20) : [];
   return { key: "map", cls: "m-root", y: 0, els, groups: map.bands.map(bandScene) };
 }
+
+export type QueueNodeKind = "done" | "running" | "ready" | "waiting" | "failed";
+
+export interface QueueGraphLine {
+  readonly id: string;
+  readonly status: string;
+  readonly reason?: string;
+  /** the queue ids its `after:` names, resolved by `describeQueue` */
+  readonly afterIds?: readonly string[];
+}
+
+export interface QueueGraph {
+  readonly nodes: readonly {
+    readonly id: string;
+    readonly kind: QueueNodeKind;
+    readonly self: boolean;
+  }[];
+  /** `from` must land before `to` starts */
+  readonly edges: readonly { readonly from: string; readonly to: string }[];
+}
+
+/** A queue line's state as the Plan tab reads it: a pending line is `ready` or `waiting` by the picker's reason. */
+export function queueNodeKind(l: QueueGraphLine): QueueNodeKind {
+  if (l.status === "done" || l.status === "running" || l.status === "failed") return l.status;
+  return l.reason === "ready" ? "ready" : "waiting";
+}
+
+/** The line `id`, the lines it waits for and the lines that wait for it, with the edges between them. */
+export function queueGraph(lines: readonly QueueGraphLine[], id: string): QueueGraph {
+  const byId = new Map(lines.map(l => [l.id, l] as const));
+  const self = byId.get(id);
+  if (!self) return { nodes: [], edges: [] };
+  const edges: { from: string; to: string }[] = [];
+  const ids = new Set([id]);
+  for (const dep of self.afterIds ?? []) {
+    edges.push({ from: dep, to: id });
+    ids.add(dep);
+  }
+  for (const l of lines)
+    if (l.id !== id && (l.afterIds ?? []).includes(id)) {
+      edges.push({ from: id, to: l.id });
+      ids.add(l.id);
+    }
+  const nodes = [...ids].map(n => ({
+    id: n,
+    kind: queueNodeKind(byId.get(n) as QueueGraphLine),
+    self: n === id,
+  }));
+  return { nodes, edges };
+}

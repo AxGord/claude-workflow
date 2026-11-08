@@ -1244,6 +1244,23 @@ describe("describeQueue", () => {
     expect(reasons.F).toMatch(/^overlaps /);
   });
 
+  it("afterIds are the ids the picker resolves: a known id inside parentheses is prose", () => {
+    const aq = parseMd(
+      [
+        "# x",
+        "batch_size: 1",
+        "## Tasks",
+        "- [ ] A | repo: /tmp | text of a is long enough to be prose here",
+        "- [ ] B | repo: /tmp | text of b is long enough to be prose here",
+        "- [ ] C | repo: /tmp | after: B (once A is read, nested (A)) | text of c is long enough to be prose here",
+        "",
+      ].join("\n"),
+      "/tmp/q.md",
+    );
+    const ids = Object.fromEntries(describeQueue(aq).lines.map(l => [l.id, l.afterIds]));
+    expect(ids).toEqual({ A: [], B: [], C: ["B"] });
+  });
+
   it("keeps the window reason in the real pick", () => {
     expect(planPick(q).reasons.find(r => r.id === "C")?.why).toBe("window full");
   });

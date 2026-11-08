@@ -17,7 +17,7 @@
     <a href="/map" id="tab-map">Map</a>
   </div>
   <div id="map-view" style="display:none"></div>
-  <div id="plan-view" style="display:none"><div class="panel"><h2 class="label">Plan</h2><div id="plan-content"><div class="empty">No queue</div></div></div></div>
+  <div id="plan-view" style="display:none"><div class="plan-cols" id="plan-cols"><div class="panel"><h2 class="label">Plan</h2><div id="plan-content"><div class="empty">No queue</div></div></div><div class="panel plan-card" id="plan-card" style="display:none"></div></div></div>
   <div id="main-view">
   <div class="grid">
     <div class="stack-col">
@@ -115,8 +115,9 @@ const ui = {
     return `<div class="strip${cls ? ' ' + cls : ''}"><span class="lead">${lead}</span>${plaquesHtml.join('')}${hidden > 0 ? `<span class="more">+${hidden}</span>` : ''}</div>`;
   },
   // A list row (session, workflow, plan line): a link when it has an href.
-  item({ href, active, title, id, info, extra }) {
-    const open = href ? `<a class="item${active ? ' active' : ''}" href="${href}">` : '<div class="item">';
+  item({ href, active, title, id, info, extra, pick }) {
+    const open = href ? `<a class="item${active ? ' active' : ''}" href="${href}">`
+      : pick ? `<div class="item pick${active ? ' active' : ''}" data-key="plan:${escapeHtml(pick)}" data-plan-id="${escapeHtml(pick)}">` : '<div class="item">';
     return open
       + `<div class="title">${title}</div>`
       + (id ? `<div class="id">${escapeHtml(id)}</div>` : '')
@@ -824,8 +825,61 @@ function planRow(l, extra, stateCls) {
     l.model ? ui.chip(l.model) : '',
     flags ? `<span class="flags">${escapeHtml(flags)}</span>` : '',
   ].join(' ');
-  return ui.item({ title, info: extra || '', extra: escapeHtml(text) });
+  return ui.item({ title, info: extra || '', extra: escapeHtml(text), pick: l.id, active: l.id === planSelected });
 }
+
+// The side card of the selected queue line: its full text and the lines it waits for / that wait for it.
+let planSelected = null;
+let planLines = [];
+
+function planGraphSvg(lines, id) {
+  const q = Layout.queueGraph(lines, id);
+  if (q.nodes.length === 0) return '';
+  const w = 150, h = 32;
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'LR', nodesep: 14, ranksep: 36, marginx: 10, marginy: 10 });
+  g.setDefaultEdgeLabel(() => ({}));
+  for (const n of q.nodes) g.setNode(n.id, { width: w, height: h });
+  for (const e of q.edges) g.setEdge(e.from, e.to);
+  dagre.layout(g);
+  const size = g.graph();
+  let svg = `<svg viewBox="0 0 ${size.width} ${size.height}" width="${size.width}" xmlns="http://www.w3.org/2000/svg">`
+    + '<defs><marker id="qarr" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto"><path class="g-arrow" d="M0,0 L10,3 L0,6z"/></marker></defs>';
+  for (const e of g.edges()) svg += `<path class="g-edge" d="${pointsToPath(g.edge(e).points)}" marker-end="url(#qarr)"/>`;
+  for (const n of q.nodes) {
+    const p = g.node(n.id);
+    svg += `<g class="qnode ${n.kind}${n.self ? ' sel' : ''}" data-plan-id="${escapeHtml(n.id)}"><title>${escapeHtml(n.id + ' — ' + n.kind)}</title>`
+      + `<rect class="g-node" x="${p.x - w / 2}" y="${p.y - h / 2}" width="${w}" height="${h}" rx="8"/>`
+      + `<text class="qlabel" x="${p.x}" y="${p.y + 4}" text-anchor="middle">${escapeHtml(n.id.length > 22 ? n.id.slice(0, 21) + '…' : n.id)}</text></g>`;
+  }
+  return svg + '</svg>';
+}
+
+function renderPlanCard() {
+  const l = planLines.find(x => x.id === planSelected);
+  const el = document.getElementById('plan-card');
+  document.getElementById('plan-cols').classList.toggle('open', !!l);
+  if (!l) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const kind = Layout.queueNodeKind(l);
+  put('plan-card', ui.label(ui.difficulty(l.difficulty) + ' ' + ui.plaque(escapeHtml(l.id)) + ` <span class="flags">${kind}</span>`
+    + ' <a class="close" href="#" data-plan-id="">close</a>')
+    + (l.after ? ui.kv('after', escapeHtml(l.after)) : '')
+    + `<div class="plan-text">${escapeHtml(l.text)}</div>`
+    + `<div class="graph">${planGraphSvg(planLines, l.id)}</div>`);
+}
+
+document.addEventListener('click', ev => {
+  const t = ev.target.closest && ev.target.closest('[data-plan-id]');
+  if (!t) return;
+  const link = ev.target.closest('a[href]:not(.close)');
+  if (link) return;
+  ev.preventDefault();
+  const id = t.dataset.planId;
+  planSelected = id === '' || (id === planSelected && t.classList.contains('pick')) ? null : id;
+  put('plan-content', planQueues.map(renderPlan).join(''));
+  renderPlanCard();
+});
 
 // `next: … +N` / `landed earlier: … +N` over a group of lines (the first few, then the count).
 function planStrip(lead, lines, cls) {
@@ -868,8 +922,12 @@ async function refreshPlan() {
   const qs = await Promise.all(files.map(f => fetchJSON('/api/queue?file=' + encodeURIComponent(f))));
   const ok = qs.filter(Boolean);
   if (ok.length === 0) return;
+  planQueues = ok;
+  planLines = ok.flatMap(q => q.lines);
   put('plan-content', ok.map(renderPlan).join(''));
+  renderPlanCard();
 }
+let planQueues = [];
 
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
 Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js')]).then(([m, s, l]) => {

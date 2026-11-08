@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { fold, seedEvents, type EventKind, type SeedSession, type WfEvent } from "./event-fold.js";
 import {
+  queueGraph,
   G,
   layout,
   placeSteps,
@@ -1117,4 +1118,38 @@ describe("station names", () => {
       expect(el?.title).toBe("reconciliation-of-everything-and-all-its-parts");
       expect(collisions(m)).toEqual([]);
     });
+});
+
+describe("the Plan tab's queue graph", () => {
+  const lines = [
+    { id: "A", status: "done" },
+    { id: "B", status: "running", afterIds: ["A"] },
+    { id: "C", status: "pending", reason: "ready", afterIds: ["A", "B"] },
+    { id: "D", status: "pending", reason: "after: C", afterIds: ["C"] },
+    { id: "E", status: "failed" },
+    { id: "F", status: "pending", reason: "after: C", afterIds: ["C", "D"] },
+  ];
+  it("holds the line, what it waits for and what waits for it, each by state", () => {
+    const g = queueGraph(lines, "C");
+    expect(g.nodes.map(n => [n.id, n.kind, n.self])).toEqual([
+      ["C", "ready", true],
+      ["A", "done", false],
+      ["B", "running", false],
+      ["D", "waiting", false],
+      ["F", "waiting", false],
+    ]);
+    expect(g.edges).toEqual([
+      { from: "A", to: "C" },
+      { from: "B", to: "C" },
+      { from: "C", to: "D" },
+      { from: "C", to: "F" },
+    ]);
+  });
+  it("a line with no neighbours is one node, an unknown id none, a failed line is failed", () => {
+    expect(queueGraph(lines, "E")).toEqual({
+      nodes: [{ id: "E", kind: "failed", self: true }],
+      edges: [],
+    });
+    expect(queueGraph(lines, "nope")).toEqual({ nodes: [], edges: [] });
+  });
 });
