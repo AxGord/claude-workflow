@@ -5,6 +5,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./dashboard.js";
+import { Pool, systemProbes } from "./pool.js";
 import { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
@@ -147,6 +148,7 @@ describe("dashboard paths", () => {
       "/workflows",
       "/workflow/engine-task",
       "/plan",
+      "/pool",
       "/session/a%20b",
     ]) {
       const res = await fetch(`${base}${p}`);
@@ -169,5 +171,40 @@ describe("dashboard paths", () => {
       "utf8",
     );
     expect(html).not.toMatch(/hashchange|location\.hash|#session=/);
+  });
+});
+
+describe("GET /api/pool", () => {
+  it("answers the pool module's snapshot: budget, a lease, a waiter in order", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashpool-"));
+    dirs.push(dir);
+    fs.writeFileSync(
+      path.join(dir, "config.yaml"),
+      JSON.stringify({ budget: 2, load_threshold: 0 }),
+    );
+    const pool = new Pool(dir, { ...systemProbes, loadavg: () => 0 });
+    const held = await pool.acquire({ threads: 2, label: "held", sessionId: "sess-1" });
+    if (held.status !== "granted") throw new Error("not granted");
+    const waiting = pool.acquire({ threads: 1, label: "next" }, { waitTimeoutMs: 5000 });
+    const storage = new Storage(path.join(dir, "state"));
+    const server = buildApp(storage, {} as Loader, undefined, pool).listen(0, "127.0.0.1");
+    servers.push(server);
+    await new Promise(r => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const body = (await (await fetch(`${base}/api/pool`)).json()) as {
+      budget: number;
+      held: number;
+      leases: { request: string; entry: { label: string; session_id: string } }[];
+      waiting: { request: string; entry: { label: string } }[];
+    };
+    expect(body.budget).toBe(2);
+    expect(body.held).toBe(2);
+    expect(body.leases).toMatchObject([
+      { request: "2 threads", entry: { label: "held", session_id: "sess-1" } },
+    ]);
+    expect(body.waiting).toMatchObject([{ request: "1 threads", entry: { label: "next" } }]);
+    await held.lease.release();
+    const next = await waiting;
+    if (next.status === "granted") await next.lease.release();
   });
 });

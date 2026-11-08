@@ -15,9 +15,11 @@
     <a href="/workflows" id="tab-workflows">Workflows</a>
     <a href="/plan" id="tab-plan">Plan</a>
     <a href="/timeline" id="tab-timeline">Timeline</a>
+    <a href="/pool" id="tab-pool">Pool</a>
     <a href="/map" id="tab-map">Map</a>
   </div>
   <div id="map-view" style="display:none"></div>
+  <div id="pool-view" style="display:none"><div class="panel"><h2 class="label">Pool</h2><div id="pool-content"><div class="empty">No pool</div></div></div></div>
   <div id="timeline-view" style="display:none"><div class="panel"><h2 class="label">Timeline</h2><div id="timeline-content"><div class="empty">No pipelines</div></div></div></div>
   <div id="plan-view" style="display:none"><div class="plan-cols" id="plan-cols"><div class="panel"><h2 class="label">Plan</h2><div id="plan-content"><div class="empty">No queue</div></div></div><div class="panel plan-card" id="plan-card" style="display:none"></div></div></div>
   <div id="main-view">
@@ -316,16 +318,18 @@ function applyRoute() {
   document.getElementById('plan-view').style.display = tab === 'plan' ? '' : 'none';
   document.getElementById('map-view').style.display = tab === 'map' ? '' : 'none';
   document.getElementById('timeline-view').style.display = tab === 'timeline' ? '' : 'none';
-  document.getElementById('main-view').style.display = tab === 'plan' || tab === 'map' || tab === 'timeline' ? 'none' : '';
+  document.getElementById('pool-view').style.display = tab === 'pool' ? '' : 'none';
+  document.getElementById('main-view').style.display = tab === 'plan' || tab === 'map' || tab === 'timeline' || tab === 'pool' ? 'none' : '';
   document.getElementById('sessions-panel').style.display = tab === 'sessions' ? '' : 'none';
   document.getElementById('workflows-panel').style.display = tab === 'workflows' ? '' : 'none';
-  for (const t of ['sessions', 'workflows', 'plan', 'timeline', 'map'])
+  for (const t of ['sessions', 'workflows', 'plan', 'timeline', 'pool', 'map'])
     document.getElementById('tab-' + t).classList.toggle('tab-active', t === tab);
   document.getElementById('detail-content').innerHTML =
     ui.empty(`Select a ${tab === 'workflows' ? 'workflow' : 'session'}`);
   const loaded = [refresh(), showMap(tab === 'map' ? route : null)];
   if (tab === 'plan') loaded.push(refreshPlan());
   if (tab === 'timeline') loaded.push(refreshTimeline());
+  if (tab === 'pool') loaded.push(refreshPool());
   return Promise.all(loaded);
 }
 
@@ -995,6 +999,29 @@ async function refreshTimeline() {
   if (t) put('timeline-content', renderTimeline(t));
 }
 
+// Pool tab: the machine-wide thread pool (GET /api/pool, the data `pool_status` prints): budget and load, each lease,
+// each waiter in admission order; refreshed with the page's 2 s tick.
+function renderPool(p) {
+  const head = `<div class="pool-head"><span>budget <b>${p.budget}</b></span><span>held <b>${p.held}</b></span><span>load <b>${p.load.toFixed(2)}</b></span><span>external <b>${p.external.toFixed(1)}</b></span><span>threshold <b>${p.load_threshold}</b></span><span>locks <b>${p.locks.length ? escapeHtml(p.locks.join(', ')) : 'none'}</b></span></div>`
+    + (p.starvedNote ? `<div class="pool-note">${ui.plaque('STARVED', 'st-stop')} ${escapeHtml(p.starvedNote)}</div>` : '');
+  const flags = r => (r.overrun ? ui.plaque('OVERRUN ~' + Math.round(r.runs), 'st-stop') : '') + (r.starved ? ui.plaque('STARVED', 'st-stop') : '');
+  const row = (r, pos) => {
+    const e = r.entry;
+    const session = e.session_id ? `<a href="${Routes.routePath({ view: 'session', id: e.session_id })}">${escapeHtml(e.session_id.slice(0, 8))}</a>` : '';
+    const project = e.project || e.cwd || '';
+    return `<tr><td class="mono">${pos === undefined ? '' : pos}</td><td class="mono">${e.pid}</td><td>${escapeHtml(r.request)}</td><td>${e.priority}${e.level ? ' ' + escapeHtml(e.level) : ''}</td>`
+      + `<td>${tlSpan(r.ageMs)}</td><td title="${escapeHtml(project)}">${escapeHtml(project.split('/').pop())}</td><td class="mono">${session}</td><td class="mono">${escapeHtml(e.step || '')}</td><td>${escapeHtml(e.label || '')}</td><td>${flags(r)}</td></tr>`;
+  };
+  const table = (title, label, rows, numbered) => rows.length === 0 ? ui.label(`${title} (0)`, true) + ui.empty('none', true)
+    : ui.label(`${title} (${rows.length})`, true) + `<div class="pool-scroll"><table class="pool-table"><thead><tr><th>${numbered ? '#' : ''}</th><th>pid</th><th>${label}</th><th>prio</th><th>${numbered ? 'waiting' : 'since'}</th><th>project</th><th>session</th><th>step</th><th>label</th><th></th></tr></thead><tbody>${rows.map((r, i) => row(r, numbered ? i + 1 : undefined)).join('')}</tbody></table></div>`;
+  return head + table('Leases', 'holds', p.leases, false) + table('Waiting, in admission order', 'wants', p.waiting, true);
+}
+
+async function refreshPool() {
+  const p = await fetchJSON('/api/pool');
+  if (p) put('pool-content', renderPool(p));
+}
+
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
 Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js')]).then(([m, s, l]) => {
   Routes = m;
@@ -1008,7 +1035,7 @@ Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js'
     const at = route.view === 'map' ? null : Stable.takeScroll();
     if (at) Stable.restoreScroll(at);
   });
-  setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); if (route.view === 'timeline') refreshTimeline(); }, 2000);
+  setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); if (route.view === 'timeline') refreshTimeline(); if (route.view === 'pool') refreshPool(); }, 2000);
 });
 </script>
 </body>

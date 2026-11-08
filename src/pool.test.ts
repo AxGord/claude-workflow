@@ -12,6 +12,7 @@ import {
   describeWait,
   formatEntry,
   formatStatus,
+  poolSnapshot,
   poolStarvation,
   projectRoot,
   projectNameOf,
@@ -202,6 +203,23 @@ describe("schedule (one admission pass)", () => {
     const granted = at(now, now - 30_000);
     expect(poolStarvation(granted, now)).toBeUndefined();
     expect(starvationNotice(waiter, granted, now)).not.toMatch(/nothing granted/);
+    // the dashboard's snapshot carries the same flags and the same STARVED line
+    const snap = poolSnapshot(late, now);
+    expect(snap.starvedNote).toBe(poolStarvation(late, now));
+    expect(snap.leases).toMatchObject([
+      { request: "4 threads", overrun: true, starved: false, runs: 12.3 },
+    ]);
+    expect(snap.waiting).toMatchObject([
+      { request: "7 threads", overrun: false, starved: true, ageMs: now - 1000 },
+    ]);
+    expect(poolSnapshot(granted, now).starvedNote).toBeUndefined();
+    // a flexible lease reads as formatStatus prints it
+    const flex = entry(4, { pid: 43, started: 0, min_threads: 2, asked_threads: 8 });
+    const flexSnap = poolSnapshot(
+      schedule({ leases: [flex], waiting: [] }, conf, 0, alive, 1),
+      now,
+    );
+    expect(flexSnap.leases[0]?.request).toBe("4 threads (asked 2-8)");
   });
 
   it("N > budget counts as the budget: waits for an empty pool, then runs alone", () => {

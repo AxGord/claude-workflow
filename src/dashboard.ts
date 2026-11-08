@@ -7,7 +7,7 @@ import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
 import type { WfEvent } from "./event-log.js";
 import { computeStations } from "./stations.js";
-import { projectNameOf } from "./pool.js";
+import { Pool, poolSnapshot, projectNameOf, resolvePoolDir } from "./pool.js";
 import { ledgerEntry } from "./ledger.js";
 import { buildTimeline, localDay } from "./timeline.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
@@ -27,6 +27,7 @@ export function buildApp(
   storage: Storage,
   loader: Loader,
   routesModule: string = ROUTES_MODULE,
+  pool: Pool = new Pool(resolvePoolDir()),
 ): express.Express {
   const app = express();
   app.use(express.json());
@@ -157,6 +158,15 @@ export function buildApp(
       return;
     }
     res.json(timeline);
+  });
+
+  // The Pool tab: the machine-wide pool through the pool module, as `pool_status` reads it (one measured pass).
+  app.get("/api/pool", async (_req, res) => {
+    try {
+      res.json(poolSnapshot(await pool.measuredStatus()));
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // Abandon a session via REST (used by SessionEnd hook)

@@ -250,3 +250,11 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .tl-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; font-size: 11px; color: var(--text-3); }
 .tl-legend .tl-seg { position: static; display: inline-block; width: 14px; height: 10px; vertical-align: middle; margin-right: 4px; }
 .tl-days { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 12px; }
+
+.pool-head { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-3); font-size: 12px; margin-bottom: 8px; }
+.pool-head b { color: var(--text); }
+.pool-note { color: var(--warn-text); font-size: 12px; margin-bottom: 8px; }
+.pool-scroll { overflow-x: auto; }
+.pool-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pool-table th { color: var(--text-4); text-align: left; font-weight: 700; padding: 4px 8px; }
+.pool-table td { padding: 4px 8px; border-top: 1px solid var(--panel-border); white-space: nowrap; }

@@ -703,3 +703,55 @@ describe("every view renders with the shared components", () => {
       expect(COMPONENTS).toContain(`.qnode.${k} `);
   });
 });
+
+describe("the Pool tab", () => {
+  it("draws the budget, each lease and each waiter with its flags and a session link", () => {
+    const page = loadPage();
+    const routesJs = ts.transpileModule(
+      fs.readFileSync(fileURLToPath(new URL("./dashboard-routes.ts", import.meta.url)), "utf8"),
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText;
+    page.run(`Routes = (() => { const exports = {}; ${routesJs}\n return exports; })();`);
+    const row = (over: object, extra: object) => ({
+      entry: {
+        id: "e",
+        pid: 41,
+        threads: 4,
+        priority: 0,
+        label: "gate",
+        cwd: "/w/proj",
+        project: "/w/proj",
+        session_id: "abcdef123456",
+        step: "task/gate",
+        arrived: 0,
+        ...over,
+      },
+      request: "4 threads",
+      ageMs: 65000,
+      overrun: false,
+      starved: false,
+      ...extra,
+    });
+    const html = page.run(
+      `renderPool(${JSON.stringify({
+        budget: 10,
+        held: 4,
+        load: 3.5,
+        external: 0.5,
+        load_threshold: 2,
+        starve_after: 900,
+        locks: ["port:3000"],
+        starvedNote: "STARVED: nothing granted for 20m",
+        leases: [row({ started: 1 }, { overrun: true, runs: 12.3 })],
+        waiting: [row({ pid: 42 }, { starved: true, request: "7 threads" })],
+      })})`,
+    ) as string;
+    expect(html).toContain("budget <b>10</b>");
+    expect(html).toContain("port:3000");
+    expect(html).toContain("STARVED: nothing granted for 20m");
+    expect(html).toContain("OVERRUN ~12");
+    expect(html).toContain('href="/session/abcdef123456"');
+    expect(html).toContain("7 threads");
+    expect(html).toContain("task/gate");
+  });
+});

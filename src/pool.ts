@@ -1084,6 +1084,20 @@ export interface EntryMarks {
   readonly starved?: boolean;
 }
 
+/** What a lease holds: `4 threads (asked 2-8) + lock a`. */
+export function describeHeld(
+  e: Pick<PoolEntry, "threads" | "min_threads" | "asked_threads" | "locks">,
+): string {
+  const asked =
+    e.asked_threads === undefined
+      ? ""
+      : ` (asked ${e.min_threads !== undefined ? `${e.min_threads}-` : ""}${e.asked_threads})`;
+  return [
+    ...(e.threads > 0 ? [`${e.threads} threads${asked}`] : []),
+    ...(e.locks ?? []).map(l => `lock ${l}`),
+  ].join(" + ");
+}
+
 /** One row per lease or waiter: who (project, session, step), what (threads, locks, priority), since when. */
 export function formatEntry(
   e: PoolEntry,
@@ -1097,11 +1111,7 @@ export function formatEntry(
   if (e.started === undefined) {
     what = `wants ${describeRequest(e, budget)}`;
   } else {
-    const asked =
-      e.asked_threads === undefined
-        ? ""
-        : ` (asked ${e.min_threads !== undefined ? `${e.min_threads}-` : ""}${e.asked_threads})`;
-    what = `holds ${[...(e.threads > 0 ? [`${e.threads} threads${asked}`] : []), ...(e.locks ?? []).map(l => `lock ${l}`)].join(" + ")}`;
+    what = `holds ${describeHeld(e)}`;
     if (marks.runs !== undefined) what += `, runs ~${Math.round(marks.runs)} (OVERRUN)`;
   }
   const project = e.project ?? e.cwd;
@@ -1112,6 +1122,61 @@ export function formatEntry(
     `  pid ${e.pid}  ${what}  prio ${e.priority}${e.level ? ` ${e.level}` : ""}  since ${clock} (${Math.round((now - since) / 1000)}s${marks.starved ? ", STARVED" : ""})` +
     `  ${shown}${e.session_id ? `  session ${e.session_id}` : ""}${e.step ? `  step ${e.step}` : ""}  ${e.label || "-"}`
   );
+}
+
+/** One lease or waiter as the dashboard's Pool panel and `GET /api/pool` carry it. */
+export interface PoolRow {
+  readonly entry: PoolEntry;
+  /** What it holds or wants, as `describeRequest` prints it. */
+  readonly request: string;
+  /** Lease: ms since it started. Waiter: ms queued. */
+  readonly ageMs: number;
+  /** A measured lease: the busy cpus of its process tree. */
+  readonly runs?: number;
+  readonly overrun: boolean;
+  readonly starved: boolean;
+}
+
+/** The pool as JSON: the data `formatStatus` prints, one reader for both. */
+export interface PoolSnapshot extends PoolConfig {
+  readonly now: number;
+  readonly load: number;
+  readonly external: number;
+  readonly held: number;
+  /** The pool-wide STARVED line, when nothing was granted for `starve_after`. */
+  readonly starvedNote?: string;
+  readonly locks: readonly string[];
+  readonly leases: readonly PoolRow[];
+  /** In admission order. */
+  readonly waiting: readonly PoolRow[];
+}
+
+export function poolSnapshot(view: PoolView, now: number = Date.now()): PoolSnapshot {
+  const starvedNote = poolStarvation(view, now);
+  const row = (e: PoolEntry): PoolRow => {
+    const runs = view.runs[e.id];
+    return {
+      entry: e,
+      request: e.started !== undefined ? describeHeld(e) : describeRequest(e, view.budget),
+      ageMs: now - (e.started ?? e.arrived),
+      ...(runs !== undefined ? { runs } : {}),
+      overrun: e.started !== undefined && overruns(e, view),
+      starved: isStarved(e, view, now),
+    };
+  };
+  return {
+    now,
+    budget: view.budget,
+    load_threshold: view.load_threshold,
+    starve_after: view.starve_after,
+    load: view.load,
+    external: view.external,
+    held: view.held,
+    ...(starvedNote !== undefined ? { starvedNote } : {}),
+    locks: view.leases.flatMap(e => e.locks ?? []),
+    leases: view.leases.map(row),
+    waiting: view.waiting.map(row),
+  };
 }
 
 /** `wf-run --status` and the `pool_status` tool. */
