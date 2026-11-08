@@ -1127,7 +1127,7 @@ export function formatEntry(
 /** One lease or waiter as the dashboard's Pool panel and `GET /api/pool` carry it. */
 export interface PoolRow {
   readonly entry: PoolEntry;
-  /** What it holds or wants, as `describeRequest` prints it. */
+  /** A waiter: what it wants, as `describeRequest` prints it. A lease: what it holds, as `describeHeld` prints it. */
   readonly request: string;
   /** Lease: ms since it started. Waiter: ms queued. */
   readonly ageMs: number;

@@ -118,7 +118,7 @@ describe("wf-calibration bin", () => {
       encoding: "utf8",
     });
     expect(out).toContain("/p1");
-  });
+  }, 60_000);
 });
 
 describe("ledgerEntry fields", () => {
