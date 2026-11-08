@@ -3,37 +3,17 @@
 // lines the write added, agent link changes, difficulty and exec changes), so every writer is covered
 // at the one place all of them pass. One log per server run: a file `events/run-<stamp>-<pid>.jsonl`
 // under the state dir (older runs' files are pruned, never one whose server pid lives), plus a bounded in-memory tail for readers.
-// `fold` rebuilds a per-session picture from events. No module state.
+// `fold` (src/event-fold.ts) rebuilds a per-session picture from events. No module state.
 
 import fs from "node:fs";
 import path from "node:path";
 import { stagesRead } from "./model-table.js";
 import { isPidAlive } from "./process.js";
 import type { HistoryEntry, SessionState } from "./types.js";
+import type { EventKind, WfEvent } from "./event-fold.js";
 
-export type EventKind =
-  | "session_start"
-  | "session_end"
-  | "transition"
-  | "exec_start"
-  | "exec_end"
-  | "agent_link"
-  | "agent_respawn"
-  | "agent_stop"
-  | "rescore"
-  | "ask"
-  | "answer";
-
-export interface WfEvent {
-  /** Global sequence of the run, from 1. */
-  readonly seq: number;
-  /** The server run that wrote it: a restart starts a new sequence. */
-  readonly run: string;
-  readonly ts: string;
-  readonly kind: EventKind;
-  readonly session: string;
-  readonly data: Record<string, unknown>;
-}
+export { fold, seedEvents } from "./event-fold.js";
+export type { EventKind, FoldedSession, WfEvent } from "./event-fold.js";
 
 export const MEMORY_TAIL = 5000;
 export const KEEP_RUN_FILES = 20;
@@ -163,7 +143,7 @@ export class EventLog {
         {
           workflow: next.stack[0]?.workflow,
           parent: next.parent_session_id ?? null,
-          task: ctx.task ?? ctx.task_id ?? null,
+          task: ctx.task ?? ctx.slice ?? ctx.task_id ?? null,
           difficulty: ctx.difficulty ?? null,
         },
         next.started_at,
@@ -262,7 +242,8 @@ export class EventLog {
       h.at,
     );
     const src = prev ?? next;
-    if (this._isAsk(src, workflow, h.from)) this.append("answer", id, { state: h.from }, h.at);
+    if (this._isAsk(src, workflow, h.from))
+      this.append("answer", id, { state: h.from, to: h.to }, h.at);
     if (this._isAsk(src, workflow, h.to)) {
       this.append("ask", id, { state: h.to }, h.at);
     }
@@ -303,102 +284,4 @@ export function pruneRuns(
   } catch {
     /* no directory yet */
   }
-}
-
-export interface FoldedSession {
-  readonly id: string;
-  workflow?: string;
-  parent: string | null;
-  task: unknown;
-  difficulty: unknown;
-  state?: string;
-  transitions: { from: string; to: string; name: unknown; ts: string }[];
-  execs: { state: unknown; start?: string; end?: string; exit_code?: unknown }[];
-  agents: {
-    agent: unknown;
-    role: unknown;
-    model: unknown;
-    effort: unknown;
-    status: "running" | "respawned" | "stopped";
-  }[];
-  asks: { state: unknown; at: string; answered?: string }[];
-  outcome?: unknown;
-}
-
-/** The per-session picture the events add up to. */
-export function fold(events: readonly WfEvent[]): Map<string, FoldedSession> {
-  const out = new Map<string, FoldedSession>();
-  const get = (id: string): FoldedSession => {
-    let s = out.get(id);
-    if (!s) {
-      s = {
-        id,
-        parent: null,
-        task: null,
-        difficulty: null,
-        transitions: [],
-        execs: [],
-        agents: [],
-        asks: [],
-      };
-      out.set(id, s);
-    }
-    return s;
-  };
-  for (const e of events) {
-    const s = get(e.session);
-    const d = e.data;
-    switch (e.kind) {
-      case "session_start":
-        s.workflow = d.workflow as string;
-        s.parent = (d.parent as string | null) ?? null;
-        s.task = d.task;
-        s.difficulty = d.difficulty;
-        break;
-      case "transition":
-        s.transitions.push({ from: d.from as string, to: d.to as string, name: d.name, ts: e.ts });
-        s.state = d.to as string;
-        break;
-      case "exec_start":
-        s.execs.push({ state: d.state, start: e.ts });
-        break;
-      case "exec_end": {
-        const open = [...s.execs].reverse().find(x => x.end === undefined && x.start !== undefined);
-        if (open) Object.assign(open, { end: e.ts, exit_code: d.exit_code });
-        else s.execs.push({ state: d.state, end: e.ts, exit_code: d.exit_code });
-        break;
-      }
-      case "agent_link":
-      case "agent_respawn": {
-        if (e.kind === "agent_respawn")
-          for (const a of s.agents) if (a.status === "running") a.status = "respawned";
-        s.agents.push({
-          agent: d.agent,
-          role: d.role,
-          model: d.model,
-          effort: d.effort,
-          status: "running",
-        });
-        break;
-      }
-      case "agent_stop":
-        for (const a of s.agents) if (a.status === "running") a.status = "stopped";
-        break;
-      case "rescore":
-        s.difficulty = d.to;
-        break;
-      case "ask":
-        s.asks.push({ state: d.state, at: e.ts });
-        break;
-      case "answer": {
-        const open = [...s.asks].reverse().find(a => a.answered === undefined);
-        if (open) open.answered = e.ts;
-        break;
-      }
-      case "session_end":
-        s.outcome = d.outcome;
-        break;
-    }
-  }
-  return out;
 }

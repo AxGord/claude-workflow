@@ -14,7 +14,9 @@
     <a href="/sessions" id="tab-sessions">Sessions</a>
     <a href="/workflows" id="tab-workflows">Workflows</a>
     <a href="/plan" id="tab-plan">Plan</a>
+    <a href="/map" id="tab-map">Map</a>
   </div>
+  <div id="map-view" style="display:none"></div>
   <div id="plan-view" style="display:none"><div class="panel"><h2 class="label">Plan</h2><div id="plan-content"><div class="empty">No queue</div></div></div></div>
   <div id="main-view">
   <div class="grid">
@@ -47,6 +49,7 @@ let route = { view: 'sessions' };
 let shownWorkflow = null;
 let allWorkflows = {};
 let allSessions = [];
+let liveMap = null; // /map.js (the live workflow map), imported when the Map tab first opens
 
 async function fetchJSON(url) {
   try {
@@ -295,15 +298,30 @@ function applyRoute() {
   selectedSessionId = route.view === 'session' ? route.id : null;
   shownWorkflow = null;
   document.getElementById('plan-view').style.display = tab === 'plan' ? '' : 'none';
-  document.getElementById('main-view').style.display = tab === 'plan' ? 'none' : '';
+  document.getElementById('map-view').style.display = tab === 'map' ? '' : 'none';
+  document.getElementById('main-view').style.display = tab === 'plan' || tab === 'map' ? 'none' : '';
   document.getElementById('sessions-panel').style.display = tab === 'sessions' ? '' : 'none';
   document.getElementById('workflows-panel').style.display = tab === 'workflows' ? '' : 'none';
-  for (const t of ['sessions', 'workflows', 'plan'])
+  for (const t of ['sessions', 'workflows', 'plan', 'map'])
     document.getElementById('tab-' + t).classList.toggle('tab-active', t === tab);
   document.getElementById('detail-content').innerHTML =
     ui.empty(`Select a ${tab === 'workflows' ? 'workflow' : 'session'}`);
   if (tab === 'plan') refreshPlan();
+  showMap(tab === 'map' ? route : null);
   refresh();
+}
+
+// The Map tab: /map draws every workflow session as a live map, /map/<id> scrolls to and highlights one lane.
+async function showMap(mapRoute) {
+  if (!mapRoute) {
+    if (liveMap) liveMap.hide();
+    return;
+  }
+  if (!liveMap) {
+    const m = await import('/map.js');
+    liveMap = m.createMap({ root: document.getElementById('map-view'), fetchJSON });
+  }
+  await liveMap.show(mapRoute.lane);
 }
 
 document.addEventListener('click', e => {

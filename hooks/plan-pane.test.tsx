@@ -146,3 +146,15 @@ test('the band hides while the pane is open and comes back after ui.close', asyn
   expect(await back.find({ key: 'band-plan' })).toBeDefined()
   await back.unmount()
 })
+
+for (const withQueue of [true, false])
+  test(`/wf-map prints the live map's URL; the pane's header links to it (${withQueue ? 'with' : 'without'} a queue)`, async ($, on) => {
+    engine(on, withQueue)
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    const out = await $.command.run({ command: 'wf-map', args: '' })
+    expect(JSON.stringify(out)).toContain('http://127.0.0.1:3100/map')
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const link = await ui.find({ type: 'Link' })
+    expect(JSON.stringify(link)).toContain('http://127.0.0.1:3100/map')
+    await ui.unmount()
+  })

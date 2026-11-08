@@ -10,6 +10,8 @@ const TABLE: [string, Route][] = [
   ["/workflow/a%20b%2Fc", { view: "workflow", name: "a b/c" }],
   ["/plan", { view: "plan" }],
   ["/plan/", { view: "plan" }],
+  ["/map", { view: "map" }],
+  ["/map/abc-1", { view: "map", lane: "abc-1" }],
 ];
 
 describe("dashboard route table", () => {
@@ -25,6 +27,7 @@ describe("dashboard route table", () => {
     "/nope",
     "//",
     "/plan/x",
+    "/map/a/b",
     "session/a",
     "/session/%E0%A4%A",
   ])("%s belongs to no view", p => {
@@ -37,7 +40,7 @@ describe("dashboard route table", () => {
     expect(routePath({ view: "sessions" })).toBe("/sessions");
   });
 
-  it("every view lives under one of the three tabs", () => {
+  it("every view lives under one of the four tabs", () => {
     expect(TABLE.map(([, r]) => routeTab(r))).toEqual([
       "sessions",
       "sessions",
@@ -47,6 +50,8 @@ describe("dashboard route table", () => {
       "workflows",
       "plan",
       "plan",
+      "map",
+      "map",
     ]);
   });
 });

@@ -925,6 +925,9 @@ no model call, no tokens:
   `/api/workflows`), and a link to its graph in the dashboard (`/session/<id>`).
 - **Waiting** — pending tasks (not parked) with the picker's own reason, from the dashboard's `/api/queue`.
 
+The pane's header links to the live map (`map ↗`, the dashboard's `/map`); an Agent call's row of a workflow
+pipeline links to its lane (`lane ↗`, `/map/<session id>`); `/wf-map` prints the map's URL.
+
 Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier. A session with
 no workflow shows "No active workflow"; nothing opens by itself.
 
@@ -937,6 +940,7 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 - **Workflow list** — all loaded workflows with state counts
 - **Session detail** — state history, stack depth, context data
 - **Workflow graphs** — interactive DAG visualization rendered with dagre
+- **Map** — the live workflow map: every session at once, as a live history of the workflows (below)
 
 Every view has a real path, driven by the History API (links are plain anchors; back and forward work, a path can be opened or shared directly):
 
@@ -947,8 +951,16 @@ Every view has a real path, driven by the History API (links are plain anchors; 
 | `/workflows` | Workflow list |
 | `/workflow/<name>` | One workflow's graph and states |
 | `/plan` | Plan tab |
+| `/map` | The live workflow map |
+| `/map/<session id>` | The map, scrolled to that session's lane and highlighting it |
 
 The server answers every `GET` that is not an `/api` call or a static file with the page; an unknown `/api/...` path is a JSON 404. The route table is `src/dashboard-routes.ts`, served to the page as `/routes.js`.
+
+### Live workflow map
+
+`/map` draws every workflow session in one space, like a live git history of the workflows. A **band** per workflow kind with its **stations** as columns (`/api/workflows` `stations`); a **lane** per task session: landed on top (oldest first; ended over an hour ago they fold into `landed earlier: … +N`), the parent rail and the running lanes below, the queue's ready lines as `next: … +N` at the bottom. A lane starts at a dot on the first station and ends IN its plaque (id, state, age; 340 px at most, the id cut with `…`); its line is coloured by the difficulty (a rescore recolours it); a running lane reaches the plaque through a faint dotted tail over the stations still ahead. Under a station hangs whoever ran it: a child session as a **branch** (its states as steps: done = ring, live = glowing dot with its time, ahead = faint), its chip `model ▮▮▮▯ effort · role` in the model's colour; a finished branch joins back up. A backward move (a review verdict back to work) **loops** the line: down, dashed back to the target station, down again, the next pass below. A replaced or stopped agent is a red step and the branch goes on; an exec station carries its verdict (`gate ✓ 14m`, red on a failing exit). The driver chip under a running plaque reads `driver · <model> <effort> · waits on <who>` (the model the workflow's `driver:` declares). Which sessions are lanes: a root with no children, or a child of a root with children (a dispatcher), which draws as the **parent rail** above the running lanes; a state tagged `ask: parent` is a yellow dashed link up to the rail (`? <state>`) and its answer a green one back down (`→ <next state> · <wait>`), and a question the dispatcher itself asks is a glowing mark on the rail (`⏸ … asked the user · open 3h`). With four or more running lanes the landed ones drop their step labels.
+
+The picture is a pure function `layout(fold(events))` (`src/event-fold.ts`, `src/map-layout.ts`, served as `/event-fold.js` and `/map-layout.js`; `dashboard/map.js` draws it). The page folds the session files (`/api/sessions`, re-read every 30 s) first and the event log over them, so a map opened after a server restart still shows each session's recorded story; it follows `/api/events/stream` (SSE) and falls back to polling `/api/events` every 2 s. Every change animates from the previous layout to the next over ~300 ms, keyed by session ids: a new lane opens space and fades in, a new segment draws itself, a landed lane slides up and dims; between events only the live step's glow moves and the ages (re-laid once a minute). Follow mode keeps the running lanes in view; scroll away to read history and a pill `↓ N new events` brings you back.
 
 ### Look
 
@@ -963,7 +975,7 @@ One style for every view (sessions, session detail, workflow graphs, plan): `das
 | `GET` | `/api/events/stream` | Server-sent events of the same log; resumes from `?since=N` or `Last-Event-ID`, then streams live |
 | `GET` | `/api/session/:id` | Get session detail |
 | `POST` | `/api/session/:id/abandon` | Abandon a session |
-| `GET` | `/api/workflows` | List all workflow definitions, each with its `stations` (the live map's columns) |
+| `GET` | `/api/workflows` | List all workflow definitions, each with its `stations` (the live map's columns) and, for a task workflow, its `driver` model and effort |
 | `GET` | `/api/queues` | Queue files named by sessions' `context.queue_file` |
 | `GET` | `/api/queue?file=<path>` | Every line of that queue with the picker's reason per pending line |
 
@@ -1052,7 +1064,9 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/dashboard-routes.ts` | The dashboard's route table (path <-> view), shared by the page and the tests |
-| `dashboard/` | The page: `index.html` (views, `ui` component helpers), `tokens.css` (the only colour literals), `components.css` |
+| `src/event-fold.ts` | The event log's `fold` and `seedEvents` (a session file's events), pure; served as `/event-fold.js` |
+| `src/map-layout.ts` | The live map's `layout` (bands, lanes, branches, loops, stops, questions) and keyed `scene`, pure; served as `/map-layout.js` |
+| `dashboard/` | The page: `index.html` (views, `ui` component helpers), `map.js` (the live map: events, keyed SVG transitions, follow mode), `tokens.css` (the only colour literals), `components.css` |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 
 ## Calibration report

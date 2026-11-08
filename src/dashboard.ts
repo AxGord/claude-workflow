@@ -15,6 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** The compiled route table the page imports as `/routes.js` (a test serves a transpiled copy instead). */
 const ROUTES_MODULE = path.join(__dirname, "dashboard-routes.js");
 
+/** The live map's pure modules, compiled beside the route table and served under these names. */
+const MAP_MODULES = ["event-fold.js", "map-layout.js"] as const;
+
 export function buildApp(
   storage: Storage,
   loader: Loader,
@@ -49,6 +52,7 @@ export function buildApp(
         max_transitions: wf.max_transitions,
         states: wf.states,
         stations: computeStations(wf),
+        ...(wf.driver ? { driver: { model: wf.driver.model, effort: wf.driver.effort } } : {}),
       };
     }
     res.json(result);
@@ -168,6 +172,13 @@ export function buildApp(
   app.get("/routes.js", (_req, res) => {
     res.sendFile(routesModule);
   });
+
+  // The live map's fold and layout (src/event-fold.ts, src/map-layout.ts), compiled beside the route table.
+  for (const name of MAP_MODULES) {
+    app.get(`/${name}`, (_req, res) => {
+      res.sendFile(path.join(path.dirname(routesModule), name));
+    });
+  }
 
   // An unknown /api path is a JSON 404, never the page.
   app.use("/api", (_req, res) => {

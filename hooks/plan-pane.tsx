@@ -287,6 +287,7 @@ function age(ms: number): string {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'wf-plan', description: 'Toggle the workflow plan pane (running pipelines, next lines, lands)' })
+    await $.command.register({ name: 'wf-map', description: "Print the live workflow map's URL (the engine's dashboard)" })
     void refresh($)
     $.clock.every(PERIOD_MS, () => void refresh($))
     // a reload keeps an open pane: the band follows the engine's record, not the module's memory
@@ -306,6 +307,8 @@ export const register: Register = on => {
     const isOpen = await togglePane($)
     return { text: isOpen ? 'Plan pane opened (refreshes every 15 s; /wf-plan again closes it).' : 'Plan pane closed.' }
   }).catch(($, e, next) => (next.called ? next(e) : { text: 'wf-plan failed: see the debug log' }))
+
+  on('command.run', { command: 'wf-map' }, async () => ({ text: `${DASHBOARD}/map` }))
 
   // The band above the prompt is the status line: the root session (◆ with children) and the others' count, the
   // queue's running/next/landed, and a button that toggles the pane. Nothing when this session runs no workflow.
@@ -450,7 +453,7 @@ export const register: Register = on => {
     const id = /agentId: ([A-Za-z0-9]+)/.exec(outputText(e.props.output))?.[1]
     if (!id) return row
     const s = await read($, snap)
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Text, Link } = $.ui.resolve(e)
     const live = s?.sessions.find(r => r.agent === id)
     let line: any = null
     if (live && s) {
@@ -469,7 +472,8 @@ export const register: Register = on => {
           <Text dimColor>{roleOf(live.workflow)} · </Text>
           {live.workflow} @ <Text weight="bold">{live.state}</Text>
           {leaf.id !== live.id ? <Text> › {roleOf(leaf.workflow)} @ <Text weight="bold">{leaf.state}</Text></Text> : null}
-          <Text dimColor> {age(now - leaf.since)}</Text>
+          <Text dimColor> {age(now - leaf.since)} </Text>
+          <Link href={`${DASHBOARD}/map/${encodeURIComponent(top.id)}`} label="lane ↗" />
         </Text>
       )
     } else {
@@ -751,7 +755,10 @@ export const register: Register = on => {
     }
     return (
       <Box flexDirection="column">
-        {s.queue ? tabRow : null}
+        <Box flexDirection="row" gap={2}>
+          {s.queue ? tabRow : null}
+          <Link href={`${DASHBOARD}/map`} label="map ↗" />
+        </Box>
         {body}
         {s.error !== '' && <Text color="red">{s.error}</Text>}
         {footer}

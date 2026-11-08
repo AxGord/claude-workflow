@@ -18,6 +18,7 @@ const read = (name: string): string => fs.readFileSync(path.join(DASH, name), "u
 const TOKENS = read("tokens.css");
 const COMPONENTS = read("components.css");
 const PAGE = read("index.html");
+const MAP = read("map.js");
 const SCRIPT = PAGE.split("<script>")[1]?.split("</script>")[0] ?? "";
 
 /** A colour written out: a hex literal, or an rgb()/hsl()/hwb()/lab()/lch()/oklch() function. */
@@ -50,6 +51,7 @@ describe("the dashboard has one style", () => {
     expect(literals(TOKENS).length).toBeGreaterThan(40);
     expect(literals(COMPONENTS)).toEqual([]);
     expect(literals(PAGE)).toEqual([]);
+    expect(literals(MAP)).toEqual([]);
   });
 
   it("the colour scan sees a literal", () => {
@@ -88,7 +90,7 @@ describe("the dashboard has one style", () => {
   });
 
   it("works offline: no web font, no remote stylesheet or script", () => {
-    for (const text of [TOKENS, COMPONENTS, PAGE]) {
+    for (const text of [TOKENS, COMPONENTS, PAGE, MAP]) {
       expect(text).not.toMatch(/@import|@font-face|url\(\s*["']?https?:|googleapis|gstatic/);
       expect(text.replaceAll("http://www.w3.org/2000/svg", "")).not.toMatch(/https?:\/\//);
     }
@@ -99,7 +101,9 @@ describe("the dashboard has one style", () => {
     // component-local custom properties: set by a state class or an inline style, read with var()
     const local = new Set(["--c"]);
     const used = new Set(
-      [COMPONENTS, PAGE].flatMap(t => [...t.matchAll(/var\((--[\w-]+)/g)].map(m => m[1] ?? "")),
+      [COMPONENTS, PAGE, MAP].flatMap(t =>
+        [...t.matchAll(/var\((--[\w-]+)/g)].map(m => m[1] ?? ""),
+      ),
     );
     const unknown = [...used].filter(n => !defined.has(n) && !local.has(n));
     expect(unknown).toEqual([]);
@@ -151,6 +155,51 @@ describe("GET /routes.js", () => {
       parseRoute: (p: string) => unknown;
     };
     expect(mod.parseRoute("/plan")).toEqual({ view: "plan" });
+  });
+
+  it("serves the live map's fold and layout beside it, as modules the page can import", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashmap-"));
+    dirs.push(dir);
+    const src = path.dirname(fileURLToPath(import.meta.url));
+    for (const name of ["dashboard-routes", "event-fold", "map-layout"])
+      fs.writeFileSync(
+        path.join(dir, `${name}.js`),
+        ts.transpileModule(fs.readFileSync(path.join(src, `${name}.ts`), "utf8"), {
+          compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+        }).outputText,
+      );
+    const base = await serve(path.join(dir, "dashboard-routes.js"));
+    const load = async (file: string): Promise<Record<string, unknown>> => {
+      const res = await fetch(`${base}/${file}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toMatch(/javascript/);
+      const body = await res.text();
+      // the page imports them by absolute path: nothing else may be imported at run time
+      expect(body).not.toMatch(/^\s*import\s/m);
+      return (await import(
+        `data:text/javascript;base64,${Buffer.from(body).toString("base64")}`
+      )) as Record<string, unknown>;
+    };
+    const foldMod = (await load("event-fold.js")) as {
+      fold: (e: unknown[]) => Map<string, unknown>;
+      seedEvents: (s: unknown[]) => unknown[];
+    };
+    const layoutMod = (await load("map-layout.js")) as {
+      layout: (f: unknown, w: unknown, o: unknown) => { bands: unknown[] };
+      scene: (m: unknown) => unknown;
+    };
+    const folded = foldMod.fold([
+      { seq: 1, run: "r", ts: "t", kind: "session_start", session: "s", data: { workflow: "w" } },
+    ]);
+    const m = layoutMod.layout(folded, { w: { stations: [{ name: "a" }] } }, { now: 0 });
+    expect(m.bands).toHaveLength(1);
+    expect(layoutMod.scene(m)).toBeTruthy();
+    // map.js is a static file of the dashboard and imports both by those paths
+    const page = await fetch(`${base}/map.js`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toBe(MAP);
+    expect(MAP).toContain("from '/event-fold.js'");
+    expect(MAP).toContain("from '/map-layout.js'");
   });
 
   it("is a 404, not the page, when the compiled module is missing", async () => {
@@ -504,7 +553,7 @@ describe("every view renders with the shared components", () => {
   it("every class a view emits is a component defined in components.css", () => {
     const defined = new Set([...COMPONENTS.matchAll(/\.([A-Za-z][\w-]*)/g)].map(m => m[1] ?? ""));
     const used = new Set<string>();
-    for (const html of [PAGE, ...Object.values(views)])
+    for (const html of [PAGE, MAP, ...Object.values(views)])
       for (const m of html.matchAll(/class="([^"$]*)"/g))
         for (const c of (m[1] ?? "").split(/\s+/)) if (c) used.add(c);
     // state / model / difficulty modifiers the script appends to a base class through a template

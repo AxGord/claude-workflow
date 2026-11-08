@@ -143,3 +143,59 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .g-tag.script { fill: var(--warn); }
 .g-tag.bg, .g-tag.skill { fill: var(--skill); }
 .g-tag.fetch { fill: var(--model-sonnet); }
+
+/* the live workflow map: dashboard/map.js draws the keyed scene of src/map-layout.ts. A line, a node or
+   a chip takes its colour from --c (the lane's difficulty, the agent's model), set inline to a token */
+.map-wrap { position: relative; overflow-x: auto; }
+.map-wrap svg { display: block; }
+.m-root { font-family: var(--font); }
+.m-panel { fill: var(--panel); stroke: var(--panel-border); }
+.m-title { font-size: 14px; font-weight: 700; fill: var(--model-sonnet); }
+.m-station { font-size: 12px; font-weight: 600; fill: var(--text-2); }
+.m-station.end { fill: var(--ok-text); }
+.m-mid { text-anchor: middle; }
+.m-end { text-anchor: end; }
+.m-grid { fill: none; stroke: var(--grid); stroke-width: 2; }
+.m-sep { fill: none; stroke: var(--panel-border); stroke-width: 1; }
+.m-section { font-size: 10px; letter-spacing: 0.08em; fill: var(--text-4); text-anchor: end; }
+.m-main { fill: none; stroke: var(--c); stroke-width: 4; stroke-linecap: round; }
+.m-tail { fill: none; stroke: var(--c); stroke-width: 1.5; stroke-dasharray: 2 4; opacity: 0.45; }
+.m-loop { fill: none; stroke: var(--c); stroke-width: 2.5; stroke-dasharray: 7 5; }
+.m-branch { fill: none; stroke: var(--c); stroke-width: 2; }
+.m-start { fill: var(--c); }
+.m-node { fill: var(--panel); stroke: var(--c); stroke-width: 2.5; }
+.m-node.done, .m-step.done { stroke-opacity: 1; }
+.m-node.m-script { fill: var(--raised); }
+.m-step { fill: var(--panel); stroke: var(--c); stroke-width: 2; }
+.m-node.live, .m-step.live { fill: var(--c); filter: drop-shadow(0 0 6px var(--c)); animation: m-glow 2s ease-in-out infinite; }
+.m-node.ahead, .m-step.ahead { opacity: 0.35; }
+.m-node.stop, .m-step.stop { fill: var(--bad); stroke: var(--bad); }
+.m-label { font-size: 10px; fill: var(--text-3); }
+.m-label.ahead { opacity: 0.45; }
+.m-label.stop, .m-detail.stop { fill: var(--bad-text); }
+.m-detail { font-size: 10px; fill: var(--c); }
+.m-chip { fill: var(--panel); stroke: var(--c); stroke-width: 1; }
+.m-chip.m-driver { stroke-opacity: 0.8; }
+.m-chip-text { font-size: 10px; fill: var(--c); white-space: pre; }
+.m-plaque { --c: var(--text-4); fill: var(--panel); stroke: var(--c); stroke-width: 2; }
+.m-plaque-text { font-size: 12px; font-weight: 600; fill: var(--text); }
+.m-plaque-sub { font-size: 12px; fill: var(--text-3); }
+.m-lead { font-size: 11px; fill: var(--text-4); }
+.m-rail { fill: none; stroke: var(--text-2); stroke-width: 1.5; }
+.m-rail-label { font-size: 10px; font-weight: 600; fill: var(--text); }
+.m-ask { fill: none; stroke: var(--warn); stroke-width: 2; stroke-dasharray: 4 3; }
+.m-answer { fill: none; stroke: var(--ok); stroke-width: 2; }
+.m-ask-label { font-size: 10px; fill: var(--warn-text); }
+.m-answer-label { font-size: 10px; fill: var(--ok-text); }
+.m-user { fill: var(--warn); filter: drop-shadow(0 0 8px var(--warn)); animation: m-glow 2s ease-in-out infinite; }
+.m-band, .m-lane { transition: transform 300ms ease-out, opacity 300ms ease-out; }
+.m-lane.running { opacity: 1; }
+.m-lane.landed, .m-lane.stopped { opacity: 0.7; }
+.m-lane.m-hl .m-plaque { stroke-width: 3; filter: drop-shadow(0 0 8px var(--c)); }
+.m-fade { transition: opacity 300ms ease-out; }
+.m-enter { opacity: 0; }
+.m-draw { transition: stroke-dashoffset 300ms ease-out; }
+@keyframes m-glow { 50% { opacity: 0.55; } }
+.m-pill { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: none; padding: 6px 16px; border-radius: 14px; border: 1px solid var(--text-4); background: var(--raised); color: var(--text); font: 600 12px var(--font); cursor: pointer; }
+.m-pill.on { display: block; }
+.map-status { color: var(--text-4); font-size: 11px; margin-bottom: 8px; }
