@@ -612,6 +612,68 @@ describe("every view renders with the shared components", () => {
     );
   });
 
+  it("timeline: a bar per pipeline, segments in the stage group classes, waits hatched, a day axis", () => {
+    const at = (hms: string): number => Date.parse(`2026-11-08T${hms}`);
+    const t = {
+      day: "2026-11-08",
+      from: at("00:00:00"),
+      to: Date.parse("2026-11-09T00:00:00"),
+      bars: [
+        {
+          id: "t1",
+          root: "r",
+          task: "LINE-1",
+          workflow: "w",
+          outcome: "completed",
+          start: at("10:00:00"),
+          end: at("11:00:00"),
+          detailed: true,
+          rows: [
+            {
+              session: "t1",
+              workflow: "w",
+              depth: 0,
+              segments: [
+                {
+                  state: "gate",
+                  group: "gate",
+                  start: at("10:00:00"),
+                  end: at("11:00:00"),
+                  waits: [{ start: at("10:00:00"), end: at("10:15:00") }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+    const html = loadPage().run(`renderTimeline(${JSON.stringify(t)})`) as string;
+    expect(html).toContain('<span class="tl-seg gate" style="left:0.000%;width:50.000%"');
+    expect(html).toContain('class="tl-wait" style="left:0.000%;width:25.000%"');
+    expect(html).toContain('title="gate (gate) · ');
+    expect(html).toContain('<a href="/session/t1">LINE-1</a>');
+    expect(html).toContain('<a href="/timeline/2026-11-07">');
+    expect(html).toContain('<span style="left:0.000%">10:00</span>');
+    expect(literals(html)).toEqual([]);
+    expect(PAGE).toContain('id="tab-timeline"');
+    expect(PAGE).toContain("/api/timeline");
+  });
+
+  it("plan: an overlaps reason that names a ready line says it is only admitted ahead", () => {
+    const q = {
+      ...QUEUE,
+      lines: [
+        { ...QUEUE.lines[1], id: "A", status: "pending", reason: "ready" },
+        { ...QUEUE.lines[1], id: "B", status: "pending", reason: "overlaps A (touches x)" },
+        { ...QUEUE.lines[0], id: "R" },
+        { ...QUEUE.lines[1], id: "C", status: "pending", reason: "overlaps R (touches x)" },
+      ],
+    };
+    const html = loadPage().run(`renderPlan(${JSON.stringify(q)})`) as string;
+    expect(html).toContain("overlaps A (touches x) (ready, admitted ahead in the same pass)");
+    expect(html).toContain("overlaps R (touches x)<");
+  });
+
   it("no view writes a colour literal or an inline colour", () => {
     for (const [view, html] of Object.entries(views)) {
       expect(literals(html), view).toEqual([]);

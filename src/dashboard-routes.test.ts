@@ -10,6 +10,8 @@ const TABLE: [string, Route][] = [
   ["/workflow/a%20b%2Fc", { view: "workflow", name: "a b/c" }],
   ["/plan", { view: "plan" }],
   ["/plan/", { view: "plan" }],
+  ["/timeline", { view: "timeline" }],
+  ["/timeline/2026-11-08", { view: "timeline", day: "2026-11-08" }],
   ["/map", { view: "map" }],
   ["/map/abc-1", { view: "map", lane: "abc-1" }],
 ];
@@ -28,6 +30,8 @@ describe("dashboard route table", () => {
     "//",
     "/plan/x",
     "/map/a/b",
+    "/timeline/today",
+    "/timeline/2026-11-08/x",
     "session/a",
     "/session/%E0%A4%A",
   ])("%s belongs to no view", p => {
@@ -40,7 +44,7 @@ describe("dashboard route table", () => {
     expect(routePath({ view: "sessions" })).toBe("/sessions");
   });
 
-  it("every view lives under one of the four tabs", () => {
+  it("every view lives under one of the five tabs", () => {
     expect(TABLE.map(([, r]) => routeTab(r))).toEqual([
       "sessions",
       "sessions",
@@ -50,6 +54,8 @@ describe("dashboard route table", () => {
       "workflows",
       "plan",
       "plan",
+      "timeline",
+      "timeline",
       "map",
       "map",
     ]);

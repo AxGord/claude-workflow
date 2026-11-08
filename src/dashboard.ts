@@ -9,7 +9,11 @@ import type { WfEvent } from "./event-log.js";
 import { computeStations } from "./stations.js";
 import { projectNameOf } from "./pool.js";
 import { ledgerEntry } from "./ledger.js";
+import { buildTimeline, localDay } from "./timeline.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
+
+/** An operator file in the state directory: state name -> stage group, over the timeline's defaults. */
+const TIMELINE_GROUPS_FILE = "timeline-groups.conf";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -128,6 +132,31 @@ export function buildApp(
     } catch (err) {
       res.status(err instanceof QueueError ? 422 : 500).json({ error: (err as Error).message });
     }
+  });
+
+  // The Timeline tab: the day's task pipelines cut into segments by state, from the session files and the ledger.
+  app.get("/api/timeline", (req, res) => {
+    const now = Date.now();
+    const day = typeof req.query.day === "string" ? req.query.day : localDay(now);
+    const raw = storage.readStateJson(TIMELINE_GROUPS_FILE);
+    const groups: Record<string, string> = {};
+    if (raw !== null && typeof raw === "object")
+      for (const [k, v] of Object.entries(raw)) if (typeof v === "string") groups[k] = v;
+    const root =
+      typeof req.query.root === "string" && req.query.root !== "" ? req.query.root : undefined;
+    const timeline = buildTimeline({
+      sessions: storage.readAll(),
+      ledger: storage.readLedger(),
+      day,
+      ...(root !== undefined ? { root } : {}),
+      now,
+      groups,
+    });
+    if (timeline === null) {
+      res.status(400).json({ error: "day must be YYYY-MM-DD" });
+      return;
+    }
+    res.json(timeline);
   });
 
   // Abandon a session via REST (used by SessionEnd hook)

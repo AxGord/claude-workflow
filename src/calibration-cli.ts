@@ -7,21 +7,7 @@ import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
 import { calibrate, formatCalibration } from "./calibration.js";
-import type { LedgerEntry } from "./ledger.js";
-
-/** Parse the lines of a ledger file; a damaged line is skipped. */
-export function parseLedger(content: string): LedgerEntry[] {
-  const out: LedgerEntry[] = [];
-  for (const line of content.split("\n")) {
-    if (line.trim() === "") continue;
-    try {
-      out.push(JSON.parse(line) as LedgerEntry);
-    } catch {
-      // a half-written line
-    }
-  }
-  return out;
-}
+import { parseLedger } from "./ledger.js";
 
 export function runCalibration(argv: readonly string[], defaultLedger: string): string {
   const flags = new Map<string, string>();

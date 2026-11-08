@@ -14,6 +14,13 @@ export function rootSessionIdOf(
   return session.root_session_id ?? session.parent_session_id ?? session.session_id;
 }
 
+/** A history entry that moves a frame between states: a `push` carries the state it enters in `to` (the timeline reads it), but is not a move. */
+function isMove<T extends { readonly to?: string; readonly event?: string }>(
+  h: T,
+): h is T & { readonly to: string } {
+  return h.to !== undefined && h.event !== "push";
+}
+
 /** One exec/fetch run of an action state, as the ledger records it. */
 export interface LedgerExec {
   readonly state: string;
@@ -169,7 +176,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
       ...(h.shards !== undefined ? { shards: h.shards } : {}),
     }));
   const visits: Record<string, number> = {};
-  for (const h of session.history) if (h.to !== undefined) visits[h.to] = (visits[h.to] ?? 0) + 1;
+  for (const h of session.history) if (isMove(h)) visits[h.to] = (visits[h.to] ?? 0) + 1;
   return {
     session_id: session.session_id,
     parent_session_id: session.parent_session_id ?? null,
@@ -178,7 +185,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
     outcome: session.outcome ?? "completed",
     started_at: session.started_at,
     ended_at: session.updated_at,
-    transitions: session.history.filter(h => h.to !== undefined).length,
+    transitions: session.history.filter(isMove).length,
     exec_ms_total: execs.reduce((sum, e) => sum + e.duration_ms, 0),
     wait_ms_total: execs.reduce((sum, e) => sum + (e.wait_ms ?? 0), 0),
     execs,
@@ -189,4 +196,18 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
     ...(Object.keys(visits).length > 0 ? { visits } : {}),
     ...agentFields(session.context),
   };
+}
+
+/** Parse the lines of a ledger file; a damaged line is skipped. */
+export function parseLedger(content: string): LedgerEntry[] {
+  const out: LedgerEntry[] = [];
+  for (const line of content.split("\n")) {
+    if (line.trim() === "") continue;
+    try {
+      out.push(JSON.parse(line) as LedgerEntry);
+    } catch {
+      // a half-written line
+    }
+  }
+  return out;
 }

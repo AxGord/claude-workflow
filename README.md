@@ -966,6 +966,7 @@ The web dashboard runs on `localhost:3100` and provides real-time monitoring:
 
 - **Sessions panel** — active sessions plus the most recent finished ones (terminal history is capped)
 - **Plan tab** — each queue named by a session's `context.queue_file`: running lines (with the pipeline state and time in it, linked to the session), ready lines in the picker's order (priority, then file order; the priority beside the id), waiting lines with the picker's reason (window ignored), failed, done today (a done line counts when its text holds today's date, `LANDED <sha> YYYY-MM-DD`; marks carry no date). Click a line (or a node of the graph) to open a sticky card beside the list (below it on a narrow window) with its full text and a small dependency graph (dagre, left to right): the lines its `after:` names and the lines that name it, each node coloured by state (done / running / ready / waiting / failed); a node click selects that line, `close` or a second click on the row closes the card. The graph is `queueGraph` in `src/map-layout.ts`; the ids come from `/api/queue` lines' `afterIds`, resolved by the picker's own tokenizer (text in parentheses is prose); a link inside a row follows its link and selects nothing
+- **Timeline tab** — one bar per task pipeline of a day (the children of a root session, or a root without children), cut into segments by state from the session's history and its child sessions' (thin sub-rows), coloured by stage group (`recon`, `plan`, `work`, `gate`, `review`, `land`, `wait`; a name match with `work` as the default, and `$STATE_DIR/timeline-groups.conf` (JSON; not `.json`, which the session store would read as a session), `{"<state>": "<group>"}`, overrides a state); a pool-lease wait of an exec (`wait_ms`) is hatched inside its segment; hover = state, group, start, duration; a time axis over the day's activity (today by default, `/timeline/<YYYY-MM-DD>` any day, arrows for the neighbours). `GET /api/timeline?day=YYYY-MM-DD&root=<id>` answers it from the session files; a pipeline whose file is pruned comes from the ledger as one undivided bar. Pure builder: `src/timeline.ts`
 - **Workflow list** — all loaded workflows with state counts
 - **Session detail** — state history, stack depth, context data
 - **Workflow graphs** — interactive DAG visualization rendered with dagre
@@ -980,6 +981,7 @@ Every view has a real path, driven by the History API (links are plain anchors; 
 | `/workflows` | Workflow list |
 | `/workflow/<name>` | One workflow's graph and states |
 | `/plan` | Plan tab |
+| `/timeline`, `/timeline/<YYYY-MM-DD>` | Timeline tab (today, or that day) |
 | `/map` | The live workflow map |
 | `/map/<session id>` | The map, scrolled to that session's lane and highlighting it |
 

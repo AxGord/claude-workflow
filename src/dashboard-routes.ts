@@ -7,13 +7,15 @@ export type Route =
   | { view: "workflows" }
   | { view: "workflow"; name: string }
   | { view: "plan" }
+  /** the day's task pipelines as bars; `day` = YYYY-MM-DD, today when absent */
+  | { view: "timeline"; day?: string }
   /** the live workflow map; `lane` = a session whose lane is scrolled to and highlighted */
   | { view: "map"; lane?: string };
 
 export type RouteView = Route["view"];
 
 /** The tab a view lives under. */
-export function routeTab(route: Route): "sessions" | "workflows" | "plan" | "map" {
+export function routeTab(route: Route): "sessions" | "workflows" | "plan" | "timeline" | "map" {
   switch (route.view) {
     case "session":
     case "sessions":
@@ -23,6 +25,8 @@ export function routeTab(route: Route): "sessions" | "workflows" | "plan" | "map
       return "workflows";
     case "plan":
       return "plan";
+    case "timeline":
+      return "timeline";
     case "map":
       return "map";
   }
@@ -49,6 +53,7 @@ export function parseRoute(pathname: string): Route | null {
     if (head === "sessions") return { view: "sessions" };
     if (head === "workflows") return { view: "workflows" };
     if (head === "plan") return { view: "plan" };
+    if (head === "timeline") return { view: "timeline" };
     if (head === "map") return { view: "map" };
     return null;
   }
@@ -57,6 +62,8 @@ export function parseRoute(pathname: string): Route | null {
   if (value === null) return null;
   if (head === "session") return { view: "session", id: value };
   if (head === "workflow") return { view: "workflow", name: value };
+  if (head === "timeline")
+    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? { view: "timeline", day: value } : null;
   if (head === "map") return { view: "map", lane: value };
   return null;
 }
@@ -74,6 +81,8 @@ export function routePath(route: Route): string {
       return `/workflow/${encodeURIComponent(route.name)}`;
     case "plan":
       return "/plan";
+    case "timeline":
+      return route.day === undefined ? "/timeline" : `/timeline/${route.day}`;
     case "map":
       return route.lane === undefined ? "/map" : `/map/${encodeURIComponent(route.lane)}`;
   }

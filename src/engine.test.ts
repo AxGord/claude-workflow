@@ -218,6 +218,28 @@ describe("Engine", () => {
       expect(result.currentStateName).toBe("work");
     });
 
+    it("a push history entry names the state it enters and the pushed workflow", async () => {
+      setup({
+        parent: {
+          initial: "start",
+          states: {
+            start: { sub_workflow: "child", on_complete: "done", on_fail: "done" },
+            done: { terminal: true, prompt: "Parent done", outcome: "complete" },
+          },
+        },
+        child: {
+          initial: "work",
+          states: {
+            work: { prompt: "Child work", transitions: { finish: "end" } },
+            end: { terminal: true, prompt: "Child done", outcome: "complete" },
+          },
+        },
+      });
+      const result = await engine.start("parent");
+      const push = storage.read(result.sessionId)!.history.find(h => h.event === "push");
+      expect(push).toMatchObject({ frame: 1, workflow: "child", to: "work" });
+    });
+
     it("pops back to parent on child completion", async () => {
       setup({
         parent: {

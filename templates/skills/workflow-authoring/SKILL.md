@@ -223,6 +223,7 @@ a relative `cwd:` resolves against it. Each exec's history entry carries
 `exit_code` and `duration_ms` (plus `wait_ms`, `threads_granted` and
 `step_key` = `<project git root>|<workflow>|<state>` for a `resource:` exec);
 every session end appends one line to `$STATE_DIR/ledger.jsonl` with them.
+A sub-workflow `push` history entry carries `workflow` and `to` (the sub-workflow's first state), so the time spent in every state can be read from the history alone (the dashboard's Timeline tab does); the ledger's `transitions` and `visits` do not count it as a move.
 
 Unknown keys are a LOAD ERROR (strict schema): a typo like `comand:` drops
 the whole workflow, and stderr names the file, state, key and nearest known key.

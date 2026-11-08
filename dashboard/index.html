@@ -14,9 +14,11 @@
     <a href="/sessions" id="tab-sessions">Sessions</a>
     <a href="/workflows" id="tab-workflows">Workflows</a>
     <a href="/plan" id="tab-plan">Plan</a>
+    <a href="/timeline" id="tab-timeline">Timeline</a>
     <a href="/map" id="tab-map">Map</a>
   </div>
   <div id="map-view" style="display:none"></div>
+  <div id="timeline-view" style="display:none"><div class="panel"><h2 class="label">Timeline</h2><div id="timeline-content"><div class="empty">No pipelines</div></div></div></div>
   <div id="plan-view" style="display:none"><div class="plan-cols" id="plan-cols"><div class="panel"><h2 class="label">Plan</h2><div id="plan-content"><div class="empty">No queue</div></div></div><div class="panel plan-card" id="plan-card" style="display:none"></div></div></div>
   <div id="main-view">
   <div class="grid">
@@ -313,15 +315,17 @@ function applyRoute() {
   shownWorkflow = null;
   document.getElementById('plan-view').style.display = tab === 'plan' ? '' : 'none';
   document.getElementById('map-view').style.display = tab === 'map' ? '' : 'none';
-  document.getElementById('main-view').style.display = tab === 'plan' || tab === 'map' ? 'none' : '';
+  document.getElementById('timeline-view').style.display = tab === 'timeline' ? '' : 'none';
+  document.getElementById('main-view').style.display = tab === 'plan' || tab === 'map' || tab === 'timeline' ? 'none' : '';
   document.getElementById('sessions-panel').style.display = tab === 'sessions' ? '' : 'none';
   document.getElementById('workflows-panel').style.display = tab === 'workflows' ? '' : 'none';
-  for (const t of ['sessions', 'workflows', 'plan', 'map'])
+  for (const t of ['sessions', 'workflows', 'plan', 'timeline', 'map'])
     document.getElementById('tab-' + t).classList.toggle('tab-active', t === tab);
   document.getElementById('detail-content').innerHTML =
     ui.empty(`Select a ${tab === 'workflows' ? 'workflow' : 'session'}`);
   const loaded = [refresh(), showMap(tab === 'map' ? route : null)];
   if (tab === 'plan') loaded.push(refreshPlan());
+  if (tab === 'timeline') loaded.push(refreshTimeline());
   return Promise.all(loaded);
 }
 
@@ -888,6 +892,14 @@ function planStrip(lead, lines, cls) {
     lines.length - shown.length, cls);
 }
 
+// A waiting line's reason; "overlaps X" names a ready line when X is only admitted ahead in the same pass, not running.
+function planWait(l, lines) {
+  const m = /^overlaps (\S+)/.exec(l.reason);
+  const other = m && lines.find(x => x.id === m[1]);
+  const note = other && other.status === 'pending' ? ' (ready, admitted ahead in the same pass)' : '';
+  return escapeHtml(l.reason) + note;
+}
+
 function renderPlan(q) {
   const by = f => q.lines.filter(f);
   let h = `<div class="id mono">${escapeHtml(q.file)} — batch_size ${q.batchSize}</div>`;
@@ -910,7 +922,7 @@ function renderPlan(q) {
     return `<a href="/session/${encodeURIComponent(s.session_id)}">${escapeHtml(f.workflow + ' @ ' + f.current_state)}</a> · ${timeIn(at)}`;
   }, 'st-run');
   group('Ready', ready, () => '', '');
-  group('Waiting', by(l => l.status === 'pending' && l.reason !== 'ready'), l => escapeHtml(l.reason), 'st-wait');
+  group('Waiting', by(l => l.status === 'pending' && l.reason !== 'ready'), l => planWait(l, q.lines), 'st-wait');
   group('Failed', by(l => l.status === 'failed'), () => '', 'st-stop');
   group('Done today', done, () => '', 'st-done');
   return h;
@@ -929,6 +941,60 @@ async function refreshPlan() {
 }
 let planQueues = [];
 
+// Timeline tab: a bar per task pipeline of the day (GET /api/timeline), segments coloured by stage group,
+// pool-lease waits hatched; the window is the day's activity, padded to whole hours.
+const TL_GROUPS = ['recon', 'plan', 'work', 'gate', 'review', 'land', 'wait'];
+
+function tlClock(ms) {
+  const d = new Date(ms);
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map(n => String(n).padStart(2, '0')).join(':');
+}
+
+function tlSpan(ms) {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? s + 's' : s < 3600 ? Math.floor(s / 60) + 'm' + String(s % 60).padStart(2, '0') + 's' : Math.floor(s / 3600) + 'h' + String(Math.floor(s % 3600 / 60)).padStart(2, '0') + 'm';
+}
+
+function tlDayShift(day, delta) {
+  const [y, m, d] = day.split('-').map(Number);
+  const x = new Date(y, m - 1, d + delta);
+  return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0');
+}
+
+function renderTimeline(t) {
+  const days = `<div class="tl-days"><a href="/timeline/${tlDayShift(t.day, -1)}">&larr; ${tlDayShift(t.day, -1)}</a><span class="mono">${escapeHtml(t.day)}</span><a href="/timeline/${tlDayShift(t.day, 1)}">${tlDayShift(t.day, 1)} &rarr;</a><a href="/timeline">today</a></div>`;
+  const legend = `<div class="tl-legend">${TL_GROUPS.map(g => `<span><span class="tl-seg ${g}"></span>${g}</span>`).join('')}<span><span class="tl-seg wait"><span class="tl-wait" style="left:0;right:0"></span></span>pool wait</span></div>`;
+  if (t.bars.length === 0) return days + legend + ui.empty('No pipelines on this day');
+  const H = 3600000;
+  // whole LOCAL hours (a zone with a half-hour offset must not shift the axis)
+  const hourOf = (ms, up) => { const d = new Date(ms); d.setMinutes(0, 0, 0); return d.getTime() + (up && d.getTime() < ms ? H : 0); };
+  const lo = Math.max(t.from, hourOf(Math.min(...t.bars.map(b => b.start)), false));
+  const hi = Math.min(t.to, Math.max(lo + 2 * H, hourOf(Math.max(...t.bars.map(b => b.end)), true)));
+  const pct = ms => ((ms - lo) / (hi - lo) * 100).toFixed(3);
+  const ticks = [];
+  const step = (hi - lo) / H > 12 ? 2 * H : H;
+  for (let x = lo; x <= hi; x += step) ticks.push(`<span style="left:${pct(x)}%">${tlClock(x).slice(0, 5)}</span>`);
+  const seg = (r, g) => {
+    const waits = g.waits.map(w => `<span class="tl-wait" style="left:${((w.start - g.start) / (g.end - g.start) * 100).toFixed(3)}%;width:${((w.end - w.start) / (g.end - g.start) * 100).toFixed(3)}%"></span>`).join('');
+    const wait = g.waits.reduce((n, w) => n + w.end - w.start, 0);
+    const tip = `${g.state} (${g.group}) · ${tlClock(g.start)} · ${tlSpan(g.end - g.start)}` + (wait ? ` · pool wait ${tlSpan(wait)}` : '');
+    return `<span class="tl-seg ${g.group}" style="left:${pct(g.start)}%;width:${((g.end - g.start) / (hi - lo) * 100).toFixed(3)}%" title="${escapeHtml(tip)}" data-state="${escapeHtml(g.state)}">${waits}</span>`;
+  };
+  const rows = t.bars.map(b => b.rows.map((r, i) => {
+    const name = i === 0
+      ? `<a href="/session/${encodeURIComponent(r.session)}">${escapeHtml(b.task || r.session)}</a>`
+      : escapeHtml(r.workflow || r.session);
+    const title = i === 0 ? `${b.outcome} · ${tlClock(b.start)} · ${tlSpan(b.end - b.start)}${b.detailed ? '' : ' · from the ledger'}` : r.session;
+    return `<div class="tl-row${i ? ' sub' : ''}"><div class="tl-name" title="${escapeHtml(title)}">${name}</div><div class="tl-track">${r.segments.map(g => seg(r, g)).join('')}</div></div>`;
+  }).join('')).join('');
+  return days + legend + `<div class="tl-scroll"><div class="tl"><div class="tl-axis">${ticks.join('')}</div>${rows}</div></div>`;
+}
+
+async function refreshTimeline() {
+  const t = await fetchJSON('/api/timeline' + (route.day ? '?day=' + route.day : ''));
+  if (t) put('timeline-content', renderTimeline(t));
+}
+
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
 Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js')]).then(([m, s, l]) => {
   Routes = m;
@@ -942,7 +1008,7 @@ Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js'
     const at = route.view === 'map' ? null : Stable.takeScroll();
     if (at) Stable.restoreScroll(at);
   });
-  setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); }, 2000);
+  setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); if (route.view === 'timeline') refreshTimeline(); }, 2000);
 });
 </script>
 </body>

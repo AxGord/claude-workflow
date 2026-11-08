@@ -1631,7 +1631,13 @@ export class Engine {
       updated_at: now,
       history: [
         ...session.history,
-        { frame: newStack.length - 1, event: "push", workflow: subName, at: now },
+        {
+          frame: newStack.length - 1,
+          event: "push",
+          workflow: subName,
+          to: wf.initial,
+          at: now,
+        },
       ],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
     };

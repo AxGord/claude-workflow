@@ -34,6 +34,15 @@
   --skill: #2dd4bf;
   --sub: #c084fc;
 
+  /* the Timeline tab's stage groups */
+  --stage-recon: #7dd3fc;
+  --stage-plan: #2dd4bf;
+  --stage-work: #38bdf8;
+  --stage-gate: #f59e0b;
+  --stage-review: #c084fc;
+  --stage-land: #22c55e;
+  --stage-wait: #eab308;
+
   /* models */
   --model-haiku: #94a3b8;
   --model-sonnet: #38bdf8;

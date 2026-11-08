@@ -226,3 +226,27 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .plan-card .graph { margin-top: 8px; overflow: auto; }
 .plan-card .graph svg { width: auto; max-width: 100%; }
 @media (max-width: 800px) { .plan-cols.open { grid-template-columns: 1fr; } .plan-cols { grid-template-columns: 1fr; } .plan-cols > .plan-card { position: static; max-height: none; } }
+
+/* Timeline tab: a bar per task pipeline, segments positioned by time inside the day's window */
+.tl-scroll { overflow-x: auto; }
+.tl { min-width: 880px; position: relative; }
+.tl-axis { position: relative; height: 16px; margin-left: 150px; color: var(--text-4); font-size: 11px; border-bottom: 1px solid var(--panel-border); }
+.tl-axis span { position: absolute; transform: translateX(-50%); }
+.tl-row { display: flex; align-items: center; margin: 6px 0; }
+.tl-row.sub { margin: 1px 0; }
+.tl-name { width: 150px; flex: none; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 8px; }
+.tl-row.sub .tl-name { color: var(--text-4); padding-left: 12px; font-size: 11px; }
+.tl-track { position: relative; flex: 1; height: 18px; background: var(--inset); border-radius: 4px; }
+.tl-row.sub .tl-track { height: 8px; }
+.tl-seg { position: absolute; top: 0; bottom: 0; background: var(--c); border-radius: 3px; min-width: 2px; opacity: 0.9; }
+.tl-seg .tl-wait { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(45deg, var(--page) 0 3px, transparent 3px 6px); }
+.tl-seg.recon { --c: var(--stage-recon); }
+.tl-seg.plan { --c: var(--stage-plan); }
+.tl-seg.work { --c: var(--stage-work); }
+.tl-seg.gate { --c: var(--stage-gate); }
+.tl-seg.review { --c: var(--stage-review); }
+.tl-seg.land { --c: var(--stage-land); }
+.tl-seg.wait { --c: var(--stage-wait); }
+.tl-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; font-size: 11px; color: var(--text-3); }
+.tl-legend .tl-seg { position: static; display: inline-block; width: 14px; height: 10px; vertical-align: middle; margin-right: 4px; }
+.tl-days { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 12px; }

@@ -4,6 +4,7 @@ import lockfile from "proper-lockfile";
 import type { SessionState } from "./types.js";
 import { LOCK_STALE_MS } from "./types.js";
 import { EventLog } from "./event-log.js";
+import { parseLedger, type LedgerEntry } from "./ledger.js";
 
 export const LEDGER_FILE = "ledger.jsonl";
 // A contended lock waits its turn instead of failing: a session file is
@@ -115,6 +116,21 @@ export class Storage {
       fs.appendFileSync(fp, JSON.stringify(entry) + "\n");
     } finally {
       if (release) await release();
+    }
+  }
+
+  /** Every line of the ledger (a damaged line is skipped); none when it was never written. */
+  public readLedger(): LedgerEntry[] {
+    const fp = path.join(this._stateDir, LEDGER_FILE);
+    return fs.existsSync(fp) ? parseLedger(fs.readFileSync(fp, "utf8")) : [];
+  }
+
+  /** A JSON file of the state directory (an operator's setting), or null when absent or damaged. */
+  public readStateJson(name: string): unknown {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(this._stateDir, name), "utf8"));
+    } catch {
+      return null;
     }
   }
 
