@@ -768,6 +768,55 @@ describe("model_table (engine)", () => {
       fix: { model: "sonnet", effort: "high" },
     });
   });
+
+  it("a batch-task heir's ledger line lists execute and review only once their spawns were entered", async () => {
+    const templates = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-mt-"));
+    dirs.push(dir);
+    // project_prepare is batch-task's extension point; review_scope is replaced to keep the run off git.
+    fs.writeFileSync(
+      path.join(dir, "bt-heir.yaml"),
+      [
+        "name: bt-heir",
+        "description: batch-task with its execs stubbed",
+        "extends: batch-task",
+        "states:",
+        "  project_prepare:",
+        "    type: exec",
+        "    command: printf %s /tmp/wt",
+        "    context_set: { wt: '{{stdout}}' }",
+        "    on_success: work",
+        "    on_error: prepare_failed",
+        "  review_scope:",
+        "    type: exec",
+        "    command: printf light",
+        "    context_set: { review_class: '{{stdout}}' }",
+        "    on_success: review",
+        "    on_error: review",
+        "",
+      ].join("\n"),
+    );
+    const storage = new InMemoryStorage();
+    const engine = new Engine(storage, new Loader(templates, dir, null), new Executor());
+    const run = async (upTo: "claim" | "work" | "review"): Promise<LedgerEntry> => {
+      const s = await engine.start("bt-heir");
+      await engine.setContext(s.sessionId, "task", "T1");
+      await engine.setContext(s.sessionId, "difficulty", 5);
+      if (upTo !== "claim") await engine.transition(s.sessionId, "prepare");
+      if (upTo === "review") await engine.transition(s.sessionId, "review");
+      if (upTo === "claim") expect(storage.read(s.sessionId)!.context.stages_first).toBeUndefined();
+      await engine.abort(s.sessionId);
+      return storage.ledger.at(-1) as LedgerEntry;
+    };
+    await run("claim");
+    const atWork = await run("work");
+    expect(atWork.stages?.execute).toEqual({ model: "sonnet", effort: "high" });
+    expect(atWork.stages?.review).toBeUndefined();
+    expect(atWork.stages?.plan).toBeUndefined();
+    const atReview = await run("review");
+    expect(atReview.stages?.execute).toEqual({ model: "sonnet", effort: "high" });
+    expect(atReview.stages?.review).toEqual({ model: "sonnet", effort: "medium" });
+  });
 });
 
 function TASK_WITHOUT_TABLE(): object {

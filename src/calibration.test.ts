@@ -160,4 +160,32 @@ describe("ledgerEntry fields", () => {
     expect(e.plan_handoff).toBe(true);
     expect(e.counts).toEqual({ items: 3 });
   });
+
+  it("stages lists only the rows a state read when stages_first exists", () => {
+    const at = "2026-11-05T00:00:00Z";
+    const withContext = (context: Record<string, unknown>): SessionState => ({
+      session_id: "s",
+      stack: [],
+      active_frame: -1,
+      started_at: at,
+      updated_at: at,
+      overrides: {},
+      history: [],
+      context,
+    });
+    const ctx = {
+      model_plan: "sonnet",
+      effort_plan: "high",
+      model_execute: "opus",
+      effort_execute: "high",
+      model_review: "opus",
+      effort_review: "high",
+    };
+    const closedAtPlan = ledgerEntry(
+      withContext({ ...ctx, stages_first: { plan: { model: "sonnet", effort: "high" } } }),
+    );
+    expect(closedAtPlan.stages).toEqual({ plan: { model: "sonnet", effort: "high" } });
+    const noRecord = ledgerEntry(withContext(ctx));
+    expect(Object.keys(noRecord.stages ?? {}).sort()).toEqual(["execute", "plan", "review"]);
+  });
 });

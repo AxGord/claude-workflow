@@ -55,7 +55,7 @@ export interface LedgerEntry {
   readonly escalations?: number;
   readonly review_model?: string;
   readonly review_effort?: string;
-  /** The model and effort each stage RAN on: its row when a state reading it was entered (a rescore afterwards does not replace it); a stage no state read keeps the context's last row. */
+  /** The model and effort each stage RAN on: its row when a state spawning on it was entered (a rescore afterwards does not replace it); a stage no state read is absent. Without the record every context pair stands. */
   readonly stages?: Readonly<Record<string, { readonly model: string; readonly effort: string }>>;
   /** The git root of the session's cwd: what a calibration report groups by. */
   readonly project?: string;
@@ -94,23 +94,27 @@ function agentFields(context: Readonly<Record<string, unknown>>): Partial<Ledger
     if (m && n !== undefined) tokens[m[1] ?? "total"] = n;
   }
   const stages: Record<string, { model: string; effort: string }> = {};
-  for (const key of Object.keys(context)) {
-    const name = stageOfKey(key, "model");
-    if (name === undefined) continue;
-    const k = stageKeys(name);
-    const model = text(context[k.model]);
-    const effort = text(context[k.effort]);
-    if (model && effort) stages[name] = { model, effort };
-  }
-  // The row recorded when a state read the stage is the one it ran on.
+  // A stage ran when a state read it: `stages_first` holds those rows, so when it exists it is the
+  // whole list and a stage absent from it did not run. Without it (a session that read none, or a
+  // context from before the record) every `model_<x>` / `effort_<x>` pair stands.
   const first = context[K.stagesFirst];
-  if (first && typeof first === "object")
+  if (first && typeof first === "object") {
     for (const [name, v] of Object.entries(first)) {
       const row = v as { model?: unknown; effort?: unknown };
       const model = text(row?.model);
       const effort = text(row?.effort);
       if (model && effort) stages[name] = { model, effort };
     }
+  } else {
+    for (const key of Object.keys(context)) {
+      const name = stageOfKey(key, "model");
+      if (name === undefined) continue;
+      const k = stageKeys(name);
+      const model = text(context[k.model]);
+      const effort = text(context[k.effort]);
+      if (model && effort) stages[name] = { model, effort };
+    }
+  }
   const counts: Record<string, number> = {};
   for (const [k, v] of Object.entries(context)) {
     if (Array.isArray(v) && /^[a-z0-9_]{1,40}$/.test(k)) counts[k] = v.length;

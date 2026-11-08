@@ -63,7 +63,7 @@ states:
       set the task running. Every `transition` reply IS the next prompt — never call `status` after it.
       context_set on THIS session (session_id {{session_id}}), each its own call — skip a key the dispatcher
       already passed to `start` (task {{context.task}}, queue_file {{context.queue_file}}, difficulty
-      {{context.difficulty}}, model {{context.model}}, effort {{context.effort}}; empty = not passed — a
+      {{context.difficulty}}; empty = not passed; model and effort are in `status`, not printed here — a
       driven task needs none of the queue line):
         task       — the line's ID
         queue_file — the queue's absolute path (the dispatcher's `queue_file`)

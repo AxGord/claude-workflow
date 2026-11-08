@@ -44,6 +44,33 @@ export function stagesRead(state: unknown): string[] {
   return [...names];
 }
 
+/**
+ * The bare keys a spawn may read in place of a stage's own: a workflow without a stage table for it
+ * (or one that falls back) names the task's `model` / `effort` for the execute spawn and
+ * `review_model` / `review_effort` for the review spawn.
+ */
+const SPAWN_ALIASES: Readonly<Record<string, { model: string; effort: string }>> = {
+  execute: { model: MODEL_KEYS.model, effort: MODEL_KEYS.effort },
+  review: { model: MODEL_KEYS.reviewModel, effort: MODEL_KEYS.reviewEffort },
+};
+
+/**
+ * The stages a state SPAWNS on: those it reads as `context.model_<x>` and, in a prompt state, the
+ * execute / review stage when it reads their bare keys. An exec reads the bare keys into its env and
+ * spawns nothing, so it records none; the claim prompt names no value for that reason.
+ */
+export function stagesSpawned(state: unknown): string[] {
+  const names = new Set(stagesRead(state));
+  const type = (state as { type?: unknown } | null)?.type;
+  if (type !== "exec" && type !== "fetch") {
+    const text = JSON.stringify(state ?? null);
+    for (const [stage, alias] of Object.entries(SPAWN_ALIASES)) {
+      if (new RegExp(`context\\.${alias.model}(?![a-z_])`).test(text)) names.add(stage);
+    }
+  }
+  return [...names];
+}
+
 /** `context` with the as-run row of each stage `names` not yet recorded (first value wins); null when none is new. */
 export function recordStagesUsed(
   context: Readonly<Record<string, unknown>>,
@@ -53,8 +80,9 @@ export function recordStagesUsed(
   const next: Record<string, unknown> = { ...was };
   for (const name of names) {
     const k = stageKeys(name);
-    const model = context[k.model];
-    const effort = context[k.effort];
+    const alias = SPAWN_ALIASES[name];
+    const model = context[k.model] ?? (alias && context[alias.model]);
+    const effort = context[k.effort] ?? (alias && context[alias.effort]);
     if (name in next || typeof model !== "string" || typeof effort !== "string") continue;
     next[name] = { model, effort };
   }

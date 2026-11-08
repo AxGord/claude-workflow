@@ -40,7 +40,7 @@ import {
   difficultyError,
   parseDifficulty,
   recordStagesUsed,
-  stagesRead,
+  stagesSpawned,
 } from "./model-table.js";
 import { render } from "./template.js";
 import { DRIVER_CALL_KEY, renderDriverCall, resolveDriverRef } from "./driver.js";
@@ -1018,7 +1018,7 @@ export class Engine {
     } catch {
       state = undefined; // a frame whose workflow is gone has no state to read; the move itself reports it
     }
-    const used = state ? recordStagesUsed(derived.context, stagesRead(state)) : null;
+    const used = state ? recordStagesUsed(derived.context, stagesSpawned(state)) : null;
     return used ? { ...derived, context: used } : derived;
   }
 
