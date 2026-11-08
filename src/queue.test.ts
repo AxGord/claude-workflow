@@ -1321,6 +1321,17 @@ describe("touches: tracked in the repo", () => {
     expect(ignoreProbes.count).toBe(1);
   });
 
+  it("an entry past a symlink costs only itself: the other ignored entries stay ignored", () => {
+    const { file, repo } = ignoredRepo(
+      `  - id: A\n    status: pending\n    repo: REPO\n    touches: [ lnk/passwd, .claude/b.yaml ]\n    text: a\n`,
+    );
+    fs.symlinkSync(os.tmpdir(), path.join(repo, "lnk"));
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replaceAll("REPO", repo));
+    const r = planPick(readQueue(file));
+    expect(r.admitted.map(a => a.id)).toEqual([]);
+    expect(r.reasons.find(x => x.id === "A")?.why).toMatch(/parent-run.*\.claude\/b\.yaml/);
+  });
+
   it("an entry outside the repo does not hide an ignored one on another line", () => {
     const { file, repo } = ignoredRepo(
       `  - id: A\n    status: pending\n    repo: REPO\n    touches: [ .claude/x.yaml ]\n    text: a\n` +

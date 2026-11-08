@@ -368,15 +368,35 @@ function isFileEntry(p: string, repo: string | null): boolean {
 /** Count of git processes spawned for ignore checks (a test seam: one per repo per plan). */
 export const ignoreProbes = { count: 0 };
 
-/** The entries of `rels` that git ignores in `repo`: ONE `git check-ignore --stdin`; empty when `repo` is no work tree. */
-function gitIgnoredSet(repo: string, rels: readonly string[]): ReadonlySet<string> {
-  if (rels.length === 0) return new Set();
+/** One `git check-ignore --stdin -z` over `rels`: the entries it printed and its exit status. */
+function checkIgnore(
+  repo: string,
+  rels: readonly string[],
+): { out: string[]; status: number | null } {
   ignoreProbes.count++;
   const r = spawnSync("git", ["-C", repo, "check-ignore", "--stdin", "-z"], {
     input: `${rels.join("\0")}\0`,
     encoding: "utf8",
   });
-  return new Set(r.status === 0 ? r.stdout.split("\0").filter(x => x !== "") : []);
+  return { out: (r.stdout ?? "").split("\0").filter(x => x !== ""), status: r.status };
+}
+
+/**
+ * The entries of `rels` that git ignores in `repo`: ONE `git check-ignore --stdin`; empty when `repo` is no work tree.
+ * Exit 0/1 is the answer. Any other exit (an entry past a symlink is fatal) keeps what was printed and
+ * asks one by one about the rest, so a bad entry costs only itself.
+ */
+function gitIgnoredSet(repo: string, rels: readonly string[]): ReadonlySet<string> {
+  if (rels.length === 0) return new Set();
+  const all = checkIgnore(repo, rels);
+  if (all.status === 0 || all.status === 1) return new Set(all.out);
+  const found = new Set(all.out);
+  for (const rel of rels) {
+    if (found.has(rel)) continue;
+    const one = checkIgnore(repo, [rel]);
+    if (one.status === 0 && one.out.includes(rel)) found.add(rel);
+  }
+  return found;
 }
 
 /** Whether `t` names a path inside `repo` (git refuses the whole batch on one that is not). */
