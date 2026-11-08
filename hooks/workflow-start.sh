@@ -117,9 +117,8 @@ find_plan_session() {
   local plan sid
   while IFS= read -r plan; do
     [ -f "$plan" ] || continue
-    # Session ID from the ## Workflow section. -A5: the section contract is
-    # 5 list lines after the heading (Session / Current state / After approve /
-    # Execution workflow / Resume) — Session is always within that window.
+    # Session ID from the ## Workflow section. -A5: the Session line is looked
+    # for only in the 5 lines after the heading.
     sid=$(grep -A5 '^## Workflow' "$plan" | grep 'Session' | grep -oE "$SID_RE" | head -1)
     [ -n "$sid" ] || continue
     validate_planning_session "$sid" || continue

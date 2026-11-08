@@ -13,14 +13,8 @@ export const READ_ONLY_CONFIG = path.join(".claude", "read-only-commands.yaml");
 
 /**
  * The agent types that are read-only when the project's config names none: plugin-qualified names, compared exactly.
- * The `workflow:wf-*` entries are the pre-rename names, kept so sessions that started before the restart stay gated.
  */
-export const DEFAULT_READ_ONLY_AGENTS: readonly string[] = [
-  "workflow:recon",
-  "workflow:reviewer",
-  "workflow:wf-recon",
-  "workflow:wf-reviewer",
-];
+export const DEFAULT_READ_ONLY_AGENTS: readonly string[] = ["workflow:recon", "workflow:reviewer"];
 
 export interface ReadOnlyConfig {
   /** Extra write commands: leading words (`apq patch`) or `/regex/flags` on the simple command's text. */

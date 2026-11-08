@@ -37,8 +37,8 @@ describe("read-only gate", () => {
     expect(isReadOnlyAgent("other:reviewer")).toBe(false);
     expect(isReadOnlyAgent("other:reviewer", ["other:reviewer"])).toBe(true);
     expect(isReadOnlyAgent("other:reviewer", ["reviewer"])).toBe(false);
-    expect(isReadOnlyAgent("workflow:wf-recon")).toBe(true);
-    expect(isReadOnlyAgent("workflow:wf-reviewer")).toBe(true);
+    expect(isReadOnlyAgent("workflow:wf-recon")).toBe(false);
+    expect(isReadOnlyAgent("workflow:wf-reviewer")).toBe(false);
     expect(isReadOnlyAgent("workflow:driver")).toBe(false);
     expect(isReadOnlyAgent(undefined)).toBe(false);
     expect(call(undefined, "git commit -m x")).toEqual({ kind: "pass" });
