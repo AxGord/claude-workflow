@@ -68,6 +68,33 @@ states:
       running automatically in its review/testing states. Including them causes
       the agent to run manual builds that conflict with the automated pipeline.
 
+      **Tasks and steps** (two levels, both in the plan). A TASK can be tested, reviewed
+      and landed on its own and leaves main green. A STEP cannot, or is too small to pay
+      for its own check, review and land: it shares its task's. Split into tasks only
+      along that line: work that compiles or passes only together is ONE task with
+      steps; a change that is useful without the rest is its own task. A small change
+      written in several places is one task with steps, not a queue.
+      - One task (any number of steps): write the steps; no table.
+      - Two or more tasks: add a `## Tasks` table and the steps under each task:
+        ```
+        ## Tasks
+        | id | after | touches | difficulty |
+        |----|-------|---------|------------|
+        | T1 | —     | src/a, docs/x.md | 4 |
+        | T2 | T1    | src/b            | 3 |
+
+        ### T1 — <title>
+        1. <step>
+        2. <step>
+        ```
+        `after` = tasks that must land first (an order the code needs, not a wish);
+        `touches` = paths (prefixes) the task edits — check each exists (or is a new
+        file under an existing directory) before naming it; if any path of a task
+        cannot be checked, the task gets no `touches` at all (it then runs alone, which is
+        slow but never wrong; a partial list claims less than the task edits);
+        `difficulty` per the rubric (1..10). Two tasks with no `after` between
+        them must not share a path.
+
       **Brevity**: fewer steps. Skip what the user can infer from the task. Don't
       restate the task back at the top of the plan. No filler sections (`Overview`,
       `Background`) unless the task is genuinely novel and context is needed.
@@ -86,9 +113,12 @@ states:
          - **Session**: `<session_id>`
          - **Current state**: `planning @ design`
          - **After approve**: transition `planned` → returns to parent
-         - **Execution workflow**: coding / docs / feature / bug_fix / testing / refactoring / <workflow-name>
+         - **Execution workflow**: coding / docs / feature / bug_fix / testing / refactoring / <workflow-name>; `batch` when there are two or more tasks
          - **Resume**: `transition("<session_id>", "planned")`
+         - **Tasks**: <N> (1 = one task, its steps run in the Execution workflow; 2 or more = the `## Tasks` table is queued and run by `batch`)
          ```
+         Keep `Tasks` the LAST line, after Resume: the start hook reads the section by
+         position (Session within five lines of the heading).
       5. Call `ExitPlanMode` for user approval
 
       **After plan approved → transition `planned`.**
@@ -129,6 +159,7 @@ states:
            - **After approve**: transition `planned` → returns to parent
            - **Execution workflow**: <workflow-name> (actual name, not "dynamic")
            - **Resume**: `transition("<session_id>", "planned")`
+           - **Tasks**: 1
            ```
       5. Call `ExitPlanMode` for user approval
 

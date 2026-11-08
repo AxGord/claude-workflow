@@ -618,6 +618,22 @@ on agent notifications and re-picks on every freed slot → one `cross_check` of
 child is `batch-task`: `claim` → `project_prepare` (worktree) → `work` (one worker agent, its session
 linked) → `review_scope` (exec: the diff's class) → `review` (one reviewer agent; FIXES → `work`) →
 `project_land` (merge + `land_test` under the repo's land lock) → `mark_done` → `cleanup`.
+**From a plan.** A plan has two levels. A TASK can be tested, reviewed and landed on its own and leaves
+main green; a STEP cannot, or is too small to pay for its own gate, and shares its task's check, review and
+land. `planning` writes a `## Tasks` table (`id`, `after`, `touches`, `difficulty`) with the steps under
+each task, and the plan's `## Workflow` section ends with a `Tasks: <N>` line (after the byte-exact Resume
+line the start hook reads). After approval master's `route_execution` reads it: one task → the plan's
+execution workflow as before (`coding` fans independent files out itself); two or more → `enqueue_plan`
+checks every `touches` path and `after`, `queue_add`s one self-contained line per task into the project's
+queue (`plan-<slug>` with its window set, or the queue of a project's `batch` heir), and runs `batch` or the
+heir; the bundled `plan_queue` resumes the handed-over queue; the pick then decides parallel or sequential by `after` / `touches` /
+`owner`. A task one of whose `touches` paths cannot be checked gets no `touches` at all (it runs alone). `touches`
+is a claim the land does not verify: `project_land` is `git merge --no-ff` plus `land_test`, so a wrong
+claim is caught only as a textual conflict or a red test, and `batch`'s `cross_check` reads the seams.
+Nothing is queued before the plan is approved; a heir of `batch` (`extends: batch` in the project's
+workflow files) gets the lines in its own queue with its header untouched, and a pass that fails halfway
+parks its lines (`parked: true`) before the plan is revised.
+
 A project with its own procedure is a heir: `extends: batch` with `plan_queue` as an exec that sets
 `queue_file` and `task_workflow` (`context_set:`), and a task workflow of its own or `extends:
 batch-task` overriding `project_prepare` / `project_land`.
@@ -811,7 +827,7 @@ itself is different.
 | `code-review` | Code review with per-file deep analysis |
 | `explore` | Codebase exploration — understand structure, trace code, find patterns |
 | `investigate` | Resolve unknowns before deciding on action |
-| `planning` | Explore, design plan, record workflow context |
+| `planning` | Explore, design plan (tasks and steps), record workflow context |
 | `testing` | Testing verification — unit tests first, then integration |
 | `web-research` | Check existing knowledge, then delegate to web subagents |
 | `reflection` | Self-reflection after significant tasks — evaluate, classify, act |

@@ -18,6 +18,10 @@ states:
     prompt: |
       Build the task queue for this batch run.
 
+      0. **Handed over** — context `queue_file` already set = master's `enqueue_plan` queued the
+         tasks of an approved plan (`queue_add`, window set): RESUME that queue (step 1's rules for
+         `base:`; add `land_test:` / `record_file:` by hand once if the project has them), do not
+         build a new one. Then go to step 3.
       1. **Resume check** — list `{{context.cwd}}/.claude/batch/*.yaml`. If a
          queue file has pending or running tasks and matches the
          user's ask, RESUME it: `suspended` → `resume` the task sessions of

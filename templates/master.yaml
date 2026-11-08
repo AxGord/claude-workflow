@@ -127,9 +127,16 @@ states:
     prompt: |
       The plan has been approved. Now route to the correct execution workflow.
 
-      Read the plan file — check the "Execution workflow" field in the Workflow section.
+      Read the plan file — the "Tasks" and "Execution workflow" fields in the Workflow section.
+
+      **Tasks first.** `Tasks: N` with N >= 2 (the plan has a `## Tasks` table) → `queue`,
+      whatever the Execution workflow says: the tasks are queued and `batch` runs them, the
+      queue's pick decides parallel or sequential by after / touches / owner. `Tasks: 1`, or
+      no Tasks field (an older plan) → one task: route by the Execution workflow as below
+      (its steps run inside that workflow; `coding` fans independent files out itself).
 
       Choose transition:
+      - `queue` → the plan has two or more tasks
       - `coding` → plan says coding
       - `docs` → plan says docs (text-only edits, no code file)
       - `refactoring` → plan says refactoring (routes to code_review)
@@ -148,6 +155,62 @@ states:
       testing: run_testing
       project: run_project
       dynamic: create_dynamic
+      queue: enqueue_plan
+
+  # Nothing is queued before the plan is approved: a rejected plan never reaches here (planning
+  # loops on ExitPlanMode), so a queue only ever holds tasks the user accepted.
+  enqueue_plan:
+    include_workflows: true
+    digest_on_repeat: true
+    prompt: |
+      Hand the approved plan's tasks to the task queue; do NOT implement anything here.
+
+      1. **Read** the plan's `## Tasks` table and the steps under each task, and check EVERY task
+         before the first `queue_add` (a pass is all-or-nothing; see 4):
+         - every `touches` path exists (`git ls-files`, `ls`) or is a new file under an existing
+           directory. If ANY path of a task fails, remove that task's WHOLE `touches` list: a list
+           with a path missing claims less than the task edits and lets it run beside a task on that
+           path, while no `touches` makes it run alone in its repo (slower, never wrong). Then check
+           overlap on what remains: two tasks without an `after` between them whose paths overlap
+           → add the `after` (dependencies first).
+         - each task stands alone (testable, reviewable, landable, main green). A task that cannot
+           → fold it into the task it depends on as steps. `after` ids exist and form no cycle.
+         `touches` is a claim the land does not verify. `project_land` is `git merge --no-ff` plus
+         `land_test`: it stops on a textual conflict or a red test, and two tasks that edited
+         different hunks of an undeclared shared file merge cleanly. The seams between tasks are
+         what `batch`'s `cross_check` of the combined diff reads.
+      2. **Which queue.** A project heir of `batch` = a workflow file with `extends: batch` in
+         `<project>/.claude/workflows/` (also `~/.claude/workflows/`): `grep -lE '^extends: *batch *$'`
+         (anchored: `extends: batch-task` is a task-workflow heir with no `plan_queue`, not a queue heir) —
+         the list printed below carries names and descriptions only, never `extends`. Heir found →
+         read its `plan_queue` for the queue it names; that queue may be live and fixed, so
+         `queue_add` into it (`file:`/`queue:` as it names) and leave its header (`batch_size`,
+         `reason`) and `queue_file` alone; set context `project_workflow` to the heir and transition
+         `project`. The heir's queue cannot be read → tell the user and transition `replan`. No heir
+         → the bundled `batch` with this plan's own queue `plan-<slug>` (a short slug of the plan's
+         topic) and transition `batch`.
+      3. The queue file must stay out of git: `git check-ignore -q .claude/batch/` else append
+         `.claude/batch/` to the file `git rev-parse --git-path info/exclude` prints (local only,
+         right in a linked worktree; a tracked queue dirties the tree and every land refuses).
+      4. **`queue_add`** one line per task, dependencies first: `{id, status: pending, difficulty,
+         after, touches, text}`. `text` is SELF-CONTAINED — the goal, the steps numbered, the
+         constraints and how to tell it is done: the worker sees only its line, never this plan. Ids
+         as in the plan; if an id is already in the queue and is not this plan's task, prefix all of
+         this plan's ids with the slug and rewrite `after`. The first add creates the queue. A task
+         whose id is already in the queue from THIS plan (a retry after an interrupted pass) is
+         skipped, never duplicated. A refused add → fix the line (`queue_edit`) and retry. Unfixable
+         after earlier adds of this pass → `queue_edit` each of this pass's lines to `parked: true`
+         (a pick skips a parked line; a live heir queue must never admit half a plan), then tell the
+         user and transition `replan`; the revised plan queues under new ids.
+      5. Own queue only (`plan-<slug>`): `queue_header({queue, batch_size: N, reason: "plan:
+         <slug>"})` — N = the tasks with no `after`, at most 3 — and `context_set(key: "queue_file",
+         value: "<absolute path of the queue file>")` (the add's answer names it). `batch`'s
+         `plan_queue` finishes the header (`base:`, `land_test:`) and resumes this queue. A heir's
+         queue: no header write.
+    transitions:
+      batch: run_batch
+      project: run_project
+      replan: plan
 
   create_dynamic:
     prompt: |
