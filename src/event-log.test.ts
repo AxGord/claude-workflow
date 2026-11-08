@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { buildApp } from "./dashboard.js";
@@ -104,9 +104,21 @@ describe("event log", () => {
     it("the same text written again while open is one ask; an abort answers it", async () => {
       const { engine, storage } = setup();
       const { sessionId } = await engine.start("wf");
-      await engine.setContext(sessionId, ASK_KEY, "stuck");
-      await engine.setContext(sessionId, ASK_KEY, "stuck");
-      expect(storage.events.since(0).filter(e => e.kind === "ask")).toHaveLength(1);
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+        await engine.setContext(sessionId, ASK_KEY, "stuck");
+        vi.setSystemTime(new Date("2030-01-01T00:00:05.000Z"));
+        await engine.setContext(sessionId, ASK_KEY, "stuck");
+      } finally {
+        vi.useRealTimers();
+      }
+      const asks = storage.events.since(0).filter(e => e.kind === "ask");
+      expect(asks).toHaveLength(1);
+      expect(new Set(storage.events.since(0).map(e => e.ts)).size).toBeGreaterThan(1);
+      // the fold too: the same ask logged again at a later time is not a second question
+      const later = asks.map(e => ({ ...e, seq: e.seq + 1000, ts: "2030-01-01T00:01:00.000Z" }));
+      expect(fold([...storage.events.since(0), ...later]).get(sessionId)!.asks).toHaveLength(1);
       await engine.abort(sessionId);
       const [asked] = fold(storage.events.since(0)).get(sessionId)!.asks;
       expect(asked.answered).toBeDefined();
