@@ -519,6 +519,32 @@ function outputText(o: unknown): string {
   return ''
 }
 
+/** What an Agent call's own input says about a workflow spawn: `workflow:*` is the plugin's subagent types; the label is the queue line's id of `drive <ID>`, else the description. */
+export function spawnOf(input: unknown): { role: string; label: string; model: string } | undefined {
+  const i = (input ?? {}) as { subagent_type?: unknown; description?: unknown; model?: unknown }
+  const type = typeof i.subagent_type === 'string' ? /^workflow:([A-Za-z0-9_-]+)$/.exec(i.subagent_type)?.[1] : undefined
+  if (!type) return undefined
+  const description = typeof i.description === 'string' ? i.description.trim() : ''
+  return { role: type, label: /^drive (\S+)$/.exec(description)?.[1] ?? (description !== '' ? description : type), model: typeof i.model === 'string' ? i.model : '' }
+}
+
+/** The id of the agent an Agent call launched: the stored result's `agentId` (an object), else the `agentId:` line of a text reply. */
+export function agentIdOf(output: unknown): string | undefined {
+  if (output && typeof output === 'object' && !Array.isArray(output)) {
+    const id = (output as { agentId?: unknown }).agentId
+    if (typeof id === 'string' && id !== '') return id
+  }
+  return /agentId: ([A-Za-z0-9]+)/.exec(outputText(output))?.[1]
+}
+
+/** The model an agent runs on, as the harness names it (`claude-haiku-5-5` is `haiku 5.5`); the call's own alias until the result says. */
+export function modelOf(output: unknown, alias = ''): string {
+  const r = output && typeof output === 'object' ? (output as { resolvedModel?: unknown }).resolvedModel : undefined
+  if (typeof r !== 'string' || r === '') return alias
+  const m = /^claude-([a-z]+)-(\d+)-(\d+)/.exec(r)
+  return m ? `${m[1]} ${m[2]}.${m[3]}` : r
+}
+
 /** The state a `transition` / `start` reply names: the `← ACTIVE` frame when a stack is printed, else the flat `<workflow> @ <state>` line or the one-line `SESSION: <id> @ <state>` of `start({ reply: "id" })`. */
 export function movedTo(o: unknown): string | undefined {
   const t = outputText(o)
@@ -783,17 +809,23 @@ export const register: Register = on => {
     )
   })
 
-  // An Agent call's row, compact, with the pipeline its agent drives or works in: slice, role, workflow and state (the
-  // deepest one under it), live while the session exists, then where it ended. The engine's row is kept as it is.
+  // An Agent call of a workflow pipeline draws as ONE line in the style of the engine-call group's line (`⚙ [slice] …`),
+  // in the place of the harness's row: role, the queue line's id, model, where the pipeline stands (the deepest state
+  // under it), its age and the lane link. Before the session is linked the line is read off the call's own input
+  // (`workflow:*` subagent type, description); once it ended, off the agent kept in `agentsSeen`. A call of no workflow,
+  // an expanded row (ctrl+o) and a failed or interrupted spawn keep the harness's row. The call's input is never
+  // rewritten, only drawn. The harness folds only reads, searches and listings into a ToolGroup, so a spawn cannot join
+  // the group's line: it is the next line, drawn alike.
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (e.props.tool !== 'Agent' || e.props.isExpanded) return next(e)
-    const row = await next(e)
-    const id = /agentId: ([A-Za-z0-9]+)/.exec(outputText(e.props.output))?.[1]
-    if (!id) return row
+    if (e.props.tool !== 'Agent' || e.props.isExpanded || e.props.isErrored || e.props.isInterrupted) return next(e)
+    const spawn = spawnOf(e.props.input)
+    const id = agentIdOf(e.props.output)
     const s = await read($, snap)
-    const { Box, Text, Link } = $.ui.resolve(e)
-    const live = s?.sessions.find(r => r.agent === id)
-    let line: any = null
+    const live = id !== undefined ? s?.sessions.find(r => r.agent === id) : undefined
+    const seen = id !== undefined && !live ? (await read($, agentsSeen))[id] : undefined
+    const { Text, Link } = $.ui.resolve(e)
+    const model = modelOf(e.props.output, spawn?.model)
+    const modelText = model !== '' ? <Text dimColor> · {model}</Text> : null
     if (live && s) {
       let top = live
       for (let i = 0; i < 8 && top.tag === '' && top.parent !== ''; i++) top = s.sessions.find(x => x.id === top.parent) ?? top
@@ -804,40 +836,37 @@ export const register: Register = on => {
         leaf = child
       }
       const now = await $.clock.now()
-      line = (
+      return (
         <Text>
           <Text color="cyan">⚙ [{top.tag !== '' ? top.tag : live.workflow}] </Text>
-          <Text dimColor>{roleOf(live.workflow)} · </Text>
+          <Text dimColor>{spawn?.role ?? roleOf(live.workflow)}</Text>
+          {modelText}
+          <Text dimColor> · </Text>
           {live.workflow} @ <Text weight="bold">{live.state}</Text>
           {leaf.id !== live.id ? <Text> › {roleOf(leaf.workflow)} @ <Text weight="bold">{leaf.state}</Text></Text> : null}
           <Text dimColor> {age(now - leaf.since)} </Text>
           <Link href={`${DASHBOARD}/map/${encodeURIComponent(top.id)}`} label="lane ↗" />
         </Text>
       )
-    } else {
-      const seen = (await read($, agentsSeen))[id]
-      if (seen) {
-        const land = s?.lands.find(l => l.slice === seen.label)
-        line = (
-          <Text>
-            <Text color="cyan">⚙ [{seen.label}] </Text>
-            <Text dimColor>{seen.role} · </Text>
-            {land && seen.role === 'driver' ? <Text color="green">✓ landed {land.sha}</Text> : <Text dimColor>ended at {seen.state}</Text>}
-          </Text>
-        )
-      }
     }
-    if (!line) return row
-    // one compact line in the row's place (ctrl+o keeps the engine's row with its background hint)
-    const input = (e.props.input ?? {}) as { description?: unknown; model?: unknown }
+    if (seen) {
+      const land = s?.lands.find(l => l.slice === seen.label)
+      return (
+        <Text>
+          <Text color="cyan">⚙ [{seen.label}] </Text>
+          <Text dimColor>{spawn?.role ?? seen.role}</Text>
+          {modelText}
+          <Text dimColor> · </Text>
+          {land && seen.role === 'driver' ? <Text color="green">✓ landed {land.sha}</Text> : <Text dimColor>ended at {seen.state}</Text>}
+        </Text>
+      )
+    }
+    if (!spawn) return next(e)
     return (
       <Text>
-        <Text>⏺ </Text>
-        <Text weight="bold">Agent</Text>
-        <Text>({String(input.description ?? '')})</Text>
-        {typeof input.model === 'string' ? <Text dimColor> {input.model}</Text> : null}
-        <Text dimColor> · </Text>
-        {line}
+        <Text color="cyan">⚙ [{spawn.label}] </Text>
+        <Text dimColor>{spawn.role}</Text>
+        {modelText}
       </Text>
     )
   })

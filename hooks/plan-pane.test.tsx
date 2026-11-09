@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { cells, dayOf, dayText, daySpends, fitCells, ledgerRunsOf, ledgerSpendOf, landMs, movedTo, poolView, queueView, spanText, startText, usdText } from './plan-pane'
+import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, ledgerRunsOf, ledgerSpendOf, landMs, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -37,6 +37,9 @@ let openFails = false
 let poolReply: { status: number; text: string } | undefined = { status: 200, text: JSON.stringify(API_POOL) }
 const NOW = Date.parse('2026-11-07T10:05:00Z')
 
+/** What a session file reads as; a test that needs an agent linked to it swaps it. */
+let sessionText = SESSION
+
 /** Every `process.run` request, as JSON (the git log of the Landed tree). */
 const ran: string[] = []
 
@@ -45,6 +48,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: str
   panes.splice(0)
   fetched.splice(0)
   ran.splice(0)
+  sessionText = SESSION
   queueDown = false
   openFails = false
   poolReply = { status: 200, text: JSON.stringify(API_POOL) }
@@ -59,7 +63,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: str
     ],
   }))
   on('fs.read', (_: unknown, e: { path: string }) => ({
-    value: e.path.endsWith('ledger.jsonl') ? (landed?.ledger ?? '') : withQueue ? SESSION : SESSION.replace(`"queue_file":"${QUEUE}"`, '"x":1'),
+    value: e.path.endsWith('ledger.jsonl') ? (landed?.ledger ?? '') : withQueue ? sessionText : sessionText.replace(`"queue_file":"${QUEUE}"`, '"x":1'),
   }))
   on('process.run', (_: unknown, e: unknown) => {
     ran.push(JSON.stringify(e))
@@ -170,6 +174,88 @@ test('a group of engine calls draws as its chain of moves, read off the recorded
     expect(texts).toContain('☰✓1')
     await ui.unmount()
   }
+})
+
+/** A session of the pipeline `ENG-X` (its queue line) with the agent `a6519b13` linked to it. */
+const LINKED = JSON.stringify({ ...JSON.parse(SESSION), context: { queue_file: QUEUE, task: 'ENG-X' }, agent_id: 'a6519b13' })
+const HARNESS_ROW = 'HARNESS ROW'
+const SPAWN_INPUT = { description: 'drive ENG-X', subagent_type: 'workflow:driver', model: 'haiku', prompt: 'P = wf-root' }
+const LAUNCHED = { status: 'async_launched', isAsync: true, agentId: 'a6519b13', description: 'drive ENG-X', resolvedModel: 'claude-haiku-5-5', prompt: 'p', outputFile: '/tmp/o' }
+
+/** An Agent call's row as the plugin sees it, over the harness's own row (`HARNESS_ROW`). */
+async function agentRow($: any, on: any, session: string, props: Record<string, unknown>) {
+  engine(on, true)
+  sessionText = session
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{HARNESS_ROW}</Text>
+  })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({
+    plugin: 'workflow',
+    component: 'ToolUse',
+    surface: 'terminal',
+    props: { tool: 'Agent', tool_use_id: 'toolu_1', input: SPAWN_INPUT, isRunning: false, isErrored: false, isInterrupted: false, output: LAUNCHED, ...props },
+  })
+  const text = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('')
+  return { ui, text }
+}
+
+test('an Agent call linked to a session draws one line in the group style instead of the harness row: role, slice, model, state, age, lane link', async ($, on) => {
+  const { ui, text } = await agentRow($, on, LINKED, {})
+  expect(text).not.toContain(HARNESS_ROW)
+  expect(text).toContain('⚙ [ENG-X] ')
+  expect(text).toContain('driver')
+  expect(text).toContain('haiku 5.5')
+  expect(text).toContain('batch @ dispatch')
+  expect(text).toContain('5m')
+  expect(JSON.stringify(await ui.find({ type: 'Link' }))).toContain('http://127.0.0.1:3100/map/wf-root')
+  await ui.unmount()
+})
+
+for (const running of [true, false])
+  test(`an Agent call not yet linked reads as a workflow line off its own input: subagent type, description, model (${running ? 'running' : 'launched'})`, async ($, on) => {
+    const { ui, text } = await agentRow($, on, SESSION, running ? { isRunning: true, output: undefined } : {})
+    expect(text).not.toContain(HARNESS_ROW)
+    expect(text).toContain('⚙ [ENG-X] ')
+    expect(text).toContain('driver')
+    expect(text).toContain(running ? 'haiku' : 'haiku 5.5')
+    await ui.unmount()
+  })
+
+test('an Agent call of no workflow keeps the harness row', async ($, on) => {
+  const input = { description: 'find x', subagent_type: 'Explore', model: 'haiku', prompt: 'p' }
+  const { ui, text } = await agentRow($, on, SESSION, { input, output: { ...LAUNCHED, agentId: 'zzz' } })
+  expect(text).toBe(HARNESS_ROW)
+  await ui.unmount()
+})
+
+test('an expanded Agent row keeps the harness row', async ($, on) => {
+  const { ui, text } = await agentRow($, on, LINKED, { isExpanded: true })
+  expect(text).toBe(HARNESS_ROW)
+  await ui.unmount()
+})
+
+for (const failure of [{ isErrored: true, output: 'Error: no such agent type' }, { isInterrupted: true }])
+  test(`a failed or interrupted spawn keeps the harness row so the error stays readable (${Object.keys(failure)[0]})`, async ($, on) => {
+    const { ui, text } = await agentRow($, on, LINKED, failure)
+    expect(text).toBe(HARNESS_ROW)
+    await ui.unmount()
+  })
+
+test('spawnOf, agentIdOf and modelOf read the call: the plugin\'s subagent types only, the result object or the text reply, the harness\'s model name', () => {
+  expect(spawnOf(SPAWN_INPUT)).toEqual({ role: 'driver', label: 'ENG-X', model: 'haiku' })
+  expect(spawnOf({ description: 'review the diff', subagent_type: 'workflow:reviewer' })).toEqual({ role: 'reviewer', label: 'review the diff', model: '' })
+  expect(spawnOf({ description: 'x', subagent_type: 'Explore' })).toBeUndefined()
+  expect(spawnOf({ description: 'x', subagent_type: 'other:workflow:driver' })).toBeUndefined()
+  expect(spawnOf(undefined)).toBeUndefined()
+  expect(agentIdOf(LAUNCHED)).toBe('a6519b13')
+  expect(agentIdOf([{ type: 'text', text: 'Async agent launched.\nagentId: a6519b13dafdc6d3f (internal)' }])).toBe('a6519b13dafdc6d3f')
+  expect(agentIdOf('Error: nope')).toBeUndefined()
+  expect(agentIdOf(undefined)).toBeUndefined()
+  expect(modelOf(LAUNCHED, 'haiku')).toBe('haiku 5.5')
+  expect(modelOf({ resolvedModel: 'gpt-x' }, 'haiku')).toBe('gpt-x')
+  expect(modelOf(undefined, 'haiku')).toBe('haiku')
 })
 
 const BAND = {

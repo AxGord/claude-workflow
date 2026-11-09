@@ -972,8 +972,19 @@ no model call, no tokens:
   the state and age indented), every row of the tree. The Pool tab already cuts each of its lines to the width.
 - **Pool** (`4`) — the machine-wide thread pool, as the dashboard's Pool tab shows it, fitted to the narrow pane: budget, threads held, load, external load and threshold, held locks, the pool-wide `STARVED` note, then each lease (what it holds, priority, time held, an `OVERRUN ~N` flag; under it project, session, step and label, cut to the pane width with `…`) and each waiter in admission order (what it wants, priority, wait time, a `STARVED` flag). It reads the dashboard's `GET /api/pool` and nothing else reads the pool. The read costs nothing while the tab is closed: `/api/pool` is called only by a refresh (every 15 s) whose open tab is Pool, and once when the tab is pressed or the pane is opened on it, never on the other tabs and never while the pane is closed. One call takes about 0.6 s on the engine (the pool's measuring window; it runs `ps -A` in the engine process for its two passes, about 25 ms each) and returns about 5 KB; the pool read is the last step of a refresh, so the other tabs' data is stored before it; a pane opened on the Pool tab comes up about 0.6 s later, because opening waits for its first read. Every line is cut to the pane width (the header is two lines; on a lease or waiter the flags keep their cells and the request, priority and age are cut with `…`). When only the pool answer fails (an older engine without the route, an answer that is not the pool), the tab shows one dim `Pool: …` line. When the whole dashboard is down the queue read fails too: the pane has no queue, so it shows the Sessions tree without the tab row and the red `queue: …` line, and the pool is not called. The tab shows with a work queue, like the other tabs.
 
-The pane's header links to the live map (`map ↗`, the dashboard's `/map`); an Agent call's row of a workflow
-pipeline links to its lane (`lane ↗`, `/map/<session id>`); `/wf-map` prints the map's URL.
+The pane's header links to the live map (`map ↗`, the dashboard's `/map`); `/wf-map` prints the map's URL.
+
+An Agent call of a workflow pipeline (the plugin's `workflow:*` subagent types, or any agent linked to a session by
+`link_agent`) draws as ONE line in the style of the engine-call group's line, in the place of the harness's row
+(`⏺ workflow:driver(drive ENG-X) Haiku 5.5`): `⚙ [ENG-X] driver · haiku 5.5 · batch-task @ review › reviewer @ read 3m lane ↗`
+— the role, the queue line's id, the model, the workflow and the state (and the deepest one under it), the age in the
+state, and the link to the lane (`/map/<session id>`). Before the session is linked it reads off the call's own input
+(`workflow:*` subagent type, description `drive <ID>`, model alias), as `⚙ [ENG-X] driver · haiku`; once the pipeline
+ended, the agent is remembered: `ended at <state>` or `✓ landed <sha>`. A call of no workflow, an expanded row (ctrl+o)
+and a failed or interrupted spawn keep the harness's row, so an error stays readable. The call's input is never
+rewritten: the hook only draws. The harness folds only reads, searches and listings into a tool group, so a spawn cannot
+join the group's line (`⚙ [slice] transition→state …`); it is the next line, drawn alike. The agent's id is read from the
+call's stored result (`agentId`, an object) and, failing that, from the `agentId:` line of a text reply.
 A move row (`a→b`) names the state of the reply's `← ACTIVE` frame when the reply prints a stack (a sub-workflow), else the flat `<workflow> @ <state>` line; a reply naming none shows `?`.
 
 Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier; right after it every queue row shows the line's `kind` as one text glyph (none an emoji): bug `※`, research `⚑`, feature `◆` (a line with no `kind` reads as feature). The glyph is `mark` in the `/api/queue` answer, from `kindMark` in `src/map-layout.ts`. A session with
