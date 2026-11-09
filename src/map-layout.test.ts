@@ -1159,7 +1159,7 @@ describe("which sessions are bands", () => {
         start("W1", "work", "10:00", null, { project: "other" });
       }),
     );
-    expect(m.bands.map(b => b.title)).toEqual(["work"]);
+    expect(m.bands.map(b => b.title)).toEqual(["other › no queue · work"]);
   });
 
   it("a `map: false` workflow with children is a dispatcher and stays", () => {
@@ -1169,7 +1169,7 @@ describe("which sessions are bands", () => {
         start("W1", "work", "10:01", "C1");
       }),
     );
-    expect(m.bands.map(b => b.title)).toEqual(["work"]);
+    expect(m.bands.map(b => b.title)).toEqual(["? › no queue · work"]);
     expect(m.bands[0].rail).not.toBeNull();
   });
 
@@ -1180,7 +1180,10 @@ describe("which sessions are bands", () => {
         start("W2", "work", "10:00", null, { project: "beta" });
       }),
     );
-    expect(m.bands.map(b => b.title)).toEqual(["work · alpha", "work · beta"]);
+    expect(m.bands.map(b => b.title)).toEqual([
+      "alpha › no queue · work",
+      "beta › no queue · work",
+    ]);
   });
 
   it("sessions in worktrees of one repo are one band: the session files carry the main checkout's name", () => {
@@ -1194,17 +1197,72 @@ describe("which sessions are bands", () => {
       { ...base, session_id: "W1", context: { cwd: "/x/repo" }, project: "repo" },
       { ...base, session_id: "W2", context: { cwd: "/x/wf-W2" }, project: "repo" },
     ]);
-    expect(run(events).bands.map(b => b.title)).toEqual(["work"]);
+    expect(run(events).bands.map(b => b.title)).toEqual(["repo › no queue · work"]);
   });
 
-  it("one project keeps the bare workflow name", () => {
+  it("one project is one band, whose heading names it", () => {
     const m = run(
       mk(() => {
         start("W1", "work", "10:00", null, { project: "alpha" });
         start("W2", "work", "10:00", null, { project: "alpha" });
       }),
     );
-    expect(m.bands.map(b => b.title)).toEqual(["work"]);
+    expect(m.bands.map(b => b.title)).toEqual(["alpha › no queue · work"]);
+  });
+});
+
+describe("project, then queue", () => {
+  const q = (name: string) => `/repo/owner/.claude/batch/${name}.yaml`;
+  const build = (extra: () => void): MapLayout => {
+    const events = scenario(extra);
+    return layout(fold(events), {}, { now: Date.parse("2026-01-01T12:00:00Z") });
+  };
+  const titles = (m: MapLayout) => m.bands.map(b => b.title);
+
+  it("two projects read one after the other, each heading naming its project and queue", () => {
+    const m = build(() => {
+      start("B", "work", "10:00", null, { project: "beta", queue: q("q") });
+      start("A", "work", "10:00", null, { project: "alpha", queue: q("q") });
+    });
+    expect(titles(m)).toEqual(["alpha › owner/q.yaml · work", "beta › owner/q.yaml · work"]);
+    expect(m.bands.map(b => b.project)).toEqual(["alpha", "beta"]);
+  });
+
+  it("two queues of one project are two bands, and its sessions with no queue come last", () => {
+    const m = build(() => {
+      start("N", "work", "10:00", null, { project: "p" });
+      start("Y", "work", "10:00", null, { project: "p", queue: q("y") });
+      start("X", "work", "10:00", null, { project: "p", queue: q("x") });
+    });
+    expect(titles(m)).toEqual([
+      "p › owner/x.yaml · work",
+      "p › owner/y.yaml · work",
+      "p › no queue · work",
+    ]);
+    expect(m.bands[2].queue).toBeNull();
+  });
+
+  it("a dispatcher started under a conversation gives each queue line its own lane", () => {
+    const m = build(() => {
+      start("R", "chat", "10:00", null, { project: "p" });
+      start("D", "disp", "10:00", "R", { project: "p", queue: q("x") });
+      start("L1", "work", "10:01", "D", { project: "p", task: "LINE-1" });
+      start("L2", "work", "10:02", "D", { project: "p", task: "LINE-2" });
+    });
+    expect(titles(m)).toEqual(["p › owner/x.yaml · work"]);
+    expect(m.bands[0].lanes.map(l => l.plaque.title)).toEqual(["LINE-1", "LINE-2"]);
+  });
+
+  it("a line's child session hangs under its lane, in its queue, and draws no lane of its own", () => {
+    const m = build(() => {
+      start("D", "disp", "10:00", null, { project: "p", queue: q("x") });
+      start("L", "work", "10:01", "D", { project: "p", task: "LINE-1" });
+      start("C", "review", "10:02", "L", { project: "p" });
+    });
+    expect(titles(m)).toEqual(["p › owner/x.yaml · work"]);
+    const lanes = m.bands[0].lanes;
+    expect(lanes.map(l => l.session)).toEqual(["L"]);
+    expect(lanes[0].plaque.title).toBe("LINE-1");
   });
 });
 
@@ -1218,7 +1276,7 @@ describe("bands without declared stations", () => {
 
   it("a lane that has not moved still draws, in one column", () => {
     const m = run(() => start("N1", "bare", "10:00", null));
-    expect(m.bands.map(b => b.title)).toEqual(["bare"]);
+    expect(m.bands.map(b => b.title)).toEqual(["? › no queue · bare"]);
     expect(m.bands[0].stations.map(s => s.name)).toEqual(["start"]);
     expect(m.bands[0].lanes).toHaveLength(1);
   });
@@ -1237,7 +1295,7 @@ describe("bands without declared stations", () => {
       start("K1", "quiet", "10:01", "D1");
       start("K2", "bare", "10:01", "D1");
     });
-    expect(m.bands.map(b => b.title)).toEqual(["bare"]);
+    expect(m.bands.map(b => b.title)).toEqual(["? › no queue · bare"]);
   });
 });
 

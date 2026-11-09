@@ -12,6 +12,7 @@ export type EventKind =
   | "agent_respawn"
   | "agent_stop"
   | "rescore"
+  | "queue"
   | "ask"
   | "answer";
 
@@ -50,10 +51,18 @@ export interface FoldedSession {
   difficulty: unknown;
   /** the directory name of the session's cwd */
   project?: string;
+  /** the queue file the session was started from (`context.queue_file`), else its nearest ancestor's; absent: not from a queue */
+  queue?: string;
   state?: string;
   started?: string;
   ended?: string;
-  transitions: { from: string; to: string; name: unknown; ts: string; workflow?: string }[];
+  transitions: {
+    from: string;
+    to: string;
+    name: unknown;
+    ts: string;
+    workflow?: string;
+  }[];
   execs: {
     state: unknown;
     start?: string;
@@ -63,7 +72,13 @@ export interface FoldedSession {
   }[];
   agents: FoldedAgent[];
   /** `to` = the state the answer moved to; `text` = the question a driver passed (`ask_parent`) */
-  asks: { state: unknown; at: string; answered?: string; to?: string; text?: string }[];
+  asks: {
+    state: unknown;
+    at: string;
+    answered?: string;
+    to?: string;
+    text?: string;
+  }[];
   outcome?: unknown;
 }
 
@@ -145,6 +160,7 @@ export function fold(events: readonly WfEvent[]): Map<string, FoldedSession> {
         if (!known(s.task)) s.task = d.task;
         if (!known(s.difficulty)) s.difficulty = d.difficulty;
         if (s.project === undefined && known(d.project)) s.project = d.project as string;
+        if (s.queue === undefined && known(d.queue)) s.queue = d.queue as string;
         s.started ??= e.ts;
         break;
       case "transition": {
@@ -225,6 +241,10 @@ export function fold(events: readonly WfEvent[]): Map<string, FoldedSession> {
             a.endedAt = { state: s.state, ts: e.ts };
           }
         break;
+      case "queue":
+        if (known(d.to)) s.queue = d.to as string;
+        else delete s.queue;
+        break;
       case "rescore":
         s.difficulty = d.to;
         break;
@@ -268,6 +288,15 @@ export function fold(events: readonly WfEvent[]): Map<string, FoldedSession> {
     const last = s.transitions.at(-1);
     if (last) s.state = last.to;
   }
+  for (const s of out.values()) {
+    const walked = new Set([s.id]);
+    let up = s.parent === null ? undefined : out.get(s.parent);
+    while (s.queue === undefined && up !== undefined && !walked.has(up.id)) {
+      walked.add(up.id);
+      s.queue = up.queue;
+      up = up.parent === null ? undefined : out.get(up.parent);
+    }
+  }
   return out;
 }
 
@@ -275,7 +304,10 @@ export function fold(events: readonly WfEvent[]): Map<string, FoldedSession> {
 export interface SeedSession {
   readonly session_id: string;
   readonly parent_session_id?: string;
-  readonly stack: readonly { readonly workflow: string; readonly current_state: string }[];
+  readonly stack: readonly {
+    readonly workflow: string;
+    readonly current_state: string;
+  }[];
   readonly active_frame?: number;
   readonly started_at: string;
   readonly updated_at: string;
@@ -325,6 +357,7 @@ export function seedEvents(sessions: readonly SeedSession[]): WfEvent[] {
       task: ctx.task ?? ctx.slice ?? ctx.task_id ?? null,
       difficulty: ctx.difficulty ?? null,
       project: s.project ?? projectOf(ctx.cwd),
+      queue: ctx.queue_file ?? null,
     });
     const frames: (string | undefined)[] = [root];
     for (const h of s.history) {

@@ -14,7 +14,10 @@ export interface MapStation {
 /** What the map reads of a workflow (`/api/workflows`). */
 export interface MapWorkflow {
   readonly stations?: readonly MapStation[];
-  readonly driver?: { readonly model?: string; readonly effort?: string } | null;
+  readonly driver?: {
+    readonly model?: string;
+    readonly effort?: string;
+  } | null;
   /** `false`: a root session of it with no children is a conversation, not a task, and is left off the map */
   readonly map?: boolean;
 }
@@ -109,7 +112,11 @@ export interface MapPass {
   readonly y: number;
   readonly stops: readonly MapStop[];
   /** consecutive visited stations, each drawn as its own segment */
-  readonly segments: readonly { readonly key: string; readonly x1: number; readonly x2: number }[];
+  readonly segments: readonly {
+    readonly key: string;
+    readonly x1: number;
+    readonly x2: number;
+  }[];
 }
 
 export interface MapStep {
@@ -190,7 +197,11 @@ export interface MapLane {
     readonly y: number;
     readonly faint: boolean;
   };
-  readonly ahead: readonly { readonly key: string; readonly x: number; readonly script: boolean }[];
+  readonly ahead: readonly {
+    readonly key: string;
+    readonly x: number;
+    readonly script: boolean;
+  }[];
   readonly plaque: MapPlaque;
   readonly driver: MapChip | null;
   readonly labels: boolean;
@@ -250,7 +261,10 @@ export interface MapRail {
 export interface MapBand {
   readonly key: string;
   readonly workflow: string;
-  /** the band's heading: the workflow, with the project when its sessions run in more than one */
+  /** the lanes' project and queue label; `queue` null: sessions not started from a queue */
+  readonly project: string | null;
+  readonly queue: string | null;
+  /** the band's heading: `project › queue · workflow` */
   readonly title: string;
   readonly y: number;
   readonly height: number;
@@ -316,7 +330,10 @@ function difficultyKnown(d: unknown): boolean {
 }
 
 /** The one difficulty plaque every dashboard view draws, first in its row: five cells wide, `?????` when unknown. */
-export function difficultyBar(d: unknown): { readonly text: string; readonly token: string } {
+export function difficultyBar(d: unknown): {
+  readonly text: string;
+  readonly token: string;
+} {
   const n = Number(d);
   if (!difficultyKnown(d)) return { text: "?????", token: difficultyToken(d) };
   const full = Math.min(5, Math.max(1, Math.round(n / 2)));
@@ -407,6 +424,16 @@ function lastAgent(s: FoldedSession): FoldedAgent | undefined {
   return s.agents.at(-1);
 }
 
+/** A queue file as a heading names it: the directory holding its `.claude`, else its own directory, and the file name. */
+export function queueLabel(file: string | undefined): string | null {
+  if (file === undefined) return null;
+  const parts = file.split("/").filter(Boolean);
+  const at = parts.indexOf(".claude");
+  const owner = at > 0 ? parts[at - 1] : parts.at(-2);
+  const name = parts.at(-1) as string;
+  return owner === undefined ? name : `${owner}/${name}`;
+}
+
 function laneTitle(s: FoldedSession): string {
   return typeof s.task === "string" && s.task !== "" ? s.task : s.id.slice(0, 8);
 }
@@ -427,7 +454,10 @@ interface Visit {
 function walk(
   s: FoldedSession,
   index: Map<string, number>,
-): { visits: Visit[]; loops: { from: number; to: number; pass: number; name: string }[] } {
+): {
+  visits: Visit[];
+  loops: { from: number; to: number; pass: number; name: string }[];
+} {
   const visits: Visit[] = [{ pass: 0, i: 0, ts: s.started ?? s.transitions[0]?.ts ?? "" }];
   const loops: { from: number; to: number; pass: number; name: string }[] = [];
   let cur = 0;
@@ -876,17 +906,21 @@ function classify(
   const isRoot = (s: FoldedSession): boolean => s.parent === null || !folded.has(s.parent);
   const dispatchers = new Set<string>();
   const lanes: LaneInput[] = [];
+  const tasked = (s: FoldedSession): boolean => typeof s.task === "string" && s.task !== "";
+  // a dispatcher hands out queue lines: a root with children, or a taskless session whose children
+  // have tasks (a dispatcher started under a conversation), so each line is a lane, not its branch
+  const dispatches = (s: FoldedSession): boolean => {
+    const kids = childrenOf.get(s.id) ?? [];
+    return kids.length > 0 && (isRoot(s) || (!tasked(s) && kids.some(tasked)));
+  };
   for (const s of folded.values()) {
     if (!s.workflow) continue;
-    const kids = childrenOf.get(s.id) ?? [];
-    if (isRoot(s)) {
-      if (kids.length > 0) dispatchers.add(s.id);
-      else if (workflows[s.workflow]?.map !== false) lanes.push({ s, children: [] });
-    }
+    if (dispatches(s)) dispatchers.add(s.id);
+    else if (isRoot(s) && workflows[s.workflow]?.map !== false) lanes.push({ s, children: [] });
   }
   for (const d of dispatchers)
     for (const s of childrenOf.get(d) ?? [])
-      if (s.workflow && workflows[s.workflow]?.map !== false)
+      if (s.workflow && !dispatchers.has(s.id) && workflows[s.workflow]?.map !== false)
         lanes.push({ s, children: (childrenOf.get(s.id) ?? []).filter(c => c.workflow) });
   return { lanes, dispatchers };
 }
@@ -1042,7 +1076,7 @@ function draftRail(
 }
 
 /**
- * The whole map. Bands by workflow (alphabetical); in a band landed lanes on top (oldest first; older
+ * The whole map. Bands by project, then queue (a project's sessions with no queue last), then workflow; in a band landed lanes on top (oldest first; older
  * than an hour folded into `landed earlier:`), then the parent rail and the running lanes (oldest
  * first); the queue's `next:` row under the last band.
  */
@@ -1053,16 +1087,8 @@ export function layout(
 ): MapLayout {
   const { lanes, dispatchers } = classify(folded, workflows);
   const foldAfter = opts.foldAfterMs ?? 3600_000;
-  const projectsOf = new Map<string, Set<string>>();
-  for (const l of lanes) {
-    const set = projectsOf.get(l.s.workflow as string) ?? new Set<string>();
-    set.add(l.s.project ?? "");
-    projectsOf.set(l.s.workflow as string, set);
-  }
   const bandKey = (l: LaneInput): string =>
-    (projectsOf.get(l.s.workflow as string)?.size ?? 0) > 1
-      ? `${l.s.workflow}@${l.s.project ?? ""}`
-      : (l.s.workflow as string);
+    [l.s.project, queueLabel(l.s.queue), l.s.workflow].filter(p => p).join("|");
   const byWorkflow = new Map<string, LaneInput[]>();
   for (const l of lanes) {
     const list = byWorkflow.get(bandKey(l)) ?? [];
@@ -1075,12 +1101,30 @@ export function layout(
   const bands: MapBand[] = [];
   let y = 0;
   let width = 0;
-  for (const bandId of [...byWorkflow.keys()].sort()) {
+  const rank = (id: string) => {
+    const { s } = (byWorkflow.get(id) as LaneInput[])[0];
+    return [
+      s.project ?? "",
+      s.queue === undefined ? 1 : 0,
+      queueLabel(s.queue) ?? "",
+      s.workflow ?? "",
+    ] as const;
+  };
+  const bandIds = [...byWorkflow.keys()].sort((a, b) => {
+    const [x, y] = [rank(a), rank(b)];
+    return (
+      x[0].localeCompare(y[0]) ||
+      x[1] - y[1] ||
+      x[2].localeCompare(y[2]) ||
+      x[3].localeCompare(y[3])
+    );
+  });
+  for (const bandId of bandIds) {
     const group = byWorkflow.get(bandId) as LaneInput[];
     const workflow = group[0].s.workflow as string;
-    const project = group[0].s.project;
-    const title =
-      bandId === workflow ? workflow : `${workflow} · ${project === undefined ? "?" : project}`;
+    const project = group[0].s.project ?? null;
+    const queue = queueLabel(group[0].s.queue);
+    const title = `${project ?? "?"} › ${queue ?? "no queue"} · ${workflow}`;
     const stations = bandStations(workflow, group, workflows);
     if (stations.length === 0) continue;
     const n = stations.length;
@@ -1189,6 +1233,8 @@ export function layout(
     bands.push({
       key: bandId,
       workflow,
+      project,
+      queue,
       title,
       y,
       height,

@@ -123,7 +123,7 @@ full prompt. Absent = the generic line. Needs an engine that knows the field.
 
 **ask: parent** (per-state tag): the state asks its parent a question. Entering it logs an `ask` event (the state name), leaving it an `answer`; the dashboard's event log (`/api/events`) carries the pair. Needs an engine that knows the key. A question from ANY state: a driver sets the context key `ask_parent` (one `context_set`) at a hand-back — it is OPEN while the key holds text and the session has not moved or ended since that write; the session's next move or end (the parent's own `transition` on it) or the key cleared to `""` is the `answer`. A stale key is ignored.
 
-**station** (per-state flag, any state): the live workflow map draws a workflow's band with one
+**station** (per-state flag, any state): the live workflow map groups bands by project, then queue (`context.queue_file`), then workflow (heading `project › queue · workflow`, one lane per queue line) and draws a workflow's band with one
 column per *station* — the states on the shortest happy-path route (`transitions`, `on_success`,
 `on_complete`, `cases["0"]`) from `initial` to the success terminal; exec states draw as scripts.
 The success terminal is the farthest terminal that is not `outcome: fail` (the early exits —

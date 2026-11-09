@@ -148,6 +148,7 @@ export class EventLog {
           task: ctx.task ?? ctx.slice ?? ctx.task_id ?? null,
           difficulty: ctx.difficulty ?? null,
           project: ctx.project ?? projectNameOf(ctx.cwd),
+          queue: ctx.queue_file ?? null,
         },
         next.started_at,
       );
@@ -164,6 +165,8 @@ export class EventLog {
         to: ctx.difficulty ?? null,
       });
     }
+    if (prev && (prev.context.queue_file ?? null) !== (ctx.queue_file ?? null))
+      this.append("queue", id, { to: ctx.queue_file ?? null });
     const was = openExec(prev);
     const now = openExec(next);
     if (!was && now) this.append("exec_start", id, { state: now.state }, now.at);

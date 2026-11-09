@@ -384,6 +384,24 @@ describe.skipIf(!HAVE_CHROME)("the live map in a real browser", () => {
     return Math.round(r.top + r.height / 2 - innerHeight / 2);
   })()`;
 
+  it("a band heading names the project and the queue", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashmap-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const storage = new Storage(path.join(dir, "state"));
+    await storage.write(
+      "q1",
+      session("q1", "b", {
+        task: "LINE-1",
+        project: "alpha",
+        queue_file: "/r/owner/.claude/batch/queue.yaml",
+      }),
+    );
+    const base = await serve(storage, routesModule(dir), 0);
+    const page = await openPage(`${base}/map`);
+    const seen = `[...document.querySelectorAll('text.m-title')].some(t => t.textContent === 'alpha › owner/queue.yaml · w')`;
+    await until(page, seen, "a heading with the project and the queue");
+  });
+
   it("F5 returns to the same lane when the event log makes the scene taller than the first one", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashmap-"));
     closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -676,7 +694,11 @@ describe.skipIf(!HAVE_CHROME)("the Timeline tab in a real browser", () => {
         n: targets.length, covered };
     })()`;
     const read = async () =>
-      (await page.eval(probe)) as { inside: boolean; n: number; covered: string[] };
+      (await page.eval(probe)) as {
+        inside: boolean;
+        n: number;
+        covered: string[];
+      };
     const first = await read();
     expect(first.inside).toBe(true);
     expect(first.n).toBeGreaterThan(2);

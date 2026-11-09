@@ -39,6 +39,26 @@ function setup(): { engine: Engine; storage: InMemoryStorage; loader: Loader } {
 }
 
 describe("event log", () => {
+  it("a dispatcher's queue set after its start reaches its child from the log alone", async () => {
+    const { engine, storage } = setup();
+    const d = await engine.start("wf");
+    await engine.setContext(d.sessionId, "queue_file", "/r/.claude/batch/q.yaml");
+    const child = await engine.start("wf", undefined, d.sessionId);
+    const folded = fold(storage.events.since(0));
+    expect(folded.get(d.sessionId)?.queue).toBe("/r/.claude/batch/q.yaml");
+    expect(folded.get(child.sessionId)?.queue).toBe("/r/.claude/batch/q.yaml");
+  });
+
+  it("a queue given at the start is in session_start, and a seed carries it", async () => {
+    const { engine, storage } = setup();
+    const { sessionId } = await engine.start("wf", undefined, undefined, undefined, undefined, {
+      queue_file: "/r/q.yaml",
+    });
+    expect(fold(storage.events.since(0)).get(sessionId)?.queue).toBe("/r/q.yaml");
+    const seeded = fold(seedEvents([storage.read(sessionId)!]));
+    expect(seeded.get(sessionId)?.queue).toBe("/r/q.yaml");
+  });
+
   it("fold(events) reproduces a session's history", async () => {
     const { engine, storage } = setup();
     const { sessionId } = await engine.start("wf");
