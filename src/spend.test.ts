@@ -66,8 +66,8 @@ describe("measureSpend", () => {
       ],
     });
     const s = measureSpend([sess("r", { agent_id: "a1" })], W[0], W[1], root)!;
-    // sonnet: 3 + 15 + 0.3 + 3.75 = 22.05; opus output 75
-    expect(s.usd).toBeCloseTo(97.05, 6);
+    // sonnet 5.5: 2 + 10 + 0.2 + 2.5 = 14.7; opus 5.5 output 20
+    expect(s.usd).toBeCloseTo(34.7, 6);
     expect(s.agents).toBe(1);
     expect(s.output).toBe(2_000_000);
   });
@@ -84,7 +84,7 @@ describe("measureSpend", () => {
         }),
       ],
     });
-    expect(measureSpend([sess("r", { agent_id: "a1" })], W[0], W[1], root)!.usd).toBeCloseTo(6, 6);
+    expect(measureSpend([sess("r", { agent_id: "a1" })], W[0], W[1], root)!.usd).toBeCloseTo(4, 6);
   });
 
   it("a synthetic zero-usage turn costs $0 and does not unmeasure the agent", () => {
@@ -94,7 +94,7 @@ describe("measureSpend", () => {
         turn("m1", "2026-11-09T10:11:00Z", "sonnet", { output_tokens: 1_000_000 }),
       ],
     });
-    expect(measureSpend([sess("r", { agent_id: "a1" })], W[0], W[1], root)!.usd).toBeCloseTo(15, 6);
+    expect(measureSpend([sess("r", { agent_id: "a1" })], W[0], W[1], root)!.usd).toBeCloseTo(10, 6);
   });
 
   it("an agent no key names is counted on the row as unnamed", () => {

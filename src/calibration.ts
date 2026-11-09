@@ -173,10 +173,33 @@ export interface TurnRates {
   /** a 5-minute cache write; a 1-hour write costs twice the input rate. */
   readonly cache_write: number;
 }
+/**
+ * Keyed by model id; a key also matches any id containing it, the longest key wins, so a dated id
+ * takes its model's rate and a bare family key (`opus`) is the fallback for an unknown id of that
+ * family (priced as the family's newest). Source: Anthropic list prices, claude-api skill table
+ * cached 2026-10-06. A 1-hour cache write costs twice the input rate. Haiku 5.5 prompts over 100K
+ * tokens cost $0.50 / $2.50: not modelled, so such a turn is under-priced.
+ */
 export const TURN_RATES_USD_PER_MTOK: Readonly<Record<string, TurnRates>> = {
-  opus: { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 },
-  sonnet: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
-  haiku: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+  "claude-opus-5-5": { input: 4, output: 20, cache_read: 0.2, cache_write: 5 },
+  "claude-opus-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  "claude-opus-4-8": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  "claude-opus-4-7": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  "claude-opus-4-6": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  "claude-opus-4-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
+  "claude-opus-4-1": { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 },
+  "claude-opus-4-2": { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  "claude-sonnet-5": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  "claude-sonnet-4": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
+  "claude-haiku-4-5": { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+  "claude-fable-5-1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  "claude-fable-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
+  opus: { input: 4, output: 20, cache_read: 0.2, cache_write: 5 },
+  sonnet: { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  haiku: { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
+  fable: { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
 };
 
 /** The USD of one transcript turn priced by its own model; undefined when the model has no rate. */
@@ -191,9 +214,11 @@ export function turnUsd(
   },
 ): number | undefined {
   const m = model.toLowerCase();
-  const family = Object.keys(TURN_RATES_USD_PER_MTOK).find(k => m.includes(k));
-  if (family === undefined) return undefined;
-  const r = TURN_RATES_USD_PER_MTOK[family];
+  const key = Object.keys(TURN_RATES_USD_PER_MTOK)
+    .filter(k => m.includes(k))
+    .sort((x, y) => y.length - x.length)[0];
+  if (key === undefined) return undefined;
+  const r = TURN_RATES_USD_PER_MTOK[key];
   return (
     (u.input * r.input +
       u.output * r.output +
