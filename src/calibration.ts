@@ -163,7 +163,46 @@ export const PRICES_USD_PER_MTOK: Readonly<Record<string, number>> = {
   sonnet: 6,
   haiku: 2,
 };
-export const PRICES_UPDATED = "2026-11-08";
+export const PRICES_UPDATED = "2026-11-09";
+
+/** USD per million tokens, by model family, for each kind of usage a transcript turn reports. */
+export interface TurnRates {
+  readonly input: number;
+  readonly output: number;
+  readonly cache_read: number;
+  /** a 5-minute cache write; a 1-hour write costs twice the input rate. */
+  readonly cache_write: number;
+}
+export const TURN_RATES_USD_PER_MTOK: Readonly<Record<string, TurnRates>> = {
+  opus: { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 },
+  sonnet: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
+  haiku: { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+};
+
+/** The USD of one transcript turn priced by its own model; undefined when the model has no rate. */
+export function turnUsd(
+  model: string,
+  u: {
+    readonly input: number;
+    readonly output: number;
+    readonly cache_read: number;
+    readonly cache_write_5m: number;
+    readonly cache_write_1h: number;
+  },
+): number | undefined {
+  const m = model.toLowerCase();
+  const family = Object.keys(TURN_RATES_USD_PER_MTOK).find(k => m.includes(k));
+  if (family === undefined) return undefined;
+  const r = TURN_RATES_USD_PER_MTOK[family];
+  return (
+    (u.input * r.input +
+      u.output * r.output +
+      u.cache_read * r.cache_read +
+      u.cache_write_5m * r.cache_write +
+      u.cache_write_1h * r.input * 2) /
+    1e6
+  );
+}
 
 /** The price of a model name (`claude-opus-4`, `sonnet`): the first family its name contains; undefined when none. */
 export function priceOf(model: string): number | undefined {
@@ -282,11 +321,19 @@ export function buildCost(entries: readonly LedgerEntry[], from: string, to: str
   const tasks: CostTask[] = [];
   for (const e of entries) {
     if (e.task === undefined) continue;
-    if (Object.keys(e.tokens ?? {}).length === 0 && Object.keys(e.stages ?? {}).length === 0)
+    if (
+      e.spend === undefined &&
+      Object.keys(e.tokens ?? {}).length === 0 &&
+      Object.keys(e.stages ?? {}).length === 0
+    )
       continue;
     const ended = Date.parse(e.ended_at);
     if (Number.isNaN(ended)) continue;
     const stages = costStages(e);
+    const spend = e.spend?.usd !== undefined ? e.spend : undefined;
+    const spendTokens = spend
+      ? spend.input + spend.output + spend.cache_read + spend.cache_write
+      : 0;
     tasks.push({
       session_id: e.session_id,
       task: e.task,
@@ -295,10 +342,22 @@ export function buildCost(entries: readonly LedgerEntry[], from: string, to: str
       ended_at: e.ended_at,
       outcome: costOutcome(e),
       rounds: reviewRounds(e.visits),
-      measured: stages.length > 0,
-      tokens: stages.reduce((s, x) => s + x.tokens, 0),
-      usd: stages.reduce((s, x) => s + (x.usd ?? 0), 0),
-      stages,
+      measured: spend ? true : e.spend ? false : stages.length > 0,
+      tokens: spend ? spendTokens : e.spend ? 0 : stages.reduce((s, x) => s + x.tokens, 0),
+      usd: spend ? (spend.usd ?? 0) : e.spend ? 0 : stages.reduce((s, x) => s + (x.usd ?? 0), 0),
+      stages: spend
+        ? [
+            {
+              stage: "spend",
+              model: "transcripts",
+              effort: "-",
+              tokens: spendTokens,
+              usd: spend.usd,
+            },
+          ]
+        : e.spend
+          ? []
+          : stages,
     });
   }
   tasks.sort((a, b) => a.ended_at.localeCompare(b.ended_at));

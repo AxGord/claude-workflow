@@ -34,7 +34,8 @@ import type { ExecContext } from "./executor.js";
 import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
-import { ledgerEntry, rootSessionIdOf } from "./ledger.js";
+import { ledgerEntry, rootSessionIdOf, type LedgerSpend } from "./ledger.js";
+import { measureSpend, subtreeOf } from "./spend.js";
 import {
   MODEL_KEYS,
   applyModelTable,
@@ -1888,9 +1889,20 @@ export class Engine {
     this._snapshots.delete(session.session_id);
     this._aborting.delete(session.session_id);
     try {
-      await this._storage.appendLedger(ledgerEntry(session));
+      await this._storage.appendLedger(ledgerEntry(session, this._spendOf(session)));
     } catch (err) {
       console.error(`Ledger append failed for ${session.session_id}:`, err);
+    }
+  }
+
+  /** The real spend of an ended session's agents (itself and its descendants); never throws. */
+  private _spendOf(session: SessionState): LedgerSpend | undefined {
+    try {
+      const tree = subtreeOf(session, this._storage.readAll());
+      return measureSpend(tree, session.started_at, session.updated_at);
+    } catch (err) {
+      console.error(`Spend of ${session.session_id} not measured:`, err);
+      return undefined;
     }
   }
 

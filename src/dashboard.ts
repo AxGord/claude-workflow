@@ -9,6 +9,7 @@ import type { WfEvent } from "./event-log.js";
 import { computeStations } from "./stations.js";
 import { Pool, poolSnapshot, projectNameOf, resolvePoolDir } from "./pool.js";
 import { ledgerEntry } from "./ledger.js";
+import { measureSpend, subtreeOf } from "./spend.js";
 import { buildCost } from "./calibration.js";
 import { buildTimeline, localDay } from "./timeline.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
@@ -214,7 +215,12 @@ export function buildApp(
 
       await storage.write(session.session_id, updated);
       await storage
-        .appendLedger(ledgerEntry(updated))
+        .appendLedger(
+          ledgerEntry(
+            updated,
+            measureSpend(subtreeOf(updated, storage.readAll()), updated.started_at, now),
+          ),
+        )
         .catch(err => console.error(`Ledger append failed for ${session.session_id}:`, err));
       res.json({ session_id: session.session_id, outcome: "abandoned" });
     } catch (err) {

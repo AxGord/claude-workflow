@@ -91,6 +91,22 @@ export interface LedgerEntry {
   readonly counts?: Readonly<Record<string, number>>;
   /** The context's `tokens` (→ `total`) and `tokens_<role>` (→ `<role>`) that read as whole numbers. */
   readonly tokens?: Readonly<Record<string, number>>;
+  /** The real spend of the task's agents; absent when the task named none (or the line predates the record). */
+  readonly spend?: LedgerSpend;
+}
+
+/** What the task's agents really spent, summed from their transcripts (`measureSpend`). `usd` is absent when any agent could not be read: the task is unmeasured, never $0. */
+export interface LedgerSpend {
+  readonly agents: number;
+  readonly usd?: number;
+  /** Agent ids whose transcript was missing, unreadable or of an unpriced model. */
+  readonly unmeasured?: readonly string[];
+  /** Agents of the task's conversations active in its window that nothing names: the figure may be incomplete. */
+  readonly unnamed?: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cache_read: number;
+  readonly cache_write: number;
 }
 
 const TOKENS_KEY = /^tokens(?:_([a-z0-9_]+))?$/;
@@ -187,7 +203,7 @@ function segsField(session: SessionState): { segs?: LedgerSegment[] } {
  * Build the ledger line for a session that has just ended (empty stack). The
  * root workflow comes from the `start` history event, since the stack is gone.
  */
-export function ledgerEntry(session: SessionState): LedgerEntry {
+export function ledgerEntry(session: SessionState, spend?: LedgerSpend): LedgerEntry {
   const execs: LedgerExec[] = session.history
     .filter(h => h.event === "action" && h.duration_ms !== undefined)
     .map(h => ({
@@ -220,6 +236,7 @@ export function ledgerEntry(session: SessionState): LedgerEntry {
       : {}),
     ...(Object.keys(visits).length > 0 ? { visits } : {}),
     ...agentFields(session.context),
+    ...(spend ? { spend } : {}),
   };
 }
 

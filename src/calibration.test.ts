@@ -222,6 +222,22 @@ describe("buildCost", () => {
     ]);
   });
 
+  it("the real spend is the task's cost; an unmeasured spend is not $0 and not the old estimate", () => {
+    const sp = { agents: 2, input: 1, output: 2, cache_read: 3, cache_write: 4 };
+    const r = buildCost(
+      [
+        staged("m", { tokens: { total: 1_000_000 }, spend: { ...sp, usd: 1.5 } }),
+        staged("u", { tokens: { total: 1_000_000 }, spend: { ...sp, unmeasured: ["x"] } }),
+      ],
+      "2026-11-08",
+      "2026-11-08",
+    );
+    const by = Object.fromEntries(r.tasks.map(t => [t.session_id, t]));
+    expect([by.m.measured, by.m.usd, by.m.tokens]).toEqual([true, 1.5, 10]);
+    expect([by.u.measured, by.u.usd, by.u.stages]).toEqual([false, 0, []]);
+    expect(r.totals.usd).toBe(1.5);
+  });
+
   it("totals, outcomes and $ per landed over the range; the trend is 14 days to `to`", () => {
     const r = buildCost(
       [
