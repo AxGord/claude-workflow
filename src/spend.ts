@@ -43,11 +43,12 @@ export function subtreeOf(root: SessionState, all: readonly SessionState[]): Ses
   return out;
 }
 
-/** Every agent id the task's sessions name (own link, context keys), de-duplicated. */
+/** Every agent id the task's sessions name (every agent ever linked, context keys), de-duplicated: an agent named twice is read once, so each turn is summed once. */
 export function agentsOf(sessions: readonly SessionState[]): string[] {
   const ids = new Set<string>();
   for (const s of sessions) {
     if (s.agent_id) ids.add(bareId(s.agent_id));
+    for (const id of s.linked_agents ?? []) ids.add(bareId(id));
     for (const id of contextAgents(s.context)) ids.add(id);
   }
   return [...ids];
@@ -195,7 +196,7 @@ export function readTranscriptSpend(file: string, from: number, to: number): Tot
 
 /**
  * Agent transcripts of the task's conversations that were active in its window and that no key or link names
- * (a replaced `agent_id`, a respawned worker, an unlinked decider). They may also belong to a concurrent task of
+ * (an unlinked decider, a respawned worker nothing linked). They may also belong to a concurrent task of
  * the same conversation: a count that says the figure may be incomplete, never a cost.
  */
 function unnamedAgents(

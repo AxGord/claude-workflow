@@ -1092,7 +1092,8 @@ export function registerTools(
         "Record which sub-agent (the Agent tool's agent id) drives a child session, so that after a restart resume() " +
         "of the parent names the agent to wake with SendMessage. Call it once the child session id is known (sessions() lists children). " +
         "It also records the parent's state and visit: status() of the parent marks the agent current at that visit, " +
-        "stale at a later visit of the state; linking again re-records it.",
+        "stale at a later visit of the state; linking again re-records it. Every agent linked stays on the session, so " +
+        "the ledger's spend sums a respawned worker's earlier agents too.",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({

@@ -232,12 +232,15 @@ describe("suspend / resume", () => {
     });
     const parent = await engine.start("w");
     const { sessionId } = await engine.start("w", undefined, parent.sessionId);
+    await engine.linkAgent(sessionId, "agent-w");
     const pending = engine.transition(sessionId, "next");
     for (let i = 0; i < 100 && !storage.read(sessionId)!.running_exec; i++)
       await new Promise(r => setTimeout(r, 10));
     await engine.linkAgent(sessionId, "agent-x");
     await pending;
     expect(storage.read(sessionId)!.agent_id).toBe("agent-x");
+    // a respawn replaced agent_id, but every agent the session was linked to is kept
+    expect(storage.read(sessionId)!.linked_agents).toEqual(["agent-w", "agent-x"]);
     // and the parent's step it was linked at
     expect(storage.read(sessionId)!.agent_step).toEqual({
       workflow: "w",

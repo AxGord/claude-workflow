@@ -903,7 +903,16 @@ export class Engine {
         ? currentStep(parent)
         : undefined;
     const set = await this._storage.update(sessionId, cur =>
-      cur ? { ...cur, agent_id: agentId, agent_step: step } : null,
+      cur
+        ? {
+            ...cur,
+            agent_id: agentId,
+            agent_step: step,
+            linked_agents: cur.linked_agents?.includes(agentId)
+              ? cur.linked_agents
+              : [...(cur.linked_agents ?? []), agentId],
+          }
+        : null,
     );
     if (!set) throw new Error(`Session "${sessionId}" not found`);
     return step;
@@ -1562,6 +1571,7 @@ export class Engine {
         // so do link_agent and the conversation id a resume stamps
         agent_id: current.agent_id,
         agent_step: current.agent_step,
+        linked_agents: current.linked_agents,
         claude_session_id: current.claude_session_id,
         stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
         updated_at: now,

@@ -111,6 +111,11 @@ describe("agent links (engine)", () => {
       `  agent a1 → session ${w}: linked at visit 1 → current`,
       `  agent x1 → session ${x}: linked at visit 1 → current`,
     ]);
+    // a respawned agent replaces agent_id but joins linked_agents; linking one again adds nothing
+    await call("link_agent", { session_id: w, agent_id: "a1b" });
+    await call("link_agent", { session_id: w, agent_id: "a1" });
+    expect(storage.read(w)!.agent_id).toBe("a1");
+    expect(storage.read(w)!.linked_agents).toEqual(["a1", "a1b"]);
     // a session without a parent records no step
     const root = (await engine.start("child")).sessionId;
     expect(await engine.linkAgent(root, "r")).toBeUndefined();

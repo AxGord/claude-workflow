@@ -384,6 +384,8 @@ export interface SessionState {
   readonly claude_session_id?: string;
   /** The Agent-tool id of the sub-agent driving this session (`link_agent`). */
   readonly agent_id?: string;
+  /** Every agent `link_agent` ever linked to this session, in order (`agent_id` is only the latest: a respawned agent replaces it): what the ledger's spend sums. */
+  readonly linked_agents?: readonly string[];
   /** The parent's step `link_agent` ran at; absent unless the parent was an active session of a `driver:` workflow then. */
   readonly agent_step?: AgentStep;
   readonly running_exec?: RunningExec;
