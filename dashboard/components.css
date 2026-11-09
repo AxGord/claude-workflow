@@ -252,7 +252,7 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .tl-seg.land { --c: var(--stage-land); }
 .tl-seg.wait { --c: var(--stage-wait); }
 .tl-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; font-size: 11px; color: var(--text-3); }
-.tl-legend .tl-seg { position: static; display: inline-block; width: 14px; height: 10px; vertical-align: middle; margin-right: 4px; }
+.tl-legend .tl-seg { position: relative; display: inline-block; width: 14px; height: 10px; vertical-align: middle; margin-right: 4px; }
 .tl-days { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; font-size: 12px; }
 
 .cost-range { display: flex; gap: 12px; margin-bottom: 8px; font-size: 12px; color: var(--text-3); }

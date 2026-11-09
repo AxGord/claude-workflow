@@ -627,3 +627,68 @@ describe.skipIf(!HAVE_CHROME)("the Plan tab in a real browser", () => {
     ).toEqual({ lit: false, still: true });
   }, 60_000);
 });
+
+describe.skipIf(!HAVE_CHROME)("the Timeline tab in a real browser", () => {
+  it("a day of many sessions keeps the page text unstriped and the tab responsive through live updates", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashtl-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const storage = new Storage(path.join(dir, "state"), { eventLog: false });
+    const now = Date.now();
+    const iso = (ago: number) => new Date(now - ago * 60_000).toISOString();
+    for (let i = 0; i < 18; i++) {
+      const id = `t${String(i).padStart(2, "0")}`;
+      const s = session(id, "b", { task: `TASK-${i}` });
+      s.started_at = iso(60);
+      s.updated_at = iso(1);
+      s.history = [
+        { frame: 0, event: "start", workflow: "w", at: iso(60) },
+        { frame: 0, event: "transition", from: "a", to: "b", at: iso(30) },
+        // a pool-lease wait inside state b
+        { frame: 0, event: "action", from: "b", at: iso(20), wait_ms: 120_000, duration_ms: 1000 },
+      ] as SessionState["history"];
+      await storage.write(id, s);
+    }
+    const base = await serve(storage, routesModule(dir));
+    const page = await openPage(`${base}/timeline`);
+    await until(
+      page,
+      "document.querySelectorAll('#timeline-content .tl-row').length >= 15",
+      "15+ timeline rows",
+    );
+    await page.eval(`(() => {
+      window.__long = [];
+      new PerformanceObserver(l => { for (const e of l.getEntries()) window.__long.push(e.duration); })
+        .observe({ entryTypes: ['longtask'] });
+    })()`);
+
+    // the legend's pool-wait swatch holds its stripes; the page's links and title are not covered by them
+    const probe = `(() => {
+      const wEl = document.querySelector('.tl-legend .tl-wait');
+      const sw = wEl.parentElement.getBoundingClientRect();
+      const w = wEl.getBoundingClientRect();
+      const targets = [...document.querySelectorAll('.tabs a, .tl-days a, h1')].filter(e => e.getClientRects().length > 0);
+      const covered = targets.filter(e => {
+        const r = e.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !hit || !(hit === e || e.contains(hit));
+      }).map(e => e.outerHTML.slice(0, 60));
+      return { inside: w.left >= sw.left - 1 && w.right <= sw.right + 1 && w.width <= 14 && w.height <= 10,
+        n: targets.length, covered };
+    })()`;
+    const read = async () =>
+      (await page.eval(probe)) as { inside: boolean; n: number; covered: string[] };
+    const first = await read();
+    expect(first.inside).toBe(true);
+    expect(first.n).toBeGreaterThan(2);
+    expect(first.covered).toEqual([]);
+
+    // several 2 s ticks later: still so, and no long task in between
+    await page.eval("window.__long = []");
+    await sleep(6500);
+    const later = await read();
+    expect(later.inside).toBe(true);
+    expect(later.covered).toEqual([]);
+    const longest = (await page.eval("Math.max(0, ...window.__long)")) as number;
+    expect(longest).toBeLessThan(200);
+  }, 60_000);
+});
