@@ -92,7 +92,7 @@ export function createMap({ root, fetchJSON }) {
       const q = await fetchJSON('/api/queue?file=' + encodeURIComponent(file));
       for (const l of q?.lines || []) {
         byId[l.id] = l.kind;
-        if (l.status === 'pending' && l.reason === 'ready') ready.push({ id: l.id, difficulty: l.difficulty, kind: l.kind });
+        if (l.status === 'pending' && l.reason === 'ready') ready.push({ id: l.id, difficulty: l.difficulty, kind: l.kind, queue: file });
       }
     }
     next = ready;

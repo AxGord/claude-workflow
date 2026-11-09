@@ -226,9 +226,9 @@ describe("GET /routes.js", () => {
   });
 
   it("the map hands the layout every queue line's kind and each ready line's own", () => {
-    // /api/queue's `kind` per id feeds the lanes' marks; a ready line carries its own into `next:`
+    // /api/queue's `kind` per id feeds the lanes' marks; a ready line carries its own, and its queue file, into `next:`
     expect(MAP).toContain("byId[l.id] = l.kind;");
-    expect(MAP).toContain("kind: l.kind });");
+    expect(MAP).toContain("kind: l.kind, queue: file });");
     expect(MAP).toMatch(/highlight: lane \|\| undefined, next, kinds, pool/);
   });
 

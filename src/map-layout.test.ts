@@ -186,7 +186,7 @@ describe("layout of the fixture event log", () => {
     expect(band.runningY!).toBeLessThan(band.rail!.y);
     expect(band.rail!.y).toBeLessThan(c.y);
     expect(c.y + c.height).toBeLessThan(e.y);
-    expect(M.next!.y).toBeGreaterThanOrEqual(band.y + band.height);
+    expect(M.next[0].y).toBeGreaterThanOrEqual(band.y + band.height);
     expect([a.status, c.status, e.status]).toEqual(["landed", "running", "running"]);
   });
 
@@ -197,9 +197,9 @@ describe("layout of the fixture event log", () => {
       more: 0,
     });
     expect(band.lanes.some(l => l.session === "B")).toBe(false);
-    expect(M.next!.items.map(i => i.id)).toEqual(["N-1", "N-2", "N-3", "N-4", "N-5", "N-6"]);
-    expect(M.next!.more).toBe(2);
-    expect(M.next!.items[0].c).toBe("--diff-4");
+    expect(M.next[0].items.map(i => i.id)).toEqual(["N-1", "N-2", "N-3", "N-4", "N-5", "N-6"]);
+    expect(M.next[0].more).toBe(2);
+    expect(M.next[0].items[0].c).toBe("--diff-4");
   });
 
   it("a review verdict loops the line back: a second pass from work, below the first", () => {
@@ -532,6 +532,7 @@ describe("seeding from session files", () => {
         session_id: "D",
         stack: [{ workflow: "dispatch", current_state: "x" }],
         history: [],
+        context: {},
       }),
       session({ session_id: "L", parent_session_id: "D" }),
       session({
@@ -981,7 +982,7 @@ describe("the kind mark", () => {
         ],
       },
     );
-    expect(nm.next!.items.map(i => i.kind)).toEqual(["⚑", "◆"]);
+    expect(nm.next[0].items.map(i => i.kind)).toEqual(["⚑", "◆"]);
     const els = flatEls(scene(nm));
     const marks = els.filter(e => e.cls === "m-kind");
     expect(marks.map(e => e.text)).toEqual(["⚑", "◆"]);

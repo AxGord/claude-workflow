@@ -29,9 +29,10 @@ export interface MapOptions {
   readonly width?: number;
   /** a lane to highlight (`/map/<session id>`) */
   readonly highlight?: string;
-  /** the queue's ready lines, for the `next:` row */
+  /** the queue's ready lines, for the `next:` rows: one row per queue, `queue` the file a line was read from */
   readonly next?: readonly {
     readonly id: string;
+    readonly queue?: string;
     readonly difficulty?: unknown;
     readonly kind?: unknown;
   }[];
@@ -217,6 +218,8 @@ export interface MapLane {
 export interface MapStrip {
   readonly y: number;
   readonly lead: string;
+  /** the queue a `next:` row belongs to, named as a band heading names it (null: lines of no known queue) */
+  readonly queue?: string | null;
   /** `key` is unique in the row (a session id, a queue line id); two items may show one id */
   readonly items: readonly {
     readonly key: string;
@@ -293,7 +296,8 @@ export interface MapLayout {
   readonly width: number;
   readonly height: number;
   readonly bands: readonly MapBand[];
-  readonly next: MapStrip | null;
+  /** one row per queue with ready lines, in the order of the band headings */
+  readonly next: readonly MapStrip[];
 }
 
 const EFFORT_BARS: Record<string, number> = { low: 1, medium: 2, high: 3, xhigh: 4, max: 4 };
@@ -984,7 +988,7 @@ function layLane(
   };
 }
 
-/** Which sessions are lanes: a root with no children, or a child of a root with children (a dispatcher); their children hang as branches. */
+/** Which sessions are lanes: a root that is not a dispatcher, or a child of a dispatcher; their children hang as branches. A dispatcher is a taskless session with children (a root, or one whose children have tasks); a root with its own task is one lane. */
 function classify(
   folded: ReadonlyMap<string, FoldedSession>,
   workflows: Readonly<Record<string, MapWorkflow>>,
@@ -1003,16 +1007,18 @@ function classify(
   const dispatchers = new Set<string>();
   const lanes: LaneInput[] = [];
   const tasked = (s: FoldedSession): boolean => typeof s.task === "string" && s.task !== "";
-  // a dispatcher hands out queue lines: a root with children, or a taskless session whose children
-  // have tasks (a dispatcher started under a conversation), so each line is a lane, not its branch
+  // a dispatcher hands out queue lines: a taskless root with children, or a taskless session whose children
+  // have tasks (a dispatcher started under a conversation), so each line is a lane, not its branch;
+  // a session with its own task is a line, and its children are its branches
   const dispatches = (s: FoldedSession): boolean => {
     const kids = childrenOf.get(s.id) ?? [];
-    return kids.length > 0 && (isRoot(s) || (!tasked(s) && kids.some(tasked)));
+    return kids.length > 0 && !tasked(s) && (isRoot(s) || kids.some(tasked));
   };
   for (const s of folded.values()) {
     if (!s.workflow) continue;
     if (dispatches(s)) dispatchers.add(s.id);
-    else if (isRoot(s) && workflows[s.workflow]?.map !== false) lanes.push({ s, children: [] });
+    else if (isRoot(s) && workflows[s.workflow]?.map !== false)
+      lanes.push({ s, children: (childrenOf.get(s.id) ?? []).filter(c => c.workflow) });
   }
   for (const d of dispatchers)
     for (const s of childrenOf.get(d) ?? [])
@@ -1355,25 +1361,32 @@ export function layout(
   }
 
   const ready = opts.next ?? [];
-  const next: MapStrip | null =
-    ready.length > 0
-      ? {
-          y,
-          lead: "next:",
-          items: ready.slice(0, G.nextShown).map((l, i) => ({
-            key: `${i}:${l.id}`,
-            id: l.id,
-            c: difficultyToken(l.difficulty),
-            bar: difficultyBar(l.difficulty).text,
-            barC: difficultyToken(l.difficulty),
-            kind: kindMark(l),
-          })),
-          more: Math.max(0, ready.length - G.nextShown),
-        }
-      : null;
+  const byQueue = new Map<string | null, NonNullable<MapOptions["next"]>[number][]>();
+  for (const l of ready) {
+    const queue = queueLabel(l.queue);
+    byQueue.set(queue, [...(byQueue.get(queue) ?? []), l]);
+  }
+  const next: MapStrip[] = [...byQueue]
+    .sort(
+      ([a], [b]) => (a === null ? 1 : 0) - (b === null ? 1 : 0) || (a ?? "").localeCompare(b ?? ""),
+    )
+    .map(([queue, lines], row) => ({
+      y: y + row * G.strip,
+      lead: queue === null ? "next:" : `next: ${queue}`,
+      queue,
+      items: lines.slice(0, G.nextShown).map((l, i) => ({
+        key: `${i}:${l.id}`,
+        id: l.id,
+        c: difficultyToken(l.difficulty),
+        bar: difficultyBar(l.difficulty).text,
+        barC: difficultyToken(l.difficulty),
+        kind: kindMark(l),
+      })),
+      more: Math.max(0, lines.length - G.nextShown),
+    }));
   return {
     width: Math.max(width, opts.width ?? 0),
-    height: y + (next ? G.strip : 0),
+    height: y + next.length * G.strip,
     bands,
     next,
   };
@@ -1827,7 +1840,9 @@ function bandScene(band: MapBand): SceneGroup {
 
 /** The keyed primitives of a layout: one group per band, one per lane inside it. */
 export function scene(map: MapLayout): SceneGroup {
-  const els: SceneEl[] = map.next ? stripEls("next", map.next, 20) : [];
+  const els: SceneEl[] = map.next.flatMap(n =>
+    stripEls(n.queue ? `next:${n.queue}` : "next", n, 20),
+  );
   return { key: "map", cls: "m-root", y: 0, els, groups: map.bands.map(bandScene) };
 }
 
