@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import YAML from "yaml";
 import { appendMarkdown, convertLine, jsonToYaml, markdownToYaml } from "./queue-convert.js";
-import { markQueue, parseQueue, planPick, readQueue } from "./queue.js";
+import { markQueue, parseQueue, planPick, readQueue, today } from "./queue.js";
 import { parseConfig } from "./pool-gate.js";
 import { parseReadOnlyConfig } from "./read-only-gate.js";
 import { parseYaml } from "./yaml-config.js";
@@ -128,12 +128,13 @@ describe("the real queue excerpt", () => {
     fs.writeFileSync(file, yaml);
     await markQueue(file, "ENG-QUEUE-YAML", "done");
     const after = fs.readFileSync(file, "utf8");
-    expect(after).toBe(
-      yaml.replace(
-        "- id: ENG-QUEUE-YAML\n    status: running",
-        "- id: ENG-QUEUE-YAML\n    status: done",
-      ),
+    const done = yaml.replace(
+      "- id: ENG-QUEUE-YAML\n    status: running",
+      "- id: ENG-QUEUE-YAML\n    status: done",
     );
+    // the mark also writes the day the line ended, ahead of its text
+    const at = done.indexOf("\n    text:", done.indexOf("- id: ENG-QUEUE-YAML"));
+    expect(after).toBe(`${done.slice(0, at)}\n    ended: ${today()}${done.slice(at)}`);
     expect(planPick(readQueue(file)).running).toEqual([]);
   });
 

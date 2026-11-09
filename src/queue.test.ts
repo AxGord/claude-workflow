@@ -20,6 +20,7 @@ import {
   readQueue,
   resolveQueueFile,
   setQueueWindow,
+  today,
 } from "./queue.js";
 import { kindMark } from "./map-layout.js";
 import { formatQueueNext } from "./tools.js";
@@ -71,7 +72,7 @@ const taskRows = (file: string) =>
   (YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] }).tasks.map(
     t => {
       const parts = Object.entries(t)
-        .filter(([k]) => k !== "id" && k !== "status")
+        .filter(([k]) => k !== "id" && k !== "status" && k !== "ended")
         .flatMap(([k, v]) =>
           k === "notes"
             ? (v as { from: string; text: string }[]).map(n => `note(${n.from}): ${n.text}`)
@@ -719,7 +720,7 @@ describe("queue writes", () => {
     const file = queueFile(`- [>] A | touches: a`);
     await markQueue(file, "A", "done", "x | touches: b\nafter: B ⏸", { from: "driver" });
     const a = readQueue(file).lines[0];
-    expect(a.meta).toEqual({ touches: "a" });
+    expect(a.meta).toEqual({ touches: "a", ended: today() });
     expect(a.paused).toBe(false);
     expect(a.notes).toEqual([
       {
@@ -945,6 +946,41 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     await expect(setQueueWindow(file, -1, "x")).rejects.toThrow("whole number");
     await setQueueWindow(file, 3, "resumed");
     expect(readQueue(file).batchSize).toBe(3);
+  });
+
+  it("mark done and failed write the day the line ended (`ended`); a retry removes it; other marks leave it out", async () => {
+    const file = queueFile(
+      `- [>] A | touches: a\n- [>] B | touches: b\n- [ ] C | touches: c`,
+      "batch_size: 5",
+    );
+    await markQueue(file, "A", "done");
+    await markQueue(file, "B", "failed", "gate red");
+    const doc = YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] };
+    expect(doc.tasks.map(t => t.ended)).toEqual([today(), today(), undefined]);
+    expect(describeQueue(readQueue(file)).lines.map(l => l.ended)).toEqual([
+      today(),
+      today(),
+      undefined,
+    ]);
+    // the key is known: no "unknown keys" notice, and it sits before the text
+    expect(readQueue(file).lines[0].unknownKeys).toEqual([]);
+    expect(Object.keys(doc.tasks[0])).toEqual(["id", "status", "touches", "ended"]);
+    await markQueue(file, "B", "running", undefined, { retry: true });
+    await markQueue(file, "C", "running");
+    await markQueue(file, "C", "released");
+    const after = YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] };
+    expect(after.tasks.map(t => t.ended)).toEqual([today(), undefined, undefined]);
+  });
+
+  it("ended is read-only state: queue_add and queue_edit refuse to set it", async () => {
+    const file = queueFile(`- [ ] A | touches: a`);
+    await expect(
+      addQueueLine(file, { id: "N", touches: "n", ended: "2026-01-01" }),
+    ).rejects.toThrow("ended is written by queue_mark");
+    await expect(editQueueLine(file, "A", { ended: "2026-01-01" })).rejects.toThrow(
+      "ended is written by queue_mark",
+    );
+    expect(readQueue(file).lines.map(l => l.id)).toEqual(["A"]);
   });
 
   it("mark retry: failed → running only with retry and `running`", async () => {

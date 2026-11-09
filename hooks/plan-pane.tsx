@@ -21,7 +21,7 @@ const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shap
 /** The Plan tab sections whose fold the person flipped (running, next, lands, failed): none by default, so all sections show but FOLDED_BY_DEFAULT ones. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-1' })
 /** Sections that start folded: a click on one unfolds it. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
-const FOLDED_BY_DEFAULT = new Set(['failed'])
+const FOLDED_BY_DEFAULT = new Set(['failed', 'failed-older'])
 /** How far back the Landed tree goes: the Cost tab's own range. */
 const LAND_DAYS = 14
 /** The session whose card is open in the Sessions tab ('' none). */
@@ -121,11 +121,14 @@ function parseSession(text: string): Parsed | null {
   }
 }
 
+/** The Failed section lists the lines that ended within this many days; the rest fold under `+N older`. */
+const FAILED_DAYS = 2
+
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; ended?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
-export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }): QueueView {
+export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }, now: number = Date.now()): QueueView {
   const lines: (QueueLine & { reason: string })[] = api.lines.map(l => ({
     id: l.id,
     status: l.status,
@@ -138,19 +141,24 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     reason: l.reason ?? '',
   }))
   const order = new Map(api.lines.map(l => [l.id, l.pickOrder ?? 0]))
-  // newest first by the date of the last note; an undated line after the dated; ties: the later in the file first
+  // newest first by the day the line ended (else the date of its last note); an undated line after the dated; ties: the later in the file first
+  const endOf = (l: ApiLine) => l.ended ?? l.lastNoteDate ?? ''
+  // recent = ended within the last FAILED_DAYS days; a line with no `ended` (written before the key) is older
+  const since = new Date(now)
+  since.setDate(since.getDate() - FAILED_DAYS)
+  const cutoff = `${since.getFullYear()}-${two(since.getMonth() + 1)}-${two(since.getDate())}`
   const failedLines: FailedLine[] = api.lines
     .map((l, i) => ({ l, i }))
     .filter(x => x.l.status === 'failed')
-    .sort((a, b) => (b.l.lastNoteDate ?? '').localeCompare(a.l.lastNoteDate ?? '') || b.i - a.i)
-    .map(({ l }) => ({ id: l.id, difficulty: l.difficulty ?? '', date: l.lastNoteDate ?? '', reason: l.lastNote ?? '' }))
+    .sort((a, b) => endOf(b.l).localeCompare(endOf(a.l)) || b.i - a.i)
+    .map(({ l }) => ({ id: l.id, difficulty: l.difficulty ?? '', date: l.lastNoteDate ?? '', reason: l.lastNote ?? '', recent: l.ended !== undefined && l.ended >= cutoff }))
   const strip = ({ reason: _r, ...l }: QueueLine & { reason: string }): QueueLine => l
   const pending = lines.filter(l => l.status === 'pending')
   return {
     file,
     window: api.batchSize,
     done: lines.filter(l => l.status === 'done').length,
-    failed: lines.filter(l => l.status === 'failed').length,
+    failed: failedLines.filter(l => l.recent).length,
     pending: pending.length,
     running: lines.filter(l => l.status === 'running').map(strip),
     ready: pending.filter(l => l.reason === 'ready').sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).map(strip),
@@ -162,13 +170,13 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
   }
 }
 
-async function loadQueue($: any, file: string): Promise<{ queue: QueueView | null; error: string }> {
+async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string }> {
   const res = await $.http.fetch(`${DASHBOARD}/api/queue?file=${encodeURIComponent(file)}`).catch((e: unknown) => String(e))
   if (typeof res === 'string') return { queue: null, error: 'queue: ' + res }
   try {
     const body = JSON.parse(res.text)
     if (!res.ok) return { queue: null, error: 'queue: ' + String(body?.error ?? res.status) }
-    return { queue: queueView(file, body), error: '' }
+    return { queue: queueView(file, body, now), error: '' }
   } catch (e) {
     return { queue: null, error: 'queue: ' + String(e) }
   }
@@ -427,7 +435,7 @@ async function build($: any): Promise<Snapshot> {
     sessions.push({ ...p.row, next: graph.get(p.row.workflow)?.get(p.row.state) ?? [] })
     if (p.queueFile !== '') queueFile = p.queueFile
   }
-  const loaded = queueFile !== '' ? await loadQueue($, queueFile) : { queue: null, error: '' }
+  const loaded = queueFile !== '' ? await loadQueue($, queueFile, now) : { queue: null, error: '' }
   const ledger = loaded.queue ? await ledgerAt($, dir) : NO_LEDGER
   // a failed line carries what the ledger says it cost
   const queue = loaded.queue && {
@@ -1153,8 +1161,12 @@ export const register: Register = on => {
         const w = Math.max(1, ...all.map(u => cells(usdText(u))))
         return { w, text: (u: number | undefined) => usdText(u).padStart(w) }
       }
+      const recentFailed = q.failedLines.filter(l => l.recent)
+      const olderFailed = q.failedLines.filter(l => !l.recent)
+      // the rows drawn: the recent ones, and the older ones once `+N older` is open
+      const shownFailed = isOpen('failed-older') ? q.failedLines : recentFailed
       const landCost = costCol(s.lands.map(l => l.usd))
-      const failCost = costCol(q.failedLines.map(l => l.usd))
+      const failCost = costCol(shownFailed.map(l => l.usd))
       const costOf = (u: number | undefined, col: { text: (u: number | undefined) => string }) => <Text dimColor={u === undefined}>{col.text(u)}</Text>
       const landTwo = !fitsOneLine(s.lands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l.usd)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
       const stampOf = (date: string) => {
@@ -1163,7 +1175,7 @@ export const register: Register = on => {
         return when ? `${when[2]}.${when[1]}` : 'date unknown'
       }
       const reasonOf = (l: FailedLine) => (l.reason === '' ? 'no note' : l.reason)
-      const failTwo = !fitsOneLine(q.failedLines.map(l => `    ${BAR_W} ${markOf(l.id)} ${failCost.text(l.usd)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
+      const failTwo = !fitsOneLine(shownFailed.map(l => `    ${BAR_W} ${markOf(l.id)} ${failCost.text(l.usd)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
       body = (
         <Box flexDirection="column">
           <Text>
@@ -1236,10 +1248,11 @@ export const register: Register = on => {
                   : []),
               ]
             })}
-          {header('failed', 'red', `✗ Failed (${q.failedLines.length})`)}
+          {header('failed', 'red', `✗ Failed (${recentFailed.length})`)}
           {isOpen('failed') && q.failedLines.length === 0 && <Text dimColor>  nothing</Text>}
+          {isOpen('failed') && q.failedLines.length > 0 && recentFailed.length === 0 && <Text dimColor>  none in the last {FAILED_DAYS} days</Text>}
           {isOpen('failed') &&
-            q.failedLines.map(l => {
+            shownFailed.map(l => {
               const stamp = stampOf(l.date)
               if (!failTwo) {
                 return <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {costOf(l.usd, failCost)} {l.id} <Text dimColor>{stamp} {reasonOf(l)}</Text></Text>
@@ -1255,6 +1268,11 @@ export const register: Register = on => {
                 </Box>
               )
             })}
+          {isOpen('failed') && olderFailed.length > 0 && (
+            <Button key="fold-failed-older" plain onPress={() => void update($, folded, f => (f.includes('failed-older') ? f.filter(k => k !== 'failed-older') : [...f, 'failed-older']))}>
+              <Text dimColor>{fitCells(`  ${isOpen('failed-older') ? '▾' : '▸'} +${olderFailed.length} older`, columns)}</Text>
+            </Button>
+          )}
         </Box>
       )
     }

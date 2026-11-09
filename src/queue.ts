@@ -2,7 +2,7 @@
 // `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
 // `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
-// breaking, parked, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// breaking, parked, ended, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
 //
@@ -67,12 +67,13 @@ export const TASK_KEYS = [
   "exclusive",
   "breaking",
   "parked",
+  "ended",
   "text",
   "notes",
 ] as const;
-/** The keys `queue_edit` sets (status is the mark's, notes are appended, id is fixed). */
+/** The keys `queue_edit` sets (status is the mark's, `ended` is the mark's, notes are appended, id is fixed). */
 export const EDIT_KEYS: ReadonlySet<string> = new Set(
-  TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes"),
+  TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes" && k !== "ended"),
 );
 const LIST_KEYS: ReadonlySet<string> = new Set(["after", "touches"]);
 const BOOL_KEYS: ReadonlySet<string> = new Set(["exclusive", "breaking", "parked"]);
@@ -224,6 +225,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "owner",
     "after",
     "touches",
+    "ended",
   ]) {
     const v = o[k];
     if (v === undefined || v === null) continue;
@@ -686,6 +688,8 @@ export interface QueueLineView {
   readonly lastNoteDate?: string;
   /** The first line of the task's last note (a failed mark writes its reason there), when it has one. */
   readonly lastNote?: string;
+  /** The day (`YYYY-MM-DD`) `queue_mark` moved the line to done or failed, when it recorded one. */
+  readonly ended?: string;
   readonly text: string;
   /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
   readonly reason?: string;
@@ -734,6 +738,7 @@ export function describeQueue(queue: Queue): {
       notes: l.notes.length,
       ...(l.notes.at(-1)?.date !== undefined ? { lastNoteDate: l.notes.at(-1)?.date } : {}),
       ...lastNoteOf(l),
+      ...(l.meta.ended !== undefined ? { ended: l.meta.ended } : {}),
       text: l.text,
       ...(l.status === "pending"
         ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }
@@ -961,6 +966,21 @@ function addNote(e: Editable, node: YAMLMap, text: string, from: string, date = 
   seq.add(e.doc.createNode({ from, date, text }));
 }
 
+/** Sets `k` on a task node; a new key goes where TASK_KEYS orders it among the present ones. */
+function setOrdered(e: Editable, node: YAMLMap, k: string, v: unknown): void {
+  if (node.has(k)) {
+    node.set(k, v);
+    return;
+  }
+  const order = TASK_KEYS.indexOf(k as (typeof TASK_KEYS)[number]);
+  const at = node.items.findIndex(
+    p => TASK_KEYS.indexOf(String((p.key as Scalar).value) as (typeof TASK_KEYS)[number]) > order,
+  );
+  const pair = e.doc.createPair(k, v);
+  if (at < 0) node.items.push(pair);
+  else node.items.splice(at, 0, pair);
+}
+
 /** Why the picker would not admit this pending line (window, pause and parent-run aside); null = it would. */
 function admitRefusal(queue: Queue, id: string): string | null {
   const plan = planPick(queue, { only: id });
@@ -1006,6 +1026,8 @@ export async function markQueue(
     }
     const node = taskNode(e, line);
     node.set("status", status);
+    if (status === "done" || status === "failed") setOrdered(e, node, "ended", today());
+    else if (node.has("ended")) node.delete("ended");
     if (forced !== undefined) addNote(e, node, forced, opts.from ?? "mark");
     const text = note?.trim();
     if (text) addNote(e, node, text, opts.from ?? "mark");
@@ -1183,6 +1205,10 @@ export async function addQueueLine(
   const unknown = Object.keys(task).find(k => !(TASK_KEYS as readonly string[]).includes(k));
   if (unknown !== undefined)
     throw new QueueError(`${id}: unknown key "${unknown}" (keys: ${TASK_KEYS.join(", ")})`);
+  if (task.ended !== undefined)
+    throw new QueueError(
+      `${id}: ended is written by queue_mark when a line ends, not set on a new one`,
+    );
   const status = task.status ?? "pending";
   if (status !== "pending" && status !== "backlog")
     throw new QueueError(`${id}: a new task is pending or backlog, not ${str(status)}`);
@@ -1269,7 +1295,8 @@ export async function editQueueLine(
 ): Promise<EditResult> {
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
   for (const k of Object.keys(set))
-    if (!EDIT_KEYS.has(k))
+    if (k === "ended") throw new QueueError(`${id}: ended is written by queue_mark, not set`);
+    else if (!EDIT_KEYS.has(k))
       throw new QueueError(`unknown field "${k}" (keys: ${[...EDIT_KEYS].join(", ")})`);
   const note = appendNote?.trim() || undefined;
   if (Object.keys(set).length === 0 && note === undefined)
@@ -1281,18 +1308,7 @@ export async function editQueueLine(
       for (const [k, raw] of Object.entries(set)) {
         const v = fieldValue(e, k, raw);
         if (v === null) node.delete(k);
-        else if (node.has(k)) node.set(k, v);
-        else {
-          const order = TASK_KEYS.indexOf(k as (typeof TASK_KEYS)[number]);
-          const at = node.items.findIndex(
-            p =>
-              TASK_KEYS.indexOf(String((p.key as Scalar).value) as (typeof TASK_KEYS)[number]) >
-              order,
-          );
-          const pair = e.doc.createPair(k, v);
-          if (at < 0) node.items.push(pair);
-          else node.items.splice(at, 0, pair);
-        }
+        else setOrdered(e, node, k, v);
       }
       if (note !== undefined) addNote(e, node, note, noteFrom);
       return { id, task: new YAML.Document(node).toString(YAML_OUT).trimEnd() };

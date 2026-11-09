@@ -424,13 +424,23 @@ test('ready lines come in the picker\'s order, the priority named', () => {
 })
 
 test('failed lines come newest first, undated last, each with its reason', () => {
-  const view = queueView('/proj/q.yaml', API_QUEUE as never)
+  const view = queueView('/proj/q.yaml', API_QUEUE as never, NOW)
   expect(view.failedLines.map(l => l.id)).toEqual(['FAIL-LONG', 'FAIL-NEW', 'FAIL-OLD', 'FAIL-BARE'])
   expect(view.failedLines.slice(1)).toEqual([
-    { id: 'FAIL-NEW', difficulty: '', date: '2026-11-07', reason: 'closed as a split' },
-    { id: 'FAIL-OLD', difficulty: '4', date: '2026-11-06', reason: 'gate red: the suite' },
-    { id: 'FAIL-BARE', difficulty: '', date: '', reason: '' },
+    { id: 'FAIL-NEW', difficulty: '', date: '2026-11-07', reason: 'closed as a split', recent: true },
+    { id: 'FAIL-OLD', difficulty: '4', date: '2026-11-06', reason: 'gate red: the suite', recent: false },
+    { id: 'FAIL-BARE', difficulty: '', date: '', reason: '', recent: false },
   ])
+})
+
+test('a line that ended today shows; one that ended 3 days ago and one with no `ended` are older; the header count is of the recent ones', () => {
+  const at = (ended?: string) => ({ id: 'X' + (ended ?? 'NONE'), status: 'failed' as const, exclusive: false, paused: false, ...(ended ? { ended } : {}) })
+  const now = new Date(2026, 10, 9, 12).getTime()
+  const view = queueView('/q.yaml', { batchSize: 1, lines: [at('2026-11-09'), at('2026-11-06'), at()] }, now)
+  expect(view.failedLines.map(l => [l.id, l.recent])).toEqual([['X2026-11-09', true], ['X2026-11-06', false], ['XNONE', false]])
+  expect(view.failed).toBe(1)
+  // the edge: two days ago is still recent
+  expect(queueView('/q.yaml', { batchSize: 1, lines: [at('2026-11-07')] }, now).failedLines[0].recent).toBe(true)
 })
 
 test('Failed is folded by default, shows its count, and unfolds on a click with bar, id, date and reason per row', async ($, on) => {
@@ -438,10 +448,15 @@ test('Failed is folded by default, shows its count, and unfolds on a click with 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   // wide enough for the longest reason: the one-line form
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 200 }, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /▸ ✗ Failed \(4\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▸ ✗ Failed \(2\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /FAIL-NEW/ })).toBeUndefined()
   await ui.press({ key: 'fold-failed' })
-  expect(await ui.find({ type: 'Text', text: /▾ ✗ Failed \(4\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▾ ✗ Failed \(2\)/ })).toBeDefined()
+  // the two older lines sit under one row until it is pressed
+  expect(await ui.find({ type: 'Text', text: /▸ \+2 older/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /FAIL-OLD|FAIL-BARE/ })).toBeUndefined()
+  await ui.press({ key: 'fold-failed-older' })
+  expect(await ui.find({ type: 'Text', text: /▾ \+2 older/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ※ — FAIL-OLD 06\.11 gate red: the suite/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ — FAIL-NEW 07\.11 closed as a split/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ — FAIL-BARE date unknown no note/ })).toBeDefined()
@@ -487,7 +502,7 @@ test('a day whose every line is measured states its sum alone; a day with none s
 
 test('Failed: each row carries the line\'s cost in front of its id, `—` when the ledger has none', async ($, on) => {
   engine(on, true, { git: '', ledger: DAY_LEDGER })
-  const all = await paneTexts($, 200, ['fold-failed'])
+  const all = await paneTexts($, 200, ['fold-failed', 'fold-failed-older'])
   expect(all.some(t => /▰▰▱▱▱ ※ \$3\.00 FAIL-OLD 06\.11 gate red: the suite/.test(t))).toBe(true)
   expect(all.some(t => /\$7\.50 FAIL-LONG/.test(t))).toBe(true)
   expect(all.some(t => /\?\?\?\?\? ◆ {5}— FAIL-NEW 07\.11/.test(t))).toBe(true)
@@ -497,7 +512,7 @@ test('Failed: each row carries the line\'s cost in front of its id, `—` when t
 test('a narrow pane keeps the cost and cuts the id: Landed and Failed rows on two lines, none past the width', async ($, on) => {
   const LONG = 'L-AN-IDENTIFIER-THAT-IS-VERY-LONG'
   engine(on, true, { git: [`ddd444\t07.11 13:49\t${LONG}`, DAY_GIT].join('\n'), ledger: [DAY_LEDGER, ran1(LONG, noon(7), 12.5)].join('\n') })
-  const all = await paneTexts($, 30, ['fold-failed'])
+  const all = await paneTexts($, 30, ['fold-failed', 'fold-failed-older'])
   const land = all.find(t => t.includes('$12.50')) ?? ''
   // the first line is cut (times, sha) before the cost is
   expect(land).toMatch(/\$12\.50 .*…$/)
@@ -535,7 +550,7 @@ async function paneTexts($: any, columns: number, presses: string[] = []): Promi
 
 test('Failed: all rows fit one line each; one reason too long puts EVERY row on two lines, the reason indented and cut with an ellipsis, a width change flips the form', async ($, on) => {
   engine(on, true)
-  const wide = await paneTexts($, 200, ['fold-failed'])
+  const wide = await paneTexts($, 200, ['fold-failed', 'fold-failed-older'])
   expect(wide.some(t => /FAIL-OLD 06\.11 gate red: the suite/.test(t))).toBe(true)
   const narrow = await paneTexts($, 50) // the fold persists: the section is still open
   // FAIL-LONG's reason does not fit 50 cells, so FAIL-OLD, which would, is on two lines as well

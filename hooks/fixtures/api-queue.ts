@@ -100,6 +100,7 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 1,
       "lastNoteDate": "2026-11-08",
+      "ended": "2026-11-07",
       "lastNote": "a reason that runs on and on well past the width of any plan pane a person would open beside the chat",
       "text": "f4"
     },
@@ -114,6 +115,7 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 1,
       "lastNoteDate": "2026-11-06",
+      "ended": "2026-11-04",
       "lastNote": "gate red: the suite",
       "text": "f"
     },
@@ -127,6 +129,7 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 1,
       "lastNoteDate": "2026-11-07",
+      "ended": "2026-11-06",
       "lastNote": "closed as a split",
       "text": "f2"
     },

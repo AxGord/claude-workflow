@@ -32,13 +32,14 @@ export type QueueLine = {
   priority?: string
 }
 
-/** A `failed` queue line: its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured). */
-export type FailedLine = { id: string; difficulty: string; date: string; reason: string; usd?: number }
+/** A `failed` queue line: `recent` = it ended within the last two days (queue_mark's `ended`; a line with none is older), its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured). */
+export type FailedLine = { id: string; difficulty: string; date: string; reason: string; recent: boolean; usd?: number }
 
 export type QueueView = {
   file: string
   window: number
   done: number
+  /** failed lines that ended within the last two days */
   failed: number
   pending: number
   running: QueueLine[]
@@ -46,7 +47,7 @@ export type QueueView = {
   ready: QueueLine[]
   /** pending tasks waiting (not parked), with the picker's own reason */
   waiting: { id: string; why: string; difficulty: string }[]
-  /** every failed line, newest first (an undated one after the dated, the later in the file first) */
+  /** every failed line, newest first by the day it ended (an undated one after the dated, the later in the file first); `recent` marks the ones the pane draws before `+N older` */
   failedLines: FailedLine[]
   /** every queue line's kind glyph by id (`kindMark`, from /api/queue), drawn right after the difficulty bar; absent id = blank */
   marks: Record<string, string>

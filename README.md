@@ -522,7 +522,7 @@ tasks:
 ```
 
 Task keys: `id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
-breaking, parked, text, notes`; any other key, a bad status, a duplicate id or a malformed file is refused by
+breaking, parked, ended, text, notes`; `ended` (`YYYY-MM-DD`) is the day `queue_mark` moved the line to `done` or `failed` — written there, removed by a retry or any move out of those, read-only for `queue_add` / `queue_edit`; any other key, a bad status, a duplicate id or a malformed file is refused by
 every read. Every write edits the parsed document in place: key order and comments stay.
 
 Keep the queue file untracked and ignored (e.g. `.claude/batch/` in `.gitignore`): a tracked queue is
@@ -565,7 +565,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
 - `queue_next({ queue?, file?, dry_run?, explain? })` — the admitted tasks (id, model, effort, repo, workflow, difficulty, kind (`feature` when the task has none), priority when not normal, text);
   `explain` adds why each other pending task waits (`window full` ones fold into one summary line;
   `explain: "all"` lists every one).
-- `queue_mark({ queue?, file?, id, to, note?, from?, retry?, force? })` — `running` pending→running (refused, with the reason, when the picker would not admit the line: overlap, `after:`, `exclusive`, `breaking`, `parked`; `force: "<reason>"` marks it anyway and writes the reason into its `notes:`; the window, a pause and `model: —` do not count) (with `retry: true`
+- `queue_mark({ queue?, file?, id, to, note?, from?, retry?, force? })` — `done` and `failed` also write the line's `ended:` (today); `running` pending→running (refused, with the reason, when the picker would not admit the line: overlap, `after:`, `exclusive`, `breaking`, `parked`; `force: "<reason>"` marks it anyway and writes the reason into its `notes:`; the window, a pause and `model: —` do not count) (with `retry: true`
   failed→running: a failed task runs again, and its `difficulty: N` becomes `N+1`, at most 10 — the
   answer says `(difficulty 4 → 5)`), `done` running→done, `failed` running→failed, `released`
   running→pending, `promoted` backlog→pending, `shelved` pending→backlog; any other current status is
@@ -952,7 +952,7 @@ no model call, no tokens:
   ledger records from the session context; `?` for a land with no ledger row, a `DD.MM` prefix when the run began
   the day before). Lands of other repos do not appear: the list is the queue repo's log. Each section and day folds on a click. The status band's `✓ n` still counts the last 24 hours.
   **Cost.** Each Landed and Failed row carries `$cost` right after the kind glyph (the difficulty bar stays first): the ledger's real `spend.usd` summed over every task run of the line (`slice-pipeline` / `engine-task` rows with a `task`); a line any of whose runs recorded no spend, or that has no ledger row, shows `—`, never `$0.00`. A figure is `$1.23` under $100, whole dollars above, right-aligned to the section's widest, and never cut: in the two-line form it is on the first line and the id is cut before it. A day row carries the day's sum: its landed lines plus the failed and closed lines whose latest run ended that day (a line counted once; `closed` = completed without a `land` state, as the Cost tab reads it), and says what it includes (`$14.75 incl. 2 failed, 1 closed`) and, when not every line is measured, how many are (`· 5/6 measured`; a day with none reads `— · 0/6 measured`). A line's whole cost (all its runs) sits on one day of the sums: the day it landed, or for a failed or closed line the day its latest run ended; a run on an earlier day adds nothing to that day.
-  `✗ Failed (n)` follows, folded until a click: every `failed` line of the queue, newest first, `bar kind $cost id DD.MM reason`
+  `✗ Failed (n)` follows, folded until a click: the `failed` lines that ended in the last 2 days (queue_mark's `ended:`; `n` and the header's `failed` count are of these), newest first, then one dim row `▸ +N older` that opens the rest (a line with no `ended:` counts as older), `bar kind $cost id DD.MM reason`
   — the reason is the first line of the line's last note (`no note` without one), cut to the pane body width, the date that
   note's (`date unknown` for a line with no dated note, listed last).
   A section lays out as one, by the pane's width (`bodyColumns` of each refresh, so a resized pane re-lays out, wide glyphs
