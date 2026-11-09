@@ -40,6 +40,12 @@ const NOW = Date.parse('2026-11-07T10:05:00Z')
 /** What a session file reads as; a test that needs an agent linked to it swaps it. */
 let sessionText = SESSION
 
+/** How far past NOW the non-ticking clock reads (a test moves it to cross midnight). */
+let clockShift = 0
+
+/** How much later the session file reads as written (a test that swaps `sessionText` moves it so the pane re-reads it). */
+let sessionTouch = 0
+
 /** Every `process.run` request, as JSON (the git log of the Landed tree). */
 const ran: string[] = []
 
@@ -49,16 +55,18 @@ function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: str
   fetched.splice(0)
   ran.splice(0)
   sessionText = SESSION
+  clockShift = 0
+  sessionTouch = 0
   queueDown = false
   openFails = false
   poolReply = { status: 200, text: JSON.stringify(API_POOL) }
   const clock = ticking ? mock.clock(on, { now: NOW }) : undefined
   on('session.id', () => ({ value: SID }))
-  if (!ticking) on('clock.now', () => ({ value: NOW }))
+  if (!ticking) on('clock.now', () => ({ value: NOW + clockShift }))
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'WF_STATE_DIR' ? STATE_DIR : undefined }))
   on('fs.list', () => ({
     value: [
-      { name: 'wf-root.json', kind: 'file', size: 1, mtimeMs: Date.parse('2026-11-07T10:04:00Z') },
+      { name: 'wf-root.json', kind: 'file', size: 1, mtimeMs: Date.parse('2026-11-07T10:04:00Z') + sessionTouch },
       ...(landed ? [{ name: 'ledger.jsonl', kind: 'file', size: 9, mtimeMs: 1 }] : []),
     ],
   }))
@@ -414,6 +422,64 @@ test('Landed is a tree of the last 14 days: today open, older days folded; per r
   await ui.press({ key: 'fold-lands-07.11' })
   expect(await ui.find({ type: 'Text', text: /L-ONE/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /L-MIDNIGHT/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a day the person folded while it was today stays folded the next day; one they opened stays open', async ($, on) => {
+  engine(on, true, { git: GIT, ledger: LEDGER })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'fold-lands-07.11' })
+  await ui.press({ key: 'fold-lands-06.11' })
+  expect(await ui.find({ type: 'Text', text: /▸ ▦ 07\.11/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▾ ▦ 06\.11/ })).toBeDefined()
+  // midnight: the pane's `today` is the next day, the folds stay as chosen
+  clockShift = 24 * 3600 * 1000
+  await ui.press({ key: 'tab-plan' })
+  expect(await ui.find({ type: 'Text', text: /▸ ▦ 07\.11/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /L-ONE/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /▾ ▦ 06\.11/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /L-MIDNIGHT/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a row too long inside a folded day does not put the open days on two lines', async ($, on) => {
+  const long = 'L-' + 'A-VERY-LONG-IDENTIFIER-'.repeat(4)
+  engine(on, true, { git: [GIT, `ddd444\t06.11 08:00\t${long}`].join('\n'), ledger: LEDGER })
+  const all = await paneTexts($, 60)
+  // 06.11 is folded: its long row is not drawn and does not size the section
+  expect(all.some(t => t.includes(long.slice(0, 12)))).toBe(false)
+  expect(all.some(t => /aaa111.*L-ONE/.test(t))).toBe(true)
+  // opened, the long row is drawn and the section takes the two-line form
+  const open = await paneTexts($, 60, ['fold-lands-06.11'])
+  expect(open.some(t => /aaa111.*L-ONE/.test(t))).toBe(false)
+})
+
+test('a driver\'s end notification drawn more than 2 days after its land still says landed: the land is looked up from the agent\'s own time, not the clock', async ($, on) => {
+  engine(on, true, { git: 'aaa111\t07.11 09:00\tENG-X', ledger: '' })
+  sessionText = LINKED
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>{HARNESS_ROW}</Text>
+  })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  // the refresh that sees the linked agent stamps it (the pane's first draw waits for it); 2.5 days later the agent is no
+  // longer linked (so it is not stamped again) and the session is still fresh, so the land stays in the snapshot
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await pane.find({ type: 'Text', text: /aaa111/ })).toBeDefined()
+  await pane.unmount()
+  sessionText = SESSION
+  sessionTouch = 1000
+  clockShift = 2.5 * 24 * 3600 * 1000
+  const ui = await $.ui.mount({
+    plugin: 'workflow',
+    component: 'UserMessage',
+    surface: 'terminal',
+    props: { origin: { kind: 'task-notification' }, task: { id: 'a6519b13', status: 'completed', durationMs: 120000 }, isExpanded: false },
+  })
+  const text = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text).join('')
+  expect(text).toContain('⚙ [ENG-X] ')
+  expect(text).toContain('✓ landed aaa111')
   await ui.unmount()
 })
 

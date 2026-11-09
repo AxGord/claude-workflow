@@ -948,11 +948,11 @@ no model call, no tokens:
 
 - **Plan** — for a session whose root workflow has a work queue (`context.queue_file`): `▶ Running n/window` (each
   line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in the picker's order: priority, then file order, the priority beside the id), `✓ Landed · 14d`
-  (the queue repo's `git log` lines carrying a `Slice:` trailer, the Cost tab's 14 days) as a tree: one foldable `▦ DD.MM (n) <day spend>` row per day (today open, the older days folded until a click),
+  (the queue repo's `git log` lines carrying a `Slice:` trailer, the Cost tab's 14 days) as a tree: one foldable `▦ DD.MM (n) <day spend>` row per day (today open, the older days folded until a click; a day the person folded or opened stays so past midnight),
   under it `▰▰▱▱▱ ◆ $cost start-end sha id` per land — the difficulty bar first on every row that has one (`?????` when
   unknown), then the line's kind glyph (a blank cell for a land that is not in the queue), start from the ledger's `started_at` of the line's task session (matched by its `task`, which the
   ledger records from the session context; `?` for a land with no ledger row, a `DD.MM` prefix when the run began
-  the day before). Lands of other repos do not appear: the list is the queue repo's log. Each section and day folds on a click. The status band's `✓ n` still counts the last 24 hours.
+  the day before). Lands of other repos do not appear: the list is the queue repo's log. Each section and day folds on a click. A day's spend counts a failed or closed line only when its latest run ended on that very date (not the same `DD.MM` of another year). The status band's `✓ n` still counts the last 24 hours.
   **Cost.** Each Landed and Failed row carries `$cost` right after the kind glyph (the difficulty bar stays first): the ledger's real `spend.usd` summed over every task run of the line (`slice-pipeline` / `engine-task` rows with a `task`); a line any of whose runs recorded no spend, or that has no ledger row, shows `—`, never `$0.00`. A figure is `$1.23` under $100, whole dollars above, right-aligned to the section's widest, and never cut: in the two-line form it is on the first line and the id is cut before it. A day row carries the day's sum: its landed lines plus the failed and closed lines whose latest run ended that day (a line counted once; `closed` = completed without a `land` state, as the Cost tab reads it), and says what it includes (`$14.75 incl. 2 failed, 1 closed`) and, when not every line is measured, how many are (`· 5/6 measured`; a day with none reads `— · 0/6 measured`). A line's whole cost (all its runs) sits on one day of the sums: the day it landed, or for a failed or closed line the day its latest run ended; a run on an earlier day adds nothing to that day.
   `✗ Failed (n)` follows, folded until a click: the `failed` lines that ended in the last 2 days (queue_mark's `ended:`; `n` and the header's `failed` count are of these), newest first, then one dim row `▸ +N older` that opens the rest (a line with no `ended:` counts as older), `bar kind $cost id DD.MM reason`
   — the reason is the first line of the line's last note (`no note` without one), cut to the pane body width, the date that
@@ -960,7 +960,7 @@ no model call, no tokens:
   A section lays out as one, by the pane's width (`bodyColumns` of each refresh, so a resized pane re-lays out, wide glyphs
   counted as two cells): while every row of the section fits on one line, each is one line as above; as soon as ANY row
   does not, EVERY row of that section takes two lines, the second indented one tab. Running: bar, kind, id / the state,
-  the next step, the age. Next: bar, kind, priority / the id. Landed (measured over all days): bar, kind, cost, times, sha / the id.
+  the next step, the age. Next: bar, kind, priority / the id. Landed (measured over the rows of the open days only: a row of a folded day neither flips the section to the two-line form nor widens its cost column): bar, kind, cost, times, sha / the id.
   Failed: bar, kind, cost, id, date / the reason (the full reason is measured, so a long one makes the section two-line). An id
   or text still too long for its line (either line) is cut with `…`, never wrapped. The height caps count lines, so a two-line
   section shows half as many rows.

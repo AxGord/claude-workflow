@@ -18,8 +18,8 @@ const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, {
 const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, { shape: 'agents-seen-1' })
 /** The last read of the engine's /api/pool, kept only while the pane is open on the Pool tab ('null' otherwise). */
 const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shape: 'pool-1' })
-/** The Plan tab sections whose fold the person flipped (running, next, lands, failed): none by default, so all sections show but FOLDED_BY_DEFAULT ones. */
-const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-1' })
+/** The Plan tab sections whose fold the person flipped (running, next, lands, failed): none by default, so all sections show but FOLDED_BY_DEFAULT ones. A Landed day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
+const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-2' })
 /** Sections that start folded: a click on one unfolds it. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
 const FOLDED_BY_DEFAULT = new Set(['failed', 'failed-older'])
 /** How far back the Landed tree goes: the Cost tab's own range. */
@@ -283,6 +283,41 @@ export function landMs(at: string, now: number): number {
   return t > now + 24 * 3600 * 1000 ? new Date(year - 1, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime() : t
 }
 
+/** A Landed day (`lands-DD.MM`) is open when the person opened it, folded when they folded it, else open only on today. The fold list holds an explicit `+key` / `-key` for a day, never a flip of the default: a default that changes at midnight must not flip a day the person chose. */
+export function landDayOpen(foldedKeys: string[], key: string, today: string): boolean {
+  if (foldedKeys.includes('-' + key)) return false
+  if (foldedKeys.includes('+' + key)) return true
+  return key === today
+}
+
+/** The fold list after a click on a Landed day: the opposite of what it showed, written explicitly. */
+export function landDayToggled(foldedKeys: string[], key: string, today: string): string[] {
+  const wasOpen = landDayOpen(foldedKeys, key, today)
+  return [...foldedKeys.filter(k => k !== '+' + key && k !== '-' + key), (wasOpen ? '-' : '+') + key]
+}
+
+/** The fold list without the signed keys (`+lands-DD.MM` / `-lands-DD.MM`) of days outside `liveDays`: a key kept past its day would, a year on, fold or open the same DD.MM. An empty `liveDays` (a failed git read) drops nothing. */
+export function pruneLandFolds(foldedKeys: string[], liveDays: Set<string>): string[] {
+  if (liveDays.size === 0) return foldedKeys
+  const gone = (k: string) => {
+    const m = /^[+-]lands-(\d\d\.\d\d)$/.exec(k)
+    return m !== null && !liveDays.has(m[1]!)
+  }
+  return foldedKeys.some(gone) ? foldedKeys.filter(k => !gone(k)) : foldedKeys
+}
+
+/** The land of a slice that a notification can be about: the lands are newest first, and an agent's land falls within two days of the refresh `at` that last saw it, so rows outside that window are skipped unread and the scan stops at its older edge. The window is anchored on the agent's own time, not the clock's: a notification drawn days later still finds its land. `now` only resolves a row's year. */
+export function recentLand(lands: Land[], label: string, at: number, now: number): Land | undefined {
+  const day = 24 * 3600 * 1000
+  for (const l of lands) {
+    const ms = landMs(l.at, now)
+    if (ms > at + 2 * day) continue
+    if (ms < at - 2 * day) break
+    if (l.slice === label) return l
+  }
+  return undefined
+}
+
 /** `$1.23`, `$12.34`, `$123`; `—` when the line has no measured cost (never `$0.00`). */
 export function usdText(usd: number | undefined): string {
   if (usd === undefined) return '—'
@@ -290,8 +325,15 @@ export function usdText(usd: number | undefined): string {
 }
 
 /** Each day of the Landed tree: the sum of its landed lines' cost plus the failed and closed lines whose latest run ended that day (a line counts once), how many lines that is and how many were measured. */
-export function daySpends(lands: Land[], spends: Map<string, TaskSpend>): Record<string, DaySpend> {
+export function daySpends(lands: Land[], spends: Map<string, TaskSpend>, now: number = Date.now()): Record<string, DaySpend> {
   const days: Record<string, DaySpend> = {}
+  // a day's full date: a label is DD.MM with no year, so a line that ended a year ago on the same DD.MM must not match it
+  const dateOf = (ms: number) => {
+    const d = new Date(ms)
+    return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+  }
+  const fullDay = new Map<string, string>()
+  for (const l of lands) if (!fullDay.has(l.at.slice(0, 5))) fullDay.set(l.at.slice(0, 5), dateOf(landMs(l.at, now)))
   const counted = new Set<string>()
   const add = (day: string, line: string, usd: number | undefined, kind?: 'failed' | 'closed') => {
     const d = (days[day] ??= { usd: 0, lines: 0, measured: 0, failed: 0, closed: 0 })
@@ -307,7 +349,7 @@ export function daySpends(lands: Land[], spends: Map<string, TaskSpend>): Record
   const landed = new Set(lands.map(l => l.slice))
   for (const [task, sp] of spends) {
     const day = dayOf(sp.endedAt)
-    if (landed.has(task) || !days[day] || (sp.outcome !== 'failed' && sp.outcome !== 'closed')) continue
+    if (landed.has(task) || !days[day] || fullDay.get(day) !== dateOf(sp.endedAt) || (sp.outcome !== 'failed' && sp.outcome !== 'closed')) continue
     add(day, task, sp.usd, sp.outcome)
   }
   return days
@@ -447,7 +489,7 @@ async function build($: any): Promise<Snapshot> {
   }
   const landed = queue ? await lands($, queueFile, ledger) : []
   const recent = landed.filter(l => landMs(l.at, now) > now - 24 * 3600 * 1000).length
-  return { at: now, sessions, queue, lands: landed, recent, days: daySpends(landed, ledger.spends), error: loaded.error }
+  return { at: now, sessions, queue, lands: landed, recent, days: daySpends(landed, ledger.spends, now), error: loaded.error }
 }
 
 /** The role an agent plays for the workflow its session runs. */
@@ -462,8 +504,7 @@ async function refresh($: any): Promise<Snapshot> {
   const s = await build($)
   await update($, snap, () => s)
   // a day's fold key leaves with the day: the folded atom does not grow
-  const days = new Set(s.lands.map(l => l.at.slice(0, 5)))
-  await update($, folded, f => (f.some(k => k.startsWith('lands-') && !days.has(k.slice(6))) ? f.filter(k => !k.startsWith('lands-') || days.has(k.slice(6))) : f))
+  await update($, folded, f => pruneLandFolds(f, new Set(s.lands.map(l => l.at.slice(0, 5)))))
   // remember each linked agent's slice and where it stood: its session file is gone once the pipeline ends
   const seen: Record<string, AgentSeen> = {}
   for (const r of s.sessions) {
@@ -801,7 +842,7 @@ export const register: Register = on => {
     if (!seen) return next(e)
     const s = await read($, snap)
     const { Text } = $.ui.resolve(e)
-    const land = s?.lands.find(l => l.slice === seen.label)
+    const land = recentLand(s?.lands ?? [], seen.label, seen.at, await $.clock.now())
     const dur = task.durationMs !== undefined ? ` · ${age(task.durationMs) || '<1m'}` : ''
     const outcome =
       task.status === 'killed' ? <Text color="red">✗ stopped by hand at {seen.state}</Text>
@@ -980,7 +1021,8 @@ export const register: Register = on => {
     const foldedNow: string[] = (await read($, folded)) ?? []
     const now = await $.clock.now()
     const today = 'lands-' + dayOf(now)
-    const isOpen = (key: string) => foldedNow.includes(key) === (FOLDED_BY_DEFAULT.has(key) || (key.startsWith('lands-') && key !== today))
+    const isOpen = (key: string) =>
+      key.startsWith('lands-') ? landDayOpen(foldedNow, key, today) : foldedNow.includes(key) === FOLDED_BY_DEFAULT.has(key)
     // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones and the days before today)
     const header = (key: string, color: string, title: string) => (
       <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => (f.includes(key) ? f.filter(k => k !== key) : [...f, key]))}>
@@ -1165,10 +1207,12 @@ export const register: Register = on => {
       const olderFailed = q.failedLines.filter(l => !l.recent)
       // the rows drawn: the recent ones, and the older ones once `+N older` is open
       const shownFailed = isOpen('failed-older') ? q.failedLines : recentFailed
-      const landCost = costCol(s.lands.map(l => l.usd))
+      // only the rows drawn size the section: a row of a folded day is not on screen and must not widen the cost column or flip the layout
+      const shownLands = isOpen('lands') ? s.lands.filter(l => isOpen('lands-' + l.at.slice(0, 5))) : []
+      const landCost = costCol(shownLands.map(l => l.usd))
       const failCost = costCol(shownFailed.map(l => l.usd))
       const costOf = (u: number | undefined, col: { text: (u: number | undefined) => string }) => <Text dimColor={u === undefined}>{col.text(u)}</Text>
-      const landTwo = !fitsOneLine(s.lands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l.usd)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
+      const landTwo = !fitsOneLine(shownLands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l.usd)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
       const stampOf = (date: string) => {
         // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
         const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(date)
@@ -1230,7 +1274,7 @@ export const register: Register = on => {
               const spend = s.days[day]
               const key = 'lands-' + day
               return [
-                <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => (f.includes(key) ? f.filter(k => k !== key) : [...f, key]))}>
+                <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => landDayToggled(f, key, today))}>
                   <Text dimColor>{fitCells(`  ${isOpen(key) ? '▾' : '▸'} ▦ ${day} (${mine.length})${spend ? ' ' + dayText(spend) : ''}`, columns)}</Text>
                 </Button>,
                 ...(isOpen(key)
