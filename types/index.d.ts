@@ -58,8 +58,47 @@ export type Land = { sha: string; slice: string; at: string; start: string; diff
 /** An agent seen linked to a workflow session: its slice (or workflow), role and last step. */
 export type AgentSeen = { label: string; role: string; state: string; at: number }
 
+/** One lease or waiter of the pool, cut to what the pane draws (the engine's /api/pool `PoolRow`). */
+export type PoolLine = {
+  pid: number
+  /** what it holds (a lease) or wants (a waiter), as `pool_status` prints it */
+  request: string
+  /** ms held (a lease) or queued (a waiter), as of the read */
+  ageMs: number
+  /** `3` or `3 normal` */
+  priority: string
+  /** the project directory's last name, '' none */
+  project: string
+  /** the first 8 characters of the session id, '' none */
+  session: string
+  step: string
+  /** the first line of the label */
+  label: string
+  /** a lease whose processes run well above its threads: the busy cpus it runs, else null */
+  overrun: number | null
+  isStarved: boolean
+}
+
+/** The machine-wide pool as the Pool tab draws it. */
+export type PoolView = {
+  budget: number
+  held: number
+  load: number
+  external: number
+  threshold: number
+  /** the pool-wide STARVED line, '' none */
+  starvedNote: string
+  locks: string[]
+  leases: PoolLine[]
+  /** in admission order */
+  waiting: PoolLine[]
+}
+
+/** What the last read of /api/pool left: the pool and when it was read, or why there is none ('' none). */
+export type PoolState = { at: number; pool: PoolView | null; error: string }
+
 /** The pane's tab. */
-export type View = 'plan' | 'sessions' | 'waiting'
+export type View = 'plan' | 'sessions' | 'waiting' | 'pool'
 
 export type Snapshot = {
   at: number
@@ -71,6 +110,6 @@ export type Snapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]>; paneOpen: Shaped<boolean>; agentsSeen: Shaped<Record<string, AgentSeen>> }
+    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]>; paneOpen: Shaped<boolean>; agentsSeen: Shaped<Record<string, AgentSeen>>; pool: Shaped<PoolState | null> }
   }
 }

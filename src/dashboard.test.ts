@@ -205,6 +205,18 @@ describe("GET /api/pool", () => {
       { request: "2 threads", entry: { label: "held", session_id: "sess-1" } },
     ]);
     expect(body.waiting).toMatchObject([{ request: "1 threads", entry: { label: "next" } }]);
+    // the plan pane's fixture of this answer (hooks/fixtures/api-pool.ts) has the answer's keys: a rename here fails here
+    const { API_POOL } = await import("../hooks/fixtures/api-pool.js");
+    const keys = (o: object): string[] => Object.keys(o).sort();
+    const optional = ["starvedNote"];
+    expect(keys(body).filter(k => !optional.includes(k))).toEqual(
+      keys(API_POOL).filter(k => !optional.includes(k)),
+    );
+    const lease = (body as unknown as { leases: Record<string, unknown>[] }).leases[0];
+    const rowKeys = Object.keys(API_POOL.leases[0]).filter(k => k !== "runs");
+    for (const k of rowKeys) expect(Object.keys(lease)).toContain(k);
+    for (const k of ["pid", "priority", "label", "session_id"])
+      expect(Object.keys(lease.entry as object)).toContain(k);
     await held.lease.release();
     const next = await waiting;
     if (next.status === "granted") await next.lease.release();

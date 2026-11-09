@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { AgentSeen, FailedLine, Land, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
+import type { AgentSeen, FailedLine, Land, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
 
 const PANE = 'workflow-plan'
 const PERIOD_MS = 15000
@@ -16,6 +16,8 @@ const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, {
 /** Agents seen linked to a workflow session, kept after the session ends (its file is removed): the end
  * notification of a driver, worker or reviewer is drawn from this. */
 const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, { shape: 'agents-seen-1' })
+/** The last read of the engine's /api/pool, kept only while the pane is open on the Pool tab ('null' otherwise). */
+const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shape: 'pool-1' })
 /** The Plan tab sections whose fold the person flipped (running, next, lands, failed): none by default, so all sections show but FOLDED_BY_DEFAULT ones. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-1' })
 /** Sections that start folded: a click on one unfolds it. */
@@ -240,6 +242,72 @@ async function lands($: any, queueFile: string, dir: string): Promise<Land[]> {
     })
 }
 
+/** The Pool tab's data, cut to what the pane draws, from the engine's /api/pool answer (`poolSnapshot`). */
+export function poolView(api: any): PoolView {
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  const line = (r: any): PoolLine => {
+    const e = r?.entry ?? {}
+    const project = String(e.project ?? e.cwd ?? '')
+    return {
+      pid: num(e.pid),
+      request: String(r?.request ?? ''),
+      ageMs: num(r?.ageMs),
+      priority: `${num(e.priority)}${e.level ? ` ${String(e.level)}` : ''}`,
+      project: project.replace(/\/+$/, '').replace(/^.*\//, ''),
+      session: String(e.session_id ?? '').slice(0, 8),
+      step: String(e.step ?? ''),
+      label: String(e.label ?? '').split('\n')[0] ?? '',
+      overrun: r?.overrun ? Math.round(num(r.runs)) : null,
+      isStarved: Boolean(r?.starved),
+    }
+  }
+  return {
+    budget: num(api?.budget),
+    held: num(api?.held),
+    load: num(api?.load),
+    external: num(api?.external),
+    threshold: num(api?.load_threshold),
+    starvedNote: typeof api?.starvedNote === 'string' ? api.starvedNote : '',
+    locks: Array.isArray(api?.locks) ? api.locks.map(String) : [],
+    leases: Array.isArray(api?.leases) ? api.leases.map(line) : [],
+    waiting: Array.isArray(api?.waiting) ? api.waiting.map(line) : [],
+  }
+}
+
+let poolBusy = false
+
+/** One GET /api/pool into the pool atom: the engine measures the pool over a short window, so a call takes about 0.6 s. Only a refresh or a tab press whose open tab is Pool calls it. */
+async function loadPool($: any): Promise<void> {
+  if (poolBusy) return
+  poolBusy = true
+  try {
+    const res = await $.http.fetch(`${DASHBOARD}/api/pool`).catch(() => undefined)
+    const at = await $.clock.now()
+    let state: PoolState
+    if (!res) state = { at, pool: null, error: `the dashboard at ${DASHBOARD} is not answering` }
+    else if (!res.ok) state = { at, pool: null, error: `the dashboard at ${DASHBOARD} answered ${String(res.status)}` }
+    else {
+      try {
+        state = { at, pool: poolView(JSON.parse(res.text)), error: '' }
+      } catch {
+        state = { at, pool: null, error: `the dashboard at ${DASHBOARD} answered something else than the pool` }
+      }
+    }
+    await update($, poolAtom, () => state)
+  } finally {
+    poolBusy = false
+  }
+}
+
+/** A refresh's pool step: reads the pool only while the pane is open on the Pool tab of a queue session, else drops what an earlier read left. */
+async function refreshPool($: any, s: Snapshot): Promise<void> {
+  if (s.queue && (await read($, paneOpen)) && (await read($, view)) === 'pool') {
+    await loadPool($)
+    return
+  }
+  if ((await read($, poolAtom)) !== null) await update($, poolAtom, () => null)
+}
+
 async function build($: any): Promise<Snapshot> {
   const now = await $.clock.now()
   const sid = await $.session.id()
@@ -304,6 +372,8 @@ async function refresh($: any): Promise<Snapshot> {
   }
   // the status line keeps the engine statusline script compact; the pane holds the detail
   $.ui.status(undefined)
+  // last: the pool read (about 0.6 s) delays nothing above; only the caller waits for it
+  await refreshPool($, s)
   return s
 }
 
@@ -314,9 +384,15 @@ async function togglePane($: any): Promise<boolean> {
     await $.ui.close({ id: PANE })
     return false
   }
-  await refresh($)
-  await $.ui.open({ id: PANE, title: 'Workflow plan', backgroundColor: 'transparent' })
+  // open before the first refresh: a pane that comes up on the Pool tab reads the pool with it
   await update($, paneOpen, () => true)
+  try {
+    await refresh($)
+    await $.ui.open({ id: PANE, title: 'Workflow plan', backgroundColor: 'transparent' })
+  } catch (err) {
+    await update($, paneOpen, () => false)
+    throw err
+  }
   return true
 }
 
@@ -353,6 +429,85 @@ function age(ms: number): string {
   if (ms <= 0) return ''
   const m = Math.floor(ms / 60000)
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`
+}
+
+/** Opens the Pool tab and reads the pool at once (the next refresh keeps it fresh while the tab stays open). */
+async function openPool($: any): Promise<void> {
+  await update($, view, () => 'pool')
+  await loadPool($)
+}
+
+/** Terminal cells a string takes: wide glyphs (CJK, emoji) two, combining marks none. */
+export function cells(text: string): number {
+  let n = 0
+  for (const ch of text) {
+    const c = ch.codePointAt(0) ?? 0
+    if (c >= 0x300 && c <= 0x36f) continue
+    const wide =
+      (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
+      (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x20000 && c <= 0x3fffd)
+    n += wide ? 2 : 1
+  }
+  return n
+}
+
+/** A text cut to `max` cells with a closing `…`; unchanged when it fits. */
+export function fitCells(text: string, max: number): string {
+  if (cells(text) <= max) return text
+  let out = ''
+  for (const ch of text) {
+    if (cells(out + ch) > max - 1) break
+    out += ch
+  }
+  return out + '…'
+}
+
+/** A span of ms for a lease or a wait: `45s`, `3m09s`, `1h05m`. */
+export function spanText(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  return m < 60 ? `${m}m${two(s % 60)}s` : `${Math.floor(m / 60)}h${two(m % 60)}m`
+}
+
+/** The Pool tab, fitted to the pane: the pool's header, then per lease or waiter two lines (what and for how long with its flags; whose and for what, cut to the width). One dim line when there is no read. */
+function poolBody(st: PoolState | null, now: number, columns: number, ui: { Box: any; Text: any }) {
+  const { Box, Text } = ui
+  if (!st) return <Text dimColor>Reading the pool…</Text>
+  const p = st.pool
+  if (!p) return <Text dimColor>Pool: {st.error}.</Text>
+  const row = (l: PoolLine, mark: string) => {
+    const who = [l.project, l.session, l.step, l.label].filter(x => x !== '').join(' · ')
+    const flags = (l.overrun !== null ? ` OVERRUN ~${l.overrun}` : '') + (l.isStarved ? ' STARVED' : '')
+    // the flags keep their cells; what and for how long is cut to the rest of the line
+    const lead = fitCells(`  ${mark} ${l.request} prio ${l.priority} · ${spanText(l.ageMs)}`, Math.max(8, columns - cells(flags)))
+    return (
+      <Box flexDirection="column">
+        <Text>
+          {lead}
+          {l.overrun !== null ? <Text color="red" weight="bold"> OVERRUN ~{l.overrun}</Text> : null}
+          {l.isStarved ? <Text color="red" weight="bold"> STARVED</Text> : null}
+        </Text>
+        <Text dimColor>{fitCells('     ' + who, columns)}</Text>
+      </Box>
+    )
+  }
+  return (
+    <Box flexDirection="column">
+      <Text weight="bold">{fitCells(`budget ${p.budget} · held ${p.held} · load ${p.load.toFixed(2)}`, columns)}</Text>
+      <Text dimColor>{fitCells(`external ${p.external.toFixed(1)} · threshold ${p.threshold}`, columns)}</Text>
+      <Text dimColor>{fitCells(`locks: ${p.locks.length > 0 ? p.locks.join(', ') : 'none'}`, columns)}</Text>
+      {p.starvedNote !== '' && <Text color="red">{fitCells(p.starvedNote, columns)}</Text>}
+      <Text color="green" weight="bold">▶ Leases ({p.leases.length})</Text>
+      {p.leases.length === 0 && <Text dimColor>  none</Text>}
+      {p.leases.map(l => row(l, '■'))}
+      <Text color="blue" weight="bold">{fitCells(`◷ Waiting (${p.waiting.length}), in admission order`, columns)}</Text>
+      {p.waiting.length === 0 && <Text dimColor>  none</Text>}
+      {p.waiting.map((l, i) => row(l, `${i + 1}.`))}
+      <Text dimColor>read {spanText(now - st.at)} ago</Text>
+    </Box>
+  )
 }
 
 export const register: Register = on => {
@@ -682,6 +837,7 @@ export const register: Register = on => {
       </Button>
     )
     const now = await $.clock.now()
+    const columns: number = e.props?.bodyColumns ?? 100
     const room = Math.max(4, (e.viewport?.rows ?? 30) - 6)
     const byId = new Map(s.sessions.map(r => [r.id, r]))
     const childrenOf = (id: string): SessionRow[] => s.sessions.filter(r => r.parent === id)
@@ -701,6 +857,8 @@ export const register: Register = on => {
       { id: 'plan', key: '1', label: q ? `Plan ${q.running.length}/${q.window}` : 'Plan' },
       { id: 'sessions', key: '2', label: `Sessions ${s.sessions.length}` },
       { id: 'waiting', key: '3', label: `Waiting ${q?.waiting.length ?? 0}` },
+      // no count: the pool is read only while this tab is open
+      { id: 'pool', key: '4', label: 'Pool' },
     ]
     // difficulty as a five-cell track (one cell per two points): its fill the level, its colour the model the
     // table gives it — 1–3 sonnet (green), 4–6 sonnet/high (yellow), 7–10 opus (red)
@@ -721,7 +879,7 @@ export const register: Register = on => {
     const tabRow = (
       <Box flexDirection="row" gap={2}>
         {tabs.map(t => (
-          <Button key={'tab-' + t.id} hotkey={t.key} plain onPress={() => void update($, view, () => t.id)}>
+          <Button key={'tab-' + t.id} hotkey={t.key} plain onPress={() => void (t.id === 'pool' ? openPool($) : update($, view, () => t.id))}>
             {t.id === tab ? <Text weight="bold" color="cyan">{t.label}</Text> : <Text dimColor>{t.label}</Text>}
           </Button>
         ))}
@@ -778,6 +936,9 @@ export const register: Register = on => {
         : <Box flexDirection="column">{lines.slice(0, room)}{lines.length > room ? <Text dimColor>  +{lines.length - room} more</Text> : null}</Box>
     } else if (!q) {
       body = <Text dimColor>No work queue in this session: the Sessions tab shows its workflow.</Text>
+    } else if (tab === 'pool') {
+      const st = (await read($, poolAtom)) as PoolState | null
+      body = poolBody(st, now, columns, { Box, Text })
     } else if (tab === 'waiting') {
       body = (
         <Box flexDirection="column">

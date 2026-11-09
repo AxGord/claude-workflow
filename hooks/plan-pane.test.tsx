@@ -1,6 +1,7 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
-import { ledgerRunsOf, movedTo, queueView, startText } from './plan-pane'
+import { cells, fitCells, ledgerRunsOf, movedTo, poolView, queueView, spanText, startText } from './plan-pane'
+import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
 
@@ -27,11 +28,25 @@ const PANE = {
 
 /** The panes the engine holds open, as the test's `ui.open` / `ui.close` stand-ins keep them. */
 const panes: string[] = []
+/** Every URL the pane fetched, in order. */
+const fetched: string[] = []
+/** What GET /api/pool answers: a status, or undefined for a refused connection. */
+let queueDown = false
+/** `ui.open` fails (the pane cannot be seated). */
+let openFails = false
+let poolReply: { status: number; text: string } | undefined = { status: 200, text: JSON.stringify(API_POOL) }
+const NOW = Date.parse('2026-11-07T10:05:00Z')
 
-function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: string }): void {
+/** `ticking`: the clock moves only when the test advances it, and the 15 s refresh fires on that (returned). */
+function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: string }, ticking = false) {
   panes.splice(0)
+  fetched.splice(0)
+  queueDown = false
+  openFails = false
+  poolReply = { status: 200, text: JSON.stringify(API_POOL) }
+  const clock = ticking ? mock.clock(on, { now: NOW }) : undefined
   on('session.id', () => ({ value: SID }))
-  on('clock.now', () => ({ value: Date.parse('2026-11-07T10:05:00Z') }))
+  if (!ticking) on('clock.now', () => ({ value: NOW }))
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'WF_STATE_DIR' ? STATE_DIR : undefined }))
   on('fs.list', () => ({
     value: [
@@ -43,16 +58,23 @@ function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: str
     value: e.path.endsWith('ledger.jsonl') ? (landed?.ledger ?? '') : withQueue ? SESSION : SESSION.replace(`"queue_file":"${QUEUE}"`, '"x":1'),
   }))
   on('process.run', () => ({ value: landed ? { exitCode: 0, stdout: landed.git, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }))
-  on('http.fetch', (_: unknown, e: { url: string }) =>
-    e.url.includes('/api/queue?file=')
+  on('http.fetch', (_: unknown, e: { url: string }) => {
+    fetched.push(e.url)
+    if (queueDown) throw new Error('ECONNREFUSED')
+    if (e.url.endsWith('/api/pool')) {
+      if (!poolReply) throw new Error('ECONNREFUSED')
+      return { value: { status: poolReply.status, ok: poolReply.status === 200, headers: {}, text: poolReply.text } }
+    }
+    return e.url.includes('/api/queue?file=')
       ? { value: { status: 200, ok: true, headers: {}, text: JSON.stringify(API_QUEUE) } }
-      : { value: { status: 404, ok: false, headers: {}, text: '{}' } },
-  )
-  on('clock.every', () => ({ value: undefined }))
+      : { value: { status: 404, ok: false, headers: {}, text: '{}' } }
+  })
+  if (!ticking) on('clock.every', () => ({ value: undefined }))
   on('ui.status', () => ({ value: undefined }))
   on('command.register', () => ({ value: { command: 'wf-plan' } }))
   on('ui.panes', () => ({ value: panes.map(id => ({ id })) }))
   on('ui.open', (_: unknown, e: { id: string }) => {
+    if (openFails) throw new Error('no surface')
     panes.push(e.id)
     return { value: { isPlaced: true } }
   })
@@ -61,6 +83,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: str
     return { value: undefined }
   })
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  return clock
 }
 
 test('the Plan tab is drawn from the engine\'s /api/queue answer', async ($, on) => {
@@ -273,4 +296,166 @@ test('a failed row\'s reason is cut with an ellipsis to the pane body width, not
   expect(text).toMatch(/FAIL-LONG 08\.11 a reason that.*…$/)
   expect(text.length).toBeLessThanOrEqual(50)
   await ui.unmount()
+})
+
+const poolFetches = () => fetched.filter(u => u.endsWith('/api/pool')).length
+
+test('the Pool tab reads /api/pool only while the pane is open on it: never on the other tabs, never while the pane is closed', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  // the pane is closed: a refresh, and several, call the queue but never the pool
+  await clock.advance(15000)
+  expect(fetched.some(u => u.includes('/api/queue?file='))).toBe(true)
+  expect(poolFetches()).toBe(0)
+  // open on the Plan tab: still none, on every refresh
+  await $.command.run({ command: 'wf-plan', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await clock.advance(45000)
+  expect(poolFetches()).toBe(0)
+  await ui.press({ key: 'tab-sessions' })
+  await ui.press({ key: 'tab-waiting' })
+  await clock.advance(30000)
+  expect(poolFetches()).toBe(0)
+  // the Pool tab reads at once, then once per refresh
+  await ui.press({ key: 'tab-pool' })
+  expect(poolFetches()).toBe(1)
+  await clock.advance(15000)
+  expect(poolFetches()).toBe(2)
+  // back to another tab: the reads stop
+  await ui.press({ key: 'tab-plan' })
+  await clock.advance(45000)
+  expect(poolFetches()).toBe(2)
+  // on the Pool tab with the pane closed: none
+  await ui.press({ key: 'tab-pool' })
+  expect(poolFetches()).toBe(3)
+  await $.command.run({ command: 'wf-plan', args: '' })
+  await clock.advance(60000)
+  expect(poolFetches()).toBe(3)
+  // a pane opened on the Pool tab reads the pool with its first refresh
+  await $.command.run({ command: 'wf-plan', args: '' })
+  expect(poolFetches()).toBe(4)
+  await ui.unmount()
+})
+
+test('the Pool tab: budget, load, locks, the STARVED note, leases and waiters in two lines each, flags beside the age', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'wf-plan', args: '' })
+  await clock.advance(1)
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 70 }, surface: 'terminal' })
+  await ui.press({ key: 'tab-pool' })
+  const texts = async (re: RegExp) => (await ui.findAll({ type: 'Text', text: re })).map(t => t.text)
+  expect((await texts(/^budget 12/))[0]).toBe('budget 12 · held 6 · load 9.09')
+  expect((await texts(/^external/))[0]).toBe('external 0.0 · threshold 2')
+  expect(await texts(/^locks:/)).toEqual(['locks: land'])
+  expect(await texts(/nothing was granted/)).toHaveLength(1)
+  expect((await texts(/Leases/))[0]).toContain('Leases (2)')
+  expect((await texts(/Waiting \(1\)/))[0]).toContain('in admission order')
+  // a lease: what it holds, how long, the OVERRUN flag; then whose and for what
+  expect((await texts(/4 threads \(asked 2-4\)/))[0]).toContain('prio 0 · 3m10s')
+  expect((await texts(/^\s*OVERRUN ~9$/))).toHaveLength(1)
+  expect(await texts(/proj · 94fe30d6 · post-land 0002ab99/)).toHaveLength(1)
+  // the step shows, the label's second line does not
+  expect(await texts(/proj · af2cce95 · slice-worker\/sync_gate_run · tree=\$\(pwd -P\)$/)).toHaveLength(1)
+  expect(await texts(/second line/)).toEqual([])
+  // a waiter: its place, STARVED, a label cut to the pane width with an ellipsis
+  expect((await texts(/1\. 4 threads/))[0]).toContain('prio 1 high · 16m40s')
+  expect(await texts(/^\s*STARVED$/)).toHaveLength(1)
+  const who = (await texts(/bf8d7d5f/))[0] ?? ''
+  expect(who.endsWith('…')).toBe(true)
+  expect(cells(who)).toBeLessThanOrEqual(70)
+  await ui.unmount()
+})
+
+test('at a narrow pane no line reaches past the width and both flags survive the cut', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'wf-plan', args: '' })
+  await clock.advance(1)
+  // a lease holding more (locks beside its threads), as describeHeld prints it
+  const pool = structuredClone(API_POOL)
+  pool.leases[0]!.request = '4 threads (asked 2-4) + lock land + lock port:3000'
+  poolReply = { status: 200, text: JSON.stringify(pool) }
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface: 'terminal' })
+  await ui.press({ key: 'tab-pool' })
+  const all = (await ui.findAll({ type: 'Text' })).map(t => t.text)
+  for (const t of all.filter(t => !/^(Plan|Sessions|Waiting|Pool|updated)\b/.test(t))) expect(cells(t)).toBeLessThanOrEqual(40)
+  const lease = all.find(t => t.includes('(asked 2-4)')) ?? ''
+  expect(lease.endsWith(' OVERRUN ~9')).toBe(true)
+  expect(lease).toContain('…')
+  expect(all.find(t => t.includes('1. 4 threads'))?.endsWith(' STARVED')).toBe(true)
+  await ui.unmount()
+})
+
+test('with the dashboard down the queue fails too: no tab row, the queue line, and no pool read even with the Pool tab chosen', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'wf-plan', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'tab-pool' })
+  expect(poolFetches()).toBe(1)
+  queueDown = true
+  await clock.advance(15000)
+  expect(poolFetches()).toBe(1)
+  expect(await ui.find({ key: 'tab-pool' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^queue: / })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Pool: / })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a pane that cannot be seated leaves the pool unread: paneOpen is reset, later refreshes make no pool call', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'tab-pool' })
+  const before = poolFetches()
+  openFails = true
+  // the opening refresh reads the pool (the pane is meant to be open), then ui.open throws
+  await $.command.run({ command: 'wf-plan', args: '' })
+  expect(poolFetches()).toBe(before + 1)
+  await clock.advance(60000)
+  expect(poolFetches()).toBe(before + 1)
+  await ui.unmount()
+})
+
+test('an engine that does not answer shows one dim line on the Pool tab, as an answer that is not the pool does', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'wf-plan', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  poolReply = undefined
+  await ui.press({ key: 'tab-pool' })
+  expect((await ui.find({ type: 'Text', text: /^Pool: / }))?.text).toBe('Pool: the dashboard at http://127.0.0.1:3100 is not answering.')
+  expect(await ui.find({ type: 'Text', text: /Leases/ })).toBeUndefined()
+  poolReply = { status: 404, text: '{}' }
+  await clock.advance(15000)
+  expect((await ui.find({ type: 'Text', text: /^Pool: / }))?.text).toContain('answered 404')
+  poolReply = { status: 200, text: 'not json' }
+  await clock.advance(15000)
+  expect((await ui.find({ type: 'Text', text: /^Pool: / }))?.text).toContain('something else than the pool')
+  poolReply = { status: 200, text: JSON.stringify(API_POOL) }
+  await clock.advance(15000)
+  expect(await ui.find({ type: 'Text', text: /Leases \(2\)/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('poolView keeps what the pane draws: the project\'s last name, an 8-character session, the label\'s first line, the overrun only on a lease that overruns', () => {
+  const v = poolView(API_POOL)
+  expect(v.leases.map(l => [l.pid, l.project, l.session, l.overrun, l.priority])).toEqual([
+    [55908, 'proj', '94fe30d6', 9, '0'],
+    [1548, 'proj', 'af2cce95', null, '0 normal'],
+  ])
+  expect(v.leases[1]?.label).toBe('tree=$(pwd -P)')
+  expect(v.waiting[0]).toMatchObject({ isStarved: true, priority: '1 high', step: '' })
+  expect(poolView({}).leases).toEqual([])
+})
+
+test('cells counts wide glyphs twice; fitCells cuts to the cells with an ellipsis; spanText', () => {
+  expect(cells('ab')).toBe(2)
+  expect(cells('日本')).toBe(4)
+  expect(fitCells('short', 10)).toBe('short')
+  expect(fitCells('日本語日本語', 7)).toBe('日本語…')
+  expect(cells(fitCells('abcdefghij', 5))).toBe(5)
+  expect([spanText(45000), spanText(189835), spanText(3900000)]).toEqual(['45s', '3m10s', '1h05m'])
 })
