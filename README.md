@@ -954,11 +954,21 @@ no model call, no tokens:
   `✗ Failed (n)` follows, folded until a click: every `failed` line of the queue, newest first, `bar kind id DD.MM reason`
   — the reason is the first line of the line's last note (`no note` without one), cut to the pane body width, the date that
   note's (`date unknown` for a line with no dated note, listed last).
+  A section lays out as one, by the pane's width (`bodyColumns` of each refresh, so a resized pane re-lays out, wide glyphs
+  counted as two cells): while every row of the section fits on one line, each is one line as above; as soon as ANY row
+  does not, EVERY row of that section takes two lines, the second indented one tab. Running: bar, kind, id / the state,
+  the next step, the age. Next: bar, kind, priority / the id. Landed (measured over all days): bar, kind, times, sha / the id.
+  Failed: bar, kind, id, date / the reason (the full reason is measured, so a long one makes the section two-line). An id
+  or text still too long for its line (either line) is cut with `…`, never wrapped. The height caps count lines, so a two-line
+  section shows half as many rows.
 - **Sessions** — the workflow sessions of THIS Claude Code session as a tree (`◆` a root with children, bright `⚙`
   a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
   or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's
   `/api/workflows`), and a link to its graph in the dashboard (`/session/<id>`).
 - **Waiting** — pending tasks (not parked) with the picker's own reason, from the dashboard's `/api/queue`.
+  The same rule applies: `bar kind id reason` on one line while every row fits, else two lines each (`bar kind id` / the reason
+  indented, cut with `…`). The Sessions tab follows it too: a tree row too long for the pane is two lines (workflow and task /
+  the state and age indented), every row of the tree. The Pool tab already cuts each of its lines to the width.
 - **Pool** (`4`) — the machine-wide thread pool, as the dashboard's Pool tab shows it, fitted to the narrow pane: budget, threads held, load, external load and threshold, held locks, the pool-wide `STARVED` note, then each lease (what it holds, priority, time held, an `OVERRUN ~N` flag; under it project, session, step and label, cut to the pane width with `…`) and each waiter in admission order (what it wants, priority, wait time, a `STARVED` flag). It reads the dashboard's `GET /api/pool` and nothing else reads the pool. The read costs nothing while the tab is closed: `/api/pool` is called only by a refresh (every 15 s) whose open tab is Pool, and once when the tab is pressed or the pane is opened on it, never on the other tabs and never while the pane is closed. One call takes about 0.6 s on the engine (the pool's measuring window; it runs `ps -A` in the engine process for its two passes, about 25 ms each) and returns about 5 KB; the pool read is the last step of a refresh, so the other tabs' data is stored before it; a pane opened on the Pool tab comes up about 0.6 s later, because opening waits for its first read. Every line is cut to the pane width (the header is two lines; on a lease or waiter the flags keep their cells and the request, priority and age are cut with `…`). When only the pool answer fails (an older engine without the route, an answer that is not the pool), the tab shows one dim `Pool: …` line. When the whole dashboard is down the queue read fails too: the pane has no queue, so it shows the Sessions tree without the tab row and the red `queue: …` line, and the pool is not called. The tab shows with a work queue, like the other tabs.
 
 The pane's header links to the live map (`map ↗`, the dashboard's `/map`); an Agent call's row of a workflow

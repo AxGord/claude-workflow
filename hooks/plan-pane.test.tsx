@@ -272,7 +272,8 @@ test('failed lines come newest first, undated last, each with its reason', () =>
 test('Failed is folded by default, shows its count, and unfolds on a click with bar, id, date and reason per row', async ($, on) => {
   engine(on, true)
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // wide enough for the longest reason: the one-line form
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 200 }, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /▸ ✗ Failed \(4\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /FAIL-NEW/ })).toBeUndefined()
   await ui.press({ key: 'fold-failed' })
@@ -287,15 +288,80 @@ test('Failed is folded by default, shows its count, and unfolds on a click with 
   await ui.unmount()
 })
 
-test('a failed row\'s reason is cut with an ellipsis to the pane body width, not the viewport', async ($, on) => {
-  engine(on, true)
+/** Every Text of a pane mounted `columns` wide after the given presses. */
+async function paneTexts($: any, columns: number, presses: string[] = []): Promise<string[]> {
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 50 }, surface: 'terminal' })
-  await ui.press({ key: 'fold-failed' })
-  const text = (await ui.find({ type: 'Text', text: /FAIL-LONG/ }))?.text ?? ''
-  expect(text).toMatch(/FAIL-LONG 08\.11 a reason that.*…$/)
-  expect(text.length).toBeLessThanOrEqual(50)
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: columns }, surface: 'terminal' })
+  for (const key of presses) await ui.press({ key })
+  const all = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string)
   await ui.unmount()
+  return all
+}
+
+test('Failed: all rows fit one line each; one reason too long puts EVERY row on two lines, the reason indented and cut with an ellipsis, a width change flips the form', async ($, on) => {
+  engine(on, true)
+  const wide = await paneTexts($, 200, ['fold-failed'])
+  expect(wide.some(t => /FAIL-OLD 06\.11 gate red: the suite/.test(t))).toBe(true)
+  const narrow = await paneTexts($, 50) // the fold persists: the section is still open
+  // FAIL-LONG's reason does not fit 50 cells, so FAIL-OLD, which would, is on two lines as well
+  expect(narrow.some(t => /FAIL-OLD 06\.11/.test(t) && !t.includes('gate red'))).toBe(true)
+  const second = narrow.filter(t => /^ {5,}\S/.test(t) && /gate red|closed as a split|no note|a reason that/.test(t))
+  expect(second).toHaveLength(4)
+  expect(second.find(t => t.includes('a reason that'))).toMatch(/…$/)
+  for (const t of narrow.filter(t => /FAIL-|reason that|gate red|closed as|no note/.test(t))) expect(cells(t)).toBeLessThanOrEqual(50)
+})
+
+test('Next: every row on one line while they fit; a priority row too long for the pane puts EVERY row on two lines, the id indented', async ($, on) => {
+  engine(on, true)
+  const wide = await paneTexts($, 100)
+  expect(wide.some(t => /▰▱▱▱▱ ⚑ NEXT-2 \[high\]/.test(t))).toBe(true)
+  const narrow = await paneTexts($, 20)
+  // `  ▰▱▱▱▱ ⚑ NEXT-2 [high]` is 23 cells: NEXT-1 (which would fit) is on two lines too
+  expect(narrow.some(t => /NEXT-1/.test(t) && !/^ {5,}\S/.test(t))).toBe(false)
+  expect(narrow.filter(t => /^ {5,}NEXT-\d$/.test(t))).toHaveLength(2)
+  expect(narrow.some(t => /⚑ \[high\]/.test(t))).toBe(true)
+})
+
+test('Waiting: the one-line form while every reason fits; otherwise EVERY row on two lines, the reason indented and cut with an ellipsis', async ($, on) => {
+  engine(on, true)
+  const wide = await paneTexts($, 100, ['tab-waiting'])
+  expect(wide.some(t => /▰▰▰▱▱ ◆ WAIT-1 after: NEXT-1 \(pending\)/.test(t))).toBe(true)
+  const narrow = await paneTexts($, 30, ['tab-waiting'])
+  expect(narrow.some(t => t.includes('WAIT-1') && !t.includes('after:'))).toBe(true)
+  expect(narrow.some(t => /^ {3,}\S/.test(t) && t.includes('after:'))).toBe(true)
+  const tight = await paneTexts($, 14, ['tab-waiting'])
+  expect(tight.find(t => t.includes('after:'))).toMatch(/…$/)
+})
+
+test('Waiting: the height cap counts lines, so a two-line list shows half as many rows and says how many more', async ($, on) => {
+  engine(on, true)
+  const extra = Array.from({ length: 30 }, (_, i) => ({ ...API_QUEUE.lines.find(l => l.id === 'WAIT-1')!, id: `W-${String(i).padStart(2, '0')}` }))
+  API_QUEUE.lines.push(...(extra as never[]))
+  try {
+    const wide = await paneTexts($, 100, ['tab-waiting'])
+    expect(wide.filter(t => /^.*W-\d\d after: /.test(t))).toHaveLength(23)
+    expect(wide.some(t => /^\+7 more$/.test(t))).toBe(true)
+    const narrow = await paneTexts($, 30)
+    // 31 waiting rows at 24 lines of room: 12 rows of two lines, not 24
+    expect(narrow.filter(t => /^ {3,}after: /.test(t))).toHaveLength(12)
+    expect(narrow.some(t => /^\+19 more$/.test(t))).toBe(true)
+  } finally {
+    API_QUEUE.lines.splice(-30)
+  }
+})
+
+test('Sessions: a tree row too long for the pane puts EVERY row on two lines, the state indented under the workflow', async ($, on) => {
+  engine(on, true)
+  const wide = await paneTexts($, 100, ['tab-sessions'])
+  expect(wide.some(t => t === 'dispatch')).toBe(true) // one line: bare strings in the button, the state its own Text
+  expect(wide.some(t => t.includes('@ dispatch'))).toBe(false)
+  const narrow = await paneTexts($, 12, ['tab-sessions'])
+  const row = narrow.find(t => t.includes('\n')) ?? ''
+  // `⚙ batch` on the first line, `    @ di… 5m` indented under it, the state cut, each line within the pane
+  expect(row.split('\n')).toHaveLength(2)
+  expect(row.split('\n')[0]).toMatch(/^.*⚙ batch$/)
+  expect(row.split('\n')[1]).toMatch(/^ {4,}@ di…/)
+  for (const line of row.split('\n')) expect(cells(line)).toBeLessThanOrEqual(12)
 })
 
 const poolFetches = () => fetched.filter(u => u.endsWith('/api/pool')).length

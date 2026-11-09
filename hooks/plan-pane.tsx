@@ -463,6 +463,16 @@ export function fitCells(text: string, max: number): string {
   return out + '…'
 }
 
+/** The bar `▰▰▱▱▱` and the kind glyph are five and one cells; a row's text is measured with them as blanks. */
+const BAR_W = ' '.repeat(5)
+/** The second line of a two-line row sits this far in from its first line's indent. */
+const TAB = '    '
+
+/** A section lays out as one: its rows are on one line each when every row fits `columns`, else on two lines each. */
+export function fitsOneLine(rows: string[], columns: number): boolean {
+  return rows.every(r => cells(r) <= columns)
+}
+
 /** A span of ms for a lease or a wait: `45s`, `3m09s`, `1h05m`. */
 export function spanText(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -875,7 +885,8 @@ export const register: Register = on => {
     }
     // the kind glyph the engine's /api/queue gives each line (`kindMark`), right after the bar; a blank cell when the
     // line is not in the queue
-    const kindOf = (id: string) => <Text dimColor>{q && Object.hasOwn(q.marks, id) ? q.marks[id] : ' '}</Text>
+    const markOf = (id: string) => (q && Object.hasOwn(q.marks, id) ? q.marks[id] : ' ')
+    const kindOf = (id: string) => <Text dimColor>{markOf(id)}</Text>
     const tabRow = (
       <Box flexDirection="row" gap={2}>
         {tabs.map(t => (
@@ -893,18 +904,39 @@ export const register: Register = on => {
 
     // as the engine statusline script draws them: a root with children ◆ bold; a working leaf (agent or exec, no
     // child) bright ⚙; any other session plain ⚙
-    const sessionLine = (r: SessionRow, depth: number) => {
+    const sessionPlain = (r: SessionRow, depth: number) =>
+      `${'  '.repeat(depth)}⚙ ${r.workflow}${r.tag !== '' ? `[${r.tag}]` : ''} @ ${r.state} ${age(now - r.since)}${open === r.id ? ' ▾' : ''}`
+    const sessionLine = (r: SessionRow, depth: number, twoLines: boolean) => {
       const hasChildren = childrenOf(r.id).length > 0
       const isRoot = r.parent === '' || !byId.has(r.parent)
       const mark = isRoot && hasChildren
         ? <Text color="cyanBright" weight="bold">◆</Text>
         : <Text color={r.isWorking && !hasChildren ? 'cyanBright' : 'cyan'}>⚙</Text>
       const isOpen = open === r.id
+      const pad = '  '.repeat(depth)
+      const tailText = ` ${age(now - r.since)}${isOpen ? ' ▾' : ''}`
+      const stateText = twoLines ? fitCells(r.state, Math.max(1, columns - pad.length - TAB.length - 2 - cells(tailText))) : r.state
+      const state = <Text weight={isOpen ? 'bold' : undefined}>{stateText}</Text>
+      const tail = <Text dimColor>{tailText}</Text>
+      if (!twoLines) {
+        return (
+          <Button key={'s-' + r.id} plain onPress={() => void update($, expanded, cur => (cur === r.id ? '' : r.id))}>
+            {pad}{mark}{' '}
+            {r.workflow}{r.tag !== '' ? <Text color="cyan">[{r.tag}]</Text> : null} @ {state}
+            {tail}
+          </Button>
+        )
+      }
+      // two lines: the workflow and its task, then the state and its age indented under them
+      const room1 = Math.max(6, columns - pad.length - 2)
+      const wf = fitCells(r.workflow, room1)
+      const tag = r.tag !== '' ? fitCells(`[${r.tag}]`, Math.max(0, room1 - cells(wf))) : ''
       return (
         <Button key={'s-' + r.id} plain onPress={() => void update($, expanded, cur => (cur === r.id ? '' : r.id))}>
-          {'  '.repeat(depth)}{mark}{' '}
-          {r.workflow}{r.tag !== '' ? <Text color="cyan">[{r.tag}]</Text> : null} @ <Text weight={isOpen ? 'bold' : undefined}>{r.state}</Text>
-          <Text dimColor> {age(now - r.since)}{isOpen ? ' ▾' : ''}</Text>
+          <Text>
+            {pad}{mark} {wf}<Text color="cyan">{tag}</Text>{'\n'}
+            {pad}{TAB}@ {state}{tail}
+          </Text>
         </Button>
       )
     }
@@ -922,36 +954,76 @@ export const register: Register = on => {
         </Box>
       )
     }
-    const tree = (r: SessionRow, depth: number): any[] => [
-      sessionLine(r, depth),
+    const tree = (r: SessionRow, depth: number, twoLines: boolean): any[] => [
+      sessionLine(r, depth, twoLines),
       ...(open === r.id ? [card(r, depth)] : []),
-      ...childrenOf(r.id).flatMap(c => tree(c, depth + 1)),
+      ...childrenOf(r.id).flatMap(c => tree(c, depth + 1, twoLines)),
+    ]
+    const plainTree = (r: SessionRow, depth: number): string[] => [
+      sessionPlain(r, depth),
+      ...childrenOf(r.id).flatMap(c => plainTree(c, depth + 1)),
     ]
 
     let body: any
     if (tab === 'sessions' || (tab === 'plan' && !q)) {
-      const lines = roots.flatMap(r => tree(r, 0))
+      const sessTwo = !fitsOneLine(roots.flatMap(x => plainTree(x, 0)), columns)
+      const lines = roots.flatMap(r => tree(r, 0, sessTwo))
+      // the height cap counts lines: a two-line row takes two
+      const cap = sessTwo ? Math.max(1, Math.floor(room / 2)) : room
       body = lines.length === 0
         ? <Text dimColor>No active workflow in this session.</Text>
-        : <Box flexDirection="column">{lines.slice(0, room)}{lines.length > room ? <Text dimColor>  +{lines.length - room} more</Text> : null}</Box>
+        : <Box flexDirection="column">{lines.slice(0, cap)}{lines.length > cap ? <Text dimColor>  +{lines.length - cap} more</Text> : null}</Box>
     } else if (!q) {
       body = <Text dimColor>No work queue in this session: the Sessions tab shows its workflow.</Text>
     } else if (tab === 'pool') {
       const st = (await read($, poolAtom)) as PoolState | null
       body = poolBody(st, now, columns, { Box, Text })
     } else if (tab === 'waiting') {
+      const waitTwo = !fitsOneLine(q.waiting.map(w => `${BAR_W} ${markOf(w.id)} ${w.id} ${w.why}`), columns)
+      // the height cap counts lines: a two-line row takes two
+      const waitCap = waitTwo ? Math.max(1, Math.floor(room / 2)) : room
       body = (
         <Box flexDirection="column">
           {q.waiting.length === 0 && <Text dimColor>Nothing waits.</Text>}
-          {q.waiting.slice(0, room).map(w => <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}<Text dimColor> {w.why}</Text></Text>)}
-          {q.waiting.length > room && <Text dimColor>+{q.waiting.length - room} more</Text>}
+          {q.waiting.slice(0, waitCap).map(w =>
+            waitTwo ? (
+              <Box flexDirection="column">
+                <Text>{level(w.difficulty)} {kindOf(w.id)} {fitCells(w.id, Math.max(1, columns - 8))}</Text>
+                <Text dimColor>{TAB}{fitCells(w.why, Math.max(1, columns - TAB.length))}</Text>
+              </Box>
+            ) : (
+              <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}<Text dimColor> {w.why}</Text></Text>
+            ),
+          )}
+          {q.waiting.length > waitCap && <Text dimColor>+{q.waiting.length - waitCap} more</Text>}
         </Box>
       )
     } else {
       // Next shows up to 10, fitted to the pane; Landed lists the whole day (the pane scrolls) and folds on a click
-      const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length
-      const showReady = Math.max(4, Math.min(10, Math.ceil(spare / 2)))
       const pipelineOf = new Map(s.sessions.filter(r => r.tag !== '').map(r => [r.tag, r]))
+      const whereOf = (id: string) => {
+        const p = pipelineOf.get(id)
+        const leaf = p ? leafOf(p.id) : undefined
+        return !p ? 'no pipeline' : leaf && leaf.id !== p.id ? `${p.state} › ${leaf.state}` : p.state
+      }
+      const sinceOf = (id: string) => {
+        const p = pipelineOf.get(id)
+        return p ? age(now - (leafOf(p.id) ?? p).since) : ''
+      }
+      // a section lays out as one: when ANY of its rows does not fit the pane, EVERY row takes two lines
+      const runTwo = !fitsOneLine(q.running.map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}  ${whereOf(l.id)} ${sinceOf(l.id)}`), columns)
+      const nextTwo = !fitsOneLine(q.ready.slice(0, 10).map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}${l.priority ? ` [${l.priority}]` : ''}`), columns)
+      // the rows left for Next count lines: a two-line Running or Next row takes two
+      const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length * (runTwo ? 2 : 1)
+      const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
+      const landTwo = !fitsOneLine(s.lands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
+      const stampOf = (date: string) => {
+        // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
+        const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(date)
+        return when ? `${when[2]}.${when[1]}` : 'date unknown'
+      }
+      const reasonOf = (l: FailedLine) => (l.reason === '' ? 'no note' : l.reason)
+      const failTwo = !fitsOneLine(q.failedLines.map(l => `    ${BAR_W} ${markOf(l.id)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
       body = (
         <Box flexDirection="column">
           <Text>
@@ -962,18 +1034,41 @@ export const register: Register = on => {
           {isOpen('running') && q.running.length === 0 && <Text dimColor>  nothing</Text>}
           {isOpen('running') && q.running.map(l => {
             const p = pipelineOf.get(l.id)
-            const leaf = p ? leafOf(p.id) : undefined
-            const where = !p ? 'no pipeline' : leaf && leaf.id !== p.id ? `${p.state} › ${leaf.state}` : p.state
+            const since = sinceOf(l.id)
+            if (!runTwo) {
+              return (
+                <Text>
+                  {'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}  <Text color={p ? 'cyan' : 'yellow'}>{whereOf(l.id)}</Text>
+                  <Text dimColor> {since}</Text>
+                </Text>
+              )
+            }
+            // two lines: bar, kind, id; the state, the next step and the age indented under them
+            const pad = '  ' + TAB
             return (
-              <Text>
-                {'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}  <Text color={p ? 'cyan' : 'yellow'}>{where}</Text>
-                <Text dimColor> {p ? age(now - (leaf ?? p).since) : ''}</Text>
-              </Text>
+              <Box flexDirection="column">
+                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {fitCells(l.id, Math.max(1, columns - 10))}</Text>
+                <Text>
+                  {pad}<Text color={p ? 'cyan' : 'yellow'}>{fitCells(whereOf(l.id), Math.max(1, columns - pad.length - (since === '' ? 0 : cells(since) + 1)))}</Text>
+                  <Text dimColor> {since}</Text>
+                </Text>
+              </Box>
             )
           })}
           {header('next', 'blue', `⏭ Next (${q.ready.length})`)}
           {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
-          {isOpen('next') && q.ready.slice(0, showReady).map(l => <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}{l.priority ? ` [${l.priority}]` : ''}</Text>)}
+          {isOpen('next') &&
+            q.ready.slice(0, showReady).map(l =>
+              nextTwo ? (
+                // two lines: bar, kind, priority; the id indented under them
+                <Box flexDirection="column">
+                  <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)}{l.priority ? ' ' + fitCells(`[${l.priority}]`, Math.max(1, columns - 9)) : ''}</Text>
+                  <Text>{'  '}{TAB}{fitCells(l.id, Math.max(1, columns - 2 - TAB.length))}</Text>
+                </Box>
+              ) : (
+                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}{l.priority ? ` [${l.priority}]` : ''}</Text>
+              ),
+            )}
           {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in the picker's order</Text>}
           {header('lands', 'green', `✓ Landed · 24h (${s.lands.length})`)}
           {isOpen('lands') &&
@@ -986,9 +1081,17 @@ export const register: Register = on => {
                   <Text dimColor>{'  '}{isOpen(key) ? '▾' : '▸'} ▦ {day} ({mine.length})</Text>
                 </Button>,
                 ...(isOpen(key)
-                  ? mine.map(l => (
-                      <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
-                    ))
+                  ? mine.map(l =>
+                      landTwo ? (
+                        // two lines: bar, kind, times, sha; the id indented under them
+                        <Box flexDirection="column">
+                          <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} <Text dimColor>{fitCells(`${l.start}-${l.at.slice(6)} ${l.sha}`, Math.max(1, columns - 12))}</Text></Text>
+                          <Text>{'    '}{TAB}{fitCells(l.slice, Math.max(1, columns - 4 - TAB.length))}</Text>
+                        </Box>
+                      ) : (
+                        <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
+                      ),
+                    )
                   : []),
               ]
             })}
@@ -996,14 +1099,19 @@ export const register: Register = on => {
           {isOpen('failed') && q.failedLines.length === 0 && <Text dimColor>  nothing</Text>}
           {isOpen('failed') &&
             q.failedLines.map(l => {
-              // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
-              const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(l.date)
-              const stamp = when ? `${when[2]}.${when[1]}` : 'date unknown'
-              const lead = `${' '.repeat(12)}${l.id} ${stamp} `
-              const fit = Math.max(10, (e.props?.bodyColumns ?? 100) - lead.length)
-              const reason = l.reason === '' ? 'no note' : l.reason.length > fit ? l.reason.slice(0, fit - 1) + '…' : l.reason
+              const stamp = stampOf(l.date)
+              if (!failTwo) {
+                return <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {l.id} <Text dimColor>{stamp} {reasonOf(l)}</Text></Text>
+              }
+              // two lines: bar, kind, id, date; the reason indented under them
+              const lead = 4 + 5 + 1 + 1 + 1
+              const idFit = fitCells(l.id, Math.max(1, columns - lead - cells(stamp) - 1))
+              const stampFit = fitCells(stamp, Math.max(1, columns - lead - cells(idFit) - 1))
               return (
-                <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {l.id} <Text dimColor>{stamp} {reason}</Text></Text>
+                <Box flexDirection="column">
+                  <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {idFit} <Text dimColor>{stampFit}</Text></Text>
+                  <Text dimColor>{'    '}{TAB}{fitCells(reasonOf(l), Math.max(1, columns - 4 - TAB.length))}</Text>
+                </Box>
               )
             })}
         </Box>
