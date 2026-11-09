@@ -60,6 +60,28 @@ describe("the dashboard has one style", () => {
     expect(literals("&#8212; var(--text) href=/session/ab#c")).toEqual([]);
   });
 
+  it("the whole page declares its dark theme to the browser, so native controls are dark", () => {
+    // `:root { color-scheme: dark }` darkens the date field and its calendar popup, selects and scrollbars
+    const root = /:root\s*\{([^}]*)\}/.exec(TOKENS)?.[1] ?? "";
+    expect(root).toMatch(/(?:^|[;\s])color-scheme:\s*dark\s*;/);
+    // before the stylesheet loads, and for a viewer that reads only the head, the page says so too
+    expect(PAGE).toContain('<meta name="color-scheme" content="dark">');
+    // no stylesheet or element turns a light scheme back on
+    for (const [file, text] of [
+      ["tokens.css", TOKENS],
+      ["components.css", COMPONENTS],
+      ["index.html", PAGE],
+    ] as const) {
+      const bad = [...text.matchAll(/color-scheme[^;}>]*/g)]
+        .map(m => m[0])
+        .filter(m => /\blight\b/.test(m) || !/\bdark\b/.test(m));
+      expect(bad, file).toEqual([]);
+    }
+    // the Cost tab's date inputs are native controls inside that root
+    expect(SCRIPT).toContain('<input type="date" id="cost-from"');
+    expect(SCRIPT).toContain('<input type="date" id="cost-to"');
+  });
+
   it("tokens.css carries the map's palette", () => {
     const token = (name: string): string | undefined =>
       new RegExp(`--${name}:\\s*([^;]+);`).exec(TOKENS)?.[1]?.trim();

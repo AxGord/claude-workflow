@@ -714,3 +714,28 @@ describe.skipIf(!HAVE_CHROME)("the Timeline tab in a real browser", () => {
     expect(longest).toBeLessThan(200);
   }, 60_000);
 });
+
+describe.skipIf(!HAVE_CHROME)("the Cost tab in a real browser", () => {
+  it("the date inputs and every native control take the page's dark scheme", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashcost-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const storage = new Storage(path.join(dir, "state"), { eventLog: false });
+    const base = await serve(storage, routesModule(dir));
+    const page = await openPage(`${base}/cost`);
+    await until(
+      page,
+      "document.querySelectorAll('#cost-from, #cost-to').length === 2",
+      "date inputs",
+    );
+    // a native control draws its field and its calendar popup by the computed colour-scheme
+    const schemes = await page.eval(
+      `JSON.stringify(['html', '#cost-from', '#cost-to'].map(q => getComputedStyle(document.querySelector(q)).colorScheme))`,
+    );
+    expect(JSON.parse(String(schemes))).toEqual(["dark", "dark", "dark"]);
+    // and the field itself is drawn dark, not the white of a light control
+    const lum = (await page.eval(
+      `(() => { const m = getComputedStyle(document.querySelector('#cost-from')).backgroundColor.match(/[\\d.]+/g).map(Number); return (m[0] + m[1] + m[2]) / 3; })()`,
+    )) as number;
+    expect(lum).toBeLessThan(100);
+  }, 30_000);
+});

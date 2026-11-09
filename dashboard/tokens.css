@@ -1,6 +1,9 @@
 /* The dashboard's design tokens: the ONLY file that holds a colour literal (src/dashboard-style.test.ts
    enforces it). Every other stylesheet and the page's script reach a colour through var(--…). */
 :root {
+  /* the page is dark: native controls (date field and its calendar popup, select, scrollbars) follow this */
+  color-scheme: dark;
+
   /* surfaces */
   --page: #0f1117;
   --panel: #11141c;
