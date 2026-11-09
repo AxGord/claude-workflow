@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { cells, fitCells, ledgerRunsOf, movedTo, poolView, queueView, spanText, startText } from './plan-pane'
+import { cells, dayOf, dayText, daySpends, fitCells, ledgerRunsOf, ledgerSpendOf, landMs, movedTo, poolView, queueView, spanText, startText, usdText } from './plan-pane'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -37,10 +37,14 @@ let openFails = false
 let poolReply: { status: number; text: string } | undefined = { status: 200, text: JSON.stringify(API_POOL) }
 const NOW = Date.parse('2026-11-07T10:05:00Z')
 
+/** Every `process.run` request, as JSON (the git log of the Landed tree). */
+const ran: string[] = []
+
 /** `ticking`: the clock moves only when the test advances it, and the 15 s refresh fires on that (returned). */
 function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: string }, ticking = false) {
   panes.splice(0)
   fetched.splice(0)
+  ran.splice(0)
   queueDown = false
   openFails = false
   poolReply = { status: 200, text: JSON.stringify(API_POOL) }
@@ -57,7 +61,10 @@ function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: str
   on('fs.read', (_: unknown, e: { path: string }) => ({
     value: e.path.endsWith('ledger.jsonl') ? (landed?.ledger ?? '') : withQueue ? SESSION : SESSION.replace(`"queue_file":"${QUEUE}"`, '"x":1'),
   }))
-  on('process.run', () => ({ value: landed ? { exitCode: 0, stdout: landed.git, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }))
+  on('process.run', (_: unknown, e: unknown) => {
+    ran.push(JSON.stringify(e))
+    return { value: landed ? { exitCode: 0, stdout: landed.git, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }
+  })
   on('http.fetch', (_: unknown, e: { url: string }) => {
     fetched.push(e.url)
     if (queueDown) throw new Error('ECONNREFUSED')
@@ -102,14 +109,14 @@ test('the Plan tab is drawn from the engine\'s /api/queue answer', async ($, on)
 })
 
 test('each row shows its kind glyph right after the bar: bug ※, research ⚑, feature and an absent kind ◆, the same column in all', async ($, on) => {
-  engine(on, true, { git: ['ddd444\t08.11 10:00\tDONE-1', 'eee555\t08.11 09:00\tNOT-IN-QUEUE'].join('\n'), ledger: '' })
+  engine(on, true, { git: ['ddd444\t07.11 10:00\tDONE-1', 'eee555\t07.11 09:00\tNOT-IN-QUEUE'].join('\n'), ledger: '' })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /▰▰▰▰▱ ※ RUN-1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▰▱▱▱▱ ⚑ NEXT-2 \[high\]/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ◆ NEXT-1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ \?    -10:00 ddd444 DONE-1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\?   \?    -09:00 eee555 NOT-IN-QUEUE/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ — \?    -10:00 ddd444 DONE-1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\?   — \?    -09:00 eee555 NOT-IN-QUEUE/ })).toBeDefined()
   await ui.press({ key: 'tab-waiting' })
   expect(await ui.find({ type: 'Text', text: /▰▰▰▱▱ ◆ WAIT-1/ })).toBeDefined()
   await ui.unmount()
@@ -215,10 +222,21 @@ test('movedTo names the active frame of a nested reply, the flat line otherwise,
   expect(movedTo('done, nothing here')).toBeUndefined()
 })
 
-const GIT = ['aaa111\t08.11 13:49\tL-ONE', 'bbb222\t08.11 09:10\tL-NOLEDGER', 'ccc333\t07.11 00:20\tL-MIDNIGHT'].join('\n')
+const GIT = ['aaa111\t07.11 13:49\tL-ONE', 'bbb222\t07.11 09:10\tL-NOLEDGER', 'ccc333\t06.11 00:20\tL-MIDNIGHT'].join('\n')
 const row = (task: string, started: string, difficulty?: number) =>
   JSON.stringify({ workflow: 'engine-task', task, started_at: started, ...(difficulty ? { difficulty } : {}) })
-const LEDGER = [row('L-ONE', '2026-11-08T13:02:00Z', 4), row('L-MIDNIGHT', '2026-11-05T12:00:00Z')].join('\n')
+/** A finished task run as the ledger holds it: `usd` its real spend (none: the run recorded no spend), `how` how it ended. */
+const ran1 = (task: string, ended: string, usd?: number, how: 'landed' | 'closed' | 'failed' = 'landed') =>
+  JSON.stringify({
+    workflow: 'engine-task',
+    task,
+    started_at: '2026-11-07T08:00:00Z',
+    ended_at: ended,
+    outcome: how === 'failed' ? 'abandoned' : 'completed',
+    visits: how === 'landed' ? { land: 1 } : { work: 1 },
+    ...(usd !== undefined ? { spend: { agents: 1, usd, input: 1, output: 1, cache_read: 1, cache_write: 1 } } : {}),
+  })
+const LEDGER = [row('L-ONE', '2026-11-07T11:02:00Z', 4), row('L-MIDNIGHT', '2026-11-05T12:00:00Z'), ran1('L-ONE', '2026-11-07T11:50:00Z', 1.234)].join('\n')
 
 test('ledgerRunsOf: latest run per line, foreign rows skipped', () => {
   const text = [
@@ -232,22 +250,82 @@ test('ledgerRunsOf: latest run per line, foreign rows skipped', () => {
   expect(runs.get('A')?.difficulty).toBe('6')
 })
 
+test('ledgerSpendOf: a line costs the sum of its runs; one run with no spend leaves the line unmeasured, never $0; the latest run decides the outcome', () => {
+  const text = [
+    ran1('A', '2026-11-07T08:00:00Z', 1.5, 'failed'),
+    ran1('A', '2026-11-07T09:00:00Z', 2, 'landed'),
+    ran1('B', '2026-11-07T09:00:00Z', 4),
+    ran1('B', '2026-11-07T10:00:00Z'),
+    ran1('C', '2026-11-07T10:00:00Z', 0.5, 'closed'),
+    ran1('D', '2026-11-07T10:00:00Z'),
+    '{"task":"E","workflow":"other","ended_at":"2026-11-07T09:00:00Z","spend":{"usd":9}}',
+    JSON.stringify({ workflow: 'engine-task', task: 'F', ended_at: '2026-11-07T09:00:00Z', outcome: 'completed', spend: { usd: 3 } }),
+    'torn{"task"',
+  ].join('\n')
+  const m = ledgerSpendOf(text)
+  expect([...m.keys()]).toEqual(['A', 'B', 'C', 'D', 'F'])
+  expect(m.get('A')).toMatchObject({ usd: 3.5, outcome: 'landed' })
+  expect(m.get('B')?.usd).toBeUndefined()
+  expect(m.get('B')).toHaveProperty('outcome', 'landed')
+  expect(m.get('C')).toMatchObject({ usd: 0.5, outcome: 'closed' })
+  expect(m.get('D')?.usd).toBeUndefined()
+  expect(m.get('F')).toMatchObject({ usd: 3, outcome: 'unknown' })
+})
+
+test('usdText: cents under $100, whole dollars above; no figure is `—`, never $0', () => {
+  expect([usdText(1.234), usdText(0), usdText(12.345), usdText(412.6), usdText(undefined)]).toEqual(['$1.23', '$0.00', '$12.35', '$413', '—'])
+})
+
+test('landMs reads `DD.MM HH:MM` into the latest year that is not past now; dayOf is its `DD.MM`', () => {
+  const now = new Date(2027, 0, 2, 10, 0).getTime()
+  expect(landMs('31.12 23:50', now)).toBe(new Date(2026, 11, 31, 23, 50).getTime())
+  expect(landMs('02.01 09:00', now)).toBe(new Date(2027, 0, 2, 9, 0).getTime())
+  expect(landMs('garbage', now)).toBe(0)
+  expect(dayOf(new Date(2027, 0, 2, 9, 0).getTime())).toBe('02.01')
+})
+
+test('daySpends: a day sums its landed lines and the failed and closed lines that ended on it, a line once; dayText says what it includes and how many are measured', () => {
+  const spends = ledgerSpendOf(
+    [
+      ran1('L1', '2026-11-07T08:00:00Z', 1),
+      ran1('L2', '2026-11-07T08:00:00Z'),
+      ran1('X', new Date(2026, 10, 7, 12).toISOString(), 2, 'failed'),
+      ran1('Y', new Date(2026, 10, 7, 12).toISOString(), 0.5, 'closed'),
+      ran1('Z', new Date(2026, 10, 7, 12).toISOString(), undefined, 'failed'),
+      ran1('OLD', new Date(2026, 10, 1, 12).toISOString(), 8, 'failed'),
+    ].join('\n'),
+  )
+  const land = (slice: string, d: string): never => ({ sha: 'a', slice, at: d + ' 10:00', start: '?', difficulty: '', ...(spends.get(slice)?.usd !== undefined ? { usd: spends.get(slice)!.usd } : {}) }) as never
+  const days = daySpends([land('L1', '07.11'), land('L2', '07.11'), land('L1', '07.11')], spends)
+  expect(days).toEqual({ '07.11': { usd: 3.5, lines: 5, measured: 3, failed: 2, closed: 1 } })
+  expect(dayText(days['07.11']!)).toBe('$3.50 incl. 2 failed, 1 closed · 3/5 measured')
+  expect(dayText({ usd: 0, lines: 2, measured: 0, failed: 0, closed: 0 })).toBe('— · 0/2 measured')
+  expect(dayText({ usd: 7.5, lines: 2, measured: 2, failed: 0, closed: 0 })).toBe('$7.50')
+})
+
 test('startText: the time, with its date when the run began on another day', () => {
   const at = new Date(2026, 10, 7, 23, 50).getTime()
   expect(startText(at, '08.11 00:20')).toBe('07.11 23:50')
   expect(startText(at, '07.11 23:59')).toBe('23:50')
 })
 
-test('Landed is a tree: day rows with counts, bar + start-end per land, `?` without a ledger row, a day folds alone', async ($, on) => {
+test('Landed is a tree of the last 14 days: today open, older days folded; per row the cost (`—` when not measured), per day its sum, a day folds alone', async ($, on) => {
   engine(on, true, { git: GIT, ledger: LEDGER })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /▦ 08\.11 \(2\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▦ 07\.11 \(1\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱   \d\d:\d\d-13:49 aaa111 L-ONE/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\?   \?    -09:10 bbb222 L-NOLEDGER/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\?   05\.11 \d\d:\d\d-00:20 ccc333/ })).toBeDefined()
-  await ui.press({ key: 'fold-lands-08.11' })
+  expect(ran.some(r => r.includes('--since=14 days ago'))).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /Landed · 14d \(3\)/ })).toBeDefined()
+  // today: two lands, one measured; the older day's sum is there, its rows are not
+  expect(await ui.find({ type: 'Text', text: /▾ ▦ 07\.11 \(2\) \$1\.23 · 1\/2 measured/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▸ ▦ 06\.11 \(1\) — · 0\/1 measured/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱   \$1\.23 \d\d:\d\d-13:49 aaa111 L-ONE/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? {7}— \?    -09:10 bbb222 L-NOLEDGER/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\$0/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /L-MIDNIGHT/ })).toBeUndefined()
+  await ui.press({ key: 'fold-lands-06.11' })
+  expect(await ui.find({ type: 'Text', text: /▾ ▦ 06\.11/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? {7}— 05\.11 \d\d:\d\d-00:20 ccc333/ })).toBeDefined()
+  await ui.press({ key: 'fold-lands-07.11' })
   expect(await ui.find({ type: 'Text', text: /L-ONE/ })).toBeUndefined()
   expect(await ui.find({ type: 'Text', text: /L-MIDNIGHT/ })).toBeDefined()
   await ui.unmount()
@@ -278,13 +356,84 @@ test('Failed is folded by default, shows its count, and unfolds on a click with 
   expect(await ui.find({ type: 'Text', text: /FAIL-NEW/ })).toBeUndefined()
   await ui.press({ key: 'fold-failed' })
   expect(await ui.find({ type: 'Text', text: /▾ ✗ Failed \(4\)/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ※ FAIL-OLD 06\.11 gate red: the suite/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ FAIL-NEW 07\.11 closed as a split/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ FAIL-BARE date unknown no note/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ※ — FAIL-OLD 06\.11 gate red: the suite/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ — FAIL-NEW 07\.11 closed as a split/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ — FAIL-BARE date unknown no note/ })).toBeDefined()
   const order = (await ui.findAll({ type: 'Text', text: /FAIL-/ })).map(t => /FAIL-\w+/.exec(t.text)?.[0])
   expect(order).toEqual(['FAIL-LONG', 'FAIL-NEW', 'FAIL-OLD', 'FAIL-BARE'])
   await ui.press({ key: 'fold-failed' })
   expect(await ui.find({ type: 'Text', text: /FAIL-NEW/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+/** A ledger run ended at noon, local time, of the given `DD` of November 2026. */
+const noon = (d: number) => new Date(2026, 10, d, 12).toISOString()
+const DAY_GIT = ['aaa111\t07.11 13:49\tL-ONE', 'bbb222\t07.11 09:10\tL-TWO', 'ccc333\t07.11 08:00\tL-THREE'].join('\n')
+const DAY_LEDGER = [
+  ran1('L-ONE', noon(7), 1.5),
+  ran1('L-TWO', noon(7), 2.25),
+  ran1('L-THREE', noon(7)),
+  ran1('FAIL-OLD', noon(7), 3, 'failed'),
+  ran1('FAIL-LONG', noon(7), 7.5, 'failed'),
+  ran1('CLOSED-1', noon(7), 0.5, 'closed'),
+].join('\n')
+
+test('a day header sums its landed lines and the failed and closed lines that ended that day, says so, and says how many of its lines are measured', async ($, on) => {
+  engine(on, true, { git: DAY_GIT, ledger: DAY_LEDGER })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 200 }, surface: 'terminal' })
+  // 1.5 + 2.25 landed, 3 + 7.5 failed, 0.5 closed; L-THREE has no spend: 5 of 6 lines measured
+  expect((await ui.find({ type: 'Text', text: /▦ 07\.11/ }))?.text).toBe('  ▾ ▦ 07.11 (3) $14.75 incl. 2 failed, 1 closed · 5/6 measured')
+  // each landed row its own line cost; the unmeasured one `—`
+  expect(await ui.find({ type: 'Text', text: /\$1\.50 \d\d:\d\d-13:49 aaa111 L-ONE|\$1\.50 \?    -13:49 aaa111 L-ONE/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: / {4}— .*ccc333 L-THREE/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a day whose every line is measured states its sum alone; a day with none says `—` and 0 measured, never $0', () => {
+  const days = daySpends(
+    [{ sha: 'a', slice: 'A', at: '07.11 10:00', start: '?', difficulty: '', usd: 2 }, { sha: 'b', slice: 'B', at: '06.11 10:00', start: '?', difficulty: '' }],
+    new Map(),
+  )
+  expect(dayText(days['07.11']!)).toBe('$2.00')
+  expect(dayText(days['06.11']!)).toBe('— · 0/1 measured')
+})
+
+test('Failed: each row carries the line\'s cost in front of its id, `—` when the ledger has none', async ($, on) => {
+  engine(on, true, { git: '', ledger: DAY_LEDGER })
+  const all = await paneTexts($, 200, ['fold-failed'])
+  expect(all.some(t => /▰▰▱▱▱ ※ \$3\.00 FAIL-OLD 06\.11 gate red: the suite/.test(t))).toBe(true)
+  expect(all.some(t => /\$7\.50 FAIL-LONG/.test(t))).toBe(true)
+  expect(all.some(t => /\?\?\?\?\? ◆ {5}— FAIL-NEW 07\.11/.test(t))).toBe(true)
+  expect(all.some(t => t.includes('$0'))).toBe(false)
+})
+
+test('a narrow pane keeps the cost and cuts the id: Landed and Failed rows on two lines, none past the width', async ($, on) => {
+  const LONG = 'L-AN-IDENTIFIER-THAT-IS-VERY-LONG'
+  engine(on, true, { git: [`ddd444\t07.11 13:49\t${LONG}`, DAY_GIT].join('\n'), ledger: [DAY_LEDGER, ran1(LONG, noon(7), 12.5)].join('\n') })
+  const all = await paneTexts($, 30, ['fold-failed'])
+  const land = all.find(t => t.includes('$12.50')) ?? ''
+  // the first line is cut (times, sha) before the cost is
+  expect(land).toMatch(/\$12\.50 .*…$/)
+  expect(all.some(t => t.includes('L-AN-IDENT') && t.includes('…'))).toBe(true)
+  const fail = all.find(t => t.includes('$7.50')) ?? ''
+  expect(fail).toContain('…')
+  expect(fail).toMatch(/FAIL-/)
+  for (const t of [land, fail, ...all.filter(t => /L-AN-|FAIL-|▦/.test(t))]) expect(cells(t)).toBeLessThanOrEqual(30)
+})
+
+test('the band counts the lands of the last 24 hours, the tree holds 14 days', async ($, on) => {
+  engine(on, true, { git: ['aaa111\t07.11 09:00\tL-ONE', 'bbb222\t04.11 09:00\tL-OLD'].join('\n'), ledger: '' })
+  on('ui.render', ($: any, e: any) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>engine</Text>
+  })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await band.find({ type: 'Text', text: /· ✓ 1$/ })).toBeDefined()
+  await band.unmount()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /Landed · 14d \(2\)/ })).toBeDefined()
   await ui.unmount()
 })
 

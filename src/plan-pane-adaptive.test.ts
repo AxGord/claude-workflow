@@ -13,10 +13,10 @@ const root = resolve(import.meta.dirname, "..");
 const HAVE_CLAUDE = spawnSync("claude", ["--version"], { stdio: "ignore" }).error === undefined;
 
 const PANE_TESTS = String.raw`
-const GIT2 = ['aaa111\t08.11 13:49\tL-ONE', 'bbb222\t08.11 09:10\tL-NOLEDGER', 'ccc333\t08.11 00:20\tL-MIDNIGHT'].join('\n')
+const GIT2 = ['aaa111\t07.11 13:49\tL-ONE', 'bbb222\t07.11 09:10\tL-NOLEDGER', 'ccc333\t07.11 00:20\tL-MIDNIGHT'].join('\n')
 const run = (task: string, started: string, difficulty?: number) =>
   JSON.stringify({ workflow: 'engine-task', task, started_at: started, ...(difficulty ? { difficulty } : {}) })
-const LEDGER2 = [run('L-ONE', '2026-11-08T13:02:00Z', 4), run('L-MIDNIGHT', '2026-11-05T12:00:00Z')].join('\n')
+const LEDGER2 = [run('L-ONE', '2026-11-07T13:02:00Z', 4), run('L-MIDNIGHT', '2026-11-05T12:00:00Z')].join('\n')
 const COLUMNS = 38
 const LONG_ID = 'RUN-2-AN-IDENTIFIER-THAT-IS-LONG'
 
@@ -54,7 +54,7 @@ test('Running: one row too long for the pane puts EVERY running row on two lines
 
 test('Landed: one row too long for the pane puts EVERY landed row on two lines, the id on an indented second line', async ($, on) => {
   const all = await rows($, on, COLUMNS)
-  // L-ONE fits (36 cells); L-NOLEDGER (41) and L-MIDNIGHT (47) do not
+  // L-ONE fits (38 cells, the cost column counted); L-NOLEDGER (43) and L-MIDNIGHT (49) do not
   const one = all.filter(t => t.includes('L-ONE'))
   expect(one.length).toBeGreaterThan(0)
   for (const t of one) {
@@ -65,7 +65,7 @@ test('Landed: one row too long for the pane puts EVERY landed row on two lines, 
   for (const t of all.filter(t => /L-(ONE|NOLEDGER|MIDNIGHT)|aaa111|bbb222|ccc333/.test(t))) expect(cells(t)).toBeLessThanOrEqual(COLUMNS)
 })
 
-// the same rows (RUN-2's is 56 cells, the widest Landed row 47) at a width where everything fits
+// the same rows (RUN-2's is 56 cells, the widest Landed row 49) at a width where everything fits
 const one = (all: string[]) => {
   for (const id of ['RUN-1', 'RUN-2']) expect(all.some(t => t.includes(id) && /^ +\S/.test(t) && t.includes('no pipeline'))).toBe(true)
   expect(all.some(t => t.includes('L-ONE') && t.includes('aaa111'))).toBe(true)

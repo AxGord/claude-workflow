@@ -32,8 +32,8 @@ export type QueueLine = {
   priority?: string
 }
 
-/** A `failed` queue line: its reason is the first line of its last note (`''` none), its date that note's (`''` unknown). */
-export type FailedLine = { id: string; difficulty: string; date: string; reason: string }
+/** A `failed` queue line: its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured). */
+export type FailedLine = { id: string; difficulty: string; date: string; reason: string; usd?: number }
 
 export type QueueView = {
   file: string
@@ -52,8 +52,11 @@ export type QueueView = {
   marks: Record<string, string>
 }
 
-/** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown). */
-export type Land = { sha: string; slice: string; at: string; start: string; difficulty: string }
+/** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown), `usd` the ledger's real spend over every run of the line (absent: not measured, never $0). */
+export type Land = { sha: string; slice: string; at: string; start: string; difficulty: string; usd?: number }
+
+/** One day of the Landed tree (`DD.MM`): the sum of the measured lines' `usd` over its landed lines and the failed and closed lines that ended that day, how many lines the sum covers, and how many of them were measured. */
+export type DaySpend = { usd: number; lines: number; measured: number; failed: number; closed: number }
 
 /** An agent seen linked to a workflow session: its slice (or workflow), role and last step. */
 export type AgentSeen = { label: string; role: string; state: string; at: number }
@@ -105,6 +108,10 @@ export type Snapshot = {
   sessions: SessionRow[]
   queue: QueueView | null
   lands: Land[]
+  /** the lands of the last 24 hours (`lands` holds the 14 days the tree shows) */
+  recent: number
+  /** per `DD.MM` of `lands`: the day's spend */
+  days: Record<string, DaySpend>
   error: string
 }
 

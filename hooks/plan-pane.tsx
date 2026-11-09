@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { AgentSeen, FailedLine, Land, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
+import type { AgentSeen, DaySpend, FailedLine, Land, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
 
 const PANE = 'workflow-plan'
 const PERIOD_MS = 15000
@@ -9,7 +9,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-6' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-7' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -20,8 +20,10 @@ const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, 
 const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shape: 'pool-1' })
 /** The Plan tab sections whose fold the person flipped (running, next, lands, failed): none by default, so all sections show but FOLDED_BY_DEFAULT ones. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-1' })
-/** Sections that start folded: a click on one unfolds it. */
+/** Sections that start folded: a click on one unfolds it. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
 const FOLDED_BY_DEFAULT = new Set(['failed'])
+/** How far back the Landed tree goes: the Cost tab's own range. */
+const LAND_DAYS = 14
 /** The session whose card is open in the Sessions tab ('' none). */
 const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { shape: 'expanded-1' })
 
@@ -175,7 +177,6 @@ async function loadQueue($: any, file: string): Promise<{ queue: QueueView | nul
 /** A finished task's run, from the ledger: when its pipeline began and the difficulty it ended at. */
 type Run = { start: number; difficulty: string }
 let ledgerSeen = ''
-let ledgerRuns = new Map<string, Run>()
 const TASK_WORKFLOWS = new Set(['slice-pipeline', 'engine-task'])
 
 /** The task runs of the ledger by queue line id (the latest run of a line wins); rows without `task` are skipped. */
@@ -196,18 +197,57 @@ export function ledgerRunsOf(text: string): Map<string, Run> {
   return out
 }
 
-/** The ledger's runs, re-read only when the file's size or mtime moved (the pane refreshes often). */
-async function ledgerRunsAt($: any, dir: string): Promise<Map<string, Run>> {
+/** What the ledger says of a queue line over every run of it: `usd` is the sum of the runs' real spend, absent when ANY run recorded none (a line is measured whole or not at all, never $0); the latest run's end and how it ended. */
+export type TaskSpend = { usd?: number; endedAt: number; outcome: 'landed' | 'closed' | 'failed' | 'unknown' }
+
+/** How a task run ended, as the Cost tab reads it (`costOutcome`): not completed = failed; completed through a `land` state = landed; completed without = closed; no visits recorded = unknown. */
+function outcomeOf(j: Record<string, unknown>): TaskSpend['outcome'] {
+  if (j.outcome !== 'completed') return 'failed'
+  if (!j.visits || typeof j.visits !== 'object') return 'unknown'
+  return Object.entries(j.visits).some(([n, v]) => typeof v === 'number' && v > 0 && /(^|_)land$/.test(n)) ? 'landed' : 'closed'
+}
+
+/** The spend of the ledger's task runs by queue line id; rows without `task`, of other workflows or with no end are skipped. */
+export function ledgerSpendOf(text: string): Map<string, TaskSpend> {
+  const acc = new Map<string, { usd: number; isMeasured: boolean; endedAt: number; outcome: TaskSpend['outcome'] }>()
+  for (const line of text.split('\n')) {
+    if (!line.includes('"task"')) continue
+    try {
+      const j = JSON.parse(line) as Record<string, unknown>
+      const ended = Date.parse(String(j.ended_at ?? ''))
+      if (typeof j.task !== 'string' || j.task === '' || !TASK_WORKFLOWS.has(String(j.workflow)) || !Number.isFinite(ended)) continue
+      const usd = (j.spend as { usd?: unknown } | undefined)?.usd
+      const cur = acc.get(j.task) ?? { usd: 0, isMeasured: true, endedAt: -Infinity, outcome: 'unknown' as const }
+      if (typeof usd === 'number' && Number.isFinite(usd)) cur.usd += usd
+      else cur.isMeasured = false
+      if (ended >= cur.endedAt) {
+        cur.endedAt = ended
+        cur.outcome = outcomeOf(j)
+      }
+      acc.set(j.task, cur)
+    } catch {
+      // a torn or foreign line is not a run
+    }
+  }
+  return new Map([...acc].map(([task, a]) => [task, { ...(a.isMeasured ? { usd: a.usd } : {}), endedAt: a.endedAt, outcome: a.outcome }]))
+}
+
+type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend> }
+const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map() }
+let ledgerRead: Ledger = NO_LEDGER
+
+/** The ledger's runs and spend, re-read only when the file's size or mtime moved (the pane refreshes often). */
+async function ledgerAt($: any, dir: string): Promise<Ledger> {
   const entries = await $.fs.list(dir).catch(() => [])
   const f = entries.find((x: any) => x.name === 'ledger.jsonl')
-  if (!f) return new Map()
+  if (!f) return NO_LEDGER
   const stamp = `${f.size}:${f.mtimeMs}`
   if (stamp !== ledgerSeen) {
-    const text = await $.fs.read(`${dir}/ledger.jsonl`).catch(() => '')
-    ledgerRuns = ledgerRunsOf(String(text))
+    const text = String(await $.fs.read(`${dir}/ledger.jsonl`).catch(() => ''))
+    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text) }
     ledgerSeen = stamp
   }
-  return ledgerRuns
+  return ledgerRead
 }
 
 const two = (n: number) => String(n).padStart(2, '0')
@@ -220,25 +260,76 @@ export function startText(start: number, endAt: string): string {
   return day === endAt.slice(0, 5) ? hm : `${day} ${hm}`
 }
 
-async function lands($: any, queueFile: string, dir: string): Promise<Land[]> {
+/** `DD.MM` of a moment, in local time: the key of a day of the Landed tree. */
+export function dayOf(ms: number): string {
+  const d = new Date(ms)
+  return `${two(d.getDate())}.${two(d.getMonth() + 1)}`
+}
+
+/** A land's `DD.MM HH:MM` as a moment: the latest year that does not put it past `now` by more than a day (the log is of the last 14 days, so the year only matters around New Year). */
+export function landMs(at: string, now: number): number {
+  const m = /^(\d\d)\.(\d\d) (\d\d):(\d\d)/.exec(at)
+  if (!m) return 0
+  const year = new Date(now).getFullYear()
+  const t = new Date(year, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime()
+  return t > now + 24 * 3600 * 1000 ? new Date(year - 1, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime() : t
+}
+
+/** `$1.23`, `$12.34`, `$123`; `—` when the line has no measured cost (never `$0.00`). */
+export function usdText(usd: number | undefined): string {
+  if (usd === undefined) return '—'
+  return '$' + (usd < 100 ? usd.toFixed(2) : usd.toFixed(0))
+}
+
+/** Each day of the Landed tree: the sum of its landed lines' cost plus the failed and closed lines whose latest run ended that day (a line counts once), how many lines that is and how many were measured. */
+export function daySpends(lands: Land[], spends: Map<string, TaskSpend>): Record<string, DaySpend> {
+  const days: Record<string, DaySpend> = {}
+  const counted = new Set<string>()
+  const add = (day: string, line: string, usd: number | undefined, kind?: 'failed' | 'closed') => {
+    const d = (days[day] ??= { usd: 0, lines: 0, measured: 0, failed: 0, closed: 0 })
+    counted.add(line)
+    d.lines++
+    if (usd !== undefined) {
+      d.measured++
+      d.usd += usd
+    }
+    if (kind) d[kind]++
+  }
+  for (const l of lands) if (!counted.has(l.slice)) add(l.at.slice(0, 5), l.slice, l.usd)
+  const landed = new Set(lands.map(l => l.slice))
+  for (const [task, sp] of spends) {
+    const day = dayOf(sp.endedAt)
+    if (landed.has(task) || !days[day] || (sp.outcome !== 'failed' && sp.outcome !== 'closed')) continue
+    add(day, task, sp.usd, sp.outcome)
+  }
+  return days
+}
+
+/** A day row's spend: the sum (`—` when no line is measured), what it includes besides landed lines, and how many of the lines were measured when not all. */
+export function dayText(d: DaySpend): string {
+  const extra = [d.failed > 0 ? `${d.failed} failed` : '', d.closed > 0 ? `${d.closed} closed` : ''].filter(x => x !== '').join(', ')
+  return `${d.measured === 0 ? '—' : usdText(d.usd)}${extra !== '' ? ` incl. ${extra}` : ''}${d.measured < d.lines ? ` · ${d.measured}/${d.lines} measured` : ''}`
+}
+
+async function lands($: any, queueFile: string, ledger: Ledger): Promise<Land[]> {
   const repo = queueFile.replace(/\/\.claude\/batch\/[^/]+$/, '')
   if (repo === queueFile) return []
   const run = await $.process
-    .run(['git', '-C', repo, 'log', '--since=24 hours ago', '--first-parent', '-n', '300',
+    .run(['git', '-C', repo, 'log', `--since=${LAND_DAYS} days ago`, '--first-parent', '-n', '2000',
       '--format=%h%x09%cd%x09%(trailers:key=Slice,valueonly,separator=)', '--date=format:%d.%m %H:%M', 'main'],
       { timeoutMs: 10000 })
     .catch(() => undefined)
   if (!run || run.exitCode !== 0) return []
-  const runs = await ledgerRunsAt($, dir)
   return String(run.stdout)
     .split('\n')
     .map(l => l.split('\t'))
     .filter(p => p.length >= 3 && (p[2] ?? '').trim() !== '')
     .map(p => {
       const slice = (p[2] ?? '').trim()
-      const r = runs.get(slice)
+      const r = ledger.runs.get(slice)
+      const usd = ledger.spends.get(slice)?.usd
       const at = p[1] ?? ''
-      return { sha: p[0] ?? '', at, slice, start: r ? startText(r.start, at) : '?'.padEnd(5), difficulty: r?.difficulty ?? '' }
+      return { sha: p[0] ?? '', at, slice, start: r ? startText(r.start, at) : '?'.padEnd(5), difficulty: r?.difficulty ?? '', ...(usd !== undefined ? { usd } : {}) }
     })
 }
 
@@ -336,8 +427,19 @@ async function build($: any): Promise<Snapshot> {
     sessions.push({ ...p.row, next: graph.get(p.row.workflow)?.get(p.row.state) ?? [] })
     if (p.queueFile !== '') queueFile = p.queueFile
   }
-  const { queue, error } = queueFile !== '' ? await loadQueue($, queueFile) : { queue: null, error: '' }
-  return { at: now, sessions, queue, lands: queue ? await lands($, queueFile, dir) : [], error }
+  const loaded = queueFile !== '' ? await loadQueue($, queueFile) : { queue: null, error: '' }
+  const ledger = loaded.queue ? await ledgerAt($, dir) : NO_LEDGER
+  // a failed line carries what the ledger says it cost
+  const queue = loaded.queue && {
+    ...loaded.queue,
+    failedLines: loaded.queue.failedLines.map(l => {
+      const usd = ledger.spends.get(l.id)?.usd
+      return usd !== undefined ? { ...l, usd } : l
+    }),
+  }
+  const landed = queue ? await lands($, queueFile, ledger) : []
+  const recent = landed.filter(l => landMs(l.at, now) > now - 24 * 3600 * 1000).length
+  return { at: now, sessions, queue, lands: landed, recent, days: daySpends(landed, ledger.spends), error: loaded.error }
 }
 
 /** The role an agent plays for the workflow its session runs. */
@@ -590,7 +692,7 @@ export const register: Register = on => {
         </Text>
         {q ? (
           <Text dimColor>
-            ▶ {q.running.length}/{q.window} · ⏭ {q.ready.length} · ✓ {s.lands.length}
+            ▶ {q.running.length}/{q.window} · ⏭ {q.ready.length} · ✓ {s.recent}
           </Text>
         ) : null}
         <Button key="band-plan" hotkey="p" plain onPress={() => void togglePane($)}>
@@ -743,7 +845,7 @@ export const register: Register = on => {
   // A driver's one-line hand-back (another session's message) drawn by its outcome. Only when ALL hold: the row is a
   // peer message; its whole text is ONE line in the exact protocol shape (LANDED <sha> slice=|task=<ID> …,
   // NEEDS-PARENT slice=|task=<ID> …, WAITING slice=|task=<ID> …); and that ID is a slice this session knows (running in
-  // the queue, landed in the last 24 h, or an agent seen on it). Anything else draws as the engine draws it.
+  // the queue, landed in the last 14 days, or an agent seen on it). Anything else draws as the engine draws it.
   on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
     if (e.props.origin.kind !== 'peer' || e.props.isExpanded) return next(e)
     const text = e.props.text.trim()
@@ -839,14 +941,15 @@ export const register: Register = on => {
     const tab: View = s.queue ? ((await read($, view)) ?? 'plan') : 'sessions'
     const open: string = (await read($, expanded)) ?? ''
     const foldedNow: string[] = (await read($, folded)) ?? []
-    const isOpen = (key: string) => foldedNow.includes(key) === FOLDED_BY_DEFAULT.has(key)
-    // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones)
+    const now = await $.clock.now()
+    const today = 'lands-' + dayOf(now)
+    const isOpen = (key: string) => foldedNow.includes(key) === (FOLDED_BY_DEFAULT.has(key) || (key.startsWith('lands-') && key !== today))
+    // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones and the days before today)
     const header = (key: string, color: string, title: string) => (
       <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => (f.includes(key) ? f.filter(k => k !== key) : [...f, key]))}>
         <Text color={color} weight="bold">{isOpen(key) ? '▾' : '▸'} {title}</Text>
       </Button>
     )
-    const now = await $.clock.now()
     const columns: number = e.props?.bodyColumns ?? 100
     const room = Math.max(4, (e.viewport?.rows ?? 30) - 6)
     const byId = new Map(s.sessions.map(r => [r.id, r]))
@@ -1016,14 +1119,22 @@ export const register: Register = on => {
       // the rows left for Next count lines: a two-line Running or Next row takes two
       const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length * (runTwo ? 2 : 1)
       const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
-      const landTwo = !fitsOneLine(s.lands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
+      // a row's cost sits right after its kind, right-aligned to the section's widest figure: it is never cut, the id is
+      const costCol = (all: (number | undefined)[]) => {
+        const w = Math.max(1, ...all.map(u => cells(usdText(u))))
+        return { w, text: (u: number | undefined) => usdText(u).padStart(w) }
+      }
+      const landCost = costCol(s.lands.map(l => l.usd))
+      const failCost = costCol(q.failedLines.map(l => l.usd))
+      const costOf = (u: number | undefined, col: { text: (u: number | undefined) => string }) => <Text dimColor={u === undefined}>{col.text(u)}</Text>
+      const landTwo = !fitsOneLine(s.lands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l.usd)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
       const stampOf = (date: string) => {
         // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
         const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(date)
         return when ? `${when[2]}.${when[1]}` : 'date unknown'
       }
       const reasonOf = (l: FailedLine) => (l.reason === '' ? 'no note' : l.reason)
-      const failTwo = !fitsOneLine(q.failedLines.map(l => `    ${BAR_W} ${markOf(l.id)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
+      const failTwo = !fitsOneLine(q.failedLines.map(l => `    ${BAR_W} ${markOf(l.id)} ${failCost.text(l.usd)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
       body = (
         <Box flexDirection="column">
           <Text>
@@ -1070,26 +1181,27 @@ export const register: Register = on => {
               ),
             )}
           {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in the picker's order</Text>}
-          {header('lands', 'green', `✓ Landed · 24h (${s.lands.length})`)}
+          {header('lands', 'green', `✓ Landed · ${LAND_DAYS}d (${s.lands.length})`)}
           {isOpen('lands') &&
             [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
-              // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day, its lands one level deeper
+              // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day with its spend, its lands one level deeper
               const mine = s.lands.filter(l => l.at.slice(0, 5) === day)
+              const spend = s.days[day]
               const key = 'lands-' + day
               return [
                 <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => (f.includes(key) ? f.filter(k => k !== key) : [...f, key]))}>
-                  <Text dimColor>{'  '}{isOpen(key) ? '▾' : '▸'} ▦ {day} ({mine.length})</Text>
+                  <Text dimColor>{fitCells(`  ${isOpen(key) ? '▾' : '▸'} ▦ ${day} (${mine.length})${spend ? ' ' + dayText(spend) : ''}`, columns)}</Text>
                 </Button>,
                 ...(isOpen(key)
                   ? mine.map(l =>
                       landTwo ? (
-                        // two lines: bar, kind, times, sha; the id indented under them
+                        // two lines: bar, kind, cost, times, sha; the id indented under them
                         <Box flexDirection="column">
-                          <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} <Text dimColor>{fitCells(`${l.start}-${l.at.slice(6)} ${l.sha}`, Math.max(1, columns - 12))}</Text></Text>
+                          <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} {costOf(l.usd, landCost)} <Text dimColor>{fitCells(`${l.start}-${l.at.slice(6)} ${l.sha}`, Math.max(1, columns - 13 - landCost.w))}</Text></Text>
                           <Text>{'    '}{TAB}{fitCells(l.slice, Math.max(1, columns - 4 - TAB.length))}</Text>
                         </Box>
                       ) : (
-                        <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
+                        <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} {costOf(l.usd, landCost)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
                       ),
                     )
                   : []),
@@ -1101,15 +1213,15 @@ export const register: Register = on => {
             q.failedLines.map(l => {
               const stamp = stampOf(l.date)
               if (!failTwo) {
-                return <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {l.id} <Text dimColor>{stamp} {reasonOf(l)}</Text></Text>
+                return <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {costOf(l.usd, failCost)} {l.id} <Text dimColor>{stamp} {reasonOf(l)}</Text></Text>
               }
-              // two lines: bar, kind, id, date; the reason indented under them
-              const lead = 4 + 5 + 1 + 1 + 1
+              // two lines: bar, kind, cost, id, date; the reason indented under them
+              const lead = 4 + 5 + 1 + 1 + 1 + failCost.w + 1
               const idFit = fitCells(l.id, Math.max(1, columns - lead - cells(stamp) - 1))
               const stampFit = fitCells(stamp, Math.max(1, columns - lead - cells(idFit) - 1))
               return (
                 <Box flexDirection="column">
-                  <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {idFit} <Text dimColor>{stampFit}</Text></Text>
+                  <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {costOf(l.usd, failCost)} {idFit} <Text dimColor>{stampFit}</Text></Text>
                   <Text dimColor>{'    '}{TAB}{fitCells(reasonOf(l), Math.max(1, columns - 4 - TAB.length))}</Text>
                 </Box>
               )

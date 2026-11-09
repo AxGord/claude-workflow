@@ -222,7 +222,7 @@ An exec without `cwd:` runs in the session's cwd — a sub-agent started with
 a relative `cwd:` resolves against it. Each exec's history entry carries
 `exit_code` and `duration_ms` (plus `wait_ms`, `threads_granted` and
 `step_key` = `<project git root>|<workflow>|<state>` for a `resource:` exec);
-every session end appends one line to `$STATE_DIR/ledger.jsonl` with them, plus `spend`: the task's real cost summed from the transcripts of the agents the session links or names (`agent_id_<stage>`, `<role>_agent` context keys), unmeasured (never $0) when one cannot be read.
+every session end appends one line to `$STATE_DIR/ledger.jsonl` with them, plus `spend`: the task's real cost summed from the transcripts of the agents the session links or names (`agent_id_<stage>`, `<role>_agent` context keys), unmeasured (never $0) when one cannot be read; the plan pane shows it per Landed and Failed row (`—` when unmeasured) and as a day sum on each Landed day.
 A sub-workflow `push` history entry carries `workflow` and `to` (the sub-workflow's first state), so the time spent in every state can be read from the history alone (the dashboard's Timeline tab does); the ledger's `transitions` and `visits` do not count it as a move.
 
 Unknown keys are a LOAD ERROR (strict schema): a typo like `comand:` drops
