@@ -357,7 +357,9 @@ export const KIND_MARKS = { bug: "※", research: "⚑", feature: "◆" } as con
 export function kindMark(line: { readonly kind?: unknown } | undefined): string {
   if (line === undefined) return " ";
   const k = typeof line.kind === "string" ? line.kind.trim().toLowerCase() : "";
-  return k in KIND_MARKS ? KIND_MARKS[k as keyof typeof KIND_MARKS] : KIND_MARKS.feature;
+  return Object.hasOwn(KIND_MARKS, k)
+    ? KIND_MARKS[k as keyof typeof KIND_MARKS]
+    : KIND_MARKS.feature;
 }
 
 /** The queue line a session's `task` names: its id is the text up to the first space or colon. */

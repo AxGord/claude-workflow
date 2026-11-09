@@ -987,7 +987,7 @@ join the group's line (`⚙ [slice] transition→state …`); it is the next lin
 call's stored result (`agentId`, an object) and, failing that, from the `agentId:` line of a text reply.
 A move row (`a→b`) names the state of the reply's `← ACTIVE` frame when the reply prints a stack (a sub-workflow), else the flat `<workflow> @ <state>` line; a reply naming none shows `?`.
 
-Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier; right after it every queue row shows the line's `kind` as one text glyph (none an emoji): bug `※`, research `⚑`, feature `◆` (a line with no `kind` reads as feature). The glyph is `mark` in the `/api/queue` answer, from `kindMark` in `src/map-layout.ts`. A session with
+Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier; right after it every queue row shows the line's `kind` as one text glyph (none an emoji): bug `※`, research `⚑`, feature `◆` (a line with no `kind`, or a kind that is not one of the three own keys (`constructor` too), reads as feature). The glyph is `mark` in the `/api/queue` answer, from `kindMark` in `src/map-layout.ts`. A session with
 no workflow shows "No active workflow"; nothing opens by itself.
 
 ## Dashboard

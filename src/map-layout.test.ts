@@ -900,6 +900,9 @@ describe("the kind mark", () => {
     expect(kindMark({})).toBe("◆");
     expect(kindMark({ kind: undefined })).toBe("◆");
     expect(kindMark({ kind: "nonsense" })).toBe("◆");
+    // a name on the object prototype is not a kind
+    for (const k of ["constructor", "toString", "__proto__", "hasOwnProperty"])
+      expect(kindMark({ kind: k }), k).toBe("◆");
     expect(kindMark(undefined)).toBe(" ");
     for (const k of ["bug", "research", "feature"])
       expect(kindMark({ kind: k })).not.toMatch(/\p{Emoji_Presentation}/u);
@@ -1342,6 +1345,20 @@ describe("the steps of a crowded branch", () => {
       placeSteps("b", mixed, 0, 600).map(s => s.name),
       "the first, `…`, then the latest",
     ).toEqual(["a", "…", ...[4, 5, 6, 7].map(k => `middle-step-${k}`), "z"]);
+  });
+
+  it("never more than the cap, even when every name is short enough for more", () => {
+    // 20 one-letter names would all fit by width alone at 11 steps; the cap is room / stepMin + 1
+    const tiny = Array.from({ length: 20 }, (_, i) => ({
+      name: String.fromCharCode(97 + i),
+      kind: "done" as const,
+    }));
+    // width 200: room 160, cap floor(160 / 40) + 1 = 5; width 120: room 80, cap 3
+    for (const [width, count] of [
+      [200, 5],
+      [120, 3],
+    ] as const)
+      expect(placeSteps("b", tiny, 0, width), `${width} px`).toHaveLength(count);
   });
 });
 
