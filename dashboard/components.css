@@ -180,6 +180,9 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .m-node.ahead, .m-step.ahead { opacity: 0.35; }
 .m-node.stop, .m-step.stop { fill: var(--bad); stroke: var(--bad); }
 .m-label { font-size: 10px; fill: var(--text-3); }
+[data-group] { cursor: pointer; }
+path[data-group] { pointer-events: stroke; }
+text[data-group] { pointer-events: all; }
 .m-label.ahead { opacity: 0.45; }
 .m-label.stop, .m-detail.stop { fill: var(--bad-text); }
 .m-detail { font-size: 10px; fill: var(--c); }

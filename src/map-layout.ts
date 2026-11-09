@@ -43,6 +43,8 @@ export interface MapOptions {
   readonly foldAfterMs?: number;
   /** a clock label for a timestamp (default: local HH:MM) */
   readonly clock?: (ms: number) => string;
+  /** keys of the folded groups of repeated rounds that are open (`MapLoop.group`): their rounds are drawn one by one */
+  readonly open?: readonly string[];
 }
 
 /** Layout units (px at scale 1). */
@@ -108,6 +110,8 @@ export interface MapStop {
 }
 
 export interface MapPass {
+  /** the round it draws (the walk's pass number; a folded group draws its first round only) */
+  readonly index: number;
   /** the main line's y, relative to the lane */
   readonly y: number;
   readonly stops: readonly MapStop[];
@@ -157,6 +161,8 @@ export interface MapLoop {
   readonly y2: number;
   readonly label: string;
   readonly title?: string;
+  /** a group of repeated rounds this loop closes: its key, for the click that opens or closes it */
+  readonly group?: string;
 }
 
 export interface MapPlaque {
@@ -657,11 +663,116 @@ function layLane(
   const rowsInPass = (p: number): number =>
     Math.max(0, ...placed.filter(b => b.pass === p).map(b => b.row + 1));
 
+  const lastVisit = visits.at(-1) as Visit;
+  const stopsOf = new Map<number, { stops: MapStop[]; shape: string }>();
+  const visitCount = new Map<string, number>();
+  const execsOf = (name: string): FoldedSession["execs"] =>
+    s.execs.filter(x => x.state === name && x.end !== undefined);
+  for (let p = 0; p < passCount; p++) {
+    const shape: string[] = [];
+    const stops: MapStop[] = visits
+      .filter(v => v.pass === p)
+      .map(v => {
+        const st = stations[v.i];
+        const k = (visitCount.get(st.name) ?? 0) + 1;
+        visitCount.set(st.name, k);
+        let kind: Kind = "done";
+        let label: string | undefined;
+        let form = st.name;
+        if (st.script) {
+          const x = execsOf(st.name)[k - 1];
+          if (x) {
+            const ok = x.exit_code === 0;
+            const ms = Number(x.duration_ms);
+            label = ok
+              ? `${st.name} ✓${Number.isFinite(ms) && ms > 0 ? " " + age(ms) : ""}`
+              : `${st.name} ✗ ${x.exit_code === null || x.exit_code === undefined ? "aborted" : "exit " + str(x.exit_code)}`;
+            form = ok ? `${st.name} ✓` : label;
+            if (!ok) kind = "stop";
+          }
+        }
+        if (v === lastVisit && status === "running") kind = "live";
+        if (v === lastVisit && status === "stopped") kind = "stop";
+        shape.push(`${form}/${kind}`);
+        return {
+          key: `${s.id}:p${p}:${st.name}`,
+          station: st.name,
+          x: xs[v.i],
+          script: st.script,
+          kind,
+          ...(label !== undefined ? { label } : {}),
+        };
+      });
+    stopsOf.set(p, { stops, shape: shape.join(">") });
+  }
+
+  // rounds of one shape (same stations, outcomes, branches, back-edge; durations do not count) that
+  // follow each other fold into one drawn round with a count; a round with an ask, a live child or
+  // the lane's last round is never folded, and a round that differs splits the run
+  const startOf = (p: number): number => time(visits.find(v => v.pass === p)?.ts);
+  const askPasses = new Set<number>([
+    ...s.asks.map(a => visitAt(visits, a.at).pass),
+    ...placed.filter(b => b.child.asks.length > 0).map(b => b.pass),
+  ]);
+  const shapeOf = (p: number): string | null => {
+    if (p === passCount - 1 || askPasses.has(p)) return null;
+    const mine = placed.filter(b => b.pass === p);
+    if (mine.some(b => b.child.outcome === undefined)) return null;
+    return JSON.stringify([
+      stopsOf.get(p)?.shape,
+      loops.find(l => l.pass === p)?.name,
+      mine.map(b => [
+        b.i,
+        b.row,
+        b.child.workflow,
+        b.child.outcome,
+        b.child.agents.length,
+        b.child.transitions.map(t => t.to),
+      ]),
+    ]);
+  };
+  const open = new Set(opts.open ?? []);
+  const groups: { key: string; first: number; last: number; open: boolean; label: string }[] = [];
+  for (let p = 0; p < passCount; ) {
+    const sh = shapeOf(p);
+    let q = p;
+    while (sh !== null && q + 1 < passCount && shapeOf(q + 1) === sh) q++;
+    if (q > p) {
+      const times = Array.from(
+        { length: q - p + 1 },
+        (_, k) => startOf(p + k + 1) - startOf(p + k),
+      );
+      const lo = Math.min(...times);
+      const hi = Math.max(...times);
+      const range =
+        Number.isFinite(lo) && Number.isFinite(hi)
+          ? ` · ${age(lo)}${age(hi) === age(lo) ? "" : "–" + age(hi)}`
+          : "";
+      const key = `${s.id}:g${p}`;
+      groups.push({ key, first: p, last: q, open: open.has(key), label: `×${q - p + 1}${range}` });
+    }
+    p = q + 1;
+  }
+  const groupOf = (p: number): (typeof groups)[number] | undefined =>
+    groups.find(g => g.first <= p && p <= g.last);
+  // the pass a round is drawn as, and whether it is drawn at all
+  const rowOf = (p: number): number => {
+    const g = groupOf(p);
+    return g && !g.open ? g.first : p;
+  };
+  const drawn = (p: number): boolean => rowOf(p) === p;
+  const placedDrawn = placed.filter(b => drawn(b.pass));
+
   // pass rows, top to bottom
   const passY: number[] = [];
   const passBottom: number[] = [];
   let y = 0;
   for (let p = 0; p < passCount; p++) {
+    if (!drawn(p)) {
+      passY.push(passY[rowOf(p)]);
+      passBottom.push(passBottom[rowOf(p)]);
+      continue;
+    }
     const main = y + G.mainTop;
     passY.push(main);
     const rows = rowsInPass(p);
@@ -673,7 +784,7 @@ function layLane(
     y = bottom + (p < passCount - 1 ? G.loopGap : 0);
   }
 
-  const branches: MapBranch[] = placed.map(({ child, pass, i, row }) => {
+  const branches: MapBranch[] = placedDrawn.map(({ child, pass, i, row }) => {
     const x1 = xs[i];
     const x2 = (i + 1 < n ? xs[i + 1] : plaqueX) - G.branchInset;
     const agent = lastAgent(child);
@@ -717,64 +828,47 @@ function layLane(
   });
 
   // the main line: one segment per pair of consecutive visits in a pass
-  const visitCount = new Map<string, number>();
-  const execsOf = (name: string): FoldedSession["execs"] =>
-    s.execs.filter(x => x.state === name && x.end !== undefined);
+  const last = lastVisit;
   const passes: MapPass[] = [];
-  const last = visits.at(-1) as Visit;
   for (let p = 0; p < passCount; p++) {
+    if (!drawn(p)) continue;
     const vs = visits.filter(v => v.pass === p);
-    const stops: MapStop[] = vs.map(v => {
-      const st = stations[v.i];
-      const k = (visitCount.get(st.name) ?? 0) + 1;
-      visitCount.set(st.name, k);
-      let kind: Kind = "done";
-      let label: string | undefined;
-      if (st.script) {
-        const x = execsOf(st.name)[k - 1];
-        if (x) {
-          const ok = x.exit_code === 0;
-          const ms = Number(x.duration_ms);
-          label = ok
-            ? `${st.name} ✓${Number.isFinite(ms) && ms > 0 ? " " + age(ms) : ""}`
-            : `${st.name} ✗ ${x.exit_code === null || x.exit_code === undefined ? "aborted" : "exit " + str(x.exit_code)}`;
-          if (!ok) kind = "stop";
-        }
-      }
-      if (v === last && status === "running") kind = "live";
-      if (v === last && status === "stopped") kind = "stop";
-      return {
-        key: `${s.id}:p${p}:${st.name}`,
-        station: st.name,
-        x: xs[v.i],
-        script: st.script,
-        kind,
-        ...(label !== undefined ? { label } : {}),
-      };
-    });
     const segments = vs.slice(1).map((v, k) => ({
       key: `${s.id}:p${p}:s${k}`,
       x1: xs[vs[k].i],
       x2: xs[v.i],
     }));
-    passes.push({ y: passY[p], stops, segments });
+    passes.push({ index: p, y: passY[p], stops: stopsOf.get(p)?.stops ?? [], segments });
   }
 
-  const mapLoops: MapLoop[] = loops.map((l, k) => {
-    const hanging = branches.filter(b => b.pass === l.pass && stations[l.from]?.name === b.station);
+  // a folded group draws the loop that closes its last round (from the row of its first); an open
+  // group marks its first loop, so a click closes it again
+  const mapLoops: MapLoop[] = loops.flatMap((l, k) => {
+    const g = groupOf(l.pass);
+    if (g && !g.open && l.pass !== g.last) return [];
+    const row = rowOf(l.pass);
+    const hanging = branches.filter(b => b.pass === row && stations[l.from]?.name === b.station);
     const from = hanging.at(-1);
     const x1 = from ? from.x2 : xs[l.from];
-    const label = fitText(`↺ ${l.name || "back"}`, Math.abs(x1 - xs[l.to]) - 8);
-    return {
-      key: `${s.id}:loop${k}`,
-      x1,
-      y1: from ? from.stepY : passY[l.pass],
-      yBack: passBottom[l.pass] + G.loopGap / 2,
-      x2: xs[l.to],
-      y2: passY[l.pass + 1],
-      label: label.text,
-      ...(label.title !== undefined ? { title: label.title } : {}),
-    };
+    const tag = g && (!g.open || l.pass === g.first) ? ` ${g.label}${g.open ? " ▾" : ""}` : "";
+    const label = fitText(`↺ ${l.name || "back"}${tag}`, Math.abs(x1 - xs[l.to]) - 8);
+    return [
+      {
+        key: g && !g.open ? `${g.key}:loop` : `${s.id}:loop${k}`,
+        x1,
+        y1: from ? from.stepY : passY[row],
+        yBack: passBottom[row] + G.loopGap / 2,
+        x2: xs[l.to],
+        y2: passY[rowOf(l.pass + 1)],
+        label: label.text,
+        ...(label.title !== undefined
+          ? { title: label.title }
+          : g
+            ? { title: `${l.name || "back"} ${g.label}` }
+            : {}),
+        ...(g ? { group: g.key } : {}),
+      },
+    ];
   });
 
   // the end: landed = a solid line into the plaque; running = a faint tail over the stations ahead
@@ -994,7 +1088,7 @@ function draftRail(
     for (const [k, a] of input.s.asks.entries()) {
       const v = visitAt(visits, a.at);
       const i = index.get(String(a.state)) ?? v.i;
-      const pass = lane.passes[v.pass] ?? lane.passes.at(-1);
+      const pass = lane.passes.find(q => q.index === v.pass) ?? lane.passes.at(-1);
       asks.push({
         key: `${lane.session}:ask${k}`,
         x: xs[i],
@@ -1485,7 +1579,10 @@ function laneScene(lane: MapLane): SceneGroup {
         key: l.key,
         tag: "path",
         cls: "m-loop",
-        attrs: { d: `M${l.x1},${l.y1}V${l.yBack}H${l.x2}V${l.y2}` },
+        attrs: {
+          d: `M${l.x1},${l.y1}V${l.yBack}H${l.x2}V${l.y2}`,
+          ...(l.group !== undefined ? { "data-group": l.group } : {}),
+        },
         c: lane.c,
         draw: true,
       },
@@ -1493,7 +1590,11 @@ function laneScene(lane: MapLane): SceneGroup {
         key: `${l.key}:label`,
         tag: "text",
         cls: "m-label m-mid",
-        attrs: { x: r((l.x1 + l.x2) / 2), y: l.yBack - 5 },
+        attrs: {
+          x: r((l.x1 + l.x2) / 2),
+          y: l.yBack - 5,
+          ...(l.group !== undefined ? { "data-group": l.group } : {}),
+        },
         text: l.label,
         ...(l.title !== undefined ? { title: l.title } : {}),
       },

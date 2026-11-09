@@ -1412,3 +1412,119 @@ describe("the Plan tab's queue graph", () => {
     expect(queueGraph(lines, "nope")).toEqual({ nodes: [], edges: [] });
   });
 });
+
+describe("repeated rounds of a lane fold into one drawn round with a count", () => {
+  /** a lane that loops work -> gate -> work `rounds` times; `red` lists the pass numbers whose gate fails */
+  function rounds(n: number, red: number[] = [], minutes = 2): WfEvent[] {
+    const out: WfEvent[] = [];
+    let q = 0;
+    const put = (kind: EventKind, session: string, min: number, data: Record<string, unknown>) =>
+      out.push({
+        seq: ++q,
+        run: "r2",
+        ts: new Date(Date.parse(at("08:00")) + min * 60_000).toISOString(),
+        kind,
+        session,
+        data,
+      });
+    put("session_start", "R", 0, {
+      workflow: "pipe",
+      parent: null,
+      task: "T-1",
+      difficulty: 3,
+    });
+    put("transition", "R", 0, {
+      from: "queue",
+      to: "work",
+      name: "go",
+      workflow: "pipe",
+    });
+    let t = 0;
+    for (let k = 0; k < n; k++) {
+      t += 1;
+      put("transition", "R", t, {
+        from: "work",
+        to: "gate",
+        name: "next",
+        workflow: "pipe",
+      });
+      const bad = red.includes(k);
+      put("exec_end", "R", t, {
+        state: "gate",
+        exit_code: bad ? 10 : 0,
+        duration_ms: k % 2 === 0 ? 60_000 : 120_000,
+      });
+      t += k % 2 === 0 ? 1 : minutes;
+      put("transition", "R", t, {
+        from: "gate",
+        to: "work",
+        name: "slot_free",
+        workflow: "pipe",
+      });
+    }
+    return out;
+  }
+  const lay = (events: WfEvent[], open: string[] = []) =>
+    layout(fold(events), WORKFLOWS, { now: NOW, clock: () => "hh:mm", open }).bands[0].lanes[0];
+
+  it("5 identical rounds draw one, with x5 and the range of their durations", () => {
+    const l = lay(rounds(6));
+    // pass 0 (the queue), five identical rounds, the running round
+    expect(l.passes.map(p => p.index)).toEqual([0, 1, 6]);
+    const folded = l.loops.filter(x => x.group !== undefined);
+    expect(folded).toHaveLength(1);
+    expect(folded[0].label).toContain("×5");
+    expect(folded[0].label).toMatch(/×5 · 2m–3m/);
+    expect(folded[0].group).toBe("R:g1");
+  });
+
+  it("a red round in the middle gives two groups around it", () => {
+    const l = lay(rounds(8, [4]));
+    expect(l.passes.map(p => p.index)).toEqual([0, 1, 4, 5, 8]);
+    expect(l.loops.filter(x => x.group !== undefined).map(x => x.label.match(/×\d+/)![0])).toEqual([
+      "×3",
+      "×3",
+    ]);
+    expect(l.passes.find(p => p.index === 4)!.stops.some(s => s.kind === "stop")).toBe(true);
+  });
+
+  it("the running round is never folded into the group", () => {
+    const l = lay(rounds(3));
+    expect(l.passes.at(-1)!.index).toBe(3);
+    expect(l.status).toBe("running");
+    expect(l.passes.at(-1)!.stops.at(-1)!.kind).toBe("live");
+  });
+
+  it("an open group draws its rounds; the open state is the key, so a live update keeps it", () => {
+    const closed = lay(rounds(6));
+    const open = lay(rounds(6), ["R:g1"]);
+    expect(open.passes).toHaveLength(7);
+    expect(open.loops.filter(x => x.group !== undefined)).toHaveLength(5);
+    expect(open.loops.filter(x => x.label.includes("▾"))).toHaveLength(1);
+    // one more round arrives: the same key still names the group, still open
+    const more = lay(rounds(7), ["R:g1"]);
+    expect(more.passes).toHaveLength(8);
+    expect(more.loops.find(x => x.label.includes("▾"))!.label).toContain("×6");
+    expect(more.loops.find(x => x.group)!.group).toBe("R:g1");
+    expect(lay(rounds(7)).passes).toHaveLength(3);
+    expect(open.height).toBeGreaterThan(closed.height);
+  });
+
+  it("the height of the lane falls", () => {
+    expect(lay(rounds(12)).height).toBeLessThan(lay(rounds(12), ["R:g1"]).height / 2);
+  });
+
+  it("the click target rides on the loop's path and label in the scene", () => {
+    const m = layout(fold(rounds(6)), WORKFLOWS, {
+      now: NOW,
+      clock: () => "hh:mm",
+    });
+    const els: SceneEl[] = [];
+    const walkG = (g: SceneGroup): void => {
+      els.push(...g.els);
+      g.groups.forEach(walkG);
+    };
+    walkG(scene(m));
+    expect(els.filter(e => e.attrs["data-group"] === "R:g1")).toHaveLength(2);
+  });
+});

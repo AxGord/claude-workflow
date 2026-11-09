@@ -210,6 +210,20 @@ describe("GET /routes.js", () => {
     expect(MAP).toMatch(/highlight: lane \|\| undefined, next, kinds, pool/);
   });
 
+  it("the map opens and folds a group of repeated rounds on a click and keeps it across a reload", () => {
+    expect(MAP).toContain("closest('[data-group]')");
+    expect(MAP).toContain("open: [...openGroups]");
+    expect(MAP).toContain("sessionStorage.setItem(OPEN_KEY");
+    expect(MAP).toContain("new Set(readOpen())");
+  });
+
+  it("a folded group's loop path takes hits on its stroke only, its label anywhere", () => {
+    const css = fs.readFileSync(path.join(DASH, "components.css"), "utf8");
+    expect(css).toMatch(/path\[data-group\]\s*\{\s*pointer-events:\s*stroke;/);
+    expect(css).toMatch(/text\[data-group\]\s*\{\s*pointer-events:\s*all;/);
+    expect(css).not.toMatch(/(^|\n)\[data-group\][^}]*pointer-events:\s*all/);
+  });
+
   it("is a 404, not the page, when the compiled module is missing", async () => {
     const res = await fetch(
       `${await serve(path.join(os.tmpdir(), "wf-no-such-routes.js"))}/routes.js`,

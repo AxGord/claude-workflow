@@ -42,6 +42,25 @@ export function createMap({ root, fetchJSON }) {
   let placing = null; // where a reload left the reader, kept until the full scene stands
   let glide = 0; // when the smooth scroll to the lane /map/<id> names was last started
   const known = new Set(); // lane keys already on the map
+  const OPEN_KEY = 'wf-map-open';
+  const openGroups = new Set(readOpen()); // folded groups of repeated rounds the reader opened; kept across a reload
+
+  function readOpen() {
+    try {
+      const list = JSON.parse(sessionStorage.getItem(OPEN_KEY) || '[]');
+      return Array.isArray(list) ? list.filter(k => typeof k === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveOpen() {
+    try {
+      sessionStorage.setItem(OPEN_KEY, JSON.stringify([...openGroups]));
+    } catch {
+      // storage can be blocked: the groups then fold again on a reload
+    }
+  }
 
   function accept(list) {
     let added = 0;
@@ -130,7 +149,7 @@ export function createMap({ root, fetchJSON }) {
   function render() {
     const folded = fold([...seedEvents(sessions), ...events]);
     const pool = sessions.filter(s => s.pool_starved).map(s => s.session_id);
-    const map = layout(folded, workflows, { now: Date.now(), width: root.clientWidth || 1200, highlight: lane || undefined, next, kinds, pool });
+    const map = layout(folded, workflows, { now: Date.now(), width: root.clientWidth || 1200, highlight: lane || undefined, next, kinds, pool, open: [...openGroups] });
     const sc = scene(map);
     // what the reader sees before anything moves: the lane at the top of the view stays where it is, and
     // only a reader who is at the bottom now is carried to a new lane
@@ -277,6 +296,16 @@ export function createMap({ root, fetchJSON }) {
   noteScroll(() => {
     const top = shown && !placing ? topLane() : null;
     return top ? { key: top.el.dataset.key, top: Math.round(top.top) } : {};
+  });
+  // a click on a folded group (its loop or its label) opens it; on an open one, folds it again
+  svg.addEventListener('click', e => {
+    const el = e.target instanceof Element ? e.target.closest('[data-group]') : null;
+    if (!el) return;
+    const key = el.getAttribute('data-group');
+    if (openGroups.has(key)) openGroups.delete(key);
+    else openGroups.add(key);
+    saveOpen();
+    render();
   });
   pill.addEventListener('click', () => {
     lane = null;
