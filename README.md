@@ -583,6 +583,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   `notes:`; checked as `queue_add` checks them; the status stays `queue_mark`'s.
 - `queue_header({ queue?, file?, batch_size, reason })` — the window: `batch_size: N` and `reason:` (`0` pauses;
   the reason is required).
+- `queue_archive({ queue?, file?, older_than_days, include_unended?, dry_run? })` — keeps the queue file small: moves the `done` and `failed` lines whose `ended:` is more than `older_than_days` days ago to `<queue>.archive.yaml` beside the queue (`queue.yaml` → `queue.archive.yaml`), appending, under the queue's lock; the line is moved whole, its text and notes unchanged. A line with no `ended:` stays unless `include_unended`; a failed line an open (pending / running / backlog) line's `after:` names stays. An `after:` naming an archived id is resolved through the archive (done passes, failed waits), `queue_add` refuses an archived id as taken, and `queue_mark` on one says it is archived. Archive first, queue second: a crash between leaves a line in both and the next run only removes it from the queue. A second run moves nothing. `dry_run` writes nothing. The answer gives the count and the queue's bytes before and after.
 - All of them write under the same lock and re-plan on a changed file, so an edit never drops a status
   an exec set at the same moment — add and change tasks through them, not by editing the file with a
   script while a run is live.
@@ -591,7 +592,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   admitted, 10 none but running tasks run, 11 none and nothing runs (done), 12 none, nothing runs and
   `batch_size: 0`, 2 error; `--done|--failed|--release|--running|--promote|--shelve <ID> [--note T] [--from W]` (`--running <ID>
   --retry`: failed→running, `difficulty:` +1; `--running <ID> --force REASON`: mark a line the picker would not admit), `--header <key>`, `--add '<YAML mapping>' [--after ID|--before ID]`, `--edit <ID>
-  [--set key=value]… [--append-note T] [--from W]` (`key=` removes), `--batch-size <N> --reason T`.
+  [--set key=value]… [--append-note T] [--from W]` (`key=` removes), `--batch-size <N> --reason T`, `--archive --older-than <days> [--include-unended] [--dry-run]`.
 - Converting the old Markdown queue (`- [m] ID | key: value | … |` lines under `## Tasks`), once:
   `wf-queue --convert <old.md>` prints the YAML; `--into <new.yaml>` writes it; `--into <existing.yaml>
   [--status backlog]` APPENDS the old file's open (not done) lines with that status. Marks map to
@@ -937,6 +938,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `queue_add` | Add a task (pending or backlog) to a queue, checked as a pick reads it | `queue`, `file`, `task`, `after_id`, `before_id` |
 | `queue_edit` | Set / remove a task's fields, append a note to its `notes:` | `queue`, `file`, `id`, `set`, `append_note`, `from` |
 | `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason | `queue`, `file`, `batch_size`, `reason` |
+| `queue_archive` | Move old done / failed lines to `<queue>.archive.yaml` | `queue`, `file`, `older_than_days`, `include_unended`, `dry_run` |
 
 ## Plan pane
 

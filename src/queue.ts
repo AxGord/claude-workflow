@@ -116,6 +116,11 @@ export interface Queue {
   /** The file's text as read: a write goes through only while the file still reads so. */
   readonly source: string;
   readonly lines: readonly QueueLine[];
+  /**
+   * The ids moved to `<queue>.archive.yaml` (`wf-queue --archive`) with their status: an `after:`
+   * naming one reads it as that status, and a new line cannot take one's id.
+   */
+  readonly archived: ReadonlyMap<string, Status>;
   readonly batchSize: number;
   /** The header's `reason:` — why the window is what it is. */
   readonly batchComment?: string;
@@ -250,7 +255,11 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
   };
 }
 
-export function parseQueue(text: string, file: string): Queue {
+export function parseQueue(
+  text: string,
+  file: string,
+  archived: ReadonlyMap<string, Status> = new Map(),
+): Queue {
   let doc: unknown;
   try {
     doc = YAML.parse(text);
@@ -289,6 +298,7 @@ export function parseQueue(text: string, file: string): Queue {
     file,
     source: text,
     lines,
+    archived,
     batchSize: bs,
     ...(reason ? { batchComment: reason } : {}),
     header,
@@ -515,7 +525,11 @@ function conflict(
 }
 
 /** null = every dependency is done; otherwise why the line must wait. */
-function blockedBy(line: QueueLine, byId: ReadonlyMap<string, QueueLine>): string | null {
+function blockedBy(
+  line: QueueLine,
+  byId: ReadonlyMap<string, QueueLine>,
+  archived: ReadonlyMap<string, Status>,
+): string | null {
   const v = line.meta.after;
   if (v === undefined) return null;
   const waits: string[] = [];
@@ -523,8 +537,11 @@ function blockedBy(line: QueueLine, byId: ReadonlyMap<string, QueueLine>): strin
   // the ids is a condition only a human can judge.
   const rest = stripParens(v).replace(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g, tok => {
     const dep = byId.get(tok);
+    const gone = dep ? undefined : archived.get(tok);
     if (dep) {
       if (dep.status !== "done") waits.push(`${tok} (${dep.status})`);
+    } else if (gone !== undefined) {
+      if (gone !== "done") waits.push(`${tok} (${gone}, archived)`);
     } else if (/^[A-Z]/.test(tok) && /\d/.test(tok)) {
       waits.push(`${tok}?`);
     } else {
@@ -593,7 +610,7 @@ export function planPick(
     else if (!hand && (l.meta.model ?? "").startsWith("—")) why = "parent-run (model —)";
     else if (l.paused) why = "parked";
     else {
-      const after = blockedBy(l, byId);
+      const after = blockedBy(l, byId, queue.archived);
       if (after !== null) why = `after: ${after}`;
       else {
         repo = resolveRepo(queue, l);
@@ -788,7 +805,47 @@ function readText(file: string): { abs: string; text: string } {
 
 export function readQueue(file: string): Queue {
   const { abs, text } = readText(file);
-  return parseQueue(text, abs);
+  return parseQueue(text, abs, archivedStatuses(abs));
+}
+
+/** The archive beside a queue: `queue.yaml` → `queue.archive.yaml`. */
+export function archivePath(file: string): string {
+  const abs = path.resolve(file);
+  return /\.ya?ml$/i.test(abs) ? abs.replace(/\.(ya?ml)$/i, ".archive.$1") : `${abs}.archive.yaml`;
+}
+
+const archiveCache = new Map<
+  string,
+  { readonly stamp: string; readonly ids: Map<string, Status> }
+>();
+
+/** id → status of every line in the queue's archive (empty when there is none); re-read only when the file changed. */
+function archivedStatuses(file: string): Map<string, Status> {
+  const arch = archivePath(file);
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(arch);
+  } catch {
+    return new Map();
+  }
+  const stamp = `${st.mtimeMs}:${st.size}`;
+  const hit = archiveCache.get(arch);
+  if (hit?.stamp === stamp) return hit.ids;
+  let doc: unknown;
+  try {
+    doc = YAML.parse(fs.readFileSync(arch, "utf8"));
+  } catch (err) {
+    throw new QueueError(`${arch}: not YAML: ${(err as Error).message}`);
+  }
+  const tasks = (doc as { tasks?: unknown } | null)?.tasks ?? [];
+  if (!Array.isArray(tasks)) throw new QueueError(`${arch}: tasks: is a list`);
+  const ids = new Map<string, Status>();
+  tasks.forEach((t, i) => {
+    const l = parseTask(t, i, arch);
+    ids.set(l.id, l.status);
+  });
+  archiveCache.set(arch, { stamp, ids });
+  return ids;
 }
 
 const REPLAN_TRIES = 5;
@@ -877,7 +934,7 @@ function writing<T>(
       const e = editable(file);
       const answer = change(e);
       const text = e.doc.toString(YAML_OUT);
-      const next = parseQueue(text, e.queue.file);
+      const next = parseQueue(text, e.queue.file, e.queue.archived);
       check?.(next, answer);
       return writeText(e.queue, text) ? answer : false;
     }),
@@ -897,7 +954,7 @@ export async function rewriteQueue<T>(
     replanning(file, () => {
       const queue = readQueue(file);
       const r = change(queue.source);
-      parseQueue(r.text, queue.file);
+      parseQueue(r.text, queue.file, queue.archived);
       return writeText(queue, r.text) ? r.answer : false;
     }),
   );
@@ -922,6 +979,138 @@ export async function pickQueue(
       return { ...plan, dryRun: false };
     }),
   );
+}
+
+export interface ArchiveResult {
+  readonly archive: string;
+  /** The ids moved (or, on a dry run, that would move), in file order. */
+  readonly moved: readonly string[];
+  /** Ended lines old enough but kept: a failed line an open line's `after:` names. */
+  readonly keptNamed: readonly string[];
+  /** done / failed lines with no `ended:`: they stay unless `includeUnended`. */
+  readonly unended: number;
+  readonly bytesBefore: number;
+  readonly bytesAfter: number;
+  readonly dryRun: boolean;
+}
+
+/** The local date `days` before `now`, `YYYY-MM-DD`. */
+function daysBefore(days: number, now: Date): string {
+  const d = new Date(now);
+  d.setDate(d.getDate() - days);
+  return today(d);
+}
+
+function archivePlan(
+  queue: Queue,
+  opts: { readonly olderThanDays: number; readonly includeUnended?: boolean; readonly now?: Date },
+): Pick<ArchiveResult, "moved" | "keptNamed" | "unended"> {
+  const cutoff = daysBefore(opts.olderThanDays, opts.now ?? new Date());
+  const byId = new Map(queue.lines.map(l => [l.id, l]));
+  const named = new Set<string>();
+  for (const l of queue.lines)
+    if (l.status !== "done" && l.status !== "failed")
+      for (const t of afterIdsOf(l.meta.after, byId)) named.add(t);
+  const moved: string[] = [];
+  const keptNamed: string[] = [];
+  let unended = 0;
+  for (const l of queue.lines) {
+    if (l.status !== "done" && l.status !== "failed") continue;
+    const ended = l.meta.ended;
+    const dated = ended !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(ended);
+    if (!dated) {
+      if (opts.includeUnended === true) {
+        if (l.status === "failed" && named.has(l.id)) keptNamed.push(l.id);
+        else moved.push(l.id);
+      } else unended++;
+    } else if (ended < cutoff) {
+      if (l.status === "failed" && named.has(l.id)) keptNamed.push(l.id);
+      else moved.push(l.id);
+    }
+  }
+  return { moved, keptNamed, unended };
+}
+
+/**
+ * Moves done and failed lines that ended before `olderThanDays` days ago into the queue's archive
+ * (`archivePath`), appending, under the queue's lock. A line with no `ended:` stays unless
+ * `includeUnended`; a failed line an open line's `after:` names stays. The archive is written first,
+ * so a crash between the two writes leaves a line in both, and a re-run only removes it from the queue.
+ */
+export async function archiveQueue(
+  file: string,
+  opts: {
+    readonly olderThanDays: number;
+    readonly includeUnended?: boolean;
+    readonly dryRun?: boolean;
+    readonly now?: Date;
+  },
+): Promise<ArchiveResult> {
+  if (!Number.isInteger(opts.olderThanDays) || opts.olderThanDays < 0)
+    throw new QueueError("older-than is a whole number of days (0 or more)");
+  const archive = archivePath(file);
+  if (opts.dryRun === true) {
+    const q = readQueue(file);
+    const size = Buffer.byteLength(q.source);
+    return { archive, ...archivePlan(q, opts), bytesBefore: size, bytesAfter: size, dryRun: true };
+  }
+  return withQueueLock(file, () =>
+    replanning(file, () => {
+      const e = editable(file);
+      const plan = archivePlan(e.queue, opts);
+      const bytesBefore = Buffer.byteLength(e.queue.source);
+      if (plan.moved.length === 0)
+        return { archive, ...plan, bytesBefore, bytesAfter: bytesBefore, dryRun: false };
+      const adoc = YAML.parseDocument(
+        fs.existsSync(archive) ? fs.readFileSync(archive, "utf8") : "tasks: []\n",
+      );
+      const found: unknown = adoc.get("tasks", true);
+      const aseq = isSeq(found) ? found : new YAMLSeq();
+      if (aseq !== found) adoc.set("tasks", aseq);
+      aseq.flow = false;
+      const have = e.queue.archived;
+      const out = new Set(plan.moved);
+      let appended = 0;
+      for (const l of e.queue.lines) {
+        if (!out.has(l.id)) continue;
+        if (!have.has(l.id)) {
+          aseq.add(taskNode(e, l));
+          appended++;
+        }
+      }
+      const gone = new Set(e.queue.lines.filter(l => out.has(l.id)).map(l => l.index));
+      for (let i = e.tasks.items.length - 1; i >= 0; i--)
+        if (gone.has(i)) e.tasks.items.splice(i, 1);
+      const text = e.doc.toString(YAML_OUT);
+      const merged = new Map(have);
+      for (const l of e.queue.lines) if (out.has(l.id)) merged.set(l.id, l.status);
+      parseQueue(text, e.queue.file, merged);
+      const archiveText = adoc.toString(YAML_OUT);
+      if (appended > 0) {
+        const tmp = `${archive}.wf-queue.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+        if (fs.readFileSync(e.queue.file, "utf8") !== e.queue.source) return false;
+        fs.writeFileSync(tmp, archiveText);
+        fs.renameSync(tmp, archive);
+      }
+      if (!writeText(e.queue, text)) return false;
+      return { archive, ...plan, bytesBefore, bytesAfter: Buffer.byteLength(text), dryRun: false };
+    }),
+  );
+}
+
+/** The answer of an archive: what moved, what stayed and why, and the queue's size. */
+export function formatArchive(r: ArchiveResult): string {
+  const lines = [
+    `${r.dryRun ? "would archive" : "archived"} ${r.moved.length} line(s) → ${r.archive}`,
+    `queue ${r.bytesBefore} → ${r.bytesAfter} bytes`,
+  ];
+  if (r.keptNamed.length > 0)
+    lines.push(`kept (failed, named by an open after:): ${r.keptNamed.join(", ")}`);
+  if (r.unended > 0)
+    lines.push(
+      `kept ${r.unended} done/failed line(s) with no ended: (--include-unended moves them)`,
+    );
+  return lines.join("\n");
 }
 
 export interface MarkResult {
@@ -1049,15 +1238,23 @@ export async function markQueue(
 
 function lineOf(queue: Queue, id: string): QueueLine {
   const line = queue.lines.find(l => l.id === id);
+  const gone = queue.archived.get(id);
+  if (!line && gone !== undefined)
+    throw new QueueError(`${id} is archived (${gone}) in ${archivePath(queue.file)}`);
   if (!line) throw new QueueError(`no task ${id} in ${queue.file}`);
   return line;
 }
 
 /** The `after:` ids that pick would wait on as unknown (`X?`). */
-function unknownAfterIds(after: string, byId: ReadonlyMap<string, QueueLine>): string[] {
+function unknownAfterIds(
+  after: string,
+  byId: ReadonlyMap<string, QueueLine>,
+  archived: ReadonlyMap<string, Status>,
+): string[] {
   const unknown: string[] = [];
   for (const tok of stripParens(after).match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g) ?? [])
-    if (!byId.has(tok) && /^[A-Z]/.test(tok) && /\d/.test(tok)) unknown.push(tok);
+    if (!byId.has(tok) && !archived.has(tok) && /^[A-Z]/.test(tok) && /\d/.test(tok))
+      unknown.push(tok);
   return unknown;
 }
 
@@ -1096,7 +1293,7 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
     (keys === undefined || keys.has(k)) && line.meta[k] !== undefined;
   if (has("after")) {
     const byId = new Map(queue.lines.map(l => [l.id, l]));
-    const unknown = unknownAfterIds(line.meta.after, byId);
+    const unknown = unknownAfterIds(line.meta.after, byId, queue.archived);
     if (unknown.length > 0)
       throw new QueueError(`${line.id}: after: ${unknown.join(", ")} — no such task in the queue`);
     const cycle = afterCycle(queue, line.id);
@@ -1217,6 +1414,8 @@ export async function addQueueLine(
   const place = (e: Editable): number => {
     if (e.queue.lines.some(l => l.id === id))
       throw new QueueError(`${id} is already in ${e.queue.file}`);
+    if (e.queue.archived.has(id))
+      throw new QueueError(`${id} is already in ${archivePath(e.queue.file)} (archived)`);
     const at =
       pos.after !== undefined
         ? lineOf(e.queue, pos.after).index + 1
@@ -1250,9 +1449,9 @@ export async function addQueueLine(
     const doc = YAML.parseDocument(NEW_QUEUE);
     const tasks = doc.get("tasks", true) as YAMLSeq;
     tasks.flow = false;
-    const e = { queue: parseQueue(NEW_QUEUE, abs), doc, tasks };
+    const e = { queue: parseQueue(NEW_QUEUE, abs, archivedStatuses(abs)), doc, tasks };
     place(e);
-    check(parseQueue(doc.toString(YAML_OUT), abs));
+    check(parseQueue(doc.toString(YAML_OUT), abs, e.queue.archived));
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     try {
       fs.writeFileSync(abs, NEW_QUEUE, { flag: "wx" });

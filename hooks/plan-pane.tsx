@@ -927,7 +927,7 @@ export const register: Register = on => {
     let lastSid = ''
     // the other engine calls by what they did: plan changes (queue_*), context writes, and the rest (reads, links)
     const ICON: Record<string, string> = {
-      queue_add: '☰+', queue_edit: '☰✎', queue_mark: '☰✓', queue_next: '☰▶', queue_header: '☰⇅', context_set: '✎',
+      queue_add: '☰+', queue_edit: '☰✎', queue_mark: '☰✓', queue_next: '☰▶', queue_header: '☰⇅', queue_archive: '☰▤', context_set: '✎',
     }
     const counted = new Map<string, number>()
     for (const c of wf) {

@@ -12,6 +12,7 @@
 //   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, touches: [a], text: …}`)
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
 //   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header
+//   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   queue_archive (done/failed lines → <q>.archive.yaml)
 //   wf-queue --convert <old.md|config.json> [--into <file.yaml>] [--status S] [--dry-run]
 //       an old Markdown queue (or a JSON config) as YAML: printed without --into; --into a new file
 //       writes it; --into an existing queue appends the old queue's open tasks with --status (default backlog)
@@ -25,7 +26,9 @@ import {
   QUEUE_EXIT,
   QueueError,
   addQueueLine,
+  archiveQueue,
   editQueueLine,
+  formatArchive,
   formatMark,
   formatPickSummary,
   formatTask,
@@ -42,7 +45,7 @@ import {
 
 const USAGE =
   "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--note TEXT] [--from WHO] | --header <key> | --path" +
-  " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --batch-size <N> --reason TEXT" +
+  " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --batch-size <N> --reason TEXT | --archive --older-than <days> [--include-unended] [--dry-run]" +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
 /** `--flag value` pairs after an op; a flag outside `allowed`, a missing value, or a repeat of a non-list flag is a usage error. */
@@ -199,6 +202,19 @@ async function main(args: string[]): Promise<number> {
     );
     process.stdout.write(`${r.task}\n`);
     for (const w of r.warnings ?? []) process.stderr.write(`warning: ${w}\n`);
+    return 0;
+  }
+  if (op === "--archive") {
+    const o = options(args.slice(1), ["--older-than"], [], ["--include-unended", "--dry-run"]);
+    const days = o.get("--older-than")?.[0];
+    if (days === undefined || !/^\d+$/.test(days))
+      throw new QueueError("--archive needs --older-than <days> (a whole number)");
+    const r = await archiveQueue(file, {
+      olderThanDays: Number(days),
+      includeUnended: o.has("--include-unended"),
+      dryRun: o.has("--dry-run"),
+    });
+    process.stdout.write(`${formatArchive(r)}\n`);
     return 0;
   }
   if (op === "--batch-size") {

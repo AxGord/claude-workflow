@@ -6,6 +6,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addQueueLine,
+  archivePath,
+  archiveQueue,
+  formatArchive,
   describeQueue,
   editQueueLine,
   explainLines,
@@ -1458,5 +1461,115 @@ describe("touches: tracked in the repo", () => {
     fs.writeFileSync(file, fs.readFileSync(file, "utf8").replaceAll("REPO", repo));
     const r = planPick(readQueue(file));
     expect(r.reasons.find(x => x.id === "A")?.why).toMatch(/parent-run/);
+  });
+});
+
+describe("queue archive", () => {
+  const NOW = new Date(2026, 10, 9, 12);
+  /** A YAML queue in a fresh project; returns its path. */
+  function yamlQueue(tasks: string): string {
+    const file = queueFile("");
+    fs.writeFileSync(file, `batch_size: 2\ntasks:\n${tasks}`);
+    return file;
+  }
+  const old = (id: string, extra = "") =>
+    `  - id: ${id}\n    status: done\n    ended: 2026-09-01\n    text: |-\n      brief of ${id}\n      second line\n${extra}`;
+  const FILE = `${old("A")}${old("F", "    notes:\n      - from: mark\n        date: 2026-09-01\n        text: n\n").replace("done", "failed")}  - id: NEW\n    status: done\n    ended: 2026-11-08\n  - id: NOEND\n    status: done\n  - id: OPEN\n    after: [A]\n    text: waits\n`;
+
+  it("archive then pick admits a line whose after: is archived", async () => {
+    const file = yamlQueue(FILE);
+    const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    expect(r.moved).toEqual(["A", "F"]);
+    expect(readQueue(file).lines.map(l => l.id)).not.toContain("A");
+    expect(planPick(readQueue(file)).admitted.map(a => a.id)).toContain("OPEN");
+  });
+  it("an archived failed line still blocks an after: that names it, and a failed line an open line names stays", async () => {
+    const file = yamlQueue(FILE.replace("after: [A]", "after: [F]"));
+    const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    expect(r.moved).toEqual(["A"]);
+    expect(r.keptNamed).toEqual(["F"]);
+    expect(readQueue(file).lines.map(l => l.id)).toContain("F");
+  });
+
+  it("an archived failed line is not read as passing: an after: naming it waits", async () => {
+    const file = yamlQueue(FILE);
+    const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    expect(r.moved).toContain("F");
+    await addQueueLine(file, { id: "AFTERF", after: ["F"], text: "x" });
+    const p = planPick(readQueue(file));
+    expect(p.admitted.map(x => x.id)).not.toContain("AFTERF");
+    expect(p.reasons.find(x => x.id === "AFTERF")?.why).toContain("F (failed, archived)");
+  });
+
+  it("re-adding an archived id is refused; marking one says it is archived", async () => {
+    const file = yamlQueue(FILE);
+    await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    await expect(addQueueLine(file, { id: "A", text: "again" })).rejects.toThrow("archived");
+    await expect(markQueue(file, "A", "running")).rejects.toThrow("is archived (done)");
+    await expect(addQueueLine(file, { id: "N2", after: ["A"], text: "ok" })).resolves.toMatchObject(
+      { id: "N2" },
+    );
+  });
+
+  it("a second run moves nothing and writes nothing", async () => {
+    const file = yamlQueue(FILE);
+    await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    const q = fs.readFileSync(file, "utf8");
+    const a = fs.readFileSync(archivePath(file), "utf8");
+    const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    expect(r.moved).toEqual([]);
+    expect(fs.readFileSync(file, "utf8")).toBe(q);
+    expect(fs.readFileSync(archivePath(file), "utf8")).toBe(a);
+  });
+
+  it("the move loses no byte of a line: each moved line is the same text in the archive", async () => {
+    const file = yamlQueue(FILE);
+    await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    const arch = fs.readFileSync(archivePath(file), "utf8");
+    expect(arch).toContain(old("A"));
+    expect(arch).toContain(
+      old(
+        "F",
+        "    notes:\n      - from: mark\n        date: 2026-09-01\n        text: n\n",
+      ).replace("done", "failed"),
+    );
+    const kept = fs.readFileSync(file, "utf8");
+    expect(kept).not.toContain("brief of A");
+    expect(kept).toContain("id: NEW");
+  });
+
+  it("a line with no ended: stays unless include_unended; a recent one stays; dry run writes nothing", async () => {
+    const file = yamlQueue(FILE);
+    const before = fs.readFileSync(file, "utf8");
+    const dry = await archiveQueue(file, { olderThanDays: 30, now: NOW, dryRun: true });
+    expect(dry).toMatchObject({ moved: ["A", "F"], unended: 1, dryRun: true });
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(fs.existsSync(archivePath(file))).toBe(false);
+    const r = await archiveQueue(file, { olderThanDays: 30, now: NOW, includeUnended: true });
+    expect(r.moved).toEqual(["A", "F", "NOEND"]);
+    expect(readQueue(file).lines.map(l => l.id)).toEqual(["NEW", "OPEN"]);
+    expect(formatArchive(r)).toContain("archived 3 line(s)");
+  });
+
+  it("the age edge: ended exactly N days ago stays, one day older moves", async () => {
+    const file = yamlQueue(
+      "  - id: E1\n    status: done\n    ended: 2026-10-10\n  - id: E2\n    status: done\n    ended: 2026-10-09\n",
+    );
+    const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    expect(r.moved).toEqual(["E2"]);
+  });
+
+  it("a crash between the two writes (line in both files) heals on the next run", async () => {
+    const file = yamlQueue(FILE);
+    await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    const arch = fs.readFileSync(archivePath(file), "utf8");
+    fs.writeFileSync(
+      file,
+      fs.readFileSync(file, "utf8").replace("tasks:\n", `tasks:\n${old("A")}`),
+    );
+    const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });
+    expect(r.moved).toEqual(["A"]);
+    expect(fs.readFileSync(archivePath(file), "utf8")).toBe(arch);
+    expect(readQueue(file).lines.map(l => l.id)).not.toContain("A");
   });
 });
