@@ -355,10 +355,10 @@ export function daySpends(lands: Land[], spends: Map<string, TaskSpend>, now: nu
   return days
 }
 
-/** A day row's spend: the sum (`—` when no line is measured), what it includes besides landed lines, and how many of the lines were measured when not all. */
+/** A day row's spend: the sum (`—` when no line is measured) and what it includes besides landed lines. */
 export function dayText(d: DaySpend): string {
   const extra = [d.failed > 0 ? `${d.failed} failed` : '', d.closed > 0 ? `${d.closed} closed` : ''].filter(x => x !== '').join(', ')
-  return `${d.measured === 0 ? '—' : usdText(d.usd)}${extra !== '' ? ` incl. ${extra}` : ''}${d.measured < d.lines ? ` · ${d.measured}/${d.lines} measured` : ''}`
+  return `${d.measured === 0 ? '—' : usdText(d.usd)}${extra !== '' ? ` incl. ${extra}` : ''}`
 }
 
 async function lands($: any, queueFile: string, ledger: Ledger): Promise<Land[]> {

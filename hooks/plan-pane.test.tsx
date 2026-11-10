@@ -378,7 +378,7 @@ test('landMs reads `DD.MM HH:MM` into the latest year that is not past now; dayO
   expect(dayOf(new Date(2027, 0, 2, 9, 0).getTime())).toBe('02.01')
 })
 
-test('daySpends: a day sums its landed lines and the failed and closed lines that ended on it, a line once; dayText says what it includes and how many are measured', () => {
+test('daySpends: a day sums its landed lines and the failed and closed lines that ended on it, a line once; dayText says what it includes', () => {
   const spends = ledgerSpendOf(
     [
       ran1('L1', '2026-11-07T08:00:00Z', 1),
@@ -392,8 +392,8 @@ test('daySpends: a day sums its landed lines and the failed and closed lines tha
   const land = (slice: string, d: string): never => ({ sha: 'a', slice, at: d + ' 10:00', start: '?', difficulty: '', ...(spends.get(slice)?.usd !== undefined ? { usd: spends.get(slice)!.usd } : {}) }) as never
   const days = daySpends([land('L1', '07.11'), land('L2', '07.11'), land('L1', '07.11')], spends)
   expect(days).toEqual({ '07.11': { usd: 3.5, lines: 5, measured: 3, failed: 2, closed: 1 } })
-  expect(dayText(days['07.11']!)).toBe('$3.50 incl. 2 failed, 1 closed · 3/5 measured')
-  expect(dayText({ usd: 0, lines: 2, measured: 0, failed: 0, closed: 0 })).toBe('— · 0/2 measured')
+  expect(dayText(days['07.11']!)).toBe('$3.50 incl. 2 failed, 1 closed')
+  expect(dayText({ usd: 0, lines: 2, measured: 0, failed: 0, closed: 0 })).toBe('—')
   expect(dayText({ usd: 7.5, lines: 2, measured: 2, failed: 0, closed: 0 })).toBe('$7.50')
 })
 
@@ -410,8 +410,8 @@ test('Landed is a tree of the last 14 days: today open, older days folded; per r
   expect(ran.some(r => r.includes('--since=14 days ago'))).toBe(true)
   expect(await ui.find({ type: 'Text', text: /Landed · 14d \(3\)/ })).toBeDefined()
   // today: two lands, one measured; the older day's sum is there, its rows are not
-  expect(await ui.find({ type: 'Text', text: /▾ ▦ 07\.11 \(2\) \$1\.23 · 1\/2 measured/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▸ ▦ 06\.11 \(1\) — · 0\/1 measured/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▾ ▦ 07\.11 \(2\) \$1\.23$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▸ ▦ 06\.11 \(1\) —$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱   \$1\.23 \d\d:\d\d-13:49 aaa111 L-ONE/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? {7}— \?    -09:10 bbb222 L-NOLEDGER/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\$0/ })).toBeUndefined()
@@ -545,25 +545,25 @@ const DAY_LEDGER = [
   ran1('CLOSED-1', noon(7), 0.5, 'closed'),
 ].join('\n')
 
-test('a day header sums its landed lines and the failed and closed lines that ended that day, says so, and says how many of its lines are measured', async ($, on) => {
+test('a day header sums its landed lines and the failed and closed lines that ended that day, and says so', async ($, on) => {
   engine(on, true, { git: DAY_GIT, ledger: DAY_LEDGER })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 200 }, surface: 'terminal' })
   // 1.5 + 2.25 landed, 3 + 7.5 failed, 0.5 closed; L-THREE has no spend: 5 of 6 lines measured
-  expect((await ui.find({ type: 'Text', text: /▦ 07\.11/ }))?.text).toBe('  ▾ ▦ 07.11 (3) $14.75 incl. 2 failed, 1 closed · 5/6 measured')
+  expect((await ui.find({ type: 'Text', text: /▦ 07\.11/ }))?.text).toBe('  ▾ ▦ 07.11 (3) $14.75 incl. 2 failed, 1 closed')
   // each landed row its own line cost; the unmeasured one `—`
   expect(await ui.find({ type: 'Text', text: /\$1\.50 \d\d:\d\d-13:49 aaa111 L-ONE|\$1\.50 \?    -13:49 aaa111 L-ONE/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: / {4}— .*ccc333 L-THREE/ })).toBeDefined()
   await ui.unmount()
 })
 
-test('a day whose every line is measured states its sum alone; a day with none says `—` and 0 measured, never $0', () => {
+test('a day whose every line is measured states its sum alone; a day with none says `—`, never $0', () => {
   const days = daySpends(
     [{ sha: 'a', slice: 'A', at: '07.11 10:00', start: '?', difficulty: '', usd: 2 }, { sha: 'b', slice: 'B', at: '06.11 10:00', start: '?', difficulty: '' }],
     new Map(),
   )
   expect(dayText(days['07.11']!)).toBe('$2.00')
-  expect(dayText(days['06.11']!)).toBe('— · 0/1 measured')
+  expect(dayText(days['06.11']!)).toBe('—')
 })
 
 test('Failed: each row carries the line\'s cost in front of its id, `—` when the ledger has none', async ($, on) => {
