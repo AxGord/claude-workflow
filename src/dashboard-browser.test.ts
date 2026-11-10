@@ -15,11 +15,16 @@ import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
 
 // The dashboard's block view refreshes in place (dashboard/stable.js): this runs the real page in a
-// headless Chrome and looks at what a reader would see. Opt-in: it runs only with CHROME_BIN set to a
-// Chrome binary (a headless launch on macOS can raise a keychain window), so `npm run check` skips it.
+// headless Chrome and looks at what a reader would see. Opt-in: it runs only with WF_BROWSER_TESTS=1 and
+// CHROME_BIN set to a Chrome binary (a headless launch on macOS can raise a keychain window), so
+// `npm run check` skips it. CHROME_BIN alone is not the opt-in: CI images export it with no usable Chrome.
 
 const CHROME = process.env.CHROME_BIN;
-const HAVE_CHROME = CHROME !== undefined && CHROME !== "" && fs.existsSync(CHROME);
+const HAVE_CHROME =
+  process.env.WF_BROWSER_TESTS === "1" &&
+  CHROME !== undefined &&
+  CHROME !== "" &&
+  fs.existsSync(CHROME);
 
 const closers: (() => void)[] = [];
 afterEach(() => {
@@ -129,7 +134,13 @@ async function openPage(url: string): Promise<Page> {
     }
   });
   const portFile = path.join(dir, "DevToolsActivePort");
-  for (let i = 0; i < 100 && !fs.existsSync(portFile); i++) await sleep(100);
+  for (let i = 0; i < 100 && !fs.existsSync(portFile) && chrome.exitCode === null; i++)
+    await sleep(100);
+  if (!fs.existsSync(portFile)) {
+    throw new Error(
+      `Chrome (${CHROME}) did not start: no port file, ${chrome.exitCode === null ? "still running after 10 s" : `exit code ${chrome.exitCode}`}`,
+    );
+  }
   const port = fs.readFileSync(portFile, "utf8").split("\n")[0];
   const target = (await (
     await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: "PUT" })
