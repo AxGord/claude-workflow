@@ -2,7 +2,7 @@
 // `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
 // `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
-// breaking, parked, ended, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// breaking, parked, ended, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
 //
@@ -19,6 +19,7 @@
 // task workflow's `model_table` maps to model/effort; `kind:` (`bug|feature|research`, absent = feature) is the
 // task's type, reported by the pick. `backlog` tasks are never picked.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
@@ -68,12 +69,16 @@ export const TASK_KEYS = [
   "breaking",
   "parked",
   "ended",
+  "base",
+  "text_hash",
   "text",
   "notes",
 ] as const;
-/** The keys `queue_edit` sets (status is the mark's, `ended` is the mark's, notes are appended, id is fixed). */
+/** Known state the engine writes (`ended` by the mark, `base` / `text_hash` by add and edit): never set by a caller. */
+const STATE_KEYS: ReadonlySet<string> = new Set(["ended", "base", "text_hash"]);
+/** The keys `queue_edit` sets (status is the mark's, state keys are the engine's, notes are appended, id is fixed). */
 export const EDIT_KEYS: ReadonlySet<string> = new Set(
-  TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes" && k !== "ended"),
+  TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes" && !STATE_KEYS.has(k)),
 );
 const LIST_KEYS: ReadonlySet<string> = new Set(["after", "touches"]);
 const BOOL_KEYS: ReadonlySet<string> = new Set(["exclusive", "breaking", "parked"]);
@@ -231,6 +236,8 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "after",
     "touches",
     "ended",
+    "base",
+    "text_hash",
   ]) {
     const v = o[k];
     if (v === undefined || v === null) continue;
@@ -560,8 +567,13 @@ function blockedBy(
  * queue's project (the git root of the queue file's directory). null = the name resolves nowhere.
  */
 export function resolveRepo(queue: Queue, line: QueueLine): string | null {
+  return repoNamed(queue, line.meta.repo);
+}
+
+/** `resolveRepo` for a `repo:` value (undefined = the queue's project). */
+function repoNamed(queue: Queue, repo: string | undefined): string | null {
   const own = projectRoot(path.dirname(queue.file));
-  const v = line.meta.repo?.trim();
+  const v = repo?.trim();
   if (!v || v === "-" || v === "—") return own;
   if (path.isAbsolute(v)) return path.resolve(v);
   const base = queue.baseRepos.find(r => path.basename(r) === v);
@@ -707,6 +719,10 @@ export interface QueueLineView {
   readonly lastNote?: string;
   /** The day (`YYYY-MM-DD`) `queue_mark` moved the line to done or failed, when it recorded one. */
   readonly ended?: string;
+  /** HEAD of the line's repo when its text, touches or owner was last written (`queue_add` / `queue_edit`); absent on an older line or outside git. */
+  readonly base?: string;
+  /** The short hash of that text, touches and owner (`lineTextHash`); absent on an older line. */
+  readonly textHash?: string;
   readonly text: string;
   /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
   readonly reason?: string;
@@ -756,6 +772,8 @@ export function describeQueue(queue: Queue): {
       ...(l.notes.at(-1)?.date !== undefined ? { lastNoteDate: l.notes.at(-1)?.date } : {}),
       ...lastNoteOf(l),
       ...(l.meta.ended !== undefined ? { ended: l.meta.ended } : {}),
+      ...(l.meta.base !== undefined ? { base: l.meta.base } : {}),
+      ...(l.meta.text_hash !== undefined ? { textHash: l.meta.text_hash } : {}),
       text: l.text,
       ...(l.status === "pending"
         ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }
@@ -1141,6 +1159,50 @@ export function today(now: Date = new Date()): string {
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
 }
 
+/**
+ * The short hash of what a recon reads of a line: its text, touches and owner (`\n`-joined, touches
+ * as the picker reads the list). Equal hashes = the brief is the one the line was written with.
+ */
+export function textHashOf(text: string, touches: string, owner: string): string {
+  return createHash("sha256")
+    .update([text.trim(), touches.trim(), owner.trim()].join("\n"))
+    .digest("hex")
+    .slice(0, 12);
+}
+
+/** `textHashOf` for a parsed line. */
+export const lineTextHash = (line: QueueLine): string =>
+  textHashOf(line.text, line.meta.touches ?? "", line.meta.owner ?? "");
+
+/** `textHashOf` for a task node. */
+function nodeTextHash(node: YAMLMap): string {
+  const o = node.toJSON() as { text?: unknown; touches?: unknown; owner?: unknown };
+  const list = Array.isArray(o.touches) ? o.touches.map(str).join(", ") : str(o.touches ?? "");
+  return textHashOf(str(o.text ?? ""), list, str(o.owner ?? ""));
+}
+
+/** HEAD of the git repo `repo`, or null (no such directory, not a repo, no commit). */
+function headOf(repo: string | null): string | null {
+  if (repo === null) return null;
+  const r = spawnSync("git", ["-C", repo, "rev-parse", "--verify", "-q", "HEAD"], {
+    encoding: "utf8",
+  });
+  const sha = (r.stdout ?? "").trim();
+  return r.status === 0 && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+
+/**
+ * Records where a line was written: `text_hash` of the node's text, touches and owner, and `base`,
+ * HEAD of the node's repo (left out, or dropped, when that repo is not git).
+ */
+function stampBase(e: Editable, node: YAMLMap): void {
+  setOrdered(e, node, "text_hash", nodeTextHash(node));
+  const repo = node.get("repo");
+  const head = headOf(repoNamed(e.queue, typeof repo === "string" ? repo : undefined));
+  if (head !== null) setOrdered(e, node, "base", head);
+  else if (node.has("base")) node.delete("base");
+}
+
 function checkNote(note: string | undefined): void {
   if (note !== undefined && note.trim() === "" && note !== "")
     throw new QueueError("a note is not blank");
@@ -1163,7 +1225,10 @@ function setOrdered(e: Editable, node: YAMLMap, k: string, v: unknown): void {
   }
   const order = TASK_KEYS.indexOf(k as (typeof TASK_KEYS)[number]);
   const at = node.items.findIndex(
-    p => TASK_KEYS.indexOf(String((p.key as Scalar).value) as (typeof TASK_KEYS)[number]) > order,
+    p =>
+      TASK_KEYS.indexOf(
+        String(isScalar(p.key) ? p.key.value : p.key) as (typeof TASK_KEYS)[number],
+      ) > order,
   );
   const pair = e.doc.createPair(k, v);
   if (at < 0) node.items.push(pair);
@@ -1406,6 +1471,9 @@ export async function addQueueLine(
     throw new QueueError(
       `${id}: ended is written by queue_mark when a line ends, not set on a new one`,
     );
+  for (const k of ["base", "text_hash"])
+    if (task[k] !== undefined)
+      throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
   const status = task.status ?? "pending";
   if (status !== "pending" && status !== "backlog")
     throw new QueueError(`${id}: a new task is pending or backlog, not ${str(status)}`);
@@ -1435,6 +1503,7 @@ export async function addQueueLine(
       }
     }
     if (task.status === undefined) node.items.splice(1, 0, e.doc.createPair("status", status));
+    stampBase(e, node);
     e.tasks.items.splice(at, 0, node);
     return at;
   };
@@ -1495,6 +1564,8 @@ export async function editQueueLine(
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
   for (const k of Object.keys(set))
     if (k === "ended") throw new QueueError(`${id}: ended is written by queue_mark, not set`);
+    else if (k === "base" || k === "text_hash")
+      throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
     else if (!EDIT_KEYS.has(k))
       throw new QueueError(`unknown field "${k}" (keys: ${[...EDIT_KEYS].join(", ")})`);
   const note = appendNote?.trim() || undefined;
@@ -1503,12 +1574,15 @@ export async function editQueueLine(
   const done = await writing(
     file,
     e => {
-      const node = taskNode(e, lineOf(e.queue, id));
+      const line = lineOf(e.queue, id);
+      const node = taskNode(e, line);
       for (const [k, raw] of Object.entries(set)) {
         const v = fieldValue(e, k, raw);
         if (v === null) node.delete(k);
         else setOrdered(e, node, k, v);
       }
+      // the brief changed: it was written now, at this HEAD (an edit that leaves it equal keeps both)
+      if (nodeTextHash(node) !== lineTextHash(line)) stampBase(e, node);
       if (note !== undefined) addNote(e, node, note, noteFrom);
       return { id, task: new YAML.Document(node).toString(YAML_OUT).trimEnd() };
     },

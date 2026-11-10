@@ -23,6 +23,7 @@ import {
   readQueue,
   resolveQueueFile,
   setQueueWindow,
+  textHashOf,
   today,
 } from "./queue.js";
 import { kindMark } from "./map-layout.js";
@@ -75,7 +76,7 @@ const taskRows = (file: string) =>
   (YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] }).tasks.map(
     t => {
       const parts = Object.entries(t)
-        .filter(([k]) => k !== "id" && k !== "status" && k !== "ended")
+        .filter(([k]) => !["id", "status", "ended", "base", "text_hash"].includes(k))
         .flatMap(([k, v]) =>
           k === "notes"
             ? (v as { from: string; text: string }[]).map(n => `note(${n.from}): ${n.text}`)
@@ -1081,7 +1082,7 @@ describe("wf-queue CLI", () => {
     );
     vi.spyOn(process, "cwd").mockReturnValue(root);
     expect((await cli("--queue", "wave", "--add", "{id: C, touches: [c]}")).out).toBe(
-      "C: added at line 6\n",
+      "C: added at line 7\n",
     );
     vi.spyOn(process, "cwd").mockReturnValue(root);
     expect((await cli("--queue", "wave", "--add", "C | touches: c")).code).toBe(2);
@@ -1149,8 +1150,10 @@ describe("wf-queue CLI", () => {
     );
     expect(added.out).toMatch(/^B: added at line \d+\n$/);
     expect((await cli(file, "--add", "{id: C, after: [Q7]}")).code).toBe(2);
-    expect((await cli(file, "--edit", "B", "--set", "model=sonnet", "--set", "after=")).out).toBe(
-      "id: B\nstatus: pending\nmodel: sonnet\ntouches: [ b ]\ntext: |-\n  x\n",
+    expect(
+      (await cli(file, "--edit", "B", "--set", "model=sonnet", "--set", "after=")).out,
+    ).toMatch(
+      /^id: B\nstatus: pending\nmodel: sonnet\ntouches: \[ b \]\ntext_hash: [0-9a-f]{12}\ntext: \|-\n {2}x\n$/,
     );
     expect((await cli(file, "--edit", "B", "--set", "nokey")).code).toBe(2);
     expect((await cli(file, "--batch-size", "0", "--reason", "pause for review")).out).toBe(
@@ -1166,6 +1169,16 @@ describe("wf-queue CLI", () => {
     );
     expect((await cli(file, "--done", "A", "--retry")).code).toBe(2);
     expect(marks(file)).toEqual({ B: " ", A: ">" });
+  });
+
+  it("--add and --edit write base and text_hash too", async () => {
+    const { file, proj } = gitQueue();
+    const first = git(proj, "rev-parse", "HEAD");
+    expect((await cli(file, "--add", "{id: A, touches: [a], text: one}")).code).toBe(0);
+    expect(fieldsOf(file, "A")).toMatchObject({ base: first });
+    const second = commit(proj, "second");
+    expect((await cli(file, "--edit", "A", "--set", "text=two")).code).toBe(0);
+    expect(fieldsOf(file, "A")).toMatchObject({ base: second });
   });
 });
 
@@ -1571,5 +1584,159 @@ describe("queue archive", () => {
     expect(r.moved).toEqual(["A"]);
     expect(fs.readFileSync(archivePath(file), "utf8")).toBe(arch);
     expect(readQueue(file).lines.map(l => l.id)).not.toContain("A");
+  });
+});
+
+const git = (cwd: string, ...args: string[]): string =>
+  execFileSync(
+    "git",
+    ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args],
+    { cwd, encoding: "utf8" },
+  ).trim();
+const commit = (repo: string, msg: string): string => {
+  git(repo, "commit", "--allow-empty", "-m", msg);
+  return git(repo, "rev-parse", "HEAD");
+};
+/** A real git project with one commit and an empty queue; returns the queue file and the project. */
+function gitQueue(): { file: string; proj: string } {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wf-queue-base-"));
+  dirs.push(root);
+  const proj = path.join(root, "proj");
+  fs.mkdirSync(path.join(proj, ".claude", "batch"), { recursive: true });
+  git(proj, "init", "-q");
+  commit(proj, "first");
+  const file = path.join(proj, ".claude", "batch", "q.yaml");
+  fs.writeFileSync(file, "batch_size: 2\ntasks: []\n");
+  return { file, proj };
+}
+const fieldsOf = (file: string, id: string): Record<string, unknown> =>
+  (YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] }).tasks.find(
+    t => t.id === id,
+  ) ?? {};
+
+describe("queue line base: and text_hash:", () => {
+  it("add writes the repo's HEAD as base and the hash of text, touches and owner", async () => {
+    const { file, proj } = gitQueue();
+    const head = git(proj, "rev-parse", "HEAD");
+    await addQueueLine(file, { id: "A", touches: ["a/b", "c"], owner: "x.y", text: "Do A." });
+    const t = fieldsOf(file, "A");
+    expect(t.base).toBe(head);
+    expect(t.text_hash).toBe(textHashOf("Do A.", "a/b, c", "x.y"));
+    expect(t.text_hash).toMatch(/^[0-9a-f]{12}$/);
+    // the keys are known: no notice, the line is admitted, the view carries them
+    const q = readQueue(file);
+    expect(q.lines[0].unknownKeys).toEqual([]);
+    expect(planPick(q, { dryRun: true }).admitted.map(a => a.id)).toEqual(["A"]);
+    expect(describeQueue(q).lines[0]).toMatchObject({ base: head, textHash: t.text_hash });
+    // a different brief hashes differently, an equal one equally
+    expect(textHashOf("Do B.", "a/b, c", "x.y")).not.toBe(t.text_hash);
+    expect(textHashOf(" Do A.\n", "a/b, c", "x.y")).toBe(t.text_hash);
+  });
+
+  it("add takes HEAD of the line's own repo: when it has one", async () => {
+    const { file, proj } = gitQueue();
+    const other = path.join(path.dirname(proj), "other");
+    fs.mkdirSync(other);
+    git(other, "init", "-q");
+    const otherHead = commit(other, "o");
+    commit(proj, "second");
+    await addQueueLine(file, { id: "A", repo: other, touches: "a", text: "t" });
+    expect(fieldsOf(file, "A").base).toBe(otherHead);
+  });
+
+  it("a repo that is not git leaves base out, still writes the hash, and raises no error", async () => {
+    const file = queueFile(`- [ ] A | touches: a`);
+    await addQueueLine(file, { id: "N", touches: "n", text: "brief" });
+    const t = fieldsOf(file, "N");
+    expect("base" in t).toBe(false);
+    expect(t.text_hash).toBe(textHashOf("brief", "n", ""));
+    // an edit of the brief there drops no error either
+    await editQueueLine(file, "N", { text: "other" });
+    expect("base" in fieldsOf(file, "N")).toBe(false);
+    expect(fieldsOf(file, "N").text_hash).toBe(textHashOf("other", "n", ""));
+    // a base left from a repo that is no longer readable does not outlive the brief it was written for
+    fs.writeFileSync(
+      file,
+      fs.readFileSync(file, "utf8").replace("text_hash:", "base: 0123456789abcdef\n    text_hash:"),
+    );
+    expect(fieldsOf(file, "N").base).toBe("0123456789abcdef");
+    await editQueueLine(file, "N", { text: "third" });
+    expect("base" in fieldsOf(file, "N")).toBe(false);
+  });
+
+  it("an edit of text, touches or owner rewrites both; priority, model and a note do not", async () => {
+    const { file, proj } = gitQueue();
+    const first = git(proj, "rev-parse", "HEAD");
+    await addQueueLine(file, { id: "A", touches: "a", owner: "o", text: "one" });
+    const h1 = fieldsOf(file, "A").text_hash;
+    const second = commit(proj, "second");
+    await editQueueLine(file, "A", { priority: "high", model: "sonnet", difficulty: 3 }, "note");
+    expect(fieldsOf(file, "A")).toMatchObject({ base: first, text_hash: h1 });
+    // the same brief set again is not a change
+    await editQueueLine(file, "A", { text: "one", touches: ["a"], owner: "o" });
+    expect(fieldsOf(file, "A")).toMatchObject({ base: first, text_hash: h1 });
+    await editQueueLine(file, "A", { text: "two" });
+    const h2 = fieldsOf(file, "A").text_hash;
+    expect(fieldsOf(file, "A")).toMatchObject({ base: second });
+    expect(h2).toBe(textHashOf("two", "a", "o"));
+    expect(h2).not.toBe(h1);
+    const third = commit(proj, "third");
+    await editQueueLine(file, "A", { touches: ["a", "b"] });
+    expect(fieldsOf(file, "A")).toMatchObject({
+      base: third,
+      text_hash: textHashOf("two", "a, b", "o"),
+    });
+    const fourth = commit(proj, "fourth");
+    await editQueueLine(file, "A", { owner: "p" });
+    expect(fieldsOf(file, "A")).toMatchObject({
+      base: fourth,
+      text_hash: textHashOf("two", "a, b", "p"),
+    });
+    // the keys sit before the text
+    expect(Object.keys(fieldsOf(file, "A")).slice(-4)).toEqual([
+      "base",
+      "text_hash",
+      "text",
+      "notes",
+    ]);
+  });
+
+  it("a line written before (no base, no hash) stays unknown until its brief is edited", async () => {
+    const { file, proj } = gitQueue();
+    fs.writeFileSync(
+      file,
+      "batch_size: 2\ntasks:\n  - id: OLD\n    touches: [ o ]\n    text: |-\n      old brief\n",
+    );
+    const q = readQueue(file);
+    expect(q.lines[0].unknownKeys).toEqual([]);
+    expect(describeQueue(q).lines[0].base).toBeUndefined();
+    expect(describeQueue(q).lines[0].textHash).toBeUndefined();
+    expect(planPick(q, { dryRun: true }).admitted.map(a => a.id)).toEqual(["OLD"]);
+    await editQueueLine(file, "OLD", { priority: "high" });
+    expect(Object.keys(fieldsOf(file, "OLD"))).not.toContain("base");
+    expect(Object.keys(fieldsOf(file, "OLD"))).not.toContain("text_hash");
+    await editQueueLine(file, "OLD", { text: "new brief" });
+    expect(fieldsOf(file, "OLD")).toMatchObject({
+      base: git(proj, "rev-parse", "HEAD"),
+      text_hash: textHashOf("new brief", "o", ""),
+    });
+  });
+
+  it("a mark keeps both; neither key can be set by add or edit", async () => {
+    const { file } = gitQueue();
+    await addQueueLine(file, { id: "A", touches: "a", text: "t" });
+    const before = fieldsOf(file, "A");
+    await markQueue(file, "A", "running");
+    await markQueue(file, "A", "done");
+    expect(fieldsOf(file, "A")).toMatchObject({ base: before.base, text_hash: before.text_hash });
+    for (const k of ["base", "text_hash"]) {
+      await expect(addQueueLine(file, { id: "N", touches: "n", [k]: "x" })).rejects.toThrow(
+        `${k} is written by queue_add / queue_edit`,
+      );
+      await expect(editQueueLine(file, "A", { [k]: "x" })).rejects.toThrow(
+        `${k} is written by queue_add / queue_edit`,
+      );
+    }
+    expect(readQueue(file).lines.map(l => l.id)).toEqual(["A"]);
   });
 });

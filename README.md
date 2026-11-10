@@ -522,7 +522,7 @@ tasks:
 ```
 
 Task keys: `id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
-breaking, parked, ended, text, notes`; `ended` (`YYYY-MM-DD`) is the day `queue_mark` moved the line to `done` or `failed` — written there, removed by a retry or any move out of those, read-only for `queue_add` / `queue_edit`; any other key, a bad status, a duplicate id or a malformed file is refused by
+breaking, parked, ended, base, text_hash, text, notes`; `ended` (`YYYY-MM-DD`) is the day `queue_mark` moved the line to `done` or `failed` — written there, removed by a retry or any move out of those, read-only for `queue_add` / `queue_edit`; `base` and `text_hash` say where the line was written — `base` the commit HEAD of the line's repo (`repo:`, else the queue's project; left out when that is not a git repo), `text_hash` the first 12 hex digits of the sha256 of its text, touches and owner — written by `queue_add` / `wf-queue --add`, rewritten (both, at the HEAD of that moment) by `queue_edit` / `--edit` only when the edit changes text, touches or owner, never by a mark or any other edit, and refused as input (a line written before has neither: unknown, and stays valid; an older reader ignores them as unknown keys; this `base` is the line's, not the header's `base:` list of repos); any other key, a bad status, a duplicate id or a malformed file is refused by
 every read. Every write edits the parsed document in place: key order and comments stay.
 
 Keep the queue file untracked and ignored (e.g. `.claude/batch/` in `.gitignore`): a tracked queue is
@@ -574,13 +574,14 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   plan again, never lost.
 - An unknown task key this server does not know (written by newer code) is kept on write and inert for the pick; `queue_next` / `queue_mark` name it (`unknown key priority on X: ignored by this server`); `queue_add` / `queue_edit` still refuse it in their input.
 - `queue_add({ queue?, file?, task, after_id? | before_id? })` — a new task (`{id, status?: pending|backlog, …}`)
-  after / before a task, else last. Refused unless a pick reads it as meant: a new id, known keys
+  after / before a task, else last; it writes the line's `base` and `text_hash` (see the task keys above). Refused unless a pick reads it as meant: a new id, known keys
   only, every id in `after:` a task of the queue and no cycle (prose beside the ids stays a manual
   condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, a `kind:` of bug|feature|research, a `priority:` of urgent|high|normal|low.
 - `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task
   (`""`/null removes one; a set field keeps its place, a new one goes in key order; `after`/`touches`
   a list or a comma-separated string; `text` is written as a block scalar), and/or a note appended to
-  `notes:`; checked as `queue_add` checks them; the status stays `queue_mark`'s.
+  `notes:`; checked as `queue_add` checks them; the status stays `queue_mark`'s. An edit of `text`, `touches`
+  or `owner` that changes the brief rewrites `base` and `text_hash`; any other edit leaves them.
 - `queue_header({ queue?, file?, batch_size, reason })` — the window: `batch_size: N` and `reason:` (`0` pauses;
   the reason is required).
 - `queue_archive({ queue?, file?, older_than_days, include_unended?, dry_run? })` — keeps the queue file small: moves the `done` and `failed` lines whose `ended:` is more than `older_than_days` days ago to `<queue>.archive.yaml` beside the queue (`queue.yaml` → `queue.archive.yaml`), appending, under the queue's lock; the line is moved whole, its text and notes unchanged. A line with no `ended:` stays unless `include_unended`; a failed line an open (pending / running / backlog) line's `after:` names stays. An `after:` naming an archived id is resolved through the archive (done passes, failed waits), `queue_add` refuses an archived id as taken, and `queue_mark` on one says it is archived. Archive first, queue second: a crash between leaves a line in both and the next run only removes it from the queue. A second run moves nothing. `dry_run` writes nothing. The answer gives the count and the queue's bytes before and after.

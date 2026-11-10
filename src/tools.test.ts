@@ -383,7 +383,7 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
       const text = fs.readFileSync(file, "utf8");
       expect(text).toContain("reason: two\n");
       expect(text).toMatch(
-        /- id: A\n {4}status: done\n {4}touches: \[ a \]\n {4}ended: \d{4}-\d\d-\d\d\n {4}notes:\n {6}- from: land\n/,
+        /- id: A\n {4}status: done\n {4}touches: \[ a \]\n {4}ended: \d{4}-\d\d-\d\d\n {4}text_hash: [0-9a-f]{12}\n {4}notes:\n {6}- from: land\n/,
       );
       expect((await call("queue_next", { queue: "n", dry_run: true })).text).toContain(
         "admitted 0",

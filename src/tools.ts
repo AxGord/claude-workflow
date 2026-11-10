@@ -1128,7 +1128,7 @@ export function registerTools(
     "queue_next",
     {
       description:
-        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive, breaking, parked, ended, text, notes}`): " +
+        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive, breaking, parked, ended, base, text_hash, text, notes}`): " +
         "fills the window (batch_size minus the running tasks) in `priority:` order (urgent, high, normal, low; file order within one) with pending tasks whose `after:` ids are all done, " +
         "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
         "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of every repo; `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
@@ -1226,6 +1226,7 @@ export function registerTools(
       description:
         "Add a task to a YAML task queue under its lock (the lock queue_next / queue_mark take, so no status " +
         "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, kind: bug|feature|research (absent = feature; any other value is refused), priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], owner, exclusive, breaking, parked, text, notes: [{from, date, text}]}`; `ended` (the day a line reached done or failed) is queue_mark's: a new task cannot set it. " +
+        "The line records where it was written: `base` (HEAD of the line's repo — `repo:` or the queue's project; left out when that is not a git repo) and `text_hash` (short sha256 of text + touches + owner), both set by queue_add / queue_edit only. " +
         "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, a `kind:` of bug|feature|research. Goes after `after_id`, before `before_id`, " +
         "else last. A queue addressed by `queue` or by default that does not exist yet is CREATED (`batch_size: 1`, `tasks: []`) and the answer says so (a full `file` path that does not exist is an error, never created).",
@@ -1273,7 +1274,7 @@ export function registerTools(
     {
       description:
         "Change one task's fields in a YAML task queue under the queue's lock: `set: { field: value }` " +
-        '(difficulty, kind: bug|feature|research — anything else is refused, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, owner, exclusive, breaking, parked, text (`ended` is set by queue_mark only, read-only here); `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
+        '(difficulty, kind: bug|feature|research — anything else is refused, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, owner, exclusive, breaking, parked, text (`ended` is set by queue_mark only, read-only here; so are `base` / `text_hash`: an edit that changes text, touches or owner rewrites both — base = HEAD of its repo now — and any other edit leaves them); `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
         "(appended to `notes:` as `{from, date, text}`, `from` default `parent`). The status is queue_mark's. " +
         "A set field keeps its place; values are checked as queue_add checks them. Returns the task as written (YAML).",
       inputSchema: z
