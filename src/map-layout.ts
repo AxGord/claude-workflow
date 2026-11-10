@@ -398,6 +398,12 @@ function localClock(ms: number): string {
 /** The room a difficulty bar takes in front of a plaque's id: five cells and a gap, drawn or blank. */
 const BAR_W = textWidth("?????") + 6;
 
+/**
+ * The bar is drawn exactly into its room: the font's `▰▱` are wider than the average glyph the room is
+ * measured with, and an unfitted bar ran under the kind mark after it.
+ */
+const BAR_FIT = { textLength: BAR_W - 6, lengthAdjust: "spacingAndGlyphs" } as const;
+
 /** The room the kind mark takes after the bar: one cell and a gap, drawn or blank. */
 const KIND_W = textWidth("◆") + 6;
 
@@ -1429,7 +1435,7 @@ function plaqueEls(key: string, p: MapPlaque): SceneEl[] {
             key: `${key}:bar`,
             tag: "text",
             cls: "m-bar",
-            attrs: { x: x + 10, y: y + 4 },
+            attrs: { x: x + 10, y: y + 4, ...BAR_FIT },
             text: p.bar,
             c: p.barC,
           },
@@ -1510,7 +1516,7 @@ function stripEls(key: string, s: MapStrip, x: number): SceneEl[] {
         key: `${key}:${it.key}:bar`,
         tag: "text",
         cls: "m-bar",
-        attrs: { x: at, y: s.y + 17 },
+        attrs: { x: at, y: s.y + 17, ...BAR_FIT },
         text: it.bar,
         c: it.barC,
       },

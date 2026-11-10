@@ -836,6 +836,26 @@ describe("the difficulty bar", () => {
     expect(bars[0]?.c).toBe("--diff-4");
   });
 
+  it("draws every bar exactly into its room, so the kind mark after it never sits on it", () => {
+    const m = layout(
+      fold([]),
+      {},
+      { now: NOW, next: [{ id: "N-1", difficulty: 4, kind: "feature" }] },
+    );
+    const els = scene(m).els;
+    const bar = els.find(e => e.cls === "m-bar")!;
+    const kind = els.find(e => e.cls === "m-kind")!;
+    expect(bar.attrs).toMatchObject({ lengthAdjust: "spacingAndGlyphs" });
+    // the bar ends at its own textLength; the kind mark starts past it
+    expect(Number(kind.attrs.x)).toBeGreaterThan(
+      Number(bar.attrs.x) + Number(bar.attrs.textLength),
+    );
+    for (const p of ["A", "C"].map(id => plaqueOf(M, lane(id).key)))
+      expect(Number(p.kind?.attrs.x ?? Infinity)).toBeGreaterThan(
+        Number(p.bar.attrs.x) + Number(p.bar.attrs.textLength),
+      );
+  });
+
   /** Every element of a scene, flattened with the group keys dropped. */
   const allEls = (g: SceneGroup): SceneEl[] => [...g.els, ...g.groups.flatMap(allEls)];
   const plaqueOf = (m: MapLayout, session: string): Record<string, SceneEl> => {
