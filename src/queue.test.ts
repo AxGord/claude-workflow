@@ -424,7 +424,7 @@ describe("queue overlap: files, exclusive:, repos", () => {
     expect(planPick(readQueue(file)).admitted.map(a => a.id)).toEqual(["C"]);
   });
 
-  it("a line without touches: overlaps only its own repo; exclusive: and owner: reach every repo", () => {
+  it("a line without touches: overlaps only its own repo; exclusive: stays in its repo, owner: reaches every repo", () => {
     const r = plan(
       [
         "- [>] R | repo: /abs/engine | touches: src/queue.ts",
@@ -434,11 +434,8 @@ describe("queue overlap: files, exclusive:, repos", () => {
       ].join("\n"),
       "batch_size: 5",
     );
-    expect(r.admitted.map(a => a.id)).toEqual(["A"]);
-    expect(r.reasons).toEqual([
-      { id: "B", why: "overlaps R (no touches:)" },
-      { id: "C", why: "overlaps R (exclusive C)" },
-    ]);
+    expect(r.admitted.map(a => a.id)).toEqual(["A", "C"]);
+    expect(r.reasons).toEqual([{ id: "B", why: "overlaps R (no touches:)" }]);
   });
 
   it("queue_add and queue_edit take exclusive: as a field", async () => {

@@ -539,8 +539,8 @@ A pick fills the window (`batch_size` minus the running tasks) in `priority:` or
 - overlap no running and no just-admitted task: `touches:` paths overlap when one is a prefix of the
   other on a `/` boundary — compared only between tasks whose `repo:` resolves to the same repository,
   where a task WITHOUT `touches:` overlaps every task (it runs alone in its repo); `owner:` names
-  overlap when equal or one is a `.`-prefix, across repos too; `exclusive: true` overlaps every task
-  of every repo (a mass move, a rename, a tree reformat). `breaking: true` (a format or protocol change running processes cannot follow) is admitted only into an empty window and nothing is admitted while it runs: that picker rule is the engine's. Handing the land to the parent (`NEEDS-PARENT reason=breaking land ready`) is a route the project's task workflow must carry; the bundled `batch-task` has none, so a breaking line on it lands as usual.
+  overlap when equal or one is a `.`-prefix, across repos too; `exclusive: true` overlaps every task of its own repo (another repo is unaffected)
+  (a mass move, a rename, a tree reformat). `breaking: true` (a format or protocol change running processes cannot follow) is admitted only into an empty window and nothing is admitted while it runs: that picker rule is the engine's. Handing the land to the parent (`NEEDS-PARENT reason=breaking land ready`) is a route the project's task workflow must carry; the bundled `batch-task` has none, so a breaking line on it lands as usual.
   The header's `overlap: files` narrows `touches:`: only an entry naming a FILE conflicts, with the
   same file in another task — a FILE is no glob and a regular file under the task's repo (`Makefile`,
   `bin/hxq`), or, when the path does not exist yet, one whose last segment holds a `.`

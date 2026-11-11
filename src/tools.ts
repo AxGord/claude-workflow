@@ -1129,7 +1129,7 @@ export function registerTools(
         "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive, breaking, parked, ended, base, text_hash, text, notes}`): " +
         "fills the window (batch_size minus the running tasks) in `priority:` order (urgent, high, normal, low; file order within one) with pending tasks whose `after:` ids are all done, " +
         "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
-        "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of every repo; `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
+        "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of its own repo (another repo is unaffected); `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
         "header `overlap: files` = only file entries conflict, a directory or glob is a hint); sets each admitted task running under the queue's lock, so two calls never admit one task. `backlog` tasks are never admitted. Returns id, " +
         "model, effort, repo (absolute), workflow (when set), difficulty (1..10, when set: " +
         "the task workflow's model_table maps it to model/effort), kind (bug|feature|research; feature when the task has none) and text per admitted task. `batch_size: 0` = paused: nothing is admitted. " +

@@ -12,7 +12,7 @@
 // done, its `repo:` resolves, and it overlaps neither a running task nor one admitted earlier in the
 // same pick (`touches:` path prefixes on a `/` boundary, compared only between tasks of one repo,
 // where a task without `touches:` overlaps every task; `owner:` equal or a `.`-prefix, across repos;
-// `exclusive: true` overlaps every task of every repo; `breaking: true` is admitted only into an empty window and nothing is admitted while it runs). The header's `overlap: files` narrows
+// `exclusive: true` overlaps every task of its own repo; `breaking: true` is admitted only into an empty window and nothing is admitted while it runs). The header's `overlap: files` narrows
 // `touches:` to its FILE entries (a regular file under the task's repo, or a path that does not
 // exist whose last segment holds a `.`): a directory or glob entry is a hint that conflicts with
 // nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
@@ -509,7 +509,7 @@ function repoKey(repo: string | null): string | null {
 /**
  * Why `a` and `b` may not run together, or null. `repoA`/`repoB` are their repo keys: `touches:`
  * (and its absence) compares only within one repo (a null key, a repo that resolves nowhere, counts
- * as the same); `exclusive:` and `owner:` compare across repos.
+ * as the same) and so does `exclusive:` (it excludes its own repo only); `owner:` compares across repos.
  */
 function conflict(
   a: QueueLine,
@@ -518,9 +518,10 @@ function conflict(
   repoA: string | null,
   repoB: string | null,
 ): string | null {
-  if (exclusiveOf(a)) return `exclusive ${a.id}`;
-  if (exclusiveOf(b)) return `exclusive ${b.id}`;
-  if (repoA === null || repoB === null || repoA === repoB) {
+  const sameRepo = repoA === null || repoB === null || repoA === repoB;
+  if (sameRepo && exclusiveOf(a)) return `exclusive ${a.id}`;
+  if (sameRepo && exclusiveOf(b)) return `exclusive ${b.id}`;
+  if (sameRepo) {
     const ta = touchesOf(a);
     const tb = touchesOf(b);
     if (ta === null || tb === null) return "no touches:";
