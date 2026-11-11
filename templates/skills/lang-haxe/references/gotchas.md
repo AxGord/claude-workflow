@@ -109,9 +109,12 @@ So a `(get, set)` property needs a separate backing field (or `@:isVar`), while 
 ## Strict null-safety — index (details: references/null-safety.md)
 
 BEFORE writing `@:nullSafety(Strict)` code or fighting ANY narrowing
-error → Read references/null-safety.md. One-line rules: a FIELD never
-stays narrowed — capture it into a local IMMEDIATELY after the null
-check (any intervening statement resets it); a LOCAL narrows reliably
+error → Read references/null-safety.md. One-line rules: a FIELD narrows after its null
+check — in Loose for good, in Strict until the first call or field write
+(evaluation order); copy it into a local ONLY for one of the five reasons
+in the reference (used after a call/write under Strict, in a lambda, a
+getter, another thread writes it, the old value is wanted) — never by
+default, never for speed; a LOCAL narrows reliably
 EXCEPT in two shapes — in an `||` chain only a null test that is the FIRST
 operand narrows the rest (an `&&` chain narrows from any position), and a
 narrowed local never reaches an anonymous-structure literal whose expected

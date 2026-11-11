@@ -13,6 +13,7 @@
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
 //   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header
 //   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   queue_archive (done/failed lines → <q>.archive.yaml)
+//   wf-queue <q> --restore <ID>   one archived line back into the queue (CLI only, no MCP tool)
 //   wf-queue --convert <old.md|config.json> [--into <file.yaml>] [--status S] [--dry-run]
 //       an old Markdown queue (or a JSON config) as YAML: printed without --into; --into a new file
 //       writes it; --into an existing queue appends the old queue's open tasks with --status (default backlog)
@@ -35,6 +36,8 @@ import {
   markQueue,
   pickQueue,
   readQueue,
+  refuseArchivedIds,
+  restoreQueue,
   rewriteQueue,
   resolveQueueFile,
   setQueueWindow,
@@ -45,7 +48,7 @@ import {
 
 const USAGE =
   "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--note TEXT] [--from WHO] | --header <key> | --path" +
-  " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --batch-size <N> --reason TEXT | --archive --older-than <days> [--include-unended] [--dry-run]" +
+  " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --batch-size <N> --reason TEXT | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>" +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
 /** `--flag value` pairs after an op; a flag outside `allowed`, a missing value, or a repeat of a non-list flag is a usage error. */
@@ -98,7 +101,12 @@ async function convert(args: readonly string[]): Promise<string> {
   };
   if (appending) {
     const append = (cur: string) => appendMarkdown(cur, text, status ?? "backlog", src, warnOnce);
-    if (o.has("--dry-run")) return append(fs.readFileSync(into, "utf8")).text;
+    if (o.has("--dry-run")) {
+      const q = readQueue(into);
+      const r = append(q.source);
+      refuseArchivedIds(q, r.text);
+      return r.text;
+    }
     const added = await rewriteQueue(into, cur => {
       const r = append(cur);
       return { text: r.text, answer: r.added };
@@ -215,6 +223,16 @@ async function main(args: string[]): Promise<number> {
       dryRun: o.has("--dry-run"),
     });
     process.stdout.write(`${formatArchive(r)}\n`);
+    return 0;
+  }
+  if (op === "--restore") {
+    if (!args[1] || args.length !== 2) throw new QueueError("--restore needs one task id");
+    const r = await restoreQueue(file, args[1]);
+    process.stdout.write(
+      r.inQueue
+        ? `${r.id}: already in ${file}; removed the copy in ${r.archive}\n`
+        : `restored ${r.id} (${r.status}) ← ${r.archive}\n`,
+    );
     return 0;
   }
   if (op === "--batch-size") {

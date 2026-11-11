@@ -959,6 +959,21 @@ function writing<T>(
   );
 }
 
+/** The refusal of an id the queue's archive holds: a new line may not take it. */
+function archivedIdError(queue: Queue, id: string): QueueError {
+  return new QueueError(`${id} is already in ${archivePath(queue.file)} (archived)`);
+}
+
+/**
+ * `text` must read as a queue, and none of the lines it adds to `queue` may carry an id the archive
+ * holds (a line already in both files, left by a crash, stays readable).
+ */
+export function refuseArchivedIds(queue: Queue, text: string): void {
+  const had = new Set(queue.lines.map(l => l.id));
+  for (const l of parseQueue(text, queue.file, queue.archived).lines)
+    if (!had.has(l.id) && queue.archived.has(l.id)) throw archivedIdError(queue, l.id);
+}
+
 /**
  * The queue's whole text rewritten by `change` under the lock, written only while the file still
  * reads as it did (else re-read and run again); the result must read as a queue. Returns `change`'s
@@ -972,7 +987,7 @@ export async function rewriteQueue<T>(
     replanning(file, () => {
       const queue = readQueue(file);
       const r = change(queue.source);
-      parseQueue(r.text, queue.file, queue.archived);
+      refuseArchivedIds(queue, r.text);
       return writeText(queue, r.text) ? r.answer : false;
     }),
   );
@@ -1091,8 +1106,17 @@ export async function archiveQueue(
       let appended = 0;
       for (const l of e.queue.lines) {
         if (!out.has(l.id)) continue;
+        const node = taskNode(e, l);
         if (!have.has(l.id)) {
-          aseq.add(taskNode(e, l));
+          aseq.add(node);
+          appended++;
+          continue;
+        }
+        // held in both files (a crash between the writes): the queue's copy is the fresher one
+        const at = aseq.items.findIndex(n => isMap(n) && String(n.get("id")) === l.id);
+        const held = aseq.items[at];
+        if (isMap(held) && JSON.stringify(held.toJSON()) !== JSON.stringify(node.toJSON())) {
+          aseq.items[at] = node;
           appended++;
         }
       }
@@ -1112,6 +1136,54 @@ export async function archiveQueue(
       }
       if (!writeText(e.queue, text)) return false;
       return { archive, ...plan, bytesBefore, bytesAfter: Buffer.byteLength(text), dryRun: false };
+    }),
+  );
+}
+
+export interface RestoreResult {
+  readonly id: string;
+  readonly status: Status;
+  readonly archive: string;
+  /** The line was already in the queue (a crash left it in both files): only the archive's copy went. */
+  readonly inQueue: boolean;
+}
+
+/**
+ * Moves one line, whole, from the queue's archive back into the queue (appended at the end), under
+ * the queue's lock; its status and `ended:` stay as archived. The queue is written first, so a crash
+ * between the writes leaves the line in both files and a re-run only removes the archive's copy.
+ */
+export async function restoreQueue(file: string, id: string): Promise<RestoreResult> {
+  const archive = archivePath(file);
+  return withQueueLock(file, () =>
+    replanning(file, () => {
+      const e = editable(file);
+      const status = e.queue.archived.get(id);
+      if (status === undefined) throw new QueueError(`${id} is not in ${archive}`);
+      const adoc = YAML.parseDocument(fs.readFileSync(archive, "utf8"));
+      const found: unknown = adoc.get("tasks", true);
+      const aseq = isSeq(found) ? found : new YAMLSeq();
+      const at = aseq.items.findIndex(n => isMap(n) && String(n.get("id")) === id);
+      const node = aseq.items[at];
+      if (!isMap(node)) throw new QueueError(`${id} is not in ${archive}`);
+      const inQueue = e.queue.lines.some(l => l.id === id);
+      let text = e.queue.source;
+      if (!inQueue) {
+        e.tasks.items.push(node);
+        text = e.doc.toString(YAML_OUT);
+      }
+      aseq.items.splice(at, 1);
+      const rest = new Map(e.queue.archived);
+      rest.delete(id);
+      parseQueue(text, e.queue.file, rest);
+      const settled = inQueue
+        ? fs.readFileSync(e.queue.file, "utf8") === e.queue.source
+        : writeText(e.queue, text);
+      if (!settled) return false;
+      const tmp = `${archive}.wf-queue.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      fs.writeFileSync(tmp, adoc.toString(YAML_OUT));
+      fs.renameSync(tmp, archive);
+      return { id, status, archive, inQueue };
     }),
   );
 }
@@ -1482,8 +1554,7 @@ export async function addQueueLine(
   const place = (e: Editable): number => {
     if (e.queue.lines.some(l => l.id === id))
       throw new QueueError(`${id} is already in ${e.queue.file}`);
-    if (e.queue.archived.has(id))
-      throw new QueueError(`${id} is already in ${archivePath(e.queue.file)} (archived)`);
+    if (e.queue.archived.has(id)) throw archivedIdError(e.queue, id);
     const at =
       pos.after !== undefined
         ? lineOf(e.queue, pos.after).index + 1

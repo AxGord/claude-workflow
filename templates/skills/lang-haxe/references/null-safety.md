@@ -2,15 +2,47 @@
 
 ## Null Safety: Narrowing Limitations
 
-### Basic (`@:nullSafety`)
-`if (x != null)` narrows for **argument passing** only. Does NOT narrow for:
-- **Lambda captures**: `() -> useString(x)` — x still nullable
-- **Method calls on nullable**: `handler.bind(...)`, `handler("x")` — error
+### When a FIELD narrows, and when a local copy is REQUIRED (measured, Haxe 4.3.7, -cpp, 51 shapes)
 
-Fix: pass narrowed value through a helper with non-null param, or use `.bind()` at call site for value types.
+A copy `final x:Null<T> = _field; if (x != null) …` is NOT the default — write it only for one of
+the five reasons below. It costs nothing at run time (a stack reference, no allocation) and saves
+nothing either (a field read is one load): choose by correctness and readability, never by speed.
+"Field" here = an instance field, a static field, or a chain of fields (`p.o`); NOT a property
+with a getter.
+
+Narrowing a field gets (`if (f != null)`, `if (f == null) return;`, `else` branch, `&&` chain, ternary):
+- **`@:nullSafety` (Loose):** stays narrowed like a local — through calls, field writes, loops.
+- **`@:nullSafety(Strict)`:** survives until the FIRST of these, in EVALUATION order:
+  - any function call — own methods, methods OF THE NARROWED OBJECT ITSELF (`o.m(); o.m();` — the
+    second fails), `trace`, `Math.abs`, an `inline` function whose body calls anything (an empty
+    inline does not count);
+  - a write to ANY field — another field, or a member of the narrowed object (`o.x = 1; o.m();` fails).
+  NOT reset by: local writes, `new`, array/string literals. Inside one expression order decides:
+  `o.n(calc())` and `take(o, calc())` pass (`o` is read first), `take(calc(), o)` fails. In a loop a
+  call anywhere in the body resets it for the next iteration (`for (i in r) o.m();` fails).
+- **Never narrows, either mode:** a field captured in a lambda (`if (o != null) later(() -> o.m())`),
+  a getter property. Locals and parameters DO narrow in lambdas (final or var).
+- Strict quirk: `fn.bind(1)` on a narrowed nullable function PARAMETER fails ("Cannot call a nullable value").
+
+**Copy the field into a local ONLY when:**
+1. Strict, and the field is used after a call or a field write (see the list above);
+2. the field is used inside a lambda / local function;
+3. it is a getter property (also: the getter then runs once, not per read);
+4. another thread may write the field — two reads are a race even with nothing between them;
+5. you WANT the value as of the check while code in between may reassign the field (in Loose the
+   compiler accepts the field version, but it then sees the new value or NPEs).
+
+Otherwise use the field directly: `if (onChange != null) onChange(this);`,
+`if (_logo != null) _logo.y = h - _logo.height;`, `_logo = new Bitmap(d); _logo.alpha = 0.3;` all compile in Strict.
+Replacing a copy with the field is behaviour-preserving only under the Strict condition (no call or
+field write between the copy and the last use) AND reason 4 absent — whatever the class's mode.
+
+### Basic (`@:nullSafety`)
+A narrowed local or parameter works for argument passing, calls (`if (h != null) h("x")`) and lambda
+captures. What fails is a FIELD in a lambda or a getter (see above).
 
 ### Optional callback forwarded into async callbacks: bind it into a method, don't default it to a no-op lambda
-Shape: `function f(?cb: () -> Void)` that calls `cb` from inside nested success/error callbacks. Under `@:nullSafety(Strict)`, `if (cb != null) cb();` inside a local function/lambda fails with "Null safety: Cannot call a nullable value" because `cb` is captured (see Lambda captures above).
+Shape: `function f(?cb: () -> Void)` that calls `cb` from inside nested success/error callbacks. Under `@:nullSafety(Strict)`, `if (cb != null) cb();` inside a NAMED local function (`function inner() …`) fails with "Null safety: Cannot call a nullable value" because `cb` is captured. Inside an arrow lambda it compiles (measured 4.3.7, both modes), and so does a check outside with the call in the lambda (`if (cb != null) later(() -> cb())`).
 
 - **WRONG**: `final done: () -> Void = cb != null ? cb : () -> {};` — noise, allocates a dummy.
 - **RIGHT**: pass it as a parameter via `.bind()` to private methods typed `Null<() -> Void>`; as a plain parameter it narrows normally:
@@ -22,45 +54,22 @@ private function errorHandler(cb: Null<() -> Void>, err: Error): Void { /* ... *
 ```
 The bound arg goes first; the API's own callback args follow.
 
-### Strict (`@:nullSafety(Strict)`)
-Fields DO narrow right after a null check, but the narrowing is fragile: ANY intervening statement that could mutate state (a call, a write to any field) resets it — the compiler assumes another thread/callback could modify the field. In practice a field is only usable as non-null on the line directly after its check. Local variables narrow normally and stay narrowed — with two exceptions that look like compiler bugs and are easy to misdiagnose as something else in the same function (see "Two Places a LOCAL Refuses to Narrow" below).
+### Strict (`@:nullSafety(Strict)`) — the reset in practice
+Locals narrow normally and stay narrowed — with two exceptions that look like compiler bugs (see
+"Two Places a LOCAL Refuses to Narrow" below). A field follows the Strict list in the section above.
 
-**Pattern: capture field into local immediately after null check:**
 ```haxe
-// WRONG — field not narrowed in Strict, any statement between check and use resets it
+// WRONG — the field write between check and use resets the field's narrowing
 if (_animate == null) return;
-_transitioning = true;             // ← field write invalidates narrowing
-final animate:AnimatePanel = _animate;  // ERROR: nullable
-
-// RIGHT — local assigned immediately after null check, before any field writes
-if (_animate == null) return;
-final animate:AnimatePanel = _animate;  // ✓ narrowed
 _transitioning = true;
+_animate.show();                        // ERROR: nullable
+
+// RIGHT — reorder, or copy once (reason 1) when the use must come after the write
+if (_animate == null) return;
+final animate:AnimatePanel = _animate;  // narrowed
+_transitioning = true;
+animate.show();
 ```
-
-**Pattern: field used multiple times — capture into local:**
-```haxe
-// WRONG — field access, Strict won't narrow
-if (_logo != null) _logo.y = h - _logo.height;  // ERROR
-
-// RIGHT — local variable narrows normally
-final logo:Null<DisplayObject> = _logo;
-if (logo != null) logo.y = h - logo.height;  // ✓
-```
-
-**Pattern: field assigned then used — use local for the non-null path:**
-```haxe
-// WRONG — _logo is Null<T> field, stays nullable after assignment
-_logo = new Bitmap(data);
-_logo.alpha = 0.3;  // ERROR
-
-// RIGHT — assign to local first, then store in field
-final logo:DisplayObject = new Bitmap(data);
-_logo = logo;
-logo.alpha = 0.3;  // ✓
-```
-
-**Key rule:** in Strict mode, ANY intervening statement (even writing to a *different* field) can invalidate narrowing of a nullable field. Always capture to local **immediately** after the null check.
 
 **Null safety with `?.` on abstract method returns:**
 ```haxe
