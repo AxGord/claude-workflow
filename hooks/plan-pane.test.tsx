@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, ledgerRunsOf, ledgerSpendOf, landMs, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
+import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, prioGlyph, ledgerRunsOf, ledgerSpendOf, landMs, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -113,7 +113,7 @@ test('the Plan tab is drawn from the engine\'s /api/queue answer', async ($, on)
     expect((await ui.find({ type: 'Text', text: /Plan 1\/2/ }))?.text).toContain('Plan 1/2')
     expect(await ui.find({ type: 'Text', text: /RUN-1/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /NEXT-1/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /NEXT-2 \[high\]/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /NEXT-2/ })).toBeDefined()
     expect((await ui.find({ type: 'Text', text: /Waiting/ }))?.text).toContain('Waiting 1')
     expect(await ui.find({ type: 'Text', text: /PARK-1/ })).toBeUndefined()
     await ui.unmount()
@@ -125,8 +125,8 @@ test('each row shows its kind glyph right after the bar: bug ※, research ⚑, 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /▰▰▰▰▱ ※ RUN-1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▰▱▱▱▱ ⚑ NEXT-2 \[high\]/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ◆ NEXT-1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▰▱▱▱▱ ⚑ ↑ NEXT-2/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ◆   NEXT-1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ — \?    -10:00 ddd444 DONE-1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\?\?\?\?\?   — \?    -09:00 eee555 NOT-IN-QUEUE/ })).toBeDefined()
   await ui.press({ key: 'tab-waiting' })
@@ -627,15 +627,38 @@ test('Failed: all rows fit one line each; one reason too long puts EVERY row on 
   for (const t of narrow.filter(t => /FAIL-|reason that|gate red|closed as|no note/.test(t))) expect(cells(t)).toBeLessThanOrEqual(50)
 })
 
-test('Next: every row on one line while they fit; a priority row too long for the pane puts EVERY row on two lines, the id indented', async ($, on) => {
+test('Next: every row on one line while they fit; one row too long for the pane puts EVERY row on two lines, the id indented', async ($, on) => {
+  engine(on, true)
+  const long = { ...API_QUEUE.lines.find(l => l.id === 'NEXT-1')!, id: 'NEXT-WITH-A-LONG-ID' }
+  API_QUEUE.lines.push(long as never)
+  try {
+    const wide = await paneTexts($, 100)
+    expect(wide.some(t => /▰▱▱▱▱ ⚑ ↑ NEXT-2/.test(t))).toBe(true)
+    expect(wide.some(t => /NEXT-1/.test(t) && !/^ {5,}\S/.test(t))).toBe(true)
+    // `  ▰▰▱▱▱ ◆   NEXT-1` is 18 cells and fits 20; the long row (31 cells) does not: the short rows go to two lines too
+    const narrow = await paneTexts($, 20)
+    expect(narrow.some(t => /NEXT-[12]/.test(t) && !/^ {5,}\S/.test(t))).toBe(false)
+    expect(narrow.filter(t => /^ {5,}NEXT-/.test(t))).toHaveLength(3)
+    expect(narrow.some(t => /⚑ ↑$/.test(t))).toBe(true)
+  } finally {
+    API_QUEUE.lines.pop()
+  }
+})
+
+test('priority glyphs: urgent red, high orange, low grey, normal and none no glyph; the text form is gone', () => {
+  expect(prioGlyph('urgent')).toEqual({ glyph: '⇈', color: 'red' })
+  expect(prioGlyph('high')).toEqual({ glyph: '↑', color: '#ff8800' })
+  expect(prioGlyph('low')).toEqual({ glyph: '↓', color: 'gray' })
+  expect(prioGlyph('normal')).toBeUndefined()
+  expect(prioGlyph(undefined)).toBeUndefined()
+  expect(prioGlyph('constructor')).toBeUndefined()
+})
+
+test('Next: a normal row keeps the glyph column blank so ids stay aligned, and no row prints [priority]', async ($, on) => {
   engine(on, true)
   const wide = await paneTexts($, 100)
-  expect(wide.some(t => /▰▱▱▱▱ ⚑ NEXT-2 \[high\]/.test(t))).toBe(true)
-  const narrow = await paneTexts($, 20)
-  // `  ▰▱▱▱▱ ⚑ NEXT-2 [high]` is 23 cells: NEXT-1 (which would fit) is on two lines too
-  expect(narrow.some(t => /NEXT-1/.test(t) && !/^ {5,}\S/.test(t))).toBe(false)
-  expect(narrow.filter(t => /^ {5,}NEXT-\d$/.test(t))).toHaveLength(2)
-  expect(narrow.some(t => /⚑ \[high\]/.test(t))).toBe(true)
+  expect(wide.some(t => /\[(urgent|high|low|normal)\]/.test(t))).toBe(false)
+  expect(wide.some(t => /◆   NEXT-1/.test(t))).toBe(true)
 })
 
 test('Waiting: the one-line form while every reason fits; otherwise EVERY row on two lines, the reason indented and cut with an ellipsis', async ($, on) => {

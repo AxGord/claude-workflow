@@ -827,6 +827,8 @@ function planSession(id) {
     && (s.context.task === id || s.context.task.startsWith(id + ' ') || s.context.task.startsWith(id + ':')));
 }
 
+const PRIO_GLYPHS = Object.assign(Object.create(null), { urgent: '⇈', high: '↑', low: '↓' });
+
 // One queue line: a state dot, its plaque in the difficulty colour, the model chip, the flags, the first words of its text.
 function planRow(l, extra, stateCls) {
   const flags = [l.exclusive ? 'exclusive' : '', l.paused ? 'parked' : ''].filter(Boolean).join(' ');
@@ -838,7 +840,7 @@ function planRow(l, extra, stateCls) {
     ui.difficulty(l.difficulty) + ui.kind(l),
     ui.dot(asking ? 'st-wait' : stateCls + (l.status === 'running' ? ' ' + modelClass(l.model) + ' live' : '')),
     ui.plaque(escapeHtml(l.id)),
-    l.priority ? `<span class="flags mono">${escapeHtml(l.priority)}</span>` : '',
+    PRIO_GLYPHS[l.priority] ? `<span class="prio prio-${l.priority}" title="${l.priority}">${PRIO_GLYPHS[l.priority]}</span>` : '',
     l.model ? ui.chip(l.model) : '',
     flags ? `<span class="flags">${escapeHtml(flags)}</span>` : '',
   ].join(' ');

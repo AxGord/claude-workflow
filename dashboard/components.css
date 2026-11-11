@@ -77,6 +77,10 @@ a.item:hover { border-color: var(--text-4); color: inherit; }
 .id { font-family: var(--mono); font-size: 11px; color: var(--text-4); }
 .item .id { margin-top: 2px; }
 .item .info { color: var(--text-3); font-size: 12px; margin-top: 4px; }
+.prio { font-weight: 700; }
+.prio-urgent { color: var(--prio-urgent); }
+.prio-high { color: var(--prio-high); }
+.prio-low { color: var(--prio-low); }
 .item .flags { color: var(--text-4); font-size: 11px; font-weight: 400; }
 .frame { padding: 8px 12px; background: var(--raised); border-left: 3px solid var(--panel-border); border-radius: 0 8px 8px 0; margin-bottom: 6px; font-family: var(--mono); font-size: 13px; }
 .frame.active-frame { border-left-color: var(--c, var(--model-sonnet)); }

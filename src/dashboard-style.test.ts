@@ -629,7 +629,7 @@ describe("every view renders with the shared components", () => {
     expect(views.planOrder.indexOf("PICK-FIRST")).toBeLessThan(
       views.planOrder.indexOf("FILE-FIRST"),
     );
-    expect(views.planOrder).toMatch(/PICK-FIRST[\s\S]*?>high</);
+    expect(views.planOrder).toMatch(/PICK-FIRST[\s\S]*?prio prio-high[^>]*>↑</);
     expect(views.planOpus).toContain('class="dot st-run opus live"');
     // no live dot, node or frame without the running state class
     for (const html of Object.values(views)) {
@@ -859,5 +859,17 @@ describe("the Pool tab", () => {
     expect(html).toContain('href="/session/abcdef123456"');
     expect(html).toContain("7 threads");
     expect(html).toContain("task/gate");
+  });
+
+  describe("queue line priority glyphs", () => {
+    it("the page draws urgent / high / low as one glyph in token colours and no text, normal as none", () => {
+      expect(SCRIPT).toContain("{ urgent: '⇈', high: '↑', low: '↓' }");
+      expect(SCRIPT).toContain("PRIO_GLYPHS[l.priority]");
+      expect(SCRIPT).not.toContain('flags mono">${escapeHtml(l.priority)');
+      for (const k of ["urgent", "high", "low"]) {
+        expect(TOKENS).toContain(`--prio-${k}:`);
+        expect(COMPONENTS).toContain(`.prio-${k} { color: var(--prio-${k}); }`);
+      }
+    });
   });
 });

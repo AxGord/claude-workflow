@@ -29,6 +29,9 @@
   --warn: #eab308;
   --warn-text: #fde68a;
   --warn-bg: #26200c;
+  --prio-urgent: #ef4444;
+  --prio-high: #f97316;
+  --prio-low: #64748b;
   --bad: #ef4444;
   --bad-text: #fca5a5;
   --bad-bg: #2a1214;

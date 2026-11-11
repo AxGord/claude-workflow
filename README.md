@@ -947,7 +947,7 @@ that loads plugin `modules`; older ones simply have no pane). It refreshes every
 no model call, no tokens:
 
 - **Plan** — for a session whose root workflow has a work queue (`context.queue_file`): `▶ Running n/window` (each
-  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in the picker's order: priority, then file order, the priority beside the id), `✓ Landed · 14d`
+  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in the picker's order: priority, then file order, the priority as a coloured one-cell glyph before the id: `⇈` urgent red, `↑` high orange, `↓` low grey, normal none and a blank cell; the dashboard's plan rows use the same glyphs), `✓ Landed · 14d`
   (the queue repo's `git log` lines carrying a `Slice:` trailer, the Cost tab's 14 days) as a tree: one foldable `▦ DD.MM (n) <day spend>` row per day (today open, the older days folded until a click; a day the person folded or opened stays so past midnight),
   under it `▰▰▱▱▱ ◆ $cost start-end sha id` per land — the difficulty bar first on every row that has one (`?????` when
   unknown), then the line's kind glyph (a blank cell for a land that is not in the queue), start from the ledger's `started_at` of the line's task session (matched by its `task`, which the
@@ -960,7 +960,7 @@ no model call, no tokens:
   A section lays out as one, by the pane's width (`bodyColumns` of each refresh, so a resized pane re-lays out, wide glyphs
   counted as two cells): while every row of the section fits on one line, each is one line as above; as soon as ANY row
   does not, EVERY row of that section takes two lines, the second indented one tab. Running: bar, kind, id / the state,
-  the next step, the age. Next: bar, kind, priority / the id. Landed (measured over the rows of the open days only: a row of a folded day neither flips the section to the two-line form nor widens its cost column): bar, kind, cost, times, sha / the id.
+  the next step, the age. Next: bar, kind, priority glyph / the id. Landed (measured over the rows of the open days only: a row of a folded day neither flips the section to the two-line form nor widens its cost column): bar, kind, cost, times, sha / the id.
   Failed: bar, kind, cost, id, date / the reason (the full reason is measured, so a long one makes the section two-line). An id
   or text still too long for its line (either line) is cut with `…`, never wrapped. The height caps count lines, so a two-line
   section shows half as many rows.

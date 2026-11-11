@@ -629,6 +629,20 @@ export function cells(text: string): number {
   return n
 }
 
+/** A queue line's priority as one cell: urgent ⇈ red, high ↑ orange, low ↓ grey; normal (or none) has no glyph. */
+export const PRIO_GLYPHS: Record<string, { glyph: string; color: string }> = {
+  urgent: { glyph: '⇈', color: 'red' },
+  high: { glyph: '↑', color: '#ff8800' },
+  low: { glyph: '↓', color: 'gray' },
+}
+export function prioGlyph(priority: string | undefined): { glyph: string; color: string } | undefined {
+  return priority !== undefined && Object.hasOwn(PRIO_GLYPHS, priority) ? PRIO_GLYPHS[priority] : undefined
+}
+const prioCell = (Text: any, priority: string | undefined) => {
+  const g = prioGlyph(priority)
+  return g ? <Text color={g.color}>{g.glyph}</Text> : ' '
+}
+
 /** A text cut to `max` cells with a closing `…`; unchanged when it fits. */
 export function fitCells(text: string, max: number): string {
   if (cells(text) <= max) return text
@@ -1194,7 +1208,7 @@ export const register: Register = on => {
       }
       // a section lays out as one: when ANY of its rows does not fit the pane, EVERY row takes two lines
       const runTwo = !fitsOneLine(q.running.map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}  ${whereOf(l.id)} ${sinceOf(l.id)}`), columns)
-      const nextTwo = !fitsOneLine(q.ready.slice(0, 10).map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}${l.priority ? ` [${l.priority}]` : ''}`), columns)
+      const nextTwo = !fitsOneLine(q.ready.slice(0, 10).map(l => `  ${BAR_W} ${markOf(l.id)} ${prioGlyph(l.priority)?.glyph ?? ' '} ${l.id}`), columns)
       // the rows left for Next count lines: a two-line Running or Next row takes two
       const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length * (runTwo ? 2 : 1)
       const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
@@ -1258,11 +1272,11 @@ export const register: Register = on => {
               nextTwo ? (
                 // two lines: bar, kind, priority; the id indented under them
                 <Box flexDirection="column">
-                  <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)}{l.priority ? ' ' + fitCells(`[${l.priority}]`, Math.max(1, columns - 9)) : ''}</Text>
+                  <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {prioCell(Text, l.priority)}</Text>
                   <Text>{'  '}{TAB}{fitCells(l.id, Math.max(1, columns - 2 - TAB.length))}</Text>
                 </Box>
               ) : (
-                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}{l.priority ? ` [${l.priority}]` : ''}</Text>
+                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {prioCell(Text, l.priority)} {l.id}</Text>
               ),
             )}
           {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in the picker's order</Text>}
