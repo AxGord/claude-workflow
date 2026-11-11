@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, prioGlyph, ledgerRunsOf, ledgerSpendOf, landMs, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
+import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, foldFlipped, prioGlyph, ledgerRunsOf, ledgerSpendOf, landMs, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -679,11 +679,90 @@ test('Waiting: the height cap counts lines, so a two-line list shows half as man
   try {
     const wide = await paneTexts($, 100, ['tab-waiting'])
     expect(wide.filter(t => /^.*W-\d\d after: /.test(t))).toHaveLength(23)
-    expect(wide.some(t => /^\+7 more$/.test(t))).toBe(true)
+    expect(wide.some(t => /^▸ \+7 more$/.test(t))).toBe(true)
     const narrow = await paneTexts($, 30)
     // 31 waiting rows at 24 lines of room: 12 rows of two lines, not 24
     expect(narrow.filter(t => /^ {3,}after: /.test(t))).toHaveLength(12)
-    expect(narrow.some(t => /^\+19 more$/.test(t))).toBe(true)
+    expect(narrow.some(t => /^▸ \+19 more$/.test(t))).toBe(true)
+  } finally {
+    API_QUEUE.lines.splice(-30)
+  }
+})
+
+test('foldFlipped: a key joins the fold list when it was absent and leaves it when present', () => {
+  expect(foldFlipped([], 'next-more')).toEqual(['next-more'])
+  expect(foldFlipped(['failed', 'next-more'], 'next-more')).toEqual(['failed'])
+})
+
+/** `n` more ready lines after the fixture's two, in the order the picker gives them (the fixture's own take 0 and 1). */
+const readyExtra = (n: number, priority?: string) =>
+  Array.from({ length: n }, (_, i) => ({
+    ...API_QUEUE.lines.find(l => l.id === 'NEXT-1')!,
+    id: `R-${String(i).padStart(2, '0')}`,
+    pickOrder: 2 + i,
+    ...(priority && i === n - 1 ? { priority } : {}),
+  }))
+
+test('Next: the `+N more` row is a fold row, closed by default; pressed, it lists every folded line in the picker\'s order with the same row form, and pressed again it closes', async ($, on) => {
+  engine(on, true)
+  const extra = readyExtra(12, 'urgent')
+  API_QUEUE.lines.push(...(extra as never[]))
+  try {
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    const rows = async () => (await ui.findAll({ type: 'Text', text: /R-\d\d/ })).map((t: any) => /R-\d\d/.exec(t.text)![0])
+    // 14 ready lines, 10 shown: 4 are folded, behind one closed row
+    expect(await ui.find({ type: 'Text', text: /^ {2}▸ \+4 more can start \(dependencies done\), in the picker's order$/ })).toBeDefined()
+    expect(await rows()).toHaveLength(8)
+    await ui.press({ key: 'fold-next-more' })
+    expect(await ui.find({ type: 'Text', text: /^ {2}▾ \+4 more can start/ })).toBeDefined()
+    // all 12, in the picker's order, the last one with its glyph in the same column as the shown ones
+    expect(await rows()).toEqual(extra.map(l => l.id))
+    expect(await ui.find({ type: 'Text', text: /^ {2}▰▰▱▱▱ ◆ ⇈ R-11$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^ {2}▰▰▱▱▱ ◆   R-10$/ })).toBeDefined()
+    await ui.press({ key: 'fold-next-more' })
+    expect(await rows()).toHaveLength(8)
+    expect(await ui.find({ type: 'Text', text: /▸ \+4 more can start/ })).toBeDefined()
+    await ui.unmount()
+  } finally {
+    API_QUEUE.lines.splice(-12)
+  }
+})
+
+test('the `+N more` fold survives a refresh and a reopened pane', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  API_QUEUE.lines.push(...(readyExtra(12) as never[]))
+  try {
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    await clock.settle()
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await ui.press({ key: 'fold-next-more' })
+    expect(await ui.find({ type: 'Text', text: /R-11/ })).toBeDefined()
+    await clock.advance(15000)
+    expect(await ui.find({ type: 'Text', text: /R-11/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /▾ \+4 more can start/ })).toBeDefined()
+    await ui.unmount()
+    const again = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await again.find({ type: 'Text', text: /R-11/ })).toBeDefined()
+    await again.unmount()
+  } finally {
+    API_QUEUE.lines.splice(-12)
+  }
+})
+
+test('Waiting: the `+N more` row folds out the same way, every waiting line in the same row form, one mechanism with Next\'s', async ($, on) => {
+  engine(on, true)
+  const extra = Array.from({ length: 30 }, (_, i) => ({ ...API_QUEUE.lines.find(l => l.id === 'WAIT-1')!, id: `W-${String(i).padStart(2, '0')}` }))
+  API_QUEUE.lines.push(...(extra as never[]))
+  try {
+    const open = await paneTexts($, 100, ['tab-waiting', 'fold-waiting-more'])
+    expect(open.filter(t => /^.*W-\d\d after: /.test(t))).toHaveLength(30)
+    expect(open.some(t => /WAIT-1 after: NEXT-1/.test(t))).toBe(true)
+    expect(open.some(t => /^▾ \+7 more$/.test(t))).toBe(true)
+    // pressed again: capped, as before
+    const closed = await paneTexts($, 100, ['fold-waiting-more'])
+    expect(closed.filter(t => /^.*W-\d\d after: /.test(t))).toHaveLength(23)
+    expect(closed.some(t => /^▸ \+7 more$/.test(t))).toBe(true)
   } finally {
     API_QUEUE.lines.splice(-30)
   }

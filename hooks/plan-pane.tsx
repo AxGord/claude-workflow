@@ -18,10 +18,10 @@ const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, {
 const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, { shape: 'agents-seen-1' })
 /** The last read of the engine's /api/pool, kept only while the pane is open on the Pool tab ('null' otherwise). */
 const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shape: 'pool-1' })
-/** The Plan tab sections whose fold the person flipped (running, next, lands, failed): none by default, so all sections show but FOLDED_BY_DEFAULT ones. A Landed day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
+/** The Plan tab sections whose fold the person flipped (running, next, lands, failed) and the `+N more` rows whose list the person opened (`next-more`, `waiting-more`, `sessions-more`): none by default, so all sections show but FOLDED_BY_DEFAULT ones, and every capped list stops at its cap. A Landed day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-2' })
-/** Sections that start folded: a click on one unfolds it. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
-const FOLDED_BY_DEFAULT = new Set(['failed', 'failed-older'])
+/** Sections that start folded: a click on one unfolds it. Each `+N more` fold row of the pane is one (`next-more`, `waiting-more`, `sessions-more`): closed, the list stops at its cap; open, it lists every row. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
+const FOLDED_BY_DEFAULT = new Set(['failed', 'failed-older', 'next-more', 'waiting-more', 'sessions-more'])
 /** How far back the Landed tree goes: the Cost tab's own range. */
 const LAND_DAYS = 14
 /** The session whose card is open in the Sessions tab ('' none). */
@@ -281,6 +281,11 @@ export function landMs(at: string, now: number): number {
   const year = new Date(now).getFullYear()
   const t = new Date(year, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime()
   return t > now + 24 * 3600 * 1000 ? new Date(year - 1, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime() : t
+}
+
+/** The fold list after a click on `key`: the key leaves the list when it was there, joins it when not. */
+export function foldFlipped(foldedKeys: string[], key: string): string[] {
+  return foldedKeys.includes(key) ? foldedKeys.filter(k => k !== key) : [...foldedKeys, key]
 }
 
 /** A Landed day (`lands-DD.MM`) is open when the person opened it, folded when they folded it, else open only on today. The fold list holds an explicit `+key` / `-key` for a day, never a flip of the default: a default that changes at midnight must not flip a day the person chose. */
@@ -1039,11 +1044,17 @@ export const register: Register = on => {
       key.startsWith('lands-') ? landDayOpen(foldedNow, key, today) : foldedNow.includes(key) === FOLDED_BY_DEFAULT.has(key)
     // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones and the days before today)
     const header = (key: string, color: string, title: string) => (
-      <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => (f.includes(key) ? f.filter(k => k !== key) : [...f, key]))}>
+      <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => foldFlipped(f, key))}>
         <Text color={color} weight="bold">{isOpen(key) ? '▾' : '▸'} {title}</Text>
       </Button>
     )
     const columns: number = e.props?.bodyColumns ?? 100
+    // the `+N more` row that ends a capped list: a click lists the rest (▾) or caps the list again (▸), the fold kept across refreshes
+    const moreRow = (key: string, text: string, indent = '') => (
+      <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => foldFlipped(f, key))}>
+        <Text dimColor>{fitCells(`${indent}${isOpen(key) ? '▾' : '▸'} ${text}`, columns)}</Text>
+      </Button>
+    )
     const room = Math.max(4, (e.viewport?.rows ?? 30) - 6)
     const byId = new Map(s.sessions.map(r => [r.id, r]))
     const childrenOf = (id: string): SessionRow[] => s.sessions.filter(r => r.parent === id)
@@ -1168,7 +1179,7 @@ export const register: Register = on => {
       const cap = sessTwo ? Math.max(1, Math.floor(room / 2)) : room
       body = lines.length === 0
         ? <Text dimColor>No active workflow in this session.</Text>
-        : <Box flexDirection="column">{lines.slice(0, cap)}{lines.length > cap ? <Text dimColor>  +{lines.length - cap} more</Text> : null}</Box>
+        : <Box flexDirection="column">{isOpen('sessions-more') ? lines : lines.slice(0, cap)}{lines.length > cap ? moreRow('sessions-more', `+${lines.length - cap} more`, '  ') : null}</Box>
     } else if (!q) {
       body = <Text dimColor>No work queue in this session: the Sessions tab shows its workflow.</Text>
     } else if (tab === 'pool') {
@@ -1181,7 +1192,7 @@ export const register: Register = on => {
       body = (
         <Box flexDirection="column">
           {q.waiting.length === 0 && <Text dimColor>Nothing waits.</Text>}
-          {q.waiting.slice(0, waitCap).map(w =>
+          {(isOpen('waiting-more') ? q.waiting : q.waiting.slice(0, waitCap)).map(w =>
             waitTwo ? (
               <Box flexDirection="column">
                 <Text>{level(w.difficulty)} {kindOf(w.id)} {fitCells(w.id, Math.max(1, columns - 8))}</Text>
@@ -1191,7 +1202,7 @@ export const register: Register = on => {
               <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}<Text dimColor> {w.why}</Text></Text>
             ),
           )}
-          {q.waiting.length > waitCap && <Text dimColor>+{q.waiting.length - waitCap} more</Text>}
+          {q.waiting.length > waitCap && moreRow('waiting-more', `+${q.waiting.length - waitCap} more`)}
         </Box>
       )
     } else {
@@ -1208,7 +1219,8 @@ export const register: Register = on => {
       }
       // a section lays out as one: when ANY of its rows does not fit the pane, EVERY row takes two lines
       const runTwo = !fitsOneLine(q.running.map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}  ${whereOf(l.id)} ${sinceOf(l.id)}`), columns)
-      const nextTwo = !fitsOneLine(q.ready.slice(0, 10).map(l => `  ${BAR_W} ${markOf(l.id)} ${prioGlyph(l.priority)?.glyph ?? ' '} ${l.id}`), columns)
+      const nextMore = isOpen('next-more')
+      const nextTwo = !fitsOneLine((nextMore ? q.ready : q.ready.slice(0, 10)).map(l => `  ${BAR_W} ${markOf(l.id)} ${prioGlyph(l.priority)?.glyph ?? ' '} ${l.id}`), columns)
       // the rows left for Next count lines: a two-line Running or Next row takes two
       const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length * (runTwo ? 2 : 1)
       const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
@@ -1268,7 +1280,7 @@ export const register: Register = on => {
           {header('next', 'blue', `⏭ Next (${q.ready.length})`)}
           {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
           {isOpen('next') &&
-            q.ready.slice(0, showReady).map(l =>
+            (nextMore ? q.ready : q.ready.slice(0, showReady)).map(l =>
               nextTwo ? (
                 // two lines: bar, kind, priority; the id indented under them
                 <Box flexDirection="column">
@@ -1279,7 +1291,7 @@ export const register: Register = on => {
                 <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {prioCell(Text, l.priority)} {l.id}</Text>
               ),
             )}
-          {isOpen('next') && q.ready.length > showReady && <Text dimColor>  +{q.ready.length - showReady} more can start (dependencies done), in the picker's order</Text>}
+          {isOpen('next') && q.ready.length > showReady && moreRow('next-more', `+${q.ready.length - showReady} more can start (dependencies done), in the picker's order`, '  ')}
           {header('lands', 'green', `✓ Landed · ${LAND_DAYS}d (${s.lands.length})`)}
           {isOpen('lands') &&
             [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
@@ -1327,7 +1339,7 @@ export const register: Register = on => {
               )
             })}
           {isOpen('failed') && olderFailed.length > 0 && (
-            <Button key="fold-failed-older" plain onPress={() => void update($, folded, f => (f.includes('failed-older') ? f.filter(k => k !== 'failed-older') : [...f, 'failed-older']))}>
+            <Button key="fold-failed-older" plain onPress={() => void update($, folded, f => foldFlipped(f, 'failed-older'))}>
               <Text dimColor>{fitCells(`  ${isOpen('failed-older') ? '▾' : '▸'} +${olderFailed.length} older`, columns)}</Text>
             </Button>
           )}
