@@ -8,6 +8,7 @@ import {
   addQueueLine,
   archivePath,
   archiveQueue,
+  formatPickSummary,
   formatArchive,
   describeQueue,
   editQueueLine,
@@ -1489,6 +1490,52 @@ describe("queue archive", () => {
     `  - id: ${id}\n    status: done\n    ended: 2026-09-01\n    text: |-\n      brief of ${id}\n      second line\n${extra}`;
   const FILE = `${old("A")}${old("F", "    notes:\n      - from: mark\n        date: 2026-09-01\n        text: n\n").replace("done", "failed")}  - id: NEW\n    status: done\n    ended: 2026-11-08\n  - id: NOEND\n    status: done\n  - id: OPEN\n    after: [A]\n    text: waits\n`;
 
+  describe("archive_after_days (ENG-QUEUE-AUTO-ARCHIVE)", () => {
+    const day = (ago: number) => {
+      const d = new Date();
+      d.setDate(d.getDate() - ago);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const line = (id: string, ended: string) =>
+      `  - id: ${id}\n    status: done\n    ended: ${ended}\n    text: x\n`;
+    const tasks = () =>
+      `${line("OLD", day(40))}${line("FRESH", day(2))}  - id: NEXT\n    after: [OLD]\n    text: y\n`;
+    const withKey = (key: string) => {
+      const file = yamlQueue(tasks());
+      if (key !== "")
+        fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("tasks:", `${key}\ntasks:`));
+      return file;
+    };
+
+    it("a pick archives the lines older than the key, before admitting", async () => {
+      const file = withKey("archive_after_days: 30");
+      const r = await pickQueue(file);
+      expect(r.archived).toEqual(["OLD"]);
+      expect(r.admitted.map(a => a.id)).toEqual(["NEXT"]);
+      expect(readQueue(file).lines.map(l => l.id)).toEqual(["FRESH", "NEXT"]);
+      expect(fs.readFileSync(archivePath(file), "utf8")).toContain("id: OLD");
+      expect(formatPickSummary(r, false)).toContain("archived 1 old line(s)");
+    });
+    it("no key, no archiving", async () => {
+      const file = withKey("");
+      const r = await pickQueue(file);
+      expect(r.archived).toBeUndefined();
+      expect(readQueue(file).lines).toHaveLength(3);
+      expect(fs.existsSync(archivePath(file))).toBe(false);
+    });
+    it("a dry-run pick archives nothing", async () => {
+      const file = withKey("archive_after_days: 30");
+      const r = await pickQueue(file, { dryRun: true });
+      expect(r.archived).toBeUndefined();
+      expect(readQueue(file).lines).toHaveLength(3);
+    });
+    it("a value that is not a whole number of days refuses the pick and writes nothing", async () => {
+      const file = withKey("archive_after_days: soon");
+      const before = fs.readFileSync(file, "utf8");
+      await expect(pickQueue(file)).rejects.toThrow("archive_after_days");
+      expect(fs.readFileSync(file, "utf8")).toBe(before);
+    });
+  });
   it("archive then pick admits a line whose after: is archived", async () => {
     const file = yamlQueue(FILE);
     const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });

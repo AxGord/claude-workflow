@@ -21,8 +21,6 @@ import { RESUME_TOOL, activeSubtree, drivenByRootAgent, subAgentLines, where } f
 import {
   MARK_TARGETS,
   addQueueLine,
-  archiveQueue,
-  formatArchive,
   editQueueLine,
   formatMark,
   formatPickSummary,
@@ -1334,45 +1332,6 @@ export function registerTools(
         return {
           content: [{ type: "text", text: `batch_size ${r.from} → ${r.to}  # ${r.reason}` }],
         };
-      } catch (err) {
-        return queueError(err);
-      }
-    },
-  );
-
-  // 21. queue_archive
-  server.registerTool(
-    "queue_archive",
-    {
-      description:
-        "Move a task queue's old finished lines to `<queue>.archive.yaml` beside it, under the queue's lock: " +
-        "done and failed lines whose `ended:` is more than `older_than_days` days ago (a line with no `ended:` stays unless `include_unended`; " +
-        "a failed line an open line's `after:` names stays). An `after:` naming an archived id still reads it as done or failed; an archived id cannot be added again. " +
-        "`dry_run` lists what would move and writes nothing. Returns the count and the queue's size before and after.",
-      inputSchema: z
-        .object({
-          ...QUEUE_SEL,
-          older_than_days: z
-            .number()
-            .int()
-            .min(0)
-            .describe("Archive lines that ended before this many days ago"),
-          include_unended: z
-            .boolean()
-            .optional()
-            .describe("Also move done / failed lines with no `ended:`"),
-          dry_run: z.boolean().optional().describe("Report only; write nothing"),
-        })
-        .strict(),
-    },
-    async args => {
-      try {
-        const r = await archiveQueue(resolveQueueFile(args), {
-          olderThanDays: args.older_than_days,
-          includeUnended: args.include_unended,
-          dryRun: args.dry_run,
-        });
-        return { content: [{ type: "text", text: formatArchive(r) }] };
       } catch (err) {
         return queueError(err);
       }

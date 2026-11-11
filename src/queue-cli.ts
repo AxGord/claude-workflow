@@ -12,7 +12,7 @@
 //   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, touches: [a], text: …}`)
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
 //   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header
-//   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   queue_archive (done/failed lines → <q>.archive.yaml)
+//   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   the manual archive (done/failed lines → <q>.archive.yaml); a pick does it by the header's archive_after_days
 //   wf-queue <q> --restore <ID>   one archived line back into the queue (CLI only, no MCP tool)
 //   wf-queue --convert <old.md|config.json> [--into <file.yaml>] [--status S] [--dry-run]
 //       an old Markdown queue (or a JSON config) as YAML: printed without --into; --into a new file

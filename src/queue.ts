@@ -1,5 +1,6 @@
 // A task queue in a YAML file, shared by every project: the top-level keys are the header —
-// `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`
+// `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`,
+// `archive_after_days: N` (a pick first archives the done / failed lines that ended over N days ago)
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
 // `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
 // breaking, parked, ended, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
@@ -167,6 +168,8 @@ export interface PickResult {
   /** One entry per pending task not admitted, in file order. */
   readonly reasons: readonly { readonly id: string; readonly why: string }[];
   readonly dryRun: boolean;
+  /** The ids the header's `archive_after_days:` moved to the archive before this pick, in file order. */
+  readonly archived?: readonly string[];
   /** Lines carrying a task key this server does not know, in file order. */
   readonly unknownKeys: readonly { readonly id: string; readonly keys: readonly string[] }[];
 }
@@ -993,14 +996,31 @@ export async function rewriteQueue<T>(
   );
 }
 
-/** Pick under the lock and mark every admitted task running; `dryRun` reads without the lock or a write. */
+/** The header's `archive_after_days: N` (a whole number ≥ 0); absent = no automatic archiving. */
+export function archiveAfterDays(queue: Queue): number | undefined {
+  const raw = queue.header.archive_after_days?.trim();
+  if (raw === undefined || raw === "") return undefined;
+  if (!/^\d+$/.test(raw))
+    throw new QueueError(
+      `${queue.file}: archive_after_days: "${raw}" is not a whole number of days`,
+    );
+  return Number(raw);
+}
+
+/**
+ * Pick under the lock and mark every admitted task running; `dryRun` reads without the lock or a write.
+ * With the header's `archive_after_days: N`, the done / failed lines that ended more than N days ago
+ * move to the archive first, under the same lock (what `archiveQueue` moves; no line without `ended:`).
+ */
 export async function pickQueue(
   file: string,
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<PickResult> {
   if (opts.dryRun === true) return { ...planPick(readQueue(file)), dryRun: true };
-  return withQueueLock(file, () =>
-    replanning(file, () => {
+  return withQueueLock(file, () => {
+    const days = archiveAfterDays(readQueue(file));
+    const archived = days === undefined ? [] : archiveLocked(file, { olderThanDays: days }).moved;
+    return replanning(file, () => {
       const e = editable(file);
       const plan = planPick(e.queue);
       if (plan.admitted.length > 0) {
@@ -1009,9 +1029,9 @@ export async function pickQueue(
           if (ids.has(l.id) && l.status === "pending") taskNode(e, l).set("status", "running");
         if (!writeText(e.queue, e.doc.toString(YAML_OUT))) return false;
       }
-      return { ...plan, dryRun: false };
-    }),
-  );
+      return { ...plan, dryRun: false, ...(archived.length > 0 ? { archived } : {}) };
+    });
+  });
 }
 
 export interface ArchiveResult {
@@ -1087,57 +1107,63 @@ export async function archiveQueue(
     const size = Buffer.byteLength(q.source);
     return { archive, ...archivePlan(q, opts), bytesBefore: size, bytesAfter: size, dryRun: true };
   }
-  return withQueueLock(file, () =>
-    replanning(file, () => {
-      const e = editable(file);
-      const plan = archivePlan(e.queue, opts);
-      const bytesBefore = Buffer.byteLength(e.queue.source);
-      if (plan.moved.length === 0)
-        return { archive, ...plan, bytesBefore, bytesAfter: bytesBefore, dryRun: false };
-      const adoc = YAML.parseDocument(
-        fs.existsSync(archive) ? fs.readFileSync(archive, "utf8") : "tasks: []\n",
-      );
-      const found: unknown = adoc.get("tasks", true);
-      const aseq = isSeq(found) ? found : new YAMLSeq();
-      if (aseq !== found) adoc.set("tasks", aseq);
-      aseq.flow = false;
-      const have = e.queue.archived;
-      const out = new Set(plan.moved);
-      let appended = 0;
-      for (const l of e.queue.lines) {
-        if (!out.has(l.id)) continue;
-        const node = taskNode(e, l);
-        if (!have.has(l.id)) {
-          aseq.add(node);
-          appended++;
-          continue;
-        }
-        // held in both files (a crash between the writes): the queue's copy is the fresher one
-        const at = aseq.items.findIndex(n => isMap(n) && String(n.get("id")) === l.id);
-        const held = aseq.items[at];
-        if (isMap(held) && JSON.stringify(held.toJSON()) !== JSON.stringify(node.toJSON())) {
-          aseq.items[at] = node;
-          appended++;
-        }
+  return withQueueLock(file, () => archiveLocked(file, opts));
+}
+
+/** The archive move itself, for a caller already holding the queue's lock. */
+function archiveLocked(
+  file: string,
+  opts: { readonly olderThanDays: number; readonly includeUnended?: boolean; readonly now?: Date },
+): ArchiveResult {
+  const archive = archivePath(file);
+  return replanning(file, () => {
+    const e = editable(file);
+    const plan = archivePlan(e.queue, opts);
+    const bytesBefore = Buffer.byteLength(e.queue.source);
+    if (plan.moved.length === 0)
+      return { archive, ...plan, bytesBefore, bytesAfter: bytesBefore, dryRun: false };
+    const adoc = YAML.parseDocument(
+      fs.existsSync(archive) ? fs.readFileSync(archive, "utf8") : "tasks: []\n",
+    );
+    const found: unknown = adoc.get("tasks", true);
+    const aseq = isSeq(found) ? found : new YAMLSeq();
+    if (aseq !== found) adoc.set("tasks", aseq);
+    aseq.flow = false;
+    const have = e.queue.archived;
+    const out = new Set(plan.moved);
+    let appended = 0;
+    for (const l of e.queue.lines) {
+      if (!out.has(l.id)) continue;
+      const node = taskNode(e, l);
+      if (!have.has(l.id)) {
+        aseq.add(node);
+        appended++;
+        continue;
       }
-      const gone = new Set(e.queue.lines.filter(l => out.has(l.id)).map(l => l.index));
-      for (let i = e.tasks.items.length - 1; i >= 0; i--)
-        if (gone.has(i)) e.tasks.items.splice(i, 1);
-      const text = e.doc.toString(YAML_OUT);
-      const merged = new Map(have);
-      for (const l of e.queue.lines) if (out.has(l.id)) merged.set(l.id, l.status);
-      parseQueue(text, e.queue.file, merged);
-      const archiveText = adoc.toString(YAML_OUT);
-      if (appended > 0) {
-        const tmp = `${archive}.wf-queue.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-        if (fs.readFileSync(e.queue.file, "utf8") !== e.queue.source) return false;
-        fs.writeFileSync(tmp, archiveText);
-        fs.renameSync(tmp, archive);
+      // held in both files (a crash between the writes): the queue's copy is the fresher one
+      const at = aseq.items.findIndex(n => isMap(n) && String(n.get("id")) === l.id);
+      const held = aseq.items[at];
+      if (isMap(held) && JSON.stringify(held.toJSON()) !== JSON.stringify(node.toJSON())) {
+        aseq.items[at] = node;
+        appended++;
       }
-      if (!writeText(e.queue, text)) return false;
-      return { archive, ...plan, bytesBefore, bytesAfter: Buffer.byteLength(text), dryRun: false };
-    }),
-  );
+    }
+    const gone = new Set(e.queue.lines.filter(l => out.has(l.id)).map(l => l.index));
+    for (let i = e.tasks.items.length - 1; i >= 0; i--) if (gone.has(i)) e.tasks.items.splice(i, 1);
+    const text = e.doc.toString(YAML_OUT);
+    const merged = new Map(have);
+    for (const l of e.queue.lines) if (out.has(l.id)) merged.set(l.id, l.status);
+    parseQueue(text, e.queue.file, merged);
+    const archiveText = adoc.toString(YAML_OUT);
+    if (appended > 0) {
+      const tmp = `${archive}.wf-queue.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      if (fs.readFileSync(e.queue.file, "utf8") !== e.queue.source) return false;
+      fs.writeFileSync(tmp, archiveText);
+      fs.renameSync(tmp, archive);
+    }
+    if (!writeText(e.queue, text)) return false;
+    return { archive, ...plan, bytesBefore, bytesAfter: Buffer.byteLength(text), dryRun: false };
+  });
 }
 
 export interface RestoreResult {
@@ -1738,6 +1764,8 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
           ? "nothing admitted and nothing runs: paused"
           : "nothing admitted and nothing runs: the queue is done (what stays pending is blocked)",
     );
+  if (r.archived !== undefined && r.archived.length > 0)
+    out.push(`archived ${r.archived.length} old line(s) (archive_after_days)`);
   out.push(...explainLines(r.reasons, explain));
   for (const u of r.unknownKeys) out.push(unknownKeyNotice(u.id, u.keys));
   return out.join("\n");

@@ -305,9 +305,13 @@ describe("registerTools annotations", () => {
       "queue_add",
       "queue_edit",
       "queue_header",
-      "queue_archive",
     ];
     expect([...annotations.keys()].sort()).toEqual([...readOnly, ...confirmed].sort());
+    // the archive is the pick's (header archive_after_days) and the CLI's: no tool, and the driver lists none
+    expect(annotations.has("queue_archive")).toBe(false);
+    expect(
+      fs.readFileSync(path.join(__dirname, "..", "agents", "driver.md"), "utf8"),
+    ).not.toContain("queue_archive");
     for (const name of readOnly) expect(annotations.get(name)).toEqual({ readOnlyHint: true });
     for (const name of confirmed) expect(annotations.get(name)).toBeUndefined();
   });
