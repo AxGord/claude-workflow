@@ -195,8 +195,15 @@ export function prunePolicy(
 ): void {
   if (keep < 0) throw new Error(`prunePolicy: keep must be >= 0, got ${keep}`);
   const terminal = sessions.filter(s => s.stack?.length === 0);
-  terminal.sort(
+  // A terminal child of a parent that is not itself terminal (still running, or
+  // not yet written) stays: the parent's ledger spend sums its children's agents
+  // when it ends, and a pruned child would drop out of that sum.
+  const terminalIds = new Set(terminal.map(s => s.session_id));
+  const retainable = terminal.filter(
+    s => !s.parent_session_id || terminalIds.has(s.parent_session_id),
+  );
+  retainable.sort(
     (a, b) => b.updated_at.localeCompare(a.updated_at) || b.session_id.localeCompare(a.session_id),
   );
-  for (const s of terminal.slice(keep)) del(s.session_id);
+  for (const s of retainable.slice(keep)) del(s.session_id);
 }

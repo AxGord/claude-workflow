@@ -69,7 +69,15 @@ for f in "$STATE_DIR"/*.json; do
   [ -f "$f" ] || continue
   # `.stack == []` (not `length == 0`) — a file without a .stack array is a
   # placeholder, not a terminal session, and must not be pruned.
-  jq -e '.stack == []' "$f" >/dev/null 2>&1 && TERM_FILES+=("$f")
+  jq -e '.stack == []' "$f" >/dev/null 2>&1 || continue
+  # A terminal child of a parent that is not terminal (running or absent) stays:
+  # the parent's ledger spend sums its children's agents when it ends.
+  pid=$(jq -r '.parent_session_id // ""' "$f" 2>/dev/null)
+  if [ -n "$pid" ]; then
+    pf="$STATE_DIR/$(printf '%s' "$pid" | sed 's/[^a-zA-Z0-9_-]/_/g').json"
+    { [ -f "$pf" ] && jq -e '.stack == []' "$pf" >/dev/null 2>&1; } || continue
+  fi
+  TERM_FILES+=("$f")
 done
 if [ "${#TERM_FILES[@]}" -gt "$KEEP_TERMINAL" ]; then
   i=0
