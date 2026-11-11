@@ -288,6 +288,88 @@ export function measureSpend(
   };
 }
 
+/** The first read of a transcript's tail (bytes); a longer last turn doubles it. */
+const TAIL_START = 1 << 18;
+
+/**
+ * The context an agent's last assistant turn held: its input, cache read and cache write tokens. Only the tail
+ * of the transcript is read, widened until the last turn's own lines are whole (a turn repeats per content block,
+ * each counter at its largest). A turn with no usage is not a turn. undefined: no readable turn.
+ */
+export function lastTurnContext(file: string): number | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    for (let len = TAIL_START; ; len *= 2) {
+      const from = Math.max(0, size - len);
+      const buf = Buffer.alloc(size - from);
+      let got = 0;
+      while (got < buf.length) {
+        const n = fs.readSync(fd, buf, got, buf.length - got, from + got);
+        if (n === 0) break;
+        got += n;
+      }
+      const lines = buf.toString("utf8", 0, got).split("\n");
+      // the first line of a tail may be cut
+      if (from > 0) lines.shift();
+      const found = lastTurnOf(lines);
+      if (found !== undefined && (found.closed || from === 0)) return found.context;
+      if (from === 0) return undefined;
+    }
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/** The last turn of `lines` (its context, and whether a turn before it proves all its lines are here). */
+function lastTurnOf(lines: readonly string[]): { context: number; closed: boolean } | undefined {
+  let id: string | undefined;
+  let counters = [0, 0, 0];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.includes('"usage"')) continue;
+    let j: TranscriptLine;
+    try {
+      j = JSON.parse(line) as TranscriptLine;
+    } catch {
+      continue;
+    }
+    const m = j?.message;
+    if (j?.type !== "assistant" || !m?.usage || typeof m.id !== "string") continue;
+    const u = m.usage;
+    const num = (v: unknown): number => (typeof v === "number" ? v : 0);
+    const read = [
+      num(u.input_tokens),
+      num(u.cache_read_input_tokens),
+      num(u.cache_creation_input_tokens),
+    ];
+    if (read[0] + read[1] + read[2] + num(u.output_tokens) === 0) continue;
+    if (id === undefined) id = m.id;
+    else if (m.id !== id) return { context: counters[0] + counters[1] + counters[2], closed: true };
+    counters = counters.map((c, k) => Math.max(c, read[k]));
+  }
+  return id === undefined
+    ? undefined
+    : { context: counters[0] + counters[1] + counters[2], closed: false };
+}
+
+/**
+ * The context of the agent linked to a session (`agent_id`, the latest if it was respawned): its last turn's
+ * size (`lastTurnContext`). undefined when no agent is linked or its transcript cannot be found or read.
+ */
+export function agentContextOf(
+  session: Pick<SessionState, "agent_id" | "claude_session_id">,
+  projects: string = projectsDir(),
+): number | undefined {
+  if (!session.agent_id) return undefined;
+  const conversations = session.claude_session_id ? [session.claude_session_id] : [];
+  const file = transcriptOf(bareId(session.agent_id), conversations, projects);
+  return file === undefined ? undefined : lastTurnContext(file);
+}
+
 /** The conversation's own transcript and the project directory it lives under: `<projects>/<project>/<conversation>.jsonl`. */
 function conversationTranscript(
   conversation: string,

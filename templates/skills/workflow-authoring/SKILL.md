@@ -214,8 +214,11 @@ Reference bundled scripts as `command: "sh \"$WF_PLUGIN_ROOT/scripts/foo.sh\""`
 — portable across install paths, no per-machine setup. A state's own `env:`
 key of the same name overrides it. It also carries `WF_SESSION_ID`,
 `WF_PARENT_SESSION_ID` (empty at the root), `WF_ROOT_SESSION_ID`,
-`WF_PRIORITY` / `WF_PRIORITY_LEVEL` (the session level, below); a
-`resource:` exec with threads also gets `WF_THREADS` (below).
+`WF_PRIORITY` / `WF_PRIORITY_LEVEL` (the session level, below) and
+`AGENT_CONTEXT` (tokens of the last turn of the agent linked to the session:
+input + cache read + cache write; empty when none is linked or its transcript
+is unreadable — test `[ "${AGENT_CONTEXT:-0}" -gt N ]` to hand off to a fresh
+agent); a `resource:` exec with threads also gets `WF_THREADS` (below).
 
 An exec without `cwd:` runs in the session's cwd — a sub-agent started with
 `start(cwd: <worktree>)` runs its execs in the worktree, not the server's tree;

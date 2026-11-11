@@ -35,7 +35,7 @@ import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf, type LedgerEntry, type LedgerSpend } from "./ledger.js";
-import { measureParentSpend, measureSpend, subtreeOf } from "./spend.js";
+import { agentContextOf, measureParentSpend, measureSpend, subtreeOf } from "./spend.js";
 import {
   MODEL_KEYS,
   applyModelTable,
@@ -1968,6 +1968,7 @@ export class Engine {
       level: session.priority ?? DEFAULT_PRIORITY_LEVEL,
       project: projectRoot(cwd ?? process.cwd()),
       step: `${frame.workflow}/${frame.current_state}`,
+      agentContext: () => agentContextOf(session),
     };
   }
 

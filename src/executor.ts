@@ -73,6 +73,8 @@ export interface ExecContext {
   readonly project?: string;
   /** The running step, `workflow/state`. */
   readonly step?: string;
+  /** The context size (tokens) of the session's linked agent's last turn, read when the exec spawns; undefined: none linked or unreadable. */
+  readonly agentContext?: () => number | undefined;
   /** The step's expected run time (ms) on `threads` threads, from past runs; undefined: unknown. */
   readonly estimate?: (threads: number) => number | undefined;
   /**
@@ -451,15 +453,26 @@ export class Executor {
     return ctx?.cwd ? path.resolve(ctx.cwd, own) : own;
   }
 
+  /** The agent context env value: tokens, or empty when unknown (a read that throws is unknown too). */
+  private static _agentContext(ctx: ExecContext): string {
+    try {
+      return String(ctx.agentContext?.() ?? "");
+    } catch {
+      return "";
+    }
+  }
+
   /**
    * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT, the
    * session ids (WF_SESSION_ID, WF_PARENT_SESSION_ID — empty at the root,
    * WF_ROOT_SESSION_ID, WF_PRIORITY = the session level's priority plus the
    * step's, WF_PRIORITY_LEVEL = that level) and, under a lease with threads,
-   * WF_THREADS (and a fanout shard's WF_SHARD or WF_ITEM) — overridable by
+   * WF_THREADS (and a fanout shard's WF_SHARD or WF_ITEM) and AGENT_CONTEXT (the
+   * context tokens of the session's linked agent's last turn; empty when none
+   * is linked or its transcript is unreadable) — overridable by
    * the state's own rendered env: entries. An inherited WF_THREADS /
-   * WF_PRIORITY / WF_PRIORITY_LEVEL / WF_SHARD / WF_ITEM is dropped: they
-   * describe this exec's own session, lease and shard only.
+   * WF_PRIORITY / WF_PRIORITY_LEVEL / WF_SHARD / WF_ITEM / AGENT_CONTEXT is
+   * dropped: they describe this exec's own session, lease and shard only.
    * Single source for both foreground and background spawns so the injection
    * contract can't drift.
    */
@@ -479,6 +492,7 @@ export class Executor {
           WF_ROOT_SESSION_ID: ctx.rootSessionId,
           WF_PRIORITY: String(Executor._priority(state, ctx)),
           WF_PRIORITY_LEVEL: ctx.level ?? DEFAULT_PRIORITY_LEVEL,
+          AGENT_CONTEXT: Executor._agentContext(ctx),
         }
       : undefined;
     const {
@@ -489,6 +503,7 @@ export class Executor {
       WF_ITEM: _item,
       ...base
     } = process.env;
+    delete base.AGENT_CONTEXT;
     return { ...base, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...leased, ...envVars };
   }
 
