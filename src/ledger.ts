@@ -93,6 +93,31 @@ export interface LedgerEntry {
   readonly tokens?: Readonly<Record<string, number>>;
   /** The real spend of the task's agents; absent when the task named none (or the line predates the record). */
   readonly spend?: LedgerSpend;
+  /** The top-level conversation's own spend over the stretch no earlier line recorded: a task's line carries it (see `LedgerParentSpend`). */
+  readonly parent_spend?: LedgerParentSpend;
+}
+
+/**
+ * What the PARENT (the top-level Claude Code session that dispatches, not a sub-agent) spent in its own turns
+ * between `from` and `to`, read from `<projects>/<project>/<conversation>.jsonl` and priced by the same table as
+ * `spend` (`measureParentSpend`). A conversation's lines tile its time: each starts just after the latest `to` the
+ * ledger already holds for the conversation (the first at the session's start), so the sum over any set of lines
+ * counts a turn once. A conversation whose transcript cannot be read or whose model has no price records no line
+ * of this kind, so the next one covers that stretch.
+ */
+export interface LedgerParentSpend {
+  readonly conversation: string;
+  /** The transcript's project directory name under `<projects>` (the parent's own project: the plan pane keeps the stretches of its queue's repo). */
+  readonly project: string;
+  readonly from: string;
+  readonly to: string;
+  /** The byte offset of the transcript up to which its turns are accounted (a complete-line boundary): the next line of the conversation reads from here, not from the top. */
+  readonly offset: number;
+  readonly usd: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cache_read: number;
+  readonly cache_write: number;
 }
 
 /** What the task's agents really spent, summed from their transcripts (`measureSpend`). `usd` is absent when any agent could not be read: the task is unmeasured, never $0. */

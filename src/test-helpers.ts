@@ -1,4 +1,5 @@
 import type { SessionState, WorkflowDefinition } from "./types.js";
+import type { LedgerEntry } from "./ledger.js";
 import type { Storage } from "./storage.js";
 import { prunePolicy } from "./storage.js";
 import { EventLog } from "./event-log.js";
@@ -62,6 +63,10 @@ export class InMemoryStorage implements Storage {
 
   async appendLedger(entry: object): Promise<void> {
     this.ledger.push(entry);
+  }
+
+  readLedger(): LedgerEntry[] {
+    return this.ledger as LedgerEntry[];
   }
 }
 

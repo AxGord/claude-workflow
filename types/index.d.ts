@@ -113,6 +113,10 @@ export type Snapshot = {
   recent: number
   /** per `DD.MM` of `lands`: the day's spend */
   days: Record<string, DaySpend>
+  /** the $ sum of the landed lines of `lands` (each line once; a line with no spend adds nothing); absent when none is measured */
+  landedUsd?: number
+  /** the parent's own spend recorded in the last 14 days in the queue repo's project (ledger `parent_spend`); absent when none is recorded */
+  parentUsd?: number
   error: string
 }
 

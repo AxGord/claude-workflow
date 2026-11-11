@@ -34,8 +34,8 @@ import type { ExecContext } from "./executor.js";
 import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
-import { ledgerEntry, rootSessionIdOf, type LedgerSpend } from "./ledger.js";
-import { measureSpend, subtreeOf } from "./spend.js";
+import { ledgerEntry, rootSessionIdOf, type LedgerEntry, type LedgerSpend } from "./ledger.js";
+import { measureParentSpend, measureSpend, subtreeOf } from "./spend.js";
 import {
   MODEL_KEYS,
   applyModelTable,
@@ -157,6 +157,9 @@ export class Engine {
   // Sessions whose processes the abort tool killed ahead of its queued abort:
   // their running action chain must stop, not route the killed exec's result.
   private readonly _aborting = new Set<string>();
+
+  /** The ledger appends of ended sessions, one after the other (see `_finalize`). */
+  private _ledgerTurn: Promise<void> = Promise.resolve();
   // Sessions whose action state this server is running: their `running_exec`
   // is this server's own, never one to take over.
   private readonly _inFlight = new Set<string>();
@@ -1898,10 +1901,36 @@ export class Engine {
   private async _finalize(session: SessionState): Promise<void> {
     this._snapshots.delete(session.session_id);
     this._aborting.delete(session.session_id);
+    // one line at a time: a task line's parent stretch starts where the line before it ended
+    const before = this._ledgerTurn;
+    const turn = (async () => {
+      await before;
+      try {
+        const entry = ledgerEntry(session, this._spendOf(session));
+        await this._storage.appendLedger(this._withParentSpend(session, entry));
+      } catch (err) {
+        console.error(`Ledger append failed for ${session.session_id}:`, err);
+      }
+    })();
+    this._ledgerTurn = turn;
+    await turn;
+  }
+
+  /** A task's line also records what the top-level conversation spent in its own turns since the ledger's latest line for it; never throws. */
+  private _withParentSpend(session: SessionState, entry: LedgerEntry): LedgerEntry {
+    const conversation = session.claude_session_id;
+    if (entry.task === undefined || !conversation) return entry;
     try {
-      await this._storage.appendLedger(ledgerEntry(session, this._spendOf(session)));
+      const parent = measureParentSpend(
+        conversation,
+        session.started_at,
+        session.updated_at,
+        this._storage.readLedger(),
+      );
+      return parent ? { ...entry, parent_spend: parent } : entry;
     } catch (err) {
-      console.error(`Ledger append failed for ${session.session_id}:`, err);
+      console.error(`Parent spend of ${session.session_id} not measured:`, err);
+      return entry;
     }
   }
 

@@ -9,7 +9,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-7' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-8' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -240,8 +240,32 @@ export function ledgerSpendOf(text: string): Map<string, TaskSpend> {
   return new Map([...acc].map(([task, a]) => [task, { ...(a.isMeasured ? { usd: a.usd } : {}), endedAt: a.endedAt, outcome: a.outcome }]))
 }
 
-type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend> }
-const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map() }
+/** One stretch of the parent's own spend, as a task's ledger line records it (`parent_spend`): the end of the stretch, the project directory of the conversation's transcript and its real cost. */
+export type ParentSpend = { to: number; project: string; usd: number }
+
+/** The parent's recorded stretches (`parent_spend` of any ledger line; the engine tiles a conversation's time, so a turn is in one). A row with no readable end, project or cost is skipped. */
+export function ledgerParentOf(text: string): ParentSpend[] {
+  const out: ParentSpend[] = []
+  for (const line of text.split('\n')) {
+    if (!line.includes('"parent_spend"')) continue
+    try {
+      const p = (JSON.parse(line) as { parent_spend?: { to?: unknown; project?: unknown; usd?: unknown } }).parent_spend
+      const to = Date.parse(String(p?.to ?? ''))
+      if (Number.isFinite(to) && typeof p?.project === 'string' && p.project !== '' && typeof p.usd === 'number' && Number.isFinite(p.usd)) out.push({ to, project: p.project, usd: p.usd })
+    } catch {
+      // a torn or foreign line is not a stretch
+    }
+  }
+  return out
+}
+
+/** The name Claude Code gives a repo's project directory under `projects/` (every character but a letter or digit becomes `-`): how a stretch of the parent is matched to the pane's queue repo. */
+export function projectDirOf(repo: string): string {
+  return repo.replace(/[^A-Za-z0-9]/g, '-')
+}
+
+type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[] }
+const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [] }
 let ledgerRead: Ledger = NO_LEDGER
 
 /** The ledger's runs and spend, re-read only when the file's size or mtime moved (the pane refreshes often). */
@@ -252,7 +276,7 @@ async function ledgerAt($: any, dir: string): Promise<Ledger> {
   const stamp = `${f.size}:${f.mtimeMs}`
   if (stamp !== ledgerSeen) {
     const text = String(await $.fs.read(`${dir}/ledger.jsonl`).catch(() => ''))
-    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text) }
+    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text) }
     ledgerSeen = stamp
   }
   return ledgerRead
@@ -366,8 +390,41 @@ export function dayText(d: DaySpend): string {
   return `${d.measured === 0 ? '—' : usdText(d.usd)}${extra !== '' ? ` incl. ${extra}` : ''}`
 }
 
+/** The $ sum of the landed lines of the Landed tree: each line once (a line that landed twice has one cost), a line with no spend row adds nothing; undefined when no line is measured. */
+export function landedUsd(lands: Land[]): number | undefined {
+  const seen = new Set<string>()
+  let sum = 0
+  let measured = false
+  for (const l of lands) {
+    if (seen.has(l.slice)) continue
+    seen.add(l.slice)
+    if (l.usd === undefined) continue
+    sum += l.usd
+    measured = true
+  }
+  return measured ? sum : undefined
+}
+
+/** The parent's spend over the Landed window: the stretches of the queue repo's own conversations (`project` is its directory under `projects/`, so another project's session adds nothing) that ended in the last `LAND_DAYS` days; undefined when none is recorded. */
+export function parentUsd(parent: ParentSpend[], now: number, project: string): number | undefined {
+  const since = now - LAND_DAYS * 24 * 3600 * 1000
+  const mine = parent.filter(p => p.to >= since && p.project === project)
+  return mine.length > 0 ? mine.reduce((a, p) => a + p.usd, 0) : undefined
+}
+
+/** `✓ Landed · 14d (434) · $1234 · parent $310 (25%)`: the count, the landed lines' spend (absent when none is measured), the parent's spend and its share of the landed sum (the share absent when there is no landed sum). */
+export function landedHeading(count: number, landed: number | undefined, parent: number | undefined): string {
+  const share = landed !== undefined && landed > 0 && parent !== undefined ? ` (${String(Math.round((parent / landed) * 100))}%)` : ''
+  return `✓ Landed · ${LAND_DAYS}d (${count})${landed !== undefined ? ' · ' + usdText(landed) : ''}${parent !== undefined ? ' · parent ' + usdText(parent) + share : ''}`
+}
+
+/** The repo a queue file lives in (`<repo>/.claude/batch/<file>`); the file itself when it is not under one. */
+function repoOf(queueFile: string): string {
+  return queueFile.replace(/\/\.claude\/batch\/[^/]+$/, '')
+}
+
 async function lands($: any, queueFile: string, ledger: Ledger): Promise<Land[]> {
-  const repo = queueFile.replace(/\/\.claude\/batch\/[^/]+$/, '')
+  const repo = repoOf(queueFile)
   if (repo === queueFile) return []
   const run = await $.process
     .run(['git', '-C', repo, 'log', `--since=${LAND_DAYS} days ago`, '--first-parent', '-n', '2000',
@@ -494,7 +551,19 @@ async function build($: any): Promise<Snapshot> {
   }
   const landed = queue ? await lands($, queueFile, ledger) : []
   const recent = landed.filter(l => landMs(l.at, now) > now - 24 * 3600 * 1000).length
-  return { at: now, sessions, queue, lands: landed, recent, days: daySpends(landed, ledger.spends, now), error: loaded.error }
+  const landedSum = landedUsd(landed)
+  const parentSum = parentUsd(ledger.parent, now, projectDirOf(repoOf(queueFile)))
+  return {
+    at: now,
+    sessions,
+    queue,
+    lands: landed,
+    recent,
+    days: daySpends(landed, ledger.spends, now),
+    ...(landedSum !== undefined ? { landedUsd: landedSum } : {}),
+    ...(parentSum !== undefined ? { parentUsd: parentSum } : {}),
+    error: loaded.error,
+  }
 }
 
 /** The role an agent plays for the workflow its session runs. */
@@ -1043,12 +1112,13 @@ export const register: Register = on => {
     const isOpen = (key: string) =>
       key.startsWith('lands-') ? landDayOpen(foldedNow, key, today) : foldedNow.includes(key) === FOLDED_BY_DEFAULT.has(key)
     // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones and the days before today)
+    const columns: number = e.props?.bodyColumns ?? 100
+    // a long title (the Landed heading with its sums) is cut with an ellipsis, never wrapped
     const header = (key: string, color: string, title: string) => (
       <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => foldFlipped(f, key))}>
-        <Text color={color} weight="bold">{isOpen(key) ? '▾' : '▸'} {title}</Text>
+        <Text color={color} weight="bold">{fitCells(`${isOpen(key) ? '▾' : '▸'} ${title}`, columns)}</Text>
       </Button>
     )
-    const columns: number = e.props?.bodyColumns ?? 100
     // the `+N more` row that ends a capped list: a click lists the rest (▾) or caps the list again (▸), the fold kept across refreshes
     const moreRow = (key: string, text: string, indent = '') => (
       <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => foldFlipped(f, key))}>
@@ -1292,7 +1362,7 @@ export const register: Register = on => {
               ),
             )}
           {isOpen('next') && q.ready.length > showReady && moreRow('next-more', `+${q.ready.length - showReady} more can start (dependencies done), in the picker's order`, '  ')}
-          {header('lands', 'green', `✓ Landed · ${LAND_DAYS}d (${s.lands.length})`)}
+          {header('lands', 'green', landedHeading(s.lands.length, s.landedUsd, s.parentUsd))}
           {isOpen('lands') &&
             [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
               // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day with its spend, its lands one level deeper

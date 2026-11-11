@@ -8,7 +8,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { turnUsd } from "./calibration.js";
-import type { LedgerSpend } from "./ledger.js";
+import type { LedgerEntry, LedgerParentSpend, LedgerSpend } from "./ledger.js";
 import type { SessionState } from "./types.js";
 
 /** `agent-<id>` and `<id>` both name an agent. */
@@ -128,11 +128,16 @@ export function readTranscriptSpend(file: string, from: number, to: number): Tot
   } catch {
     return undefined;
   }
+  return spendOfLines(content.split("\n"), from, to);
+}
+
+/** The usage of transcript lines inside [from, to] (ms), a turn once; undefined when a model has no price. */
+function spendOfLines(lines: Iterable<string>, from: number, to: number): Totals | undefined {
   const turns = new Map<
     string,
     { model: string; u: Record<string, number>; five: number; hour: number }
   >();
-  for (const line of content.split("\n")) {
+  for (const line of lines) {
     if (line === "" || !line.includes('"usage"')) continue;
     let j: TranscriptLine;
     try {
@@ -280,5 +285,122 @@ export function measureSpend(
     output: sum.output,
     cache_read: sum.cache_read,
     cache_write: sum.cache_write,
+  };
+}
+
+/** The conversation's own transcript and the project directory it lives under: `<projects>/<project>/<conversation>.jsonl`. */
+function conversationTranscript(
+  conversation: string,
+  projects: string,
+): { file: string; project: string } | undefined {
+  let dirs: string[];
+  try {
+    dirs = fs.readdirSync(projects);
+  } catch {
+    return undefined;
+  }
+  for (const d of dirs) {
+    const p = path.join(projects, d, `${conversation}.jsonl`);
+    if (fs.existsSync(p)) return { file: p, project: d };
+  }
+  return undefined;
+}
+
+/**
+ * The complete lines of `file` from byte `start` whose turns are not after `to` (ms), and the byte offset just past
+ * the last one consumed. Only the part from `start` is read (a conversation's transcript grows without end); the scan
+ * stops at the first turn after `to` (a transcript is append-only, in time order) and leaves an incomplete last line
+ * for the next read. A `start` beyond the file (it was rewritten) reads from the top.
+ */
+function readTail(
+  file: string,
+  start: number,
+  to: number,
+): { lines: string[]; end: number } | undefined {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(file, "r");
+    const size = fs.fstatSync(fd).size;
+    const from = start > size ? 0 : start;
+    const buf = Buffer.alloc(size - from);
+    let got = 0;
+    while (got < buf.length) {
+      const n = fs.readSync(fd, buf, got, buf.length - got, from + got);
+      if (n === 0) break;
+      got += n;
+    }
+    const lines: string[] = [];
+    let at = 0;
+    let end = from;
+    while (at < got) {
+      const nl = buf.indexOf(10, at);
+      if (nl === -1 || nl >= got) break;
+      const line = buf.toString("utf8", at, nl);
+      if (line.includes('"usage"')) {
+        let stamp = Number.NaN;
+        try {
+          stamp = Date.parse((JSON.parse(line) as TranscriptLine).timestamp ?? "");
+        } catch {
+          // a damaged line is skipped like any other
+        }
+        if (stamp > to) break;
+        lines.push(line);
+      }
+      at = nl + 1;
+      end = from + at;
+    }
+    return { lines, end };
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+/**
+ * The parent's own spend (the conversation that dispatches, never its sub-agents: those are `measureSpend`'s) over
+ * the stretch the ledger does not hold yet: after the latest `parent_spend.to` among `recorded` lines of the same
+ * conversation, else from `startedAt`, up to `endedAt`. The transcript is read from the byte offset that line
+ * recorded, so a task's end costs the new turns, not the whole conversation. Priced by the same table as an agent
+ * turn. undefined when nothing new lies in the stretch, the transcript cannot be read or a model has no price: no
+ * line is recorded then and the next one covers the stretch.
+ */
+export function measureParentSpend(
+  conversation: string,
+  startedAt: string,
+  endedAt: string,
+  recorded: readonly LedgerEntry[],
+  projects: string = projectsDir(),
+): LedgerParentSpend | undefined {
+  let held = -Infinity;
+  let offset = 0;
+  for (const e of recorded) {
+    const p = e.parent_spend;
+    if (p?.conversation !== conversation) continue;
+    const to = Date.parse(p.to);
+    if (to > held) {
+      held = to;
+      offset = typeof p.offset === "number" ? p.offset : 0;
+    }
+  }
+  const from = held === -Infinity ? Date.parse(startedAt) : held + 1;
+  const to = Date.parse(endedAt);
+  if (Number.isNaN(from) || Number.isNaN(to) || from > to) return undefined;
+  const found = conversationTranscript(conversation, projects);
+  const tail = found === undefined ? undefined : readTail(found.file, offset, to);
+  const t = tail === undefined ? undefined : spendOfLines(tail.lines, from, to);
+  if (found === undefined || tail === undefined || t === undefined) return undefined;
+  if (t.input + t.output + t.cache_read + t.cache_write === 0) return undefined;
+  return {
+    conversation,
+    project: found.project,
+    from: new Date(from).toISOString(),
+    to: new Date(to).toISOString(),
+    offset: tail.end,
+    usd: t.usd,
+    input: t.input,
+    output: t.output,
+    cache_read: t.cache_read,
+    cache_write: t.cache_write,
   };
 }

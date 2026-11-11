@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, foldFlipped, prioGlyph, ledgerRunsOf, ledgerSpendOf, landMs, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
+import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, foldFlipped, prioGlyph, landedHeading, landedUsd, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -401,6 +401,88 @@ test('startText: the time, with its date when the run began on another day', () 
   const at = new Date(2026, 10, 7, 23, 50).getTime()
   expect(startText(at, '08.11 00:20')).toBe('07.11 23:50')
   expect(startText(at, '07.11 23:59')).toBe('23:50')
+})
+
+/** A task run's ledger line holding the parent's stretch that ended at `to` and cost `usd`, from the conversation of project directory `project` (default: the queue's repo, `/proj`). */
+const parentRow = (to: string, usd: number, project = '-proj') =>
+  JSON.stringify({ workflow: 'engine-task', task: 'P', parent_spend: { conversation: 'c', project, from: '2026-11-01T00:00:00Z', to, offset: 1, usd } })
+
+test('ledgerParentOf: the parent\'s recorded stretches; a row with no end, project or cost, a torn one and a row with none are skipped', () => {
+  const text = [
+    parentRow('2026-11-07T10:00:00Z', 2.5),
+    parentRow('2026-11-07T11:00:00Z', 1, '-other'),
+    '{"parent_spend":{"to":"nope","project":"-proj","usd":3}}',
+    '{"parent_spend":{"to":"2026-11-07T10:00:00Z","project":"-proj"}}',
+    '{"parent_spend":{"to":"2026-11-07T10:00:00Z","usd":4}}',
+    '{"task":"A","spend":{"usd":9}}',
+    'torn{"parent_spend"',
+  ].join('\n')
+  expect(ledgerParentOf(text).map(p => [p.project, p.usd])).toEqual([['-proj', 2.5], ['-other', 1]])
+})
+
+test('projectDirOf: the project directory name Claude Code gives a repo (every character but a letter or digit becomes a dash)', () => {
+  expect(projectDirOf('/Users/axg/dev/lab/anyparse')).toBe('-Users-axg-dev-lab-anyparse')
+  expect(projectDirOf('/Users/axg/.claude/x')).toBe('-Users-axg--claude-x')
+})
+
+test('landedUsd: each landed line once, a line with no spend adds nothing, none measured is no sum', () => {
+  const land = (slice: string, usd?: number) => ({ sha: 'x', at: '07.11 10:00', slice, start: '10:00', difficulty: '', ...(usd !== undefined ? { usd } : {}) })
+  expect(landedUsd([land('A', 1.5), land('B'), land('C', 2), land('A', 1.5)])).toBe(3.5)
+  expect(landedUsd([land('A'), land('B')])).toBeUndefined()
+  expect(landedUsd([])).toBeUndefined()
+})
+
+test('parentUsd: only the stretches that ended inside the 14 days and belong to the queue repo\'s project count; none recorded is no figure', () => {
+  const now = Date.parse('2026-11-10T12:00:00Z')
+  const parent = ledgerParentOf([parentRow('2026-11-10T11:00:00Z', 10), parentRow('2026-10-27T13:00:00Z', 5), parentRow('2026-10-20T00:00:00Z', 100), parentRow('2026-11-10T11:00:00Z', 1000, '-another-repo')].join('\n'))
+  expect(parentUsd(parent, now, '-proj')).toBe(15)
+  expect(parentUsd(parent, now, '-another-repo')).toBe(1000)
+  expect(parentUsd(parent, now, '-nobody')).toBeUndefined()
+  expect(parentUsd(ledgerParentOf(parentRow('2026-10-20T00:00:00Z', 100)), now, '-proj')).toBeUndefined()
+  expect(parentUsd([], now, '-proj')).toBeUndefined()
+})
+
+test('landedHeading: count, landed $, parent $ and the parent\'s share of the landed sum', () => {
+  expect(landedHeading(434, 1234.4, 310.2)).toBe('✓ Landed · 14d (434) · $1234 · parent $310 (25%)')
+  expect(landedHeading(434, 1234.4, undefined)).toBe('✓ Landed · 14d (434) · $1234')
+  // a line with no spend adds nothing: no landed figure at all when none is measured, and no unpriced marker
+  expect(landedHeading(3, undefined, undefined)).toBe('✓ Landed · 14d (3)')
+  // the parent without a landed sum has no share to give
+  expect(landedHeading(3, undefined, 12.5)).toBe('✓ Landed · 14d (3) · parent $12.50')
+  expect(landedHeading(2, 8, 2)).toBe('✓ Landed · 14d (2) · $8.00 · parent $2.00 (25%)')
+  expect(landedHeading(2, 3, 2)).toBe('✓ Landed · 14d (2) · $3.00 · parent $2.00 (67%)')
+})
+
+test('the Landed heading carries the landed lines\' $ and the parent\'s $ with its share, over the same 14 days', async ($, on) => {
+  // L-ONE costs $1.234 (the one measured landed line); the parent spent $0.617 in the window, $50 on a stretch 20 days ago and $900 in another project's conversation
+  const ledger = [LEDGER, parentRow('2026-11-07T11:50:00Z', 0.617), parentRow('2026-10-18T11:50:00Z', 50), parentRow('2026-11-07T11:55:00Z', 900, '-elsewhere')].join('\n')
+  engine(on, true, { git: GIT, ledger })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(3\) · \$1\.23 · parent \$0\.62 \(50%\)$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a pane narrower than the Landed heading cuts it with an ellipsis: it never wraps', async ($, on) => {
+  const ledger = [LEDGER, parentRow('2026-11-07T11:50:00Z', 0.617)].join('\n')
+  engine(on, true, { git: GIT, ledger })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 30 }, surface: 'terminal' })
+  const full = `▾ ${landedHeading(3, 1.234, 0.617)}`
+  expect(cells(full)).toBeGreaterThan(30)
+  expect(cells(fitCells(full, 30))).toBeLessThanOrEqual(30)
+  expect(await ui.find({ type: 'Text', text: fitCells(full, 30) })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: full })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the Landed heading shows the landed $ and no parent figure while the ledger recorded none', async ($, on) => {
+  engine(on, true, { git: GIT, ledger: LEDGER })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(3\) · \$1\.23$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /parent/ })).toBeUndefined()
+  await ui.unmount()
 })
 
 test('Landed is a tree of the last 14 days: today open, older days folded; per row the cost (`—` when not measured), per day its sum, a day folds alone', async ($, on) => {
