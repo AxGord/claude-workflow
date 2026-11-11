@@ -20,13 +20,16 @@ import { activeParents, staleNote } from "./stale.js";
 import { RESUME_TOOL, activeSubtree, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
 import {
   MARK_TARGETS,
+  QueueError,
   addQueueLine,
   editQueueLine,
+  formatHeaderKey,
   formatMark,
   formatPickSummary,
   markQueue,
   pickQueue,
   resolveQueueFile,
+  setQueueHeaderKey,
   setQueueWindow,
   type MarkTarget,
   type PickResult,
@@ -1316,22 +1319,53 @@ export function registerTools(
     "queue_header",
     {
       description:
-        "Set a task queue's window under its lock: the header's `batch_size: N` and `reason: <reason>`. " +
-        "`0` is the pause (running tasks finish, nothing new is admitted). The reason is required.",
+        "Set a task queue's header under its lock. The window: `batch_size: N` with `reason: <reason>` (both required together; " +
+        "`0` is the pause: running tasks finish, nothing new is admitted). And/or `archive_after_days: N` (a whole number ≥ 1; " +
+        "`null` removes the key = no automatic archiving; a pick archives the done / failed lines that ended over N days ago). " +
+        "One call sets the window, the key or both; the other header keys are untouched.",
       inputSchema: z
         .object({
           ...QUEUE_SEL,
-          batch_size: z.number().int().min(0).describe("The window; 0 = paused"),
-          reason: z.string().min(1).describe("Why — written as the header's `reason:`"),
+          batch_size: z.number().int().min(0).optional().describe("The window; 0 = paused"),
+          reason: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Why — written as the header's `reason:`; required with batch_size"),
+          archive_after_days: z
+            .number()
+            .int()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe(
+              "Days after which a pick archives a done / failed line; null removes the key",
+            ),
         })
         .strict(),
     },
     async args => {
       try {
-        const r = await setQueueWindow(resolveQueueFile(args), args.batch_size, args.reason);
-        return {
-          content: [{ type: "text", text: `batch_size ${r.from} → ${r.to}  # ${r.reason}` }],
-        };
+        const window = args.batch_size !== undefined || args.reason !== undefined;
+        if (!window && args.archive_after_days === undefined)
+          throw new QueueError(
+            "queue_header needs batch_size + reason, archive_after_days, or both",
+          );
+        if (window && (args.batch_size === undefined || args.reason === undefined))
+          throw new QueueError("batch_size and reason go together");
+        const file = resolveQueueFile(args);
+        const lines: string[] = [];
+        if (args.batch_size !== undefined && args.reason !== undefined) {
+          const r = await setQueueWindow(file, args.batch_size, args.reason);
+          lines.push(`batch_size ${r.from} → ${r.to}  # ${r.reason}`);
+        }
+        if (args.archive_after_days !== undefined)
+          lines.push(
+            formatHeaderKey(
+              await setQueueHeaderKey(file, "archive_after_days", args.archive_after_days),
+            ),
+          );
+        return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
         return queueError(err);
       }

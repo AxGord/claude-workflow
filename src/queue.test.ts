@@ -8,6 +8,7 @@ import {
   addQueueLine,
   archivePath,
   archiveQueue,
+  archiveAfterDays,
   formatPickSummary,
   formatArchive,
   describeQueue,
@@ -23,6 +24,7 @@ import {
   KINDS,
   readQueue,
   resolveQueueFile,
+  setQueueHeaderKey,
   setQueueWindow,
   textHashOf,
   today,
@@ -950,6 +952,37 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     expect(readQueue(file).batchSize).toBe(3);
   });
 
+  it("setQueueHeaderKey sets, changes and removes archive_after_days; the window and the other keys stay; an unknown key or a bad value is refused (ENG-QUEUE-HEADER-KEYS)", async () => {
+    const file = queueFile(`- [ ] A | touches: a`, "batch_size: 2");
+    await setQueueWindow(file, 3, "three");
+    const win = () => `${readQueue(file).batchSize}/${readQueue(file).batchComment}`;
+    expect(await setQueueHeaderKey(file, "archive_after_days", 30)).toEqual({
+      key: "archive_after_days",
+      from: undefined,
+      to: 30,
+    });
+    expect(readQueue(file).header.archive_after_days).toBe("30");
+    const text = fs.readFileSync(file, "utf8");
+    expect(text.indexOf("archive_after_days:")).toBeGreaterThan(-1);
+    expect(text.indexOf("archive_after_days:")).toBeLessThan(text.indexOf("tasks:"));
+    expect(archiveAfterDays(readQueue(file))).toBe(30);
+    expect(win()).toBe("3/three");
+    expect((await setQueueHeaderKey(file, "archive_after_days", 7)).from).toBe("30");
+    expect(readQueue(file).header.archive_after_days).toBe("7");
+    expect((await setQueueHeaderKey(file, "archive_after_days", null)).to).toBeUndefined();
+    expect(readQueue(file).header.archive_after_days).toBeUndefined();
+    expect(archiveAfterDays(readQueue(file))).toBeUndefined();
+    expect(win()).toBe("3/three");
+    const before = fs.readFileSync(file, "utf8");
+    for (const key of ["batch_size", "reason", "nokey"])
+      await expect(setQueueHeaderKey(file, key, 1)).rejects.toThrow("not a header key a tool sets");
+    for (const bad of [0, -1, 1.5])
+      await expect(setQueueHeaderKey(file, "archive_after_days", bad)).rejects.toThrow(
+        "whole number ≥ 1",
+      );
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
   it("mark done and failed write the day the line ended (`ended`); a retry removes it; other marks leave it out", async () => {
     const file = queueFile(
       `- [>] A | touches: a\n- [>] B | touches: b\n- [ ] C | touches: c`,
@@ -1158,6 +1191,22 @@ describe("wf-queue CLI", () => {
       "batch_size 2 → 0  # pause for review\n",
     );
     expect((await cli(file, "--batch-size", "1")).code).toBe(2);
+    expect((await cli(file, "--header-set", "archive_after_days=14", "--reason", "why")).out).toBe(
+      "archive_after_days (none) → 14  # why\n",
+    );
+    expect(readQueue(file)).toMatchObject({ batchSize: 0, header: { archive_after_days: "14" } });
+    expect((await cli(file, "--header-set", "archive_after_days=")).out).toBe(
+      "archive_after_days 14 → (none)\n",
+    );
+    expect(readQueue(file).header.archive_after_days).toBeUndefined();
+    for (const bad of [
+      "nokey=3",
+      "batch_size=1",
+      "archive_after_days=0",
+      "archive_after_days=x",
+      "archive_after_days",
+    ])
+      expect((await cli(file, "--header-set", bad)).code).toBe(2);
     expect((await cli(file, "--running", "A")).code).toBe(2);
     expect((await cli(file, "--running", "A", "--retry")).out).toBe("A: failed → running\n");
     await cli(file, "--failed", "A");

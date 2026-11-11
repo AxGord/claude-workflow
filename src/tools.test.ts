@@ -11,6 +11,7 @@ import {
 } from "./tools.js";
 import { Engine, type StatusResult } from "./engine.js";
 import { Executor } from "./executor.js";
+import { readQueue } from "./queue.js";
 import { InMemoryStorage, createTestLoader, cleanupDir, SIMPLE_WORKFLOW } from "./test-helpers.js";
 import type { SessionState } from "./types.js";
 
@@ -363,6 +364,16 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
       expect((await call("queue_header", { queue: "n", batch_size: 2, reason: "two" })).text).toBe(
         "batch_size 1 → 2  # two",
       );
+      expect((await call("queue_header", { queue: "n", archive_after_days: 30 })).text).toBe(
+        "archive_after_days (none) → 30",
+      );
+      expect(readQueue(file)).toMatchObject({ batchSize: 2, batchComment: "two" });
+      expect((await call("queue_header", { queue: "n", archive_after_days: null })).text).toBe(
+        "archive_after_days 30 → (none)",
+      );
+      expect(readQueue(file).header.archive_after_days).toBeUndefined();
+      expect((await call("queue_header", { queue: "n", batch_size: 1 })).isError).toBe(true);
+      expect((await call("queue_header", { queue: "n" })).isError).toBe(true);
       const next = await call("queue_next", { queue: "n" });
       expect(next.text).toContain("ADMITTED (running) A |");
       expect(

@@ -11,7 +11,8 @@
 //   wf-queue <q> --header <key>                   the header's value of <key> (empty when absent)
 //   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, touches: [a], text: …}`)
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
-//   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header
+//   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header (the window)
+//   wf-queue <q> --header-set archive_after_days=N [--reason TEXT]   queue_header (a header key: N ≥ 1, `key=` removes; any other key refused; --reason is echoed, not written)
 //   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   the manual archive (done/failed lines → <q>.archive.yaml); a pick does it by the header's archive_after_days
 //   wf-queue <q> --restore <ID>   one archived line back into the queue (CLI only, no MCP tool)
 //   wf-queue --convert <old.md|config.json> [--into <file.yaml>] [--status S] [--dry-run]
@@ -40,6 +41,8 @@ import {
   restoreQueue,
   rewriteQueue,
   resolveQueueFile,
+  formatHeaderKey,
+  setQueueHeaderKey,
   setQueueWindow,
   STATUSES,
   type MarkTarget,
@@ -48,7 +51,7 @@ import {
 
 const USAGE =
   "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--note TEXT] [--from WHO] | --header <key> | --path" +
-  " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --batch-size <N> --reason TEXT | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>" +
+  " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --batch-size <N> --reason TEXT | --header-set archive_after_days=N [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>" +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
 /** `--flag value` pairs after an op; a flag outside `allowed`, a missing value, or a repeat of a non-list flag is a usage error. */
@@ -243,6 +246,20 @@ async function main(args: string[]): Promise<number> {
     if (reason === undefined) throw new QueueError("--batch-size needs --reason TEXT");
     const r = await setQueueWindow(file, n, reason);
     process.stdout.write(`batch_size ${r.from} → ${r.to}  # ${r.reason}\n`);
+    return 0;
+  }
+  if (op === "--header-set") {
+    const o = options(args.slice(2), ["--reason"]);
+    const kv = args[1] ?? "";
+    const eq = kv.indexOf("=");
+    if (eq < 1) throw new QueueError("--header-set needs key=value (`key=` removes the key)");
+    const key = kv.slice(0, eq);
+    const raw = kv.slice(eq + 1);
+    if (raw !== "" && !/^\d+$/.test(raw))
+      throw new QueueError(`--header-set ${key}: a whole number ≥ 1, or empty to remove`);
+    const r = await setQueueHeaderKey(file, key, raw === "" ? null : Number(raw));
+    const why = o.get("--reason")?.[0];
+    process.stdout.write(`${formatHeaderKey(r)}${why === undefined ? "" : `  # ${why}`}\n`);
     return 0;
   }
   const unknown = args.find(a => a !== "--dry-run" && a !== "--explain" && a !== "--explain-all");

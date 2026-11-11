@@ -1720,6 +1720,51 @@ export async function setQueueWindow(
   });
 }
 
+/** The header keys a tool may set besides the window (`batch_size` / `reason`): each a whole number ≥ 1, or removed. */
+export const SETTABLE_HEADER_KEYS: readonly string[] = ["archive_after_days"];
+
+export interface HeaderKeyResult {
+  readonly key: string;
+  /** The value before (`undefined` = the key was absent). */
+  readonly from: string | undefined;
+  /** The value after (`undefined` = the key is now absent). */
+  readonly to: number | undefined;
+}
+
+/**
+ * One header key of {@link SETTABLE_HEADER_KEYS} under the lock: `value` (a whole number ≥ 1) set or
+ * changed, `null` removes it. The window (`batch_size` / `reason`) and every other key stay as they
+ * are; an unknown key is refused.
+ */
+export async function setQueueHeaderKey(
+  file: string,
+  key: string,
+  value: number | null,
+): Promise<HeaderKeyResult> {
+  if (!SETTABLE_HEADER_KEYS.includes(key))
+    throw new QueueError(
+      `${key} is not a header key a tool sets (${SETTABLE_HEADER_KEYS.join(", ")}; the window is batch_size + reason)`,
+    );
+  if (value !== null && (!Number.isInteger(value) || value < 1))
+    throw new QueueError(`${key} is a whole number ≥ 1 (null removes it), not ${value}`);
+  return writing(file, e => {
+    const from = e.queue.header[key]?.trim() || undefined;
+    if (value === null) e.doc.delete(key);
+    else if (e.doc.has(key)) e.doc.set(key, value);
+    else {
+      const top = e.doc.contents as YAMLMap;
+      const at = top.items.findIndex(p => String((p.key as Scalar).value) === "tasks");
+      top.items.splice(at < 0 ? top.items.length : at, 0, e.doc.createPair(key, value));
+    }
+    return { key, from, to: value ?? undefined };
+  });
+}
+
+/** `archive_after_days 30 → 7`, `archive_after_days 30 → (none)`: what a header key set did. */
+export function formatHeaderKey(r: HeaderKeyResult): string {
+  return `${r.key} ${r.from ?? "(none)"} → ${r.to ?? "(none)"}`;
+}
+
 // Reasons that say nothing about a line itself: with `explain` they fold into one summary line each.
 const BLANK_WHY: ReadonlySet<string> = new Set(["window full", "paused (batch_size 0)"]);
 const BLANK_NAMES = 5;
