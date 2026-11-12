@@ -1763,6 +1763,43 @@ describe("wf-run CLI (real processes)", () => {
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
   }, 20_000);
 
+  it("--est-by-threads: waits for the max when its ETA ends the run earlier, takes the free threads when it does not", async () => {
+    const dir = poolDir(quiet);
+    const threads = ["--", "sh", "-c", 'printf "%s" "$WF_THREADS"'];
+    const curve = ["--threads", "2-8", "--est-by-threads", "2:540,8:180"];
+    // 6 held for an estimated 2 s: 8 threads then end at 2 + 180 s, 4 now at 300 s
+    const soon = await new Pool(dir, fakeProbes()).acquire({
+      threads: 6,
+      label: "soon",
+      estMs: 2000,
+    });
+    setTimeout(() => {
+      if (soon.status === "granted") void soon.lease.release();
+    }, 400);
+    const waited = await wfRun(dir, [...curve, ...threads]).done;
+    expect([waited.code, waited.stdout]).toEqual([0, "8"]);
+    // 6 held for an estimated 1000 s: 4 now
+    const late = await new Pool(dir, fakeProbes()).acquire({
+      threads: 6,
+      label: "late",
+      estMs: 1_000_000,
+    });
+    const now = await wfRun(dir, [...curve, ...threads]).done;
+    expect([now.code, now.stdout]).toEqual([0, "4"]);
+    // one size cannot make a curve: a note, and the free threads (no wait_full: at once)
+    const one = await wfRun(dir, ["--threads", "2-8", "--est-by-threads", "2:540", ...threads])
+      .done;
+    expect([one.code, one.stdout]).toEqual([0, "4"]);
+    expect(one.stderr).toContain("no estimate");
+    for (const bad of [
+      ["--est-by-threads", "2:540,8:180"],
+      ["--threads", "2-8", "--est-by-threads", "2"],
+      ["--threads", "2-8", "--est-by-threads", "2:0,8:1"],
+    ])
+      expect((await wfRun(dir, [...bad, "--", "true"]).done).code).toBe(64);
+    if (late.status === "granted") await late.lease.release();
+  }, 20_000);
+
   it("without --priority a run takes WF_PRIORITY and its level from the environment; --status shows level, project, session and step", async () => {
     const dir = poolDir(quiet);
     const pool = new Pool(dir, fakeProbes());

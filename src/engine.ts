@@ -1946,7 +1946,10 @@ export class Engine {
   }
 
   /** The ledger's estimate of a leased step's run, read by the requester (never under the pool lock). */
-  private _estimate(session: SessionState, state: StateDefinition): Pick<ExecContext, "estimate"> {
+  private _estimate(
+    session: SessionState,
+    state: StateDefinition,
+  ): Pick<ExecContext, "estimate" | "estimateCurve"> {
     const stateDir = this._options.stateDir;
     if (!stateDir || !state.resource || state.fanout) return {};
     const frame = session.stack[session.active_frame];
@@ -1954,7 +1957,10 @@ export class Engine {
     const key = `${projectRoot(cwd)}|${frame.workflow}|${frame.current_state}`;
     this._estimates ??= new Estimates(path.join(stateDir, LEDGER_FILE));
     const estimates = this._estimates;
-    return { estimate: threads => estimates.lookup(key, threads) };
+    return {
+      estimate: threads => estimates.lookup(key, threads),
+      estimateCurve: (min, max) => estimates.curve(key, min, max),
+    };
   }
 
   private _execContext(session: SessionState): ExecContext {

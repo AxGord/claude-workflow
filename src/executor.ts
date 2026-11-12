@@ -78,6 +78,11 @@ export interface ExecContext {
   /** The step's expected run time (ms) on `threads` threads, from past runs; undefined: unknown. */
   readonly estimate?: (threads: number) => number | undefined;
   /**
+   * The step's expected run time (ms) on each of `min..max` threads — a flexible request's
+   * sizes, from the history of its sizes (a curve through them); undefined: some size unknown.
+   */
+  readonly estimateCurve?: (min: number, max: number) => Record<number, number> | undefined;
+  /**
    * A plain or leased foreground exec reports its detached run here once it
    * started; the run's files then belong to the caller (`discardRun`).
    */
@@ -217,8 +222,15 @@ export class Executor {
           project: ctx?.project,
           step: ctx?.step,
           sessionId,
-          // a flexible request's threads are not known before the grant, a shard's run is not its step's
+          // a flexible request's size is picked by the pool from its curve; a shard's run is not its step's
           estMs: flexible || shard || threads === 0 ? undefined : ctx?.estimate?.(threads),
+          estCurve:
+            flexible && !shard && minThreads !== undefined
+              ? ctx?.estimateCurve?.(
+                  Math.min(minThreads, this.pool.config().budget),
+                  Math.min(threads, this.pool.config().budget),
+                )
+              : undefined,
         },
         {
           waitTimeoutMs:

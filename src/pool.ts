@@ -206,6 +206,12 @@ export interface PoolEntry {
   readonly starved?: number;
   /** The p90 run time (ms) of the step from the ledger: what backfill trusts. Absent: unknown, never backfilled by time. */
   readonly est_ms?: number;
+  /**
+   * A flexible waiter: its estimated run (ms, a p90) on each of `min_threads..threads` threads,
+   * by thread count. With it the pool picks the size that ends earliest (waiting for more
+   * threads when their ETA beats starting small); the lease keeps the granted size's as `est_ms`.
+   */
+  readonly est_curve?: Readonly<Record<string, number>>;
   /** A lease granted ahead of a waiting head (backfill): that head's id. */
   readonly backfill_for?: string;
 }
@@ -320,6 +326,15 @@ export function levelPriority(level: PriorityLevel, stepPriority = 0): number {
  * waits for is the threads being freed, and a later task taking them would
  * defeat it.
  *
+ * A flexible waiter with an estimate by threads (`est_curve`) does not use that
+ * window: for each size k in min..max it takes the start of k (now when k fits,
+ * else `headAt` of k over the running leases' estimated ends) plus its run on k
+ * threads, and takes the size that ends earliest — now, or after a short wait for
+ * more threads, in which case it is the head and waits for exactly that size. A size
+ * whose threads free at an unknown time is not a candidate. Behind a head it
+ * backfills only a size that ends before the head's start. A lease from it carries
+ * the granted size's estimate. No (or an incomplete) curve: the rule above.
+ *
  * `runs` (busy cpus of a lease's own process tree): a lease with threads
  * accounts for the larger of its threads and its tree, so a lease whose
  * command runs more processes than it leased is not external load that
@@ -364,9 +379,15 @@ export function schedule(
     const until = w.full_until ?? now + (w.full_ms ?? 0);
     // The most threads that fit now: external load counts only beside a live lease.
     const room = held === 0 ? config.budget : Math.floor(config.budget - held - external);
+    const curve = max === 0 ? undefined : curveOfEntry(w, config.budget);
     let n: number | undefined;
+    let waitAt: number | undefined;
     if (max === 0) n = 0;
-    else if (!head) n = fit(w, room, until);
+    else if (curve) {
+      const pick = pickByEta(curve, room, head, now, leases, config.budget, external, runs);
+      n = pick.n;
+      waitAt = pick.waitAt;
+    } else if (!head) n = fit(w, room, until);
     else if (head.at !== undefined && w.est_ms !== undefined && now + w.est_ms <= head.at)
       n = fit(w, room, until);
     if (locksFree && n !== undefined) {
@@ -383,6 +404,8 @@ export function schedule(
         ...backfill,
         starved: undefined,
         full_ms: undefined,
+        est_curve: undefined,
+        ...(curve ? { est_ms: curve.get(n) } : {}),
       });
       held += n;
       lastGrant = now;
@@ -405,10 +428,12 @@ export function schedule(
         )
       )
         backfillOff = w.id;
-      // inside its wait_full window a flexible head waits for its max
-      const need = now < until ? max : minThreads(w, config.budget);
+      // inside its wait_full window a flexible head waits for its max; one with a curve, for its picked size
+      const need = curve || now >= until ? minThreads(w, config.budget) : max;
       const at =
-        backfillOff === w.id ? undefined : headAt(leases, need, config.budget, external, runs, now);
+        backfillOff === w.id
+          ? undefined
+          : (waitAt ?? headAt(leases, need, config.budget, external, runs, now));
       head = { id: w.id, ...(at !== undefined ? { at } : {}) };
     }
   }
@@ -423,6 +448,53 @@ export function schedule(
     ...(backfillOff !== undefined ? { backfill_off: backfillOff } : {}),
     runs,
   };
+}
+
+/** A waiter's estimate by threads for every size it accepts, else undefined. */
+function curveOfEntry(w: PoolEntry, budget: number): ReadonlyMap<number, number> | undefined {
+  if (!w.est_curve) return undefined;
+  const out = new Map<number, number>();
+  for (let k = minThreads(w, budget); k <= effectiveThreads(w, budget); k++) {
+    const t = w.est_curve[k];
+    if (!(typeof t === "number" && t > 0 && Number.isFinite(t))) return undefined;
+    out.set(k, t);
+  }
+  return out;
+}
+
+/**
+ * The size a flexible waiter with a curve takes: `n` now, or it waits (`waitAt`: when the
+ * threads of the size that ends earliest are expected free), or neither (nothing fits and no
+ * size has a known start). Ties end at the earlier start, then the larger size.
+ */
+function pickByEta(
+  curve: ReadonlyMap<number, number>,
+  room: number,
+  head: Reservation | undefined,
+  now: number,
+  leases: readonly PoolEntry[],
+  budget: number,
+  external: number,
+  runs: Readonly<Record<string, number>>,
+): { n?: number; waitAt?: number } {
+  let best: { k: number; start: number; end: number } | undefined;
+  const better = (c: { k: number; start: number; end: number }): boolean =>
+    !best ||
+    c.end < best.end ||
+    (c.end === best.end && (c.start < best.start || (c.start === best.start && c.k > best.k)));
+  for (const [k, ms] of curve) {
+    if (head) {
+      // behind a head only a size that fits now and ends before the head starts
+      if (k > room || head.at === undefined || now + ms > head.at) continue;
+      if (better({ k, start: now, end: now + ms })) best = { k, start: now, end: now + ms };
+      continue;
+    }
+    const start = k <= room ? now : headAt(leases, k, budget, external, runs, now);
+    if (start === undefined) continue;
+    if (better({ k, start, end: start + ms })) best = { k, start, end: start + ms };
+  }
+  if (!best) return {};
+  return best.start <= now ? { n: best.k } : { waitAt: best.start };
 }
 
 /** The head's reservation in one admission pass. */
@@ -598,6 +670,12 @@ export interface LeaseRequest {
   readonly ownsGroup?: boolean;
   /** The run's expected time (ms, a p90): lets the pool backfill it ahead of a waiting head. */
   readonly estMs?: number;
+  /**
+   * A flexible request: the run's expected time (ms, a p90) on each of `minThreads..threads`
+   * threads. With every size covered the pool takes the size that ends earliest, waiting
+   * for more threads when their ETA beats starting small, instead of `waitFullMs`.
+   */
+  readonly estCurve?: Readonly<Record<number, number>>;
 }
 
 export interface AcquireOptions {
@@ -725,6 +803,8 @@ export class Pool {
       throw new Error(`min threads must be an integer in 1..${req.threads}, got ${req.minThreads}`);
     if (req.waitFullMs !== undefined && !flexible)
       throw new Error("waiting for the full threads needs a min");
+    if (req.estCurve !== undefined && !flexible)
+      throw new Error("an estimate by threads needs a min");
     const priority = req.priority ?? 0;
     if (!Number.isInteger(priority))
       throw new Error(`priority must be an integer, got ${priority}`);
@@ -755,6 +835,7 @@ export class Pool {
       ...(locks.length > 0 ? { locks } : {}),
       ...(req.ownsGroup ? { owns_group: true as const } : {}),
       ...(req.estMs !== undefined && req.estMs > 0 ? { est_ms: req.estMs } : {}),
+      ...(req.estCurve !== undefined ? { est_curve: { ...req.estCurve } } : {}),
     };
     const progressMs = opts.progressMs ?? DEFAULT_PROGRESS_MS;
     let lastProgress: number | undefined;

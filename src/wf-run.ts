@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // wf-run: run a heavy command under a lease from the machine-wide thread pool.
-//   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]
+//   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--est-by-threads K:SEC,…] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]
 //   wf-run --status
 // The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
 // and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
@@ -17,6 +17,7 @@ import {
   formatStatus,
   resolvePoolDir,
 } from "./pool.js";
+import { curveOf } from "./estimate.js";
 import { killProcessGroup } from "./process.js";
 import {
   LOCK_NAME_PATTERN,
@@ -26,7 +27,7 @@ import {
 } from "./types.js";
 
 const USAGE =
-  "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]\n" +
+  "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--est-by-threads K:SEC,…] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]\n" +
   "       wf-run --status";
 const EX_USAGE = 64;
 const EX_NOEXEC = 126;
@@ -49,6 +50,8 @@ interface Options {
   readonly waitTimeoutSec?: number;
   /** The run's expected time: the pool may start it ahead of a waiting head it cannot delay. */
   readonly estSec?: number;
+  /** A `MIN-MAX` run: its expected time in seconds on some thread counts; the pool takes the size that ends earliest. */
+  readonly estByThreads?: ReadonlyMap<number, number>;
   readonly label?: string;
   readonly efficiency: boolean;
   readonly failOpen: boolean;
@@ -67,6 +70,7 @@ function parseArgs(argv: readonly string[]): Options {
   let priority: number | undefined;
   let waitTimeoutSec: number | undefined;
   let estSec: number | undefined;
+  let estByThreads: Map<number, number> | undefined;
   let label: string | undefined;
   let i = 0;
   const value = (flag: string, inline: string | undefined): string => {
@@ -140,6 +144,17 @@ function parseArgs(argv: readonly string[]): Options {
         estSec = seconds(flag, value(flag, inline));
         if (estSec === 0) throw new Error(`${flag}: expected seconds > 0`);
         break;
+      case "--est-by-threads": {
+        estByThreads = new Map();
+        for (const pair of value(flag, inline).split(",")) {
+          const m = /^(\d+):(.+)$/.exec(pair);
+          const sec = m ? Number(m[2]) : NaN;
+          if (!m || !(sec > 0) || !Number.isFinite(sec) || Number(m[1]) < 1)
+            throw new Error(`${flag}: expected THREADS:SEC pairs, got "${pair}"`);
+          estByThreads.set(Number(m[1]), sec);
+        }
+        break;
+      }
       default:
         throw new Error(`unknown option ${flag}`);
     }
@@ -148,6 +163,8 @@ function parseArgs(argv: readonly string[]): Options {
   if (!status && command.length === 0) throw new Error("no command given");
   if (waitFullSec !== undefined && minThreads === undefined)
     throw new Error("--wait-full needs --threads MIN-MAX");
+  if (estByThreads !== undefined && minThreads === undefined)
+    throw new Error("--est-by-threads needs --threads MIN-MAX");
   // A session exec's own priority (its level's plus its step's) is the default.
   const inherited = priority === undefined ? fromEnvironment() : undefined;
   return {
@@ -160,6 +177,7 @@ function parseArgs(argv: readonly string[]): Options {
     level: inherited?.level,
     waitTimeoutSec,
     estSec,
+    ...(estByThreads ? { estByThreads } : {}),
     label,
     efficiency,
     failOpen,
@@ -276,6 +294,16 @@ async function main(argv: readonly string[]): Promise<number> {
     // A max the budget clamps below the min still runs: the min clamps with it.
     minThreads =
       efficient || opts.minThreads === undefined ? undefined : Math.min(opts.minThreads, threads);
+    // the sizes' times for the range the pool will use; a range the points cannot cover has none
+    const known = new Map([...(opts.estByThreads ?? [])].map(([k, sec]) => [k, sec * 1000]));
+    const estCurve =
+      minThreads === undefined || known.size === 0
+        ? undefined
+        : curveOf(known, minThreads, threads);
+    if (minThreads !== undefined && known.size > 0 && !estCurve)
+      process.stderr.write(
+        "wf-run: --est-by-threads names fewer than two sizes and not every size of the range — no estimate\n",
+      );
     result = await pool.acquire(
       {
         threads,
@@ -293,6 +321,7 @@ async function main(argv: readonly string[]): Promise<number> {
         // a SIGKILLed wf-run cannot release: the reaper kills its detached child's group instead
         ownsGroup: true,
         ...(opts.estSec !== undefined ? { estMs: opts.estSec * 1000 } : {}),
+        ...(estCurve ? { estCurve } : {}),
       },
       {
         waitTimeoutMs: opts.waitTimeoutSec === undefined ? undefined : opts.waitTimeoutSec * 1000,

@@ -1,6 +1,7 @@
 // Run-time estimates of leased steps, read from the ledger (`ledger.jsonl`):
 // what the pool's backfill trusts to say "this run ends before the head's
-// threads are free". Read OUTSIDE the pool lock, by the requester.
+// threads are free", and which size of a flexible request ends earliest. Read OUTSIDE
+// the pool lock, by the requester.
 import fs from "node:fs";
 import type { LedgerEntry } from "./ledger.js";
 
@@ -24,10 +25,52 @@ export function p90(values: readonly number[]): number | undefined {
 }
 
 /**
+ * The run time (ms) on each of `min..max` threads from the `known` estimates by threads: a
+ * size with an estimate keeps it, the others come from `t(k) = a + b / k` (`a`, `b` ≥ 0:
+ * a serial part and a parallel one) fitted by least squares through every known size,
+ * also those outside the range. Fewer than two known sizes cannot fit a curve: a range
+ * they do not fully cover has none (undefined).
+ */
+export function curveOf(
+  known: ReadonlyMap<number, number>,
+  min: number,
+  max: number,
+): Record<number, number> | undefined {
+  const out: Record<number, number> = {};
+  let missing = false;
+  for (let k = min; k <= max; k++) {
+    const t = known.get(k);
+    if (t === undefined) missing = true;
+    else out[k] = t;
+  }
+  if (!missing) return out;
+  if (known.size < 2) return undefined;
+  const pts = [...known].map(([k, t]) => ({ x: 1 / k, t }));
+  const n = pts.length;
+  const sx = pts.reduce((s, p) => s + p.x, 0);
+  const st = pts.reduce((s, p) => s + p.t, 0);
+  const sxx = pts.reduce((s, p) => s + p.x * p.x, 0);
+  const sxt = pts.reduce((s, p) => s + p.x * p.t, 0);
+  const det = n * sxx - sx * sx;
+  let b = det === 0 ? 0 : (n * sxt - sx * st) / det;
+  let a = (st - b * sx) / n;
+  // a time that grows with the threads, or a negative serial part, is noise: refit one term
+  if (b < 0) {
+    b = 0;
+    a = st / n;
+  } else if (a < 0) {
+    a = 0;
+    b = sxt / sxx;
+  }
+  for (let k = min; k <= max; k++) out[k] ??= a + b / k;
+  return out;
+}
+
+/**
  * Per `step_key` and threads granted, the latest successful runs of a ledger;
  * re-reads only the appended tail (a file that shrank or was replaced is read
  * again from the start). Keyed by threads: a run on other threads says nothing
- * about this one's time, and no speed-up curve is guessed.
+ * about this one's time; `curve` fits one over the sizes the history has.
  */
 export class Estimates {
   private readonly _path: string;
@@ -47,6 +90,28 @@ export class Estimates {
       s => now - s.at < MAX_AGE_MS,
     );
     return p90(recent.map(s => s.ms));
+  }
+
+  /**
+   * The p90 run time (ms) of `stepKey` on each of `min..max` threads (`curveOf` over the
+   * sizes with an estimate), or undefined: the history cannot tell every size.
+   */
+  curve(
+    stepKey: string,
+    min: number,
+    max: number,
+    now: number = Date.now(),
+  ): Record<number, number> | undefined {
+    this._refresh();
+    const known = new Map<number, number>();
+    const prefix = `${stepKey}#`;
+    for (const key of this._samples.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const k = Number(key.slice(prefix.length));
+      const t = this.lookup(stepKey, k, now);
+      if (t !== undefined) known.set(k, t);
+    }
+    return curveOf(known, min, max);
   }
 
   private _refresh(): void {
