@@ -16,6 +16,9 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 - "Spawn ONE worker/reviewer": Agent with the model and effort the prompt names, `run_in_background:
   true`, the prompt text exactly as given — never shorten or rephrase it; then `link_agent` and the
   context_set it asks for.
+  Pass `subagent_type` only when the prompt names one; a prompt that names none -> omit it (the default
+  agent). Never choose a type by the role's name: a read-only type has no workflow tools and cannot
+  drive a session.
 - Then WAIT: end your turn. The agent's notification wakes you. Never poll, never sleep.
 - Workers and reviewers answer with ONE line (`DONE … report=<file>`, `BLOCKED …`, `VERDICT X …
   review=<file> design=yes|no`); their full text is in the files they name. Do not open those files
