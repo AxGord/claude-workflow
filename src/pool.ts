@@ -462,7 +462,7 @@ export function schedule(
       const asked =
         w.min_threads !== undefined || n !== w.threads ? { asked_threads: w.threads } : {};
       const backfill = head && n > 0 ? { backfill_for: head.id } : {};
-      const est = curve ? curve.get(n) : estimate;
+      const est = curve ? curve.get(n) : (partialEstimate(w, n) ?? estimate);
       // a waiter's starved mark is not the lease's (undefined: never written)
       leases.push({
         ...granted,
@@ -517,6 +517,23 @@ export function schedule(
     ...(state.history ? { history: state.history } : {}),
     runs,
   };
+}
+
+/**
+ * A flexible waiter's estimate at `n` threads from an incomplete `est_curve`: the size's own
+ * time, else the nearest measured size's time as is (the larger on a tie). The size pick still
+ * falls back; this only gives the granted lease its end.
+ */
+function partialEstimate(w: PoolEntry, n: number): number | undefined {
+  let best: { k: number; t: number } | undefined;
+  for (const [key, t] of Object.entries(w.est_curve ?? {})) {
+    const k = Number(key);
+    if (!(t > 0 && Number.isFinite(t))) continue;
+    const d = Math.abs(k - n);
+    if (!best || d < Math.abs(best.k - n) || (d === Math.abs(best.k - n) && k > best.k))
+      best = { k, t };
+  }
+  return best?.t;
 }
 
 /** A waiter's estimate by threads for every size it accepts, else undefined. */

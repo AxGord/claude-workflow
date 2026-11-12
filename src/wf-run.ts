@@ -302,9 +302,11 @@ async function main(argv: readonly string[]): Promise<number> {
       minThreads === undefined || known.size === 0
         ? undefined
         : curveOf(known, minThreads, threads);
-    if (minThreads !== undefined && known.size > 0 && !estCurve)
+    // points that cannot cover the range keep the wait_full pick; the pool still reads the lease's end off them
+    const partial = minThreads !== undefined && known.size > 0 && !estCurve;
+    if (partial)
       process.stderr.write(
-        "wf-run: --est-by-threads names fewer than two sizes and not every size of the range — no estimate\n",
+        "wf-run: --est-by-threads names fewer than two sizes and not every size of the range — no estimate for the size pick (wait_full decides); the lease's end is read off the named sizes\n",
       );
     result = await pool.acquire(
       {
@@ -323,7 +325,7 @@ async function main(argv: readonly string[]): Promise<number> {
         // a SIGKILLed wf-run cannot release: the reaper kills its detached child's group instead
         ownsGroup: true,
         ...(opts.estSec !== undefined ? { estMs: opts.estSec * 1000 } : {}),
-        ...(estCurve ? { estCurve } : {}),
+        ...(estCurve ? { estCurve } : partial ? { estCurve: Object.fromEntries(known) } : {}),
       },
       {
         waitTimeoutMs: opts.waitTimeoutSec === undefined ? undefined : opts.waitTimeoutSec * 1000,

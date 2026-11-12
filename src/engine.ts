@@ -1959,7 +1959,8 @@ export class Engine {
     const estimates = this._estimates;
     return {
       estimate: threads => estimates.lookup(key, threads),
-      estimateCurve: (min, max) => estimates.curve(key, min, max),
+      // a history that cannot cover the range still hands over the sizes it has: the pool takes the lease's end from them
+      estimateCurve: (min, max) => estimates.curve(key, min, max) ?? estimates.known(key),
     };
   }
 

@@ -114,6 +114,24 @@ export class Estimates {
     return curveOf(known, min, max);
   }
 
+  /**
+   * The p90 run time (ms) of `stepKey` on every size the history has an estimate for (any
+   * size, in or out of `min..max`), or undefined when it has none. What `curve` cannot cover
+   * (fewer than two sizes) still tells a lease its end.
+   */
+  known(stepKey: string, now: number = Date.now()): Record<number, number> | undefined {
+    this._refresh();
+    const out: Record<number, number> = {};
+    const prefix = `${stepKey}#`;
+    for (const key of this._samples.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      const k = Number(key.slice(prefix.length));
+      const t = this.lookup(stepKey, k, now);
+      if (t !== undefined) out[k] = t;
+    }
+    return Object.keys(out).length > 0 ? out : undefined;
+  }
+
   private _refresh(): void {
     let stat: fs.Stats;
     try {
