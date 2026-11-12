@@ -24,8 +24,10 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   true`, the prompt text exactly as given — never shorten or rephrase it; then `link_agent` and the
   context_set it asks for.
   Pass `subagent_type` only when the prompt names one; a prompt that names none -> omit it (the default
-  agent). Never choose a type by the role's name: a read-only type has no workflow tools and cannot
-  drive a session.
+  agent). Never choose a type by the role's name: the agent you spawn drives its own session and
+  needs the general-purpose tools, and a `workflow:*` type lacks them (`workflow:driver` has no
+  Bash/Edit; `workflow:recon` and `workflow:reviewer` have no workflow tools, so they cannot drive a
+  session).
 - Then WAIT: end your turn. The agent's notification wakes you. Never poll, never sleep.
 - Workers and reviewers answer with ONE line (`DONE … report=<file>`, `BLOCKED …`, `VERDICT X …
   review=<file> design=yes|no`); their full text is in the files they name. Do not open those files

@@ -19,6 +19,8 @@ describe("driver spawn bullet forbids guessed subagent_type", () => {
       expect(b).toContain("subagent_type");
       expect(b).toMatch(/omit/u);
       expect(b).toMatch(/Never choose a type by the role/u);
+      expect(b).toMatch(/workflow:driver. has no\s+Bash\/Edit/u);
+      expect(b).toMatch(/workflow:recon. and .workflow:reviewer. have no workflow tools/u);
     });
   }
 });
