@@ -30,6 +30,21 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 - Tokens: the agent's task-notification usage line is its context size at stop, not its spend: report
   the last value you saw for that role, never a sum over rounds.
 - A transition into a long exec (the land) may outlive the call; its notification wakes you.
+- A `start` reply shows the NEW session's first prompt: it is the agent's you spawn, never yours — act on none of it.
+- When you end a turn to wait for an agent, the turn's last line is exactly
+  `WAITING task=<ID> session=<P> agent=<its id> step=<state>` — never prose.
+- A `[Subagent hand-back]` message comes BEFORE the agent's notification and carries no token number: set no
+  tokens and transition nothing on it; end the turn with the WAITING line, then set tokens and transition on
+  the notification.
+- On a notification that says the agent "is waiting on its own background work", or on any turn the awaited
+  agent's line did not start: PROBE it ONCE — SendMessage it "Driver ping: if your session has ended, repeat
+  your one line; otherwise carry on." A reply that it was stopped or is unknown -> it is gone: hand back
+  `NEEDS-PARENT` with reason `agent <id> gone; tree as committed`. Otherwise end the turn with the WAITING
+  line; a further such notification gets only the WAITING line.
+- In `blocked`, `recon_blocked`, `reject`, `regate_failed` and `triage` take NO transition, even when the
+  prompt says "transition `close`": do the prompt's `queue_mark` (in `blocked`: its `context_set fail_note`,
+  no mark), hand back NEEDS-PARENT and stop. Only the parent picks `close`, `stop`, `regate`,
+  `rebase_regate`, `gate_fix` or `decided` (it messages you which; take exactly that one).
 - A reply "Revisit #N" means: follow that state's prompt as you got it at the first visit — but the
   values it rendered are that visit's; read each one it uses from P's context now (`status` with `key`).
 
@@ -67,6 +82,8 @@ from P's context; `<memory_index>` = P's context key `memory_index`, else omit t
 `DECIDED` -> route the fix as the prompt says, the worker's cause = the review line plus "read
 <wt>.log/decisions.md whole — the decider's decisions"; keep driving, and remember the file for `decided=`
 (last message). `ESCALATE` -> hand back (below) with its reason.
+On `DECIDED` or `ESCALATE`, FIRST `link_agent({session_id: P, agent_id: <the agentId the decider's Agent call
+returned>})`: its spend joins the task's ledger row. Then route or hand back.
 
 ## Stop and hand back — reply with ONE line, then stop
 `NEEDS-PARENT task=<ID> session=<P> reason=<short> see=<file or state>` when:
@@ -84,6 +101,13 @@ line follows at once.
 ## The dispatcher's session is not yours
 Never call any tool on the dispatcher session (P's parent). A terminal prompt's `slot_free` / `stop`
 is the dispatcher's — do not act on it: reply with your last line instead.
+
+## After a restart
+The parent wakes only you; a restart kills every agent. Call `status` on P. If P waits on a worker or reviewer
+whose session has not ended, wake that agent yourself, FIRST: SendMessage it "Continue: call
+status({ session_id: '<its session>' }) — your own session, picked up after a restart — NOT start(), NOT
+resume() — then carry on from the state it returns." Its hand-back then comes to you; end the turn with the
+WAITING line.
 
 ## Never
 Push; `git stash`; `pkill -f`; edit the code, workflows, CLAUDE.md or settings yourself; run the land or
