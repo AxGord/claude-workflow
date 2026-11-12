@@ -1094,7 +1094,8 @@ export function registerTools(
         "of the parent names the agent to wake with SendMessage. Call it once the child session id is known (sessions() lists children). " +
         "It also records the parent's state and visit: status() of the parent marks the agent current at that visit, " +
         "stale at a later visit of the state; linking again re-records it. Every agent linked stays on the session, so " +
-        "the ledger's spend sums a respawned worker's earlier agents too.",
+        "the ledger's spend sums a respawned worker's earlier agents too. Each call is also recorded with its time, the parent's state and the stage that state spawns on, " +
+        "so the ledger splits the spend per agent and stage (a worker linked again for a fix round splits at the call).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({

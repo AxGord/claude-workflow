@@ -351,6 +351,21 @@ export interface AgentStep {
   readonly visit: number;
 }
 
+/**
+ * One `link_agent` call as the ledger's per-agent spend reads it: when it ran and the parent's state (and
+ * the stage that state spawns on) the agent was linked at. A same agent linked again adds a row, so its turns
+ * split at each link's time (`measureSpend`). Unlike `agent_step` it is recorded under any parent.
+ */
+export interface AgentLink {
+  readonly agent_id: string;
+  /** ISO time of the call. */
+  readonly at: string;
+  /** The parent's active state at the call; absent when the session has no active parent. */
+  readonly state?: string;
+  /** The first stage that state spawns on (`stagesSpawned`); absent when it spawns none. */
+  readonly stage?: string;
+}
+
 /** A session's foreground exec in flight, recorded so a resume can take it over. */
 export interface RunningExec extends DetachedRun {
   readonly frame: number;
@@ -386,6 +401,8 @@ export interface SessionState {
   readonly agent_id?: string;
   /** Every agent `link_agent` ever linked to this session, in order (`agent_id` is only the latest: a respawned agent replaces it): what the ledger's spend sums. */
   readonly linked_agents?: readonly string[];
+  /** Every `link_agent` call on this session, in order: what the ledger attributes each agent's spend to a state and stage by. */
+  readonly agent_links?: readonly AgentLink[];
   /** The parent's step `link_agent` ran at; absent unless the parent was an active session of a `driver:` workflow then. */
   readonly agent_step?: AgentStep;
   readonly running_exec?: RunningExec;

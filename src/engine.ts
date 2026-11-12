@@ -17,6 +17,7 @@ import type {
   PendingAction,
   Driver,
   AgentStep,
+  AgentLink,
 } from "./types.js";
 import {
   MAX_STACK_DEPTH,
@@ -905,6 +906,7 @@ export class Engine {
       parent && parent.stack.length > 0 && this._declaresDriver(parent)
         ? currentStep(parent)
         : undefined;
+    const link = this._agentLink(parent, agentId);
     const set = await this._storage.update(sessionId, cur =>
       cur
         ? {
@@ -914,11 +916,32 @@ export class Engine {
             linked_agents: cur.linked_agents?.includes(agentId)
               ? cur.linked_agents
               : [...(cur.linked_agents ?? []), agentId],
+            agent_links: [...(cur.agent_links ?? []), link],
           }
         : null,
     );
     if (!set) throw new Error(`Session "${sessionId}" not found`);
     return step;
+  }
+
+  /** A `link_agent` call now: the parent's active state and the first stage it spawns on, none for a parent that is not active. */
+  private _agentLink(parent: SessionState | null, agentId: string): AgentLink {
+    const at = new Date().toISOString();
+    const frame = parent && parent.stack.length > 0 ? parent.stack[parent.active_frame] : undefined;
+    if (!parent || !frame) return { agent_id: agentId, at };
+    let stage: string | undefined;
+    try {
+      const def = this._resolveState(parent, frame.workflow, frame.current_state);
+      stage = def ? stagesSpawned(def)[0] : undefined;
+    } catch {
+      // a state that cannot be resolved names no stage
+    }
+    return {
+      agent_id: agentId,
+      at,
+      state: frame.current_state,
+      ...(stage !== undefined ? { stage } : {}),
+    };
   }
 
   /** The session runs a `driver:` workflow: the workflow it was started with declares one. */
@@ -1575,6 +1598,7 @@ export class Engine {
         agent_id: current.agent_id,
         agent_step: current.agent_step,
         linked_agents: current.linked_agents,
+        agent_links: current.agent_links,
         claude_session_id: current.claude_session_id,
         stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
         updated_at: now,

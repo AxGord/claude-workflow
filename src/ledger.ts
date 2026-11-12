@@ -120,9 +120,29 @@ export interface LedgerParentSpend {
   readonly cache_write: number;
 }
 
+/**
+ * One agent's spend over the stretch it was linked at one state: `state` is the parent's state at the `link_agent`
+ * call and `stage` the model-table stage that state spawns on (an agent linked again at a state that spawns
+ * none keeps the stage it had). An agent nothing linked has neither. A row without `usd` is an agent whose
+ * transcript could not be read or priced: unmeasured, never $0. `model` is the model that cost the most.
+ */
+export interface LedgerAgentSpend {
+  readonly agent: string;
+  readonly state?: string;
+  readonly stage?: string;
+  readonly model?: string;
+  readonly usd?: number;
+  readonly input: number;
+  readonly output: number;
+  readonly cache_read: number;
+  readonly cache_write: number;
+}
+
 /** What the task's agents really spent, summed from their transcripts (`measureSpend`). `usd` is absent when any agent could not be read: the task is unmeasured, never $0. */
 export interface LedgerSpend {
   readonly agents: number;
+  /** The same spend per agent and linked state: `usd` of the rows sums to this `usd`. Absent on a line from before the record. */
+  readonly by_agent?: readonly LedgerAgentSpend[];
   readonly usd?: number;
   /** Agent ids whose transcript was missing, unreadable or of an unpriced model. */
   readonly unmeasured?: readonly string[];

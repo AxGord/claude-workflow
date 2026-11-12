@@ -25,6 +25,12 @@ export interface CalibrationRow {
   review_rounds: number;
   escalations: number;
   tokens: number;
+  /** USD the task's measured agents spent at this stage (`spend.by_agent`); counts only tasks whose line records it. */
+  usd: number;
+  /** Tasks with at least one measured agent spend at this stage: the `$/task` denominator. */
+  spent_tasks: number;
+  /** Agents attributed here whose transcript could not be read or priced: `usd` is then a lower bound. */
+  unmeasured: number;
   findings: number;
   /** Tasks whose final difficulty differs from the claim by 2 or more (the line was off). */
   claim_off: number;
@@ -52,8 +58,8 @@ function tokensOf(t: LedgerEntry["tokens"]): number {
 
 /**
  * A task's tokens split over its stage rows: a token key naming a stage goes to it; `worker` goes to the execute
- * stage, else fix, plan, or the first non-review stage (the ledger keeps `agent_ids` per stage but no per-agent tokens or
- * spend, so no finer split exists: ledger.ts `tokens`/`spend`); anything else (and the total's remainder) to the first row.
+ * stage, else fix, plan, or the first non-review stage (the ledger keeps no per-agent tokens: ledger.ts `tokens`);
+ * anything else (and the total's remainder) to the first row.
  */
 function tokensByStage(e: LedgerEntry, stages: readonly string[]): Map<string, number> {
   const out = new Map<string, number>();
@@ -66,6 +72,29 @@ function tokensByStage(e: LedgerEntry, stages: readonly string[]): Map<string, n
     stages[0];
   for (const [k, n] of roles) add(stages.includes(k) ? k : k === "worker" ? worker : stages[0], n);
   add(stages[0], tokensOf(e.tokens) - roles.reduce((s, [, n]) => s + n, 0));
+  return out;
+}
+
+/**
+ * What a task's agents spent at one stage row: each `spend.by_agent` row goes to the stage it was linked at; a row
+ * with no stage (a driver linked at the dispatcher's dispatch, an agent only a context key names), or one the task
+ * did not run, goes to the stage `-` and never to another stage's row.
+ */
+function agentsAt(
+  e: LedgerEntry,
+  stage: string,
+  stages: readonly string[],
+): { usd: number; unmeasured: number; measured: boolean } {
+  const out = { usd: 0, unmeasured: 0, measured: false };
+  for (const a of e.spend?.by_agent ?? []) {
+    const at = a.stage !== undefined && stages.includes(a.stage) ? a.stage : "-";
+    if (at !== stage) continue;
+    if (a.usd === undefined) out.unmeasured += 1;
+    else {
+      out.usd += a.usd;
+      out.measured = true;
+    }
+  }
   return out;
 }
 
@@ -97,7 +126,7 @@ export function calibrate(
       0,
       picks.findIndex(p => p[0] === "review"),
     );
-    picks.forEach(([stage, model, effort], i) => {
+    const rowOf = (stage: string, model: string, effort: string): CalibrationRow => {
       const key = JSON.stringify([project, e.workflow, band, stage, model, effort]);
       let row = rows.get(key);
       if (row === undefined) {
@@ -112,6 +141,9 @@ export function calibrate(
           review_rounds: 0,
           escalations: 0,
           tokens: 0,
+          usd: 0,
+          spent_tasks: 0,
+          unmeasured: 0,
           findings: 0,
           claim_off: 0,
           outcomes: {},
@@ -119,6 +151,10 @@ export function calibrate(
         };
         rows.set(key, row);
       }
+      return row;
+    };
+    picks.forEach(([stage, model, effort], i) => {
+      const row = rowOf(stage, model, effort);
       row.tasks += 1;
       if (claimOff) row.claim_off += 1;
       bump(row.outcomes, e.outcome ?? "-");
@@ -129,12 +165,31 @@ export function calibrate(
           e,
           picks.map(p => p[0]),
         ).get(stage) ?? 0;
+      const spent = agentsAt(
+        e,
+        stage,
+        picks.map(p => p[0]),
+      );
+      row.usd += spent.usd;
+      row.unmeasured += spent.unmeasured;
+      if (spent.measured) row.spent_tasks += 1;
       if (i === 0) {
         row.escalations += e.escalations ?? 0;
       }
       if (i === roundsAt && opts.findingsKey !== undefined)
         row.findings += e.counts?.[opts.findingsKey] ?? 0;
     });
+    const names = picks.map(p => p[0]);
+    if (!names.includes("-")) {
+      const loose = agentsAt(e, "-", names);
+      if (loose.measured || loose.unmeasured > 0) {
+        const row = rowOf("-", "-", "-");
+        row.tasks += 1;
+        row.usd += loose.usd;
+        row.unmeasured += loose.unmeasured;
+        if (loose.measured) row.spent_tasks += 1;
+      }
+    }
   }
   return [...rows.values()].sort((a, b) =>
     JSON.stringify([a.project, a.workflow, a.band, a.stage, a.model, a.effort]).localeCompare(
@@ -148,6 +203,12 @@ const fmt = (m: Record<string, number>): string =>
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, n]) => `${k}:${n}`)
     .join(",") || "-";
+
+/** A USD figure of a stage row: `-` when no task measured an agent there, `>=` when some agent there is unmeasured. */
+function dollars(usd: number, unmeasured: number, spentTasks: number): string {
+  if (spentTasks === 0) return "-";
+  return `${unmeasured > 0 ? ">=" : ""}${usd.toFixed(2)}`;
+}
 
 export function formatCalibration(rows: readonly CalibrationRow[], findings: boolean): string {
   const head = [
@@ -178,8 +239,8 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
     String(r.escalations),
     String(r.tokens),
     String(r.claim_off),
-    "-",
-    "-",
+    dollars(r.usd, r.unmeasured, r.spent_tasks),
+    dollars(r.usd / Math.max(r.spent_tasks, 1), r.unmeasured, r.spent_tasks),
     ...(findings ? [String(r.findings)] : []),
     fmt(r.outcomes),
     fmt(r.verdicts),

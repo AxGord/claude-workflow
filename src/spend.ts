@@ -8,8 +8,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { turnUsd } from "./calibration.js";
-import type { LedgerEntry, LedgerParentSpend, LedgerSpend } from "./ledger.js";
-import type { SessionState } from "./types.js";
+import type { LedgerAgentSpend, LedgerEntry, LedgerParentSpend, LedgerSpend } from "./ledger.js";
+import type { AgentLink, SessionState } from "./types.js";
 
 /** `agent-<id>` and `<id>` both name an agent. */
 const bareId = (id: string): string => id.replace(/^agent-/, "");
@@ -49,6 +49,7 @@ export function agentsOf(sessions: readonly SessionState[]): string[] {
   for (const s of sessions) {
     if (s.agent_id) ids.add(bareId(s.agent_id));
     for (const id of s.linked_agents ?? []) ids.add(bareId(id));
+    for (const l of s.agent_links ?? []) ids.add(bareId(l.agent_id));
     for (const id of contextAgents(s.context)) ids.add(id);
   }
   return [...ids];
@@ -112,7 +113,7 @@ interface TranscriptLine {
   };
 }
 
-interface Totals {
+interface Usage {
   usd: number;
   input: number;
   output: number;
@@ -120,15 +121,55 @@ interface Totals {
   cache_write: number;
 }
 
+/** A reading of a transcript window: `model` is the one that cost the most in it. */
+interface Totals extends Usage {
+  model?: string;
+}
+
 /** The usage of one transcript inside [from, to] (ms); undefined when it cannot be read or a model has no price. */
 export function readTranscriptSpend(file: string, from: number, to: number): Totals | undefined {
-  let content: string;
+  const lines = readLines(file);
+  return lines === undefined ? undefined : spendOfLines(lines, from, to);
+}
+
+/** The lines of a transcript; undefined when it cannot be read. */
+function readLines(file: string): string[] | undefined {
   try {
-    content = fs.readFileSync(file, "utf8");
+    return fs.readFileSync(file, "utf8").split("\n");
   } catch {
     return undefined;
   }
-  return spendOfLines(content.split("\n"), from, to);
+}
+
+/** One stretch of an agent's transcript and the state and stage it counts under. */
+interface Window {
+  readonly from: number;
+  readonly to: number;
+  readonly state?: string;
+  readonly stage?: string;
+}
+
+/**
+ * The stretches of an agent's life inside [from, to]: one for an agent no `link_agent` call is on record for; else the
+ * stretch of each call runs from its time to the next call's (the first from `from`, the last to `to`), so a worker
+ * linked again for a fix round splits there. A call that spawns no stage keeps the stage before it.
+ */
+function windowsOf(links: readonly AgentLink[], from: number, to: number): Window[] {
+  const at = links
+    .map(l => ({ l, t: Date.parse(l.at) }))
+    .filter(x => !Number.isNaN(x.t))
+    .sort((a, b) => a.t - b.t);
+  if (at.length === 0) return [{ from, to }];
+  const out: Window[] = [];
+  let stage: string | undefined;
+  at.forEach(({ l, t }, i) => {
+    stage = l.stage ?? stage;
+    const a = i === 0 ? from : Math.max(from, t);
+    const b = i === at.length - 1 ? to : Math.min(to, at[i + 1].t - 1);
+    if (a > b) return;
+    out.push({ from: a, to: b, state: l.state, stage });
+  });
+  return out;
 }
 
 /** The usage of transcript lines inside [from, to] (ms), a turn once; undefined when a model has no price. */
@@ -179,6 +220,7 @@ function spendOfLines(lines: Iterable<string>, from: number, to: number): Totals
     cache_read: 0,
     cache_write: 0,
   };
+  const byModel = new Map<string, number>();
   for (const x of turns.values()) {
     // a synthetic or empty turn (no usage) costs nothing and has no rate to look up
     if (x.u.input + x.u.output + x.u.cache_read + x.u.cache_write === 0) continue;
@@ -191,12 +233,14 @@ function spendOfLines(lines: Iterable<string>, from: number, to: number): Totals
     });
     if (usd === undefined) return undefined;
     t.usd += usd;
+    byModel.set(x.model, (byModel.get(x.model) ?? 0) + usd);
     t.input += x.u.input;
     t.output += x.u.output;
     t.cache_read += x.u.cache_read;
     t.cache_write += x.u.cache_write;
   }
-  return t;
+  const top = [...byModel].sort((a, b) => b[1] - a[1])[0];
+  return top === undefined ? t : { ...t, model: top[0] };
 }
 
 /**
@@ -243,7 +287,8 @@ function unnamedAgents(
 }
 
 /**
- * The real spend of a task: its agents (see `agentsOf`) read from `projects` inside [startedAt, endedAt].
+ * The real spend of a task: its agents (see `agentsOf`) read from `projects` inside [startedAt, endedAt], also
+ * per agent and linked state (`by_agent`: an agent's stretches of one state and stage are one row).
  * undefined when the task named no agent. Any agent unread leaves `usd` absent and lists it in `unmeasured`.
  */
 export function measureSpend(
@@ -259,7 +304,13 @@ export function measureSpend(
   const conversations = [
     ...new Set(sessions.map(s => s.claude_session_id).filter((c): c is string => !!c)),
   ];
-  const sum: Totals = {
+  const links = new Map<string, AgentLink[]>();
+  for (const s of sessions)
+    for (const l of s.agent_links ?? []) {
+      const id = bareId(l.agent_id);
+      links.set(id, [...(links.get(id) ?? []), l]);
+    }
+  const sum: Usage = {
     usd: 0,
     input: 0,
     output: 0,
@@ -267,18 +318,48 @@ export function measureSpend(
     cache_write: 0,
   };
   const unmeasured: string[] = [];
+  const rows: LedgerAgentSpend[] = [];
   for (const id of ids) {
     const file = transcriptOf(id, conversations, projects);
-    const t = file === undefined ? undefined : readTranscriptSpend(file, from, to);
-    if (t === undefined) {
-      unmeasured.push(id);
-      continue;
+    const windows = windowsOf(links.get(id) ?? [], from, to);
+    const lines = file === undefined ? undefined : readLines(file);
+    const read = windows.map(w => ({
+      w,
+      t: lines === undefined ? undefined : spendOfLines(lines, w.from, w.to),
+    }));
+    const ok = read.every(r => r.t !== undefined);
+    if (!ok) unmeasured.push(id);
+    const byKey = new Map<string, Array<{ w: Window; t: Totals | undefined }>>();
+    for (const r of read) {
+      const key = JSON.stringify([r.w.state, r.w.stage]);
+      byKey.set(key, [...(byKey.get(key) ?? []), { w: r.w, t: ok ? r.t : undefined }]);
     }
-    for (const k of Object.keys(sum) as Array<keyof Totals>) sum[k] += t[k];
+    for (const group of byKey.values()) {
+      const { state, stage } = group[0].w;
+      const model = group
+        .filter(g => g.t?.model !== undefined)
+        .sort((a, b) => b.t!.usd - a.t!.usd)[0]?.t?.model;
+      const part = (k: keyof Usage): number => group.reduce((n, g) => n + (g.t?.[k] ?? 0), 0);
+      rows.push({
+        agent: id,
+        ...(state !== undefined ? { state } : {}),
+        ...(stage !== undefined ? { stage } : {}),
+        ...(model !== undefined ? { model } : {}),
+        ...(ok ? { usd: part("usd") } : {}),
+        input: part("input"),
+        output: part("output"),
+        cache_read: part("cache_read"),
+        cache_write: part("cache_write"),
+      });
+    }
+    if (!ok) continue;
+    for (const { t } of read)
+      for (const k of Object.keys(sum) as Array<keyof Usage>) sum[k] += t![k];
   }
   const unnamed = unnamedAgents(new Set(ids), conversations, projects, from, to);
   return {
     agents: ids.length,
+    by_agent: rows,
     ...(unnamed > 0 ? { unnamed } : {}),
     ...(unmeasured.length === 0 ? { usd: sum.usd } : { unmeasured }),
     input: sum.input,

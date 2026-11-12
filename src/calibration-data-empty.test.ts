@@ -84,7 +84,7 @@ describe("calibration columns", () => {
     ]);
   });
 
-  it("$ is - on every row: the ledger holds no per-stage spend, never a task total, never 0", () => {
+  it("$ is - on a row no agent spend is recorded for: never a task total, never 0", () => {
     const text = formatCalibration(calibrate([unmeasured, multi], {}), false);
     expect(text).toContain("$/task");
     expect(text).not.toMatch(/\d\.\d\d/);
@@ -93,7 +93,7 @@ describe("calibration columns", () => {
   it("--help prints the usage and reads no ledger", () => {
     expect(runCalibration(["--help"], "/nonexistent")).toMatchInlineSnapshot(`
       "usage: wf-calibration [--ledger FILE] [--since DATE] [--project PATH] [--findings-key KEY] [--json]
-        rounds = review visits (on the review row), tokens split per stage row, findings on the review row, $ - until a stage's own spend is recorded, claim = tasks off their claim by >=2, esc/verdicts per task"
+        rounds = review visits (on the review row), tokens split per stage row, findings on the review row, $ and $/task = USD of the agents linked at that stage (- none on record, >= an agent unmeasured; an agent linked at no stage is on a - row), claim = tasks off their claim by >=2, esc/verdicts per task"
     `);
   });
 });
