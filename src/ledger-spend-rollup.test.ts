@@ -29,6 +29,8 @@ describe("ledger spend roll-up of a pipeline", () => {
     const usage = { input_tokens: 1000, output_tokens: 1000 };
     const n = KEEP_TERMINAL_SESSIONS + 3;
     const storage = new Storage(dir);
+    // the parent is running (its file exists, stack non-empty) while its children end
+    await storage.write("pipe", base("pipe", { stack: [{ workflow: "w", state: "s" } as never] }));
     for (let i = 0; i < n; i++) {
       fs.writeFileSync(
         path.join(subs, `agent-a${i}.jsonl`),
