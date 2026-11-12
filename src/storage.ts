@@ -7,6 +7,11 @@ import { EventLog } from "./event-log.js";
 import { parseLedger, type LedgerEntry } from "./ledger.js";
 
 export const LEDGER_FILE = "ledger.jsonl";
+/** The ledger lines of the last `LEDGER_RECENT_DAYS` days: the plan pane reads this one, since the plugin API rejects a read of a file over 4 MiB and the ledger is never pruned. */
+export const LEDGER_RECENT_FILE = "ledger-recent.jsonl";
+export const LEDGER_RECENT_DAYS = 30;
+/** Under the plugin API's 4 MiB read cap, with room to spare (a line is ASCII or near it). */
+export const LEDGER_RECENT_MAX_BYTES = 3 * 1024 * 1024;
 // A contended lock waits its turn instead of failing: a session file is
 // written by its own transitions and, outside their queue, by set_priority;
 // the ledger is shared by every session and process.
@@ -114,9 +119,58 @@ export class Storage {
     try {
       release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: LOCK_RETRIES });
       fs.appendFileSync(fp, JSON.stringify(entry) + "\n");
+      this._writeLedgerRecent(fp);
     } finally {
       if (release) await release();
     }
+  }
+
+  /**
+   * Rewrite `ledger-recent.jsonl` from the ledger (caller holds the ledger lock): the lines that ended within the
+   * window, cut to the fields the plan pane reads (task runs and parent stretches only), and never over
+   * `LEDGER_RECENT_MAX_BYTES`: past it the oldest lines are dropped.
+   */
+  private _writeLedgerRecent(ledgerFile: string): void {
+    const since = Date.now() - LEDGER_RECENT_DAYS * 86_400_000;
+    const keep: string[] = [];
+    for (const line of fs.readFileSync(ledgerFile, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const j = JSON.parse(line) as Record<string, unknown>;
+        if (!(Date.parse(typeof j.ended_at === "string" ? j.ended_at : "") >= since)) continue;
+        if (typeof j.task !== "string" && !j.parent_spend) continue;
+        const spend = j.spend as { usd?: unknown } | undefined;
+        const ps = j.parent_spend as { to?: unknown; project?: unknown; usd?: unknown } | undefined;
+        keep.push(
+          JSON.stringify({
+            task: j.task,
+            workflow: j.workflow,
+            started_at: j.started_at,
+            ended_at: j.ended_at,
+            outcome: j.outcome,
+            visits: j.visits,
+            difficulty: j.difficulty,
+            ...(spend && spend.usd !== undefined ? { spend: { usd: spend.usd } } : {}),
+            ...(ps ? { parent_spend: { to: ps.to, project: ps.project, usd: ps.usd } } : {}),
+          }),
+        );
+      } catch {
+        // a damaged line is not a run
+      }
+    }
+    let bytes = 0;
+    let from = keep.length;
+    while (from > 0 && bytes + keep[from - 1].length + 1 <= LEDGER_RECENT_MAX_BYTES)
+      bytes += keep[--from].length + 1;
+    const out = path.join(this._stateDir, LEDGER_RECENT_FILE);
+    fs.writeFileSync(
+      `${out}.tmp`,
+      keep
+        .slice(from)
+        .map(l => `${l}\n`)
+        .join(""),
+    );
+    fs.renameSync(`${out}.tmp`, out);
   }
 
   /** Every line of the ledger (a damaged line is skipped); none when it was never written. */

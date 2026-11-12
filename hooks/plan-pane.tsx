@@ -271,11 +271,12 @@ let ledgerRead: Ledger = NO_LEDGER
 /** The ledger's runs and spend, re-read only when the file's size or mtime moved (the pane refreshes often). */
 async function ledgerAt($: any, dir: string): Promise<Ledger> {
   const entries = await $.fs.list(dir).catch(() => [])
-  const f = entries.find((x: any) => x.name === 'ledger.jsonl')
+  // the full ledger outgrows the 4 MiB the plugin API reads; the engine keeps the recent lines in a small file beside it
+  const f = entries.find((x: any) => x.name === 'ledger-recent.jsonl') ?? entries.find((x: any) => x.name === 'ledger.jsonl')
   if (!f) return NO_LEDGER
-  const stamp = `${f.size}:${f.mtimeMs}`
+  const stamp = `${f.name}:${f.size}:${f.mtimeMs}`
   if (stamp !== ledgerSeen) {
-    const text = String(await $.fs.read(`${dir}/ledger.jsonl`).catch(() => ''))
+    const text = String(await $.fs.read(`${dir}/${f.name}`).catch(() => ''))
     ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text) }
     ledgerSeen = stamp
   }
