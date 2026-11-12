@@ -1056,12 +1056,22 @@ function columnNeed(
   const index = new Map(stations.map((st, i) => [st.name, i]));
   for (const { s, children } of lanes) {
     // a loop back one column draws its label over that column: `↺ name`, with the count and the range once rounds repeat
-    const back = new Map<string, number>();
-    for (const t of ownMoves(s))
-      if ((index.get(String(t.to)) ?? Infinity) <= (index.get(t.from) ?? -1))
-        back.set(String(t.name), (back.get(String(t.name)) ?? 0) + 1);
-    for (const [name, times] of back)
-      need = Math.max(need, textWidth(`↺ ${name}${times > 1 ? G.loopTag : ""}`, G.chipW) + 8);
+    // a label spanning several columns is counted across them: its width shared by the columns it crosses
+    const back = new Map<string, { times: number; span: number }>();
+    for (const t of ownMoves(s)) {
+      const span = (index.get(t.from) ?? -1) - (index.get(String(t.to)) ?? Infinity);
+      if (span < 0) continue;
+      const prev = back.get(String(t.name));
+      back.set(String(t.name), {
+        times: (prev?.times ?? 0) + 1,
+        span: Math.min(prev?.span ?? Infinity, Math.max(1, span)),
+      });
+    }
+    for (const [name, { times, span }] of back)
+      need = Math.max(
+        need,
+        (textWidth(`↺ ${name}${times > 1 ? G.loopTag : ""}`, G.chipW) + 8) / span,
+      );
     for (const child of children) {
       const steps = branchSteps(child, workflows[child.workflow ?? ""]?.stations, now, clock);
       const shown = Math.min(G.roomSteps, steps.length);
