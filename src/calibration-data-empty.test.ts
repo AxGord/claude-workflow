@@ -70,33 +70,30 @@ describe("calibration columns", () => {
     spend: { agents: 1, input: 0, output: 0, cache_read: 0, cache_write: 0 },
   } as LedgerEntry;
 
-  it("esc, $ stay on the first row; findings go to the review row; worker tokens go to fix", () => {
+  it("esc stays on the first row; findings go to the review row; worker tokens go to fix", () => {
     const rows = calibrate([multi], { findingsKey: "findings" });
     const by = (s: string) => rows.find(r => r.stage === s)!;
     expect(by("fix").tokens).toBe(100);
     expect(by("review").tokens).toBe(50);
     expect(by("review").findings).toBe(3);
-    expect(rows.map(r => [r.stage, r.escalations, r.findings, r.usd])).toEqual([
-      ["fix", 0, 0, undefined],
-      ["plan", 0, 0, undefined],
-      ["recon", 1, 0, 4],
-      ["review", 0, 3, undefined],
+    expect(rows.map(r => [r.stage, r.escalations, r.findings])).toEqual([
+      ["fix", 0, 0],
+      ["plan", 0, 0],
+      ["recon", 1, 0],
+      ["review", 0, 3],
     ]);
   });
 
-  it("an unmeasured task leaves $ unmeasured, never 0", () => {
-    const first = calibrate([unmeasured], {}).find(r => r.usd !== undefined);
-    expect(first).toBeUndefined();
+  it("$ is - on every row: the ledger holds no per-stage spend, never a task total, never 0", () => {
     const text = formatCalibration(calibrate([unmeasured, multi], {}), false);
     expect(text).toContain("$/task");
-    expect(text).toMatch(/4\.00\s+4\.00/);
-    expect(formatCalibration(calibrate([unmeasured], {}), false)).not.toMatch(/0\.00/);
+    expect(text).not.toMatch(/\d\.\d\d/);
   });
 
   it("--help prints the usage and reads no ledger", () => {
     expect(runCalibration(["--help"], "/nonexistent")).toMatchInlineSnapshot(`
       "usage: wf-calibration [--ledger FILE] [--since DATE] [--project PATH] [--findings-key KEY] [--json]
-        rounds = review visits (on the review row), tokens split per stage row, findings on the review row, $ = task spend on the first row (- when unmeasured), esc/verdicts per task"
+        rounds = review visits (on the review row), tokens split per stage row, findings on the review row, $ - until a stage's own spend is recorded, claim = tasks off their claim by >=2, esc/verdicts per task"
     `);
   });
 });

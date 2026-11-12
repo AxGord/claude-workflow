@@ -63,9 +63,9 @@ const ledger: LedgerEntry[] = [
 ];
 
 describe("calibrate", () => {
-  it("bands by the claim difficulty, not the final one", () => {
+  it("bands by the final difficulty and counts a claim off by 2 or more", () => {
     const rows = calibrate([line("x", { project: "/p", difficulty: 9, claim_difficulty: 5 })], {});
-    expect(rows.map(r => r.band)).toEqual(["4-6"]);
+    expect(rows.map(r => [r.band, r.claim_off])).toEqual([["7-10", 1]]);
   });
 
   it("folds two projects and three bands into the exact table", () => {

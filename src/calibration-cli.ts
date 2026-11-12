@@ -13,7 +13,7 @@ export function runCalibration(argv: readonly string[], defaultLedger: string): 
   const flags = new Map<string, string>();
   let json = false;
   if (argv.includes("--help") || argv.includes("-h"))
-    return "usage: wf-calibration [--ledger FILE] [--since DATE] [--project PATH] [--findings-key KEY] [--json]\n  rounds = review visits (on the review row), tokens split per stage row, findings on the review row, $ = task spend on the first row (- when unmeasured), esc/verdicts per task";
+    return "usage: wf-calibration [--ledger FILE] [--since DATE] [--project PATH] [--findings-key KEY] [--json]\n  rounds = review visits (on the review row), tokens split per stage row, findings on the review row, $ - until a stage's own spend is recorded, claim = tasks off their claim by >=2, esc/verdicts per task";
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") json = true;

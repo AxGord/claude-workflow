@@ -26,15 +26,13 @@ export interface CalibrationRow {
   escalations: number;
   tokens: number;
   findings: number;
-  /** Measured spend of the tasks on this row (`spend.usd`, a task-level sum the ledger cannot split by stage: counted once, on the first row); undefined while no task is measured, never $0. */
-  usd?: number;
-  /** Tasks whose spend is in `usd`. */
-  measured: number;
+  /** Tasks whose final difficulty differs from the claim by 2 or more (the line was off). */
+  claim_off: number;
   outcomes: Record<string, number>;
   verdicts: Record<string, number>;
 }
 
-/** Difficulty bands; a line without a difficulty is `-`. */
+/** Difficulty bands (the band of a task is its FINAL difficulty); a line without a difficulty is `-`. */
 export function bandOf(difficulty: number | undefined): string {
   if (difficulty === undefined) return "-";
   return difficulty <= 3 ? "1-3" : difficulty <= 6 ? "4-6" : "7-10";
@@ -90,7 +88,11 @@ export function calibrate(
       staged.length > 0
         ? staged.map(n => [n, e.stages![n].model, e.stages![n].effort])
         : [["-", e.model ?? "-", e.effort ?? "-"]];
-    const band = bandOf(e.claim_difficulty ?? e.difficulty);
+    const band = bandOf(e.difficulty);
+    const claimOff =
+      e.claim_difficulty !== undefined &&
+      e.difficulty !== undefined &&
+      Math.abs(e.difficulty - e.claim_difficulty) >= 2;
     const roundsAt = Math.max(
       0,
       picks.findIndex(p => p[0] === "review"),
@@ -111,13 +113,14 @@ export function calibrate(
           escalations: 0,
           tokens: 0,
           findings: 0,
-          measured: 0,
+          claim_off: 0,
           outcomes: {},
           verdicts: {},
         };
         rows.set(key, row);
       }
       row.tasks += 1;
+      if (claimOff) row.claim_off += 1;
       bump(row.outcomes, e.outcome ?? "-");
       if (e.verdict !== undefined) bump(row.verdicts, e.verdict);
       if (i === roundsAt) row.review_rounds += e.visits?.review ?? reviewRounds(e.visits);
@@ -128,10 +131,6 @@ export function calibrate(
         ).get(stage) ?? 0;
       if (i === 0) {
         row.escalations += e.escalations ?? 0;
-        if (e.spend?.usd !== undefined) {
-          row.usd = (row.usd ?? 0) + e.spend.usd;
-          row.measured += 1;
-        }
       }
       if (i === roundsAt && opts.findingsKey !== undefined)
         row.findings += e.counts?.[opts.findingsKey] ?? 0;
@@ -161,6 +160,7 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
     "rounds",
     "esc",
     "tokens",
+    "claim",
     "$",
     "$/task",
     ...(findings ? ["findings"] : []),
@@ -177,8 +177,9 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
     String(r.review_rounds),
     String(r.escalations),
     String(r.tokens),
-    r.usd === undefined ? "-" : r.usd.toFixed(2),
-    r.usd === undefined ? "-" : (r.usd / r.measured).toFixed(2),
+    String(r.claim_off),
+    "-",
+    "-",
     ...(findings ? [String(r.findings)] : []),
     fmt(r.outcomes),
     fmt(r.verdicts),
