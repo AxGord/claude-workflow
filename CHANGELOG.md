@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- plan pane (ENG-PANE-MORE-ROW-STAYS): opening a capped list (`+N more` in Sessions, Waiting, Next) moved its toggle row to the list's end. The toggle now stays after the first `cap` lines and the rest list below it. Pin: `src/pane-more-row-stays.test.ts` (toggle row index identical open vs closed). README says it.
 - engine (ENG-EXCLUSIVE-HOLD-SAME-PASS): the exclusive hold of `planPick` read only lines running before the pass, so a line admitted earlier in the same pass (empty window, a high line overlapping the exclusive) let later same-repo lines in and the exclusive starved. A line admitted in the pass now counts as running for the hold; `exclusive_hold: no` is unchanged.
 
 - engine (ENG-QUEUE-BASE-REPO): `queue_edit` / `wf-queue --edit` that changes only a line's `repo:` kept the old `base`, a HEAD of the previous repo; an edit that sets `repo:` to another value now re-stamps `base` (and `text_hash`) from the new repo's HEAD, as an edit of text, touches or owner does (a repo that is not git drops `base`). Setting the same `repo:` again, a priority, a model or a note still leaves both. README, the bundled workflow-authoring skill and the `queue_edit` description say so. Pin: `src/queue-base-repo.test.ts` (add, then edit only `repo:`: `base` is the new repo's HEAD).

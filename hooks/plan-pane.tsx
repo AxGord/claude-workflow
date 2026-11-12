@@ -1120,7 +1120,7 @@ export const register: Register = on => {
         <Text color={color} weight="bold">{fitCells(`${isOpen(key) ? '▾' : '▸'} ${title}`, columns)}</Text>
       </Button>
     )
-    // the `+N more` row that ends a capped list: a click lists the rest (▾) or caps the list again (▸), the fold kept across refreshes
+    // the `+N more` row that follows a capped list's first lines: a click lists the rest below it (▾) or caps the list again (▸), the fold kept across refreshes
     const moreRow = (key: string, text: string, indent = '') => (
       <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => foldFlipped(f, key))}>
         <Text dimColor>{fitCells(`${indent}${isOpen(key) ? '▾' : '▸'} ${text}`, columns)}</Text>
@@ -1250,7 +1250,7 @@ export const register: Register = on => {
       const cap = sessTwo ? Math.max(1, Math.floor(room / 2)) : room
       body = lines.length === 0
         ? <Text dimColor>No active workflow in this session.</Text>
-        : <Box flexDirection="column">{isOpen('sessions-more') ? lines : lines.slice(0, cap)}{lines.length > cap ? moreRow('sessions-more', `+${lines.length - cap} more`, '  ') : null}</Box>
+        : <Box flexDirection="column">{lines.slice(0, cap)}{lines.length > cap ? moreRow('sessions-more', `+${lines.length - cap} more`, '  ') : null}{isOpen('sessions-more') ? lines.slice(cap) : null}</Box>
     } else if (!q) {
       body = <Text dimColor>No work queue in this session: the Sessions tab shows its workflow.</Text>
     } else if (tab === 'pool') {
@@ -1263,7 +1263,8 @@ export const register: Register = on => {
       body = (
         <Box flexDirection="column">
           {q.waiting.length === 0 && <Text dimColor>Nothing waits.</Text>}
-          {(isOpen('waiting-more') ? q.waiting : q.waiting.slice(0, waitCap)).map(w =>
+          {[...q.waiting.slice(0, waitCap), null, ...(isOpen('waiting-more') ? q.waiting.slice(waitCap) : [])].map(w =>
+            w === null ? (q.waiting.length > waitCap ? moreRow('waiting-more', `+${q.waiting.length - waitCap} more`) : null) :
             waitTwo ? (
               <Box flexDirection="column">
                 <Text>{level(w.difficulty)} {kindOf(w.id)} {fitCells(w.id, Math.max(1, columns - 8))}</Text>
@@ -1273,7 +1274,6 @@ export const register: Register = on => {
               <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}<Text dimColor> {w.why}</Text></Text>
             ),
           )}
-          {q.waiting.length > waitCap && moreRow('waiting-more', `+${q.waiting.length - waitCap} more`)}
         </Box>
       )
     } else {
@@ -1351,7 +1351,8 @@ export const register: Register = on => {
           {header('next', 'blue', `⏭ Next (${q.ready.length})`)}
           {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
           {isOpen('next') &&
-            (nextMore ? q.ready : q.ready.slice(0, showReady)).map(l =>
+            [...q.ready.slice(0, showReady), null, ...(nextMore ? q.ready.slice(showReady) : [])].map(l =>
+              l === null ? (q.ready.length > showReady ? moreRow('next-more', `+${q.ready.length - showReady} more can start (dependencies done), in the picker's order`, '  ') : null) :
               nextTwo ? (
                 // two lines: bar, kind; the id indented under them, the priority glyph after it
                 <Box flexDirection="column">
@@ -1362,7 +1363,6 @@ export const register: Register = on => {
                 <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id} {prioCell(Text, l.priority)}</Text>
               ),
             )}
-          {isOpen('next') && q.ready.length > showReady && moreRow('next-more', `+${q.ready.length - showReady} more can start (dependencies done), in the picker's order`, '  ')}
           {header('lands', 'green', landedHeading(s.lands.length, s.landedUsd, s.parentUsd))}
           {isOpen('lands') &&
             [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
