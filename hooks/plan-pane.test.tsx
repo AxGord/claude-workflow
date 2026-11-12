@@ -125,8 +125,8 @@ test('each row shows its kind glyph right after the bar: bug ※, research ⚑, 
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /▰▰▰▰▱ ※ RUN-1/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▰▱▱▱▱ ⚑ ↑ NEXT-2/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ◆   NEXT-1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▰▱▱▱▱ ⚑ NEXT-2 ↑/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▰▰▱▱▱ ◆ NEXT-1  / })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\?\?\?\?\? ◆ — \?    -10:00 ddd444 DONE-1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /\?\?\?\?\?   — \?    -09:00 eee555 NOT-IN-QUEUE/ })).toBeDefined()
   await ui.press({ key: 'tab-waiting' })
@@ -715,13 +715,13 @@ test('Next: every row on one line while they fit; one row too long for the pane 
   API_QUEUE.lines.push(long as never)
   try {
     const wide = await paneTexts($, 100)
-    expect(wide.some(t => /▰▱▱▱▱ ⚑ ↑ NEXT-2/.test(t))).toBe(true)
+    expect(wide.some(t => /▰▱▱▱▱ ⚑ NEXT-2 {14}↑/.test(t))).toBe(true)
     expect(wide.some(t => /NEXT-1/.test(t) && !/^ {5,}\S/.test(t))).toBe(true)
-    // `  ▰▰▱▱▱ ◆   NEXT-1` is 18 cells and fits 20; the long row (31 cells) does not: the short rows go to two lines too
+    // `  ▰▰▱▱▱ ◆ NEXT-1   ` is 18 cells and fits 20; the long row (31 cells) does not: the short rows go to two lines too
     const narrow = await paneTexts($, 20)
     expect(narrow.some(t => /NEXT-[12]/.test(t) && !/^ {5,}\S/.test(t))).toBe(false)
     expect(narrow.filter(t => /^ {5,}NEXT-/.test(t))).toHaveLength(3)
-    expect(narrow.some(t => /⚑ ↑$/.test(t))).toBe(true)
+    expect(narrow.some(t => /^ {5,}NEXT-2 ↑$/.test(t))).toBe(true)
   } finally {
     API_QUEUE.lines.pop()
   }
@@ -736,11 +736,13 @@ test('priority glyphs: urgent red, high orange, low grey, normal and none no gly
   expect(prioGlyph('constructor')).toBeUndefined()
 })
 
-test('Next: a normal row keeps the glyph column blank so ids stay aligned, and no row prints [priority]', async ($, on) => {
+test('Next: the priority glyph follows the id, padded to the widest id, so glyphs align; no row prints [priority]', async ($, on) => {
   engine(on, true)
   const wide = await paneTexts($, 100)
   expect(wide.some(t => /\[(urgent|high|low|normal)\]/.test(t))).toBe(false)
-  expect(wide.some(t => /◆   NEXT-1/.test(t))).toBe(true)
+  expect(wide.some(t => /◆ NEXT-1 {2}$/.test(t.trimStart()) || /◆ NEXT-1 {2}/.test(t))).toBe(true)
+  expect(wide.some(t => /⚑ NEXT-2 ↑/.test(t))).toBe(true)
+  expect(wide.some(t => /[↑⇈↓] NEXT-/.test(t))).toBe(false)
 })
 
 test('Waiting: the one-line form while every reason fits; otherwise EVERY row on two lines, the reason indented and cut with an ellipsis', async ($, on) => {
@@ -800,8 +802,8 @@ test('Next: the `+N more` row is a fold row, closed by default; pressed, it list
     expect(await ui.find({ type: 'Text', text: /^ {2}▾ \+4 more can start/ })).toBeDefined()
     // all 12, in the picker's order, the last one with its glyph in the same column as the shown ones
     expect(await rows()).toEqual(extra.map(l => l.id))
-    expect(await ui.find({ type: 'Text', text: /^ {2}▰▰▱▱▱ ◆ ⇈ R-11$/ })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /^ {2}▰▰▱▱▱ ◆   R-10$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^ {2}▰▰▱▱▱ ◆ R-11 {3}⇈$/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /^ {2}▰▰▱▱▱ ◆ R-10 {4}$/ })).toBeDefined()
     await ui.press({ key: 'fold-next-more' })
     expect(await rows()).toHaveLength(8)
     expect(await ui.find({ type: 'Text', text: /▸ \+4 more can start/ })).toBeDefined()

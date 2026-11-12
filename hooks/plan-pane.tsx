@@ -1291,10 +1291,11 @@ export const register: Register = on => {
       // a section lays out as one: when ANY of its rows does not fit the pane, EVERY row takes two lines
       const runTwo = !fitsOneLine(q.running.map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}  ${whereOf(l.id)} ${sinceOf(l.id)}`), columns)
       const nextMore = isOpen('next-more')
-      const nextTwo = !fitsOneLine((nextMore ? q.ready : q.ready.slice(0, 10)).map(l => `  ${BAR_W} ${markOf(l.id)} ${prioGlyph(l.priority)?.glyph ?? ' '} ${l.id}`), columns)
+      const nextTwo = !fitsOneLine((nextMore ? q.ready : q.ready.slice(0, 10)).map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id} ${prioGlyph(l.priority)?.glyph ?? ' '}`), columns)
       // the rows left for Next count lines: a two-line Running or Next row takes two
       const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length * (runTwo ? 2 : 1)
       const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
+      const idW = Math.max(0, ...(nextMore ? q.ready : q.ready.slice(0, showReady)).map(l => cells(l.id)))
       // a row's cost sits right after its kind, right-aligned to the section's widest figure: it is never cut, the id is
       const costCol = (all: (number | undefined)[]) => {
         const w = Math.max(1, ...all.map(u => cells(usdText(u))))
@@ -1353,13 +1354,13 @@ export const register: Register = on => {
           {isOpen('next') &&
             (nextMore ? q.ready : q.ready.slice(0, showReady)).map(l =>
               nextTwo ? (
-                // two lines: bar, kind, priority; the id indented under them
+                // two lines: bar, kind; the id indented under them, the priority glyph after it
                 <Box flexDirection="column">
-                  <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {prioCell(Text, l.priority)}</Text>
-                  <Text>{'  '}{TAB}{fitCells(l.id, Math.max(1, columns - 2 - TAB.length))}</Text>
+                  <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)}</Text>
+                  <Text>{'  '}{TAB}{fitCells(l.id, Math.max(1, columns - 4 - TAB.length))} {prioCell(Text, l.priority)}</Text>
                 </Box>
               ) : (
-                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {prioCell(Text, l.priority)} {l.id}</Text>
+                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}{' '.repeat(idW - cells(l.id))} {prioCell(Text, l.priority)}</Text>
               ),
             )}
           {isOpen('next') && q.ready.length > showReady && moreRow('next-more', `+${q.ready.length - showReady} more can start (dependencies done), in the picker's order`, '  ')}
