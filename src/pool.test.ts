@@ -353,6 +353,42 @@ describe("schedule: flexible threads", () => {
     expect(ids(after.waiting)).toEqual([small.id]);
   });
 
+  it("a flexible waiter behind a lock starts its wait_full window when the lock is free, not at its arrival", () => {
+    const lock = entry(0, { locks: ["L"] });
+    const busy = entry(6);
+    const flex = entry(8, { min_threads: 2, full_ms: 100, locks: ["L"], arrived: 0 });
+    // the lock is held for a long time: no grant, the window has not started
+    const held = schedule({ leases: [lock, busy], waiting: [flex] }, cfg, 0, alive, 5_000);
+    expect(ids(held.leases)).toEqual([lock.id, busy.id]);
+    expect(held.waiting.map(e => [e.full_ms, e.full_until])).toEqual([[100, undefined]]);
+    // the lock frees: the window starts now, the waiter does not take its min at once
+    const freed = schedule({ leases: [busy], waiting: held.waiting }, cfg, 0, alive, 6_000);
+    expect(ids(freed.leases)).toEqual([busy.id]);
+    expect(freed.waiting.map(e => [e.full_ms, e.full_until])).toEqual([[undefined, 6_100]]);
+    // it closes the threads behind it meanwhile, then takes what fits once the window is over
+    const small = entry(1);
+    const inside = schedule(
+      { leases: [busy], waiting: [...freed.waiting, small] },
+      cfg,
+      0,
+      alive,
+      6_050,
+    );
+    expect(ids(inside.leases)).toEqual([busy.id]);
+    const after = schedule({ leases: [busy], waiting: freed.waiting }, cfg, 0, alive, 6_100);
+    expect(after.leases.map(e => [e.id, e.threads])).toEqual([
+      [busy.id, 6],
+      [flex.id, 4],
+    ]);
+    // the threads free inside the window: its max
+    const full = schedule({ leases: [], waiting: freed.waiting }, cfg, 0, alive, 6_050);
+    expect(full.leases.map(e => e.threads)).toEqual([8]);
+    // a waiter behind another waiter's claim on the lock has not started its window either
+    const ahead = entry(1, { locks: ["L"], arrived: -1 });
+    const behind = schedule({ leases: [busy], waiting: [ahead, flex] }, cfg, 0, alive, 7_000);
+    expect(behind.waiting.map(e => [e.id, e.full_until])).toEqual([[flex.id, undefined]]);
+  });
+
   it("external load and the budget bound a flexible grant; min = max is the fixed form", () => {
     const held = entry(2);
     const flex = entry(20, { min_threads: 3, full_until: 0 });
@@ -1038,6 +1074,25 @@ describe("Pool: flexible leases and re-ranking", () => {
       /min threads must be an integer in 1\.\.2/,
     );
     await expect(pool.acquire({ threads: 2, waitFullMs: 10 })).rejects.toThrow(/needs a min/);
+  }, 10_000);
+
+  it("a flexible waiter that queued behind a lock waits its wait_full window from the lock's release", async () => {
+    const pool = new Pool(poolDir(), fakeProbes());
+    const busy = await pool.acquire({ threads: 6 });
+    const lock = await pool.acquire({ threads: 0, locks: ["L"] });
+    setTimeout(() => {
+      if (lock.status === "granted") void lock.lease.release();
+    }, 400);
+    const late = await pool.acquire(
+      { threads: 8, minThreads: 2, waitFullMs: 300, locks: ["L"] },
+      { pollMs: 5_000 },
+    );
+    expect(late.status === "granted" && late.lease.threads).toBe(4);
+    // the lock was held 400 ms and the window outlasts it: min is not taken at the release
+    expect(late.waitMs).toBeGreaterThanOrEqual(690);
+    expect(late.waitMs).toBeLessThan(3_000);
+    if (late.status === "granted") await late.lease.release();
+    if (busy.status === "granted") await busy.lease.release();
   }, 10_000);
 
   it("reprioritize moves only the waiters of the sessions that carry a level; leases keep theirs", async () => {

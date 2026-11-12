@@ -164,6 +164,12 @@ export interface PoolEntry {
   readonly min_threads?: number;
   /** A flexible waiter takes fewer than its max only from this time on (ms since epoch). */
   readonly full_until?: number;
+  /**
+   * A flexible waiter that holds locks: its `wait_full` window in ms, not started yet.
+   * The window starts when the waiter's locks are first free (`full_until` is then set
+   * and this dropped), so time queued behind a lock does not use it up.
+   */
+  readonly full_ms?: number;
   /** A lease from a flexible request, or one the budget clamped: the threads it asked for (a flexible one: its max). */
   readonly asked_threads?: number;
   readonly priority: number;
@@ -307,10 +313,12 @@ export function levelPriority(level: PriorityLevel, stepPriority = 0): number {
  *
  * A flexible waiter (`min_threads` below its max) gets its max when that fits;
  * otherwise, once `full_until` has passed, all the threads that fit if they
- * are at least its min. While it waits — for its max inside the `full_until`
- * window, or for its min after it — it closes the threads to everyone behind
- * it like any waiter: what the window waits for is the threads being freed,
- * and a later task taking them would defeat it.
+ * are at least its min. A waiter that asks for locks starts that window when
+ * its locks are first free (`full_ms`), not at its arrival. While it waits —
+ * for its max inside the `full_until` window, or for its min after it — it
+ * closes the threads to everyone behind it like any waiter: what the window
+ * waits for is the threads being freed, and a later task taking them would
+ * defeat it.
  *
  * `runs` (busy cpus of a lease's own process tree): a lease with threads
  * accounts for the larger of its threads and its tree, so a lease whose
@@ -342,23 +350,25 @@ export function schedule(
   let head: Reservation | undefined;
   let backfillOff = waiting.some(w => w.id === state.backfill_off) ? state.backfill_off : undefined;
   // The threads a waiter takes out of `avail`: its max, else (window over) all of `avail` down to its min.
-  const fit = (w: PoolEntry, avail: number): number | undefined => {
+  const fit = (w: PoolEntry, avail: number, until: number): number | undefined => {
     const max = effectiveThreads(w, config.budget);
     if (avail >= max) return max;
-    if (now >= (w.full_until ?? 0) && avail >= minThreads(w, config.budget)) return avail;
+    if (now >= until && avail >= minThreads(w, config.budget)) return avail;
     return undefined;
   };
   for (const w of waiting) {
     const locks = w.locks ?? [];
     const max = effectiveThreads(w, config.budget);
     const locksFree = !locks.some(l => locked.has(l) || claimed.has(l));
+    // the window of a waiter that holds locks starts when they are first free
+    const until = w.full_until ?? now + (w.full_ms ?? 0);
     // The most threads that fit now: external load counts only beside a live lease.
     const room = held === 0 ? config.budget : Math.floor(config.budget - held - external);
     let n: number | undefined;
     if (max === 0) n = 0;
-    else if (!head) n = fit(w, room);
+    else if (!head) n = fit(w, room, until);
     else if (head.at !== undefined && w.est_ms !== undefined && now + w.est_ms <= head.at)
-      n = fit(w, room);
+      n = fit(w, room, until);
     if (locksFree && n !== undefined) {
       const { full_until: _window, ...granted } = w;
       const asked =
@@ -372,13 +382,16 @@ export function schedule(
         ...asked,
         ...backfill,
         starved: undefined,
+        full_ms: undefined,
       });
       held += n;
       lastGrant = now;
       for (const l of locks) locked.add(l);
       continue;
     }
-    still.push(w);
+    if (locksFree && w.full_until === undefined && w.full_ms !== undefined) {
+      still.push({ ...w, full_ms: undefined, full_until: until });
+    } else still.push(w);
     for (const l of locks) claimed.add(l);
     if (locksFree && !head) {
       // A lease backfilled past this head that ran twice its estimate: estimates are not trusted for it any more.
@@ -393,7 +406,7 @@ export function schedule(
       )
         backfillOff = w.id;
       // inside its wait_full window a flexible head waits for its max
-      const need = now < (w.full_until ?? 0) ? max : minThreads(w, config.budget);
+      const need = now < until ? max : minThreads(w, config.budget);
       const at =
         backfillOff === w.id ? undefined : headAt(leases, need, config.budget, external, runs, now);
       head = { id: w.id, ...(at !== undefined ? { at } : {}) };
@@ -723,7 +736,13 @@ export class Pool {
       pid,
       threads: req.threads,
       ...(flexible
-        ? { min_threads: req.minThreads, full_until: arrived + (req.waitFullMs ?? 0) }
+        ? {
+            min_threads: req.minThreads,
+            // behind a lock the window starts when the lock is free, not now
+            ...(locks.length > 0 && (req.waitFullMs ?? 0) > 0
+              ? { full_ms: req.waitFullMs }
+              : { full_until: arrived + (req.waitFullMs ?? 0) }),
+          }
         : {}),
       priority,
       ...(req.level ? { level: req.level } : {}),
@@ -757,8 +776,8 @@ export class Pool {
         if (left <= 0) return await this._giveUp(self, "timeout", arrived);
         watcher ??= this._watch(() => wake?.());
         // A flexible waiter's window ending changes what it accepts: pass again right then.
-        const window =
-          self.full_until !== undefined && self.full_until > now ? self.full_until - now : Infinity;
+        const until = view.waiting.find(e => e.id === self.id)?.full_until;
+        const window = until !== undefined && until > now ? until - now : Infinity;
         await sleep(Math.min(opts.pollMs ?? DEFAULT_POLL_MS, left, window), opts.signal, w => {
           wake = w;
         });
