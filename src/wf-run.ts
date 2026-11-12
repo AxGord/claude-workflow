@@ -5,6 +5,8 @@
 // The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
 // and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
 // (a session exec's), and the run keeps WF_PRIORITY_LEVEL so `set_priority` can re-rank it.
+// --est SEC is the run's expected time; without it the pool takes the p90 of the last runs of the
+// same label (its history, recorded when a run exits 0), once it has 3.
 // --fail-open: a pool that cannot be used (unwritable dir, broken config) runs the command
 // without a lease (one stderr line) instead of failing it; busy is still a wait.
 import { spawn } from "node:child_process";
@@ -354,10 +356,12 @@ async function main(argv: readonly string[]): Promise<number> {
   }
   const { lease } = result;
   // A SIGKILLed wf-run cannot release: the next pool pass kills the child's group, then frees the lease.
+  let code = 1;
   try {
-    return await run(cmd, args, opts, lease.threads, pgid => lease.attach(pgid));
+    code = await run(cmd, args, opts, lease.threads, pgid => lease.attach(pgid));
+    return code;
   } finally {
-    await lease.release().catch((err: unknown) => {
+    await lease.release({ failed: code !== 0 }).catch((err: unknown) => {
       if (!opts.failOpen) throw err;
       process.stderr.write(`wf-run: could not release the lease: ${(err as Error).message}\n`);
     });

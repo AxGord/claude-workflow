@@ -254,7 +254,7 @@ export class Executor {
     ctx?.onPhase?.("run");
     // An abort that landed while the grant was being written: give it back, do not run.
     if (got.status === "granted" && (ac.signal.aborted || ctx?.mayStart?.() === false)) {
-      await got.lease.release();
+      await got.lease.release({ failed: true });
       return {
         type: "exec",
         success: false,
@@ -281,6 +281,7 @@ export class Executor {
         wait_ms,
       };
     }
+    let failed = true;
     try {
       const leased = {
         ...(got.lease.threads > 0 ? { WF_THREADS: String(got.lease.threads) } : {}),
@@ -288,13 +289,18 @@ export class Executor {
       };
       // a fanout shard is not taken over on its own: a resumed fanout runs again
       const detached = shard ? undefined : ctx?.onDetached;
-      return {
-        ...(await this._exec(state, vars, ctx, leased, pgid => got.lease.attach(pgid), detached)),
-        wait_ms,
-        threads_granted: got.lease.threads,
-      };
+      const result = await this._exec(
+        state,
+        vars,
+        ctx,
+        leased,
+        pgid => got.lease.attach(pgid),
+        detached,
+      );
+      failed = !result.success;
+      return { ...result, wait_ms, threads_granted: got.lease.threads };
     } finally {
-      await got.lease.release();
+      await got.lease.release({ failed });
     }
   }
 
@@ -516,7 +522,13 @@ export class Executor {
       ...base
     } = process.env;
     delete base.AGENT_CONTEXT;
-    return { ...base, WF_PLUGIN_ROOT: PLUGIN_ROOT, ...ids, ...leased, ...envVars };
+    return {
+      ...base,
+      WF_PLUGIN_ROOT: PLUGIN_ROOT,
+      ...ids,
+      ...leased,
+      ...envVars,
+    };
   }
 
   /**

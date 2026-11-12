@@ -1,6 +1,6 @@
 // Run-time estimates of leased steps, read from the ledger (`ledger.jsonl`):
-// what the pool's backfill trusts to say "this run ends before the head's
-// threads are free", and which size of a flexible request ends earliest. Read OUTSIDE
+// what the pool's backfill trusts first (else the pool's own history of the label) to say "this run ends
+// before the head's threads are free", and which size of a flexible request ends earliest. Read OUTSIDE
 // the pool lock, by the requester.
 import fs from "node:fs";
 import type { LedgerEntry } from "./ledger.js";

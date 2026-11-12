@@ -11,6 +11,7 @@ import path from "node:path";
 import { parseYaml, warnLeftoverJson } from "./yaml-config.js";
 import lockfile from "proper-lockfile";
 import { LOCK_NAME_PATTERN, LOCK_STALE_MS, PRIORITY_LEVELS, type PriorityLevel } from "./types.js";
+import { p90 } from "./estimate.js";
 import {
   bootTimeMs,
   isGroupAlive,
@@ -40,6 +41,9 @@ const PROCESS_BACKOFF_MS = 30_000;
 // load up to the same amount is noise, not external heavy work.
 const RESERVED_CORES = 2;
 const DEFAULT_POLL_MS = 1000;
+// The run times kept per label key, and how many keys: the pool file stays small.
+export const HISTORY_SAMPLES = 10;
+const HISTORY_KEYS = 200;
 const DEFAULT_PROGRESS_MS = 30_000;
 // `wf-run --status` / `pool_status`: the cpu tick window a status measures over.
 const STATUS_WINDOW_MS = 600;
@@ -49,7 +53,12 @@ const STATUS_WINDOW_MS = 600;
 const LOAD_WINDOW_MIN_MS = 500;
 const LOAD_WINDOW_MAX_MS = 5000;
 // Every waiter polls the same file: a contended lock waits its turn.
-const POOL_LOCK_RETRIES = { retries: 200, minTimeout: 5, maxTimeout: 50, randomize: true };
+const POOL_LOCK_RETRIES = {
+  retries: 200,
+  minTimeout: 5,
+  maxTimeout: 50,
+  randomize: true,
+};
 
 /** Cumulative CPU time of the machine, summed over its logical cpus (ms). */
 export interface CpuTicks {
@@ -117,7 +126,9 @@ function readPerfCores(): number {
   if (process.platform === "darwin") {
     try {
       const n = parseInt(
-        execFileSync("sysctl", ["-n", "hw.perflevel0.physicalcpu"], { encoding: "utf8" }).trim(),
+        execFileSync("sysctl", ["-n", "hw.perflevel0.physicalcpu"], {
+          encoding: "utf8",
+        }).trim(),
         10,
       );
       if (n > 0) return n;
@@ -204,7 +215,10 @@ export interface PoolEntry {
   readonly overrun?: number;
   /** When the waiter was first seen starved (logged once). */
   readonly starved?: number;
-  /** The p90 run time (ms) of the step from the ledger: what backfill trusts. Absent: unknown, never backfilled by time. */
+  /**
+   * The p90 run time (ms) of the step from the ledger or of the label's recent runs in the
+   * pool's `history`: what backfill trusts. Absent: unknown, never backfilled by time.
+   */
   readonly est_ms?: number;
   /**
    * A flexible waiter: its estimated run (ms, a p90) on each of `min_threads..threads` threads,
@@ -223,6 +237,46 @@ export interface PoolState {
   readonly last_grant?: number;
   /** A head nothing is backfilled past any more: a lease backfilled ahead of it ran past twice its estimate. */
   readonly backfill_off?: string;
+  /**
+   * The run times (ms, oldest first, the last `HISTORY_SAMPLES`) of finished leases by label
+   * key (`labelKey`): an entry with no estimate of its own takes the p90 of its key's.
+   */
+  readonly history?: Readonly<Record<string, readonly number[]>>;
+}
+
+// What differs between runs of one command and is no part of its identity: a slice or task id
+// (`ENG-POOL-FLEX`, `S201`), a commit hash.
+const RUN_SPECIFIC =
+  /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b|\b[A-Z]\d+\b|\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/g;
+
+/** The identity of a lease's work across runs: its label with the slice id (and commit hashes) dropped. Empty: no identity. */
+export function labelKey(label: string): string {
+  return label.trim() === "" ? "" : label.replace(RUN_SPECIFIC, "*");
+}
+
+/** The p90 of the last runs with `label`'s key, or undefined below `MIN_SAMPLES`: strict order, as without history. */
+export function historyEstimate(
+  state: Pick<PoolState, "history">,
+  label: string,
+): number | undefined {
+  const key = labelKey(label);
+  return key === "" ? undefined : p90(state.history?.[key] ?? []);
+}
+
+/** `history` with one more run of `label`: the key moves to the newest, past `HISTORY_KEYS` the oldest key goes. */
+export function recordRun(
+  state: Pick<PoolState, "history">,
+  label: string,
+  ms: number,
+): NonNullable<PoolState["history"]> {
+  const key = labelKey(label);
+  if (key === "" || !(ms > 0) || !Number.isFinite(ms)) return state.history ?? {};
+  const { [key]: old = [], ...rest } = state.history ?? {};
+  const kept = Object.entries({
+    ...rest,
+    [key]: [...old, Math.round(ms)].slice(-HISTORY_SAMPLES),
+  });
+  return Object.fromEntries(kept.slice(-HISTORY_KEYS));
 }
 
 /** The pool after one admission pass. */
@@ -308,9 +362,9 @@ export function levelPriority(level: PriorityLevel, stepPriority = 0): number {
  * none of its locks is held or wanted by an earlier waiter. A lock is handed
  * out in queue order. The first waiter that fits by locks but not by threads
  * is the head: a later waiter takes threads ahead of it (backfill) only when
- * its estimate (`est_ms`) ends before the threads the head waits for are
- * expected free (`headAt`), so it cannot delay the head. No estimate on either
- * side: strict order. (Threads "left over after the head's min" do not exist
+ * its estimate (`est_ms`: its own, else the p90 of the recent runs of its label key,
+ * `history`) ends before the threads the head waits for are expected free (`headAt`), so it
+ * cannot delay the head. No estimate on either side: strict order. (Threads "left over after the head's min" do not exist
  * now: a head blocked by threads has less room than it needs.) A lease
  * backfilled past a head that runs twice its estimate stops backfill past
  * that head (`backfill_off`). A waiter
@@ -349,7 +403,13 @@ export function schedule(
   now: number,
   runs: Readonly<Record<string, number>> = {},
 ): PoolView {
-  const leases = state.leases.filter(isLive);
+  // An entry with no estimate of its own takes the p90 of its label's recent runs (`history`).
+  const estimateOf = (e: PoolEntry): number | undefined =>
+    e.est_ms ?? historyEstimate(state, e.label);
+  const leases = state.leases.filter(isLive).map(e => {
+    const est = e.threads > 0 && e.started !== undefined ? estimateOf(e) : undefined;
+    return est !== undefined && e.est_ms === undefined ? { ...e, est_ms: est } : e;
+  });
   const waiting = state.waiting.filter(isLive).sort(byQueueOrder);
   let held = leases.reduce((sum, e) => sum + effectiveThreads(e, config.budget), 0);
   const own = leases.reduce((sum, e) => {
@@ -380,6 +440,7 @@ export function schedule(
     // The most threads that fit now: external load counts only beside a live lease.
     const room = held === 0 ? config.budget : Math.floor(config.budget - held - external);
     const curve = max === 0 ? undefined : curveOfEntry(w, config.budget);
+    const estimate = estimateOf(w);
     let n: number | undefined;
     let waitAt: number | undefined;
     if (max === 0) n = 0;
@@ -388,13 +449,14 @@ export function schedule(
       n = pick.n;
       waitAt = pick.waitAt;
     } else if (!head) n = fit(w, room, until);
-    else if (head.at !== undefined && w.est_ms !== undefined && now + w.est_ms <= head.at)
+    else if (head.at !== undefined && now + (estimate ?? Infinity) <= head.at)
       n = fit(w, room, until);
     if (locksFree && n !== undefined) {
       const { full_until: _window, ...granted } = w;
       const asked =
         w.min_threads !== undefined || n !== w.threads ? { asked_threads: w.threads } : {};
       const backfill = head && n > 0 ? { backfill_for: head.id } : {};
+      const est = curve ? curve.get(n) : estimate;
       // a waiter's starved mark is not the lease's (undefined: never written)
       leases.push({
         ...granted,
@@ -405,7 +467,7 @@ export function schedule(
         starved: undefined,
         full_ms: undefined,
         est_curve: undefined,
-        ...(curve ? { est_ms: curve.get(n) } : {}),
+        ...(est !== undefined ? { est_ms: est } : {}),
       });
       held += n;
       lastGrant = now;
@@ -446,6 +508,7 @@ export function schedule(
     waiting: still,
     ...(lastGrant !== undefined ? { last_grant: lastGrant } : {}),
     ...(backfillOff !== undefined ? { backfill_off: backfillOff } : {}),
+    ...(state.history ? { history: state.history } : {}),
     runs,
   };
 }
@@ -523,7 +586,10 @@ function headAt(
       const n = effectiveThreads(e, budget);
       const end =
         e.est_ms !== undefined && e.started !== undefined ? e.started + e.est_ms : Infinity;
-      return { n, end: end > now && !overruns(e, { budget, runs }) ? end : Infinity };
+      return {
+        n,
+        end: end > now && !overruns(e, { budget, runs }) ? end : Infinity,
+      };
     })
     .filter(e => e.n > 0)
     .sort((a, b) => a.end - b.end);
@@ -668,7 +734,7 @@ export interface LeaseRequest {
   readonly pid?: number;
   /** The group attached later dies with `pid`: once `pid` is dead the reaper kills it (a `wf-run` lease). */
   readonly ownsGroup?: boolean;
-  /** The run's expected time (ms, a p90): lets the pool backfill it ahead of a waiting head. */
+  /** The run's expected time (ms, a p90): lets the pool backfill it ahead of a waiting head. Absent: the p90 of its label's recent runs in the pool's `history`. */
   readonly estMs?: number;
   /**
    * A flexible request: the run's expected time (ms, a p90) on each of `minThreads..threads`
@@ -694,13 +760,25 @@ export interface Lease {
   readonly threads: number;
   /** Record the leased command's process group: it keeps the lease alive if the leaseholder dies first. */
   attach(pgid: number): Promise<void>;
-  /** Idempotent; also grants the waiters the freed threads now fit. */
-  release(): Promise<void>;
+  /**
+   * Idempotent; also grants the waiters the freed threads now fit. The lease's run time goes
+   * into the pool's `history` of its label unless the run `failed` (a failed run's time says
+   * nothing about a good one's).
+   */
+  release(opts?: { readonly failed?: boolean }): Promise<void>;
 }
 
 export type AcquireResult =
-  | { readonly status: "granted"; readonly waitMs: number; readonly lease: Lease }
-  | { readonly status: "timeout" | "aborted"; readonly waitMs: number; readonly view: PoolView };
+  | {
+      readonly status: "granted";
+      readonly waitMs: number;
+      readonly lease: Lease;
+    }
+  | {
+      readonly status: "timeout" | "aborted";
+      readonly waitMs: number;
+      readonly view: PoolView;
+    };
 
 /** Sleep until `ms` pass, `signal` aborts, or the function handed to `setWake` is called. */
 function sleep(
@@ -730,6 +808,7 @@ function readState(raw: string, fp: string): PoolState {
       waiting: parsed.waiting ?? [],
       ...(typeof parsed.last_grant === "number" ? { last_grant: parsed.last_grant } : {}),
       ...(typeof parsed.backfill_off === "string" ? { backfill_off: parsed.backfill_off } : {}),
+      ...(parsed.history && typeof parsed.history === "object" ? { history: parsed.history } : {}),
     };
   } catch {
     console.error(`wf-pool: ${fp} is not valid JSON — starting from an empty pool`);
@@ -888,16 +967,20 @@ export class Pool {
       attach: async pgid => {
         // read outside the pool lock: a slow `ps` must not hold every waiter
         const start = this._probes.processStart?.(pgid);
-        const group = { pgid, boot_ms: bootTimeMs(), ...(start ? { pgid_start: start } : {}) };
+        const group = {
+          pgid,
+          boot_ms: bootTimeMs(),
+          ...(start ? { pgid_start: start } : {}),
+        };
         await this._update(state => ({
           ...state,
           leases: state.leases.map(e => (e.id === self.id ? { ...e, ...group } : e)),
         }));
       },
-      release: async () => {
+      release: async (opts = {}) => {
         if (released) return;
         released = true;
-        await this._remove(self.id);
+        await this._remove(self.id, opts.failed !== true);
       },
     };
     return { status: "granted", waitMs: Date.now() - arrived, lease };
@@ -951,12 +1034,21 @@ export class Pool {
     return this._pass();
   }
 
-  private _remove(id: string): Promise<PoolView> {
-    return this._update(state => ({
-      ...state,
-      leases: state.leases.filter(e => e.id !== id),
-      waiting: state.waiting.filter(e => e.id !== id),
-    }));
+  private _remove(id: string, record: boolean): Promise<PoolView> {
+    return this._update(state => {
+      const lease = state.leases.find(e => e.id === id);
+      const ran = record && lease?.started !== undefined && lease.threads > 0;
+      return {
+        ...state,
+        leases: state.leases.filter(e => e.id !== id),
+        waiting: state.waiting.filter(e => e.id !== id),
+        ...(ran
+          ? {
+              history: recordRun(state, lease.label, Date.now() - lease.started),
+            }
+          : {}),
+      };
+    });
   }
 
   /** One admission pass; `self` joins the queue unless it is already queued or leased. */
@@ -1114,7 +1206,10 @@ export class Pool {
     const fp = path.join(this.dir, POOL_FILE);
     if (!fs.existsSync(fp)) fs.writeFileSync(fp, "", { flag: "a" });
     this._sampleProcesses(fs.readFileSync(fp, "utf8"), Date.now());
-    const release = await lockfile.lock(fp, { stale: LOCK_STALE_MS, retries: POOL_LOCK_RETRIES });
+    const release = await lockfile.lock(fp, {
+      stale: LOCK_STALE_MS,
+      retries: POOL_LOCK_RETRIES,
+    });
     try {
       const raw = fs.readFileSync(fp, "utf8");
       const live = (e: PoolEntry): boolean =>
@@ -1138,6 +1233,7 @@ export class Pool {
             ? { last_grant: view.last_grant }
             : {}),
           ...(view.backfill_off !== undefined ? { backfill_off: view.backfill_off } : {}),
+          ...(view.history ? { history: view.history } : {}),
         },
         null,
         2,
@@ -1294,7 +1390,9 @@ export function formatStatus(view: PoolView, dir: string, now: number = Date.now
     ),
     `waiting (${view.waiting.length}, in admission order):`,
     ...view.waiting.map(e =>
-      formatEntry(e, view.budget, now, home, { starved: isStarved(e, view, now) }),
+      formatEntry(e, view.budget, now, home, {
+        starved: isStarved(e, view, now),
+      }),
     ),
   ].join("\n");
 }

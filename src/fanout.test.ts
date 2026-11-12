@@ -33,8 +33,14 @@ function executorWith(budget: number): { executor: Executor; dir: string } {
   return { executor: new Executor(new Pool(dir, probes)), dir };
 }
 
-const readPool = (dir: string): PoolState =>
-  JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8"));
+// The queue and the leases; the run `history` the pool keeps beside them is pinned in pool-history.test.ts.
+const readPool = (dir: string): PoolState => {
+  const state = JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8")) as {
+    -readonly [K in keyof PoolState]: PoolState[K];
+  };
+  delete state.history;
+  return state;
+};
 
 /**
  * A shard command that records how many shards run at once: it adds itself
