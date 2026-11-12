@@ -372,6 +372,16 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
         "archive_after_days 30 → (none)",
       );
       expect(readQueue(file).header.archive_after_days).toBeUndefined();
+      expect((await call("queue_header", { queue: "n", exclusive_hold: "no" })).text).toBe(
+        "exclusive_hold (none) → no",
+      );
+      expect(readQueue(file).header.exclusive_hold).toBe("no");
+      expect((await call("queue_header", { queue: "n", exclusive_hold: null })).text).toBe(
+        "exclusive_hold no → (none)",
+      );
+      expect((await call("queue_header", { queue: "n", exclusive_hold: "maybe" })).isError).toBe(
+        true,
+      );
       expect((await call("queue_header", { queue: "n", batch_size: 1 })).isError).toBe(true);
       expect((await call("queue_header", { queue: "n" })).isError).toBe(true);
       const next = await call("queue_next", { queue: "n" });

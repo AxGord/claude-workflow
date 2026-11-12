@@ -86,9 +86,11 @@ states:
            entry is a hint. `owner:` — one
            name (`typer`, `typer.flow`): tasks of one owner run one at a
            time. `exclusive: true` — the task runs alone (mass moves, renames,
-           reformats). `breaking: true` — a format or protocol
-           change running processes cannot follow: admitted only into an empty
-           window, nothing else admitted while it runs.
+           reformats); while it waits for running lines of its repo, no later
+           line of that repo is admitted (header `exclusive_hold: no` = off).
+           `breaking: true` — a format or protocol change running processes
+           cannot follow: admitted only into an empty window, nothing else
+           admitted while it runs.
          - `after:` — ids that must be done first.
          - `repo:` — another repo (absolute path, or a name: the `base:` repo
            of that name, else the directory beside this project); default

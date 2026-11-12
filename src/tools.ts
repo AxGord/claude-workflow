@@ -1132,7 +1132,7 @@ export function registerTools(
         "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive, breaking, parked, ended, restored, base, text_hash, text, notes}`): " +
         "fills the window (batch_size minus the running tasks) in `priority:` order (urgent, high, normal, low; file order within one) with pending tasks whose `after:` ids are all done, " +
         "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
-        "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of its own repo (another repo is unaffected); `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
+        "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of its own repo (another repo is unaffected), and while it waits only for running lines of its repo, no later line of that repo is admitted (`held for exclusive <ID>`; header `exclusive_hold: no` turns that off); `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
         "header `overlap: files` = only file entries conflict, a directory or glob is a hint); sets each admitted task running under the queue's lock, so two calls never admit one task. `backlog` tasks are never admitted. Returns id, " +
         "model, effort, repo (absolute), workflow (when set), difficulty (1..10, when set: " +
         "the task workflow's model_table maps it to model/effort), kind (bug|feature|research; feature when the task has none) and text per admitted task. `batch_size: 0` = paused: nothing is admitted. " +
@@ -1322,7 +1322,9 @@ export function registerTools(
         "Set a task queue's header under its lock. The window: `batch_size: N` with `reason: <reason>` (both required together; " +
         "`0` is the pause: running tasks finish, nothing new is admitted). And/or `archive_after_days: N` (a whole number ≥ 1; " +
         "`null` removes the key = no automatic archiving; a pick archives the done / failed lines that ended over N days ago). " +
-        "One call sets the window, the key or both; the other header keys are untouched.",
+        "And/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line: while a pending `exclusive: true` line waits only for running " +
+        "lines of its repo, no later line of that repo is admitted; `null` removes the key = on). " +
+        "One call sets the window, either key or all; the other header keys are untouched.",
       inputSchema: z
         .object({
           ...QUEUE_SEL,
@@ -1341,15 +1343,22 @@ export function registerTools(
             .describe(
               "Days after which a pick archives a done / failed line; null removes the key",
             ),
+          exclusive_hold: z
+            .enum(["yes", "no"])
+            .nullable()
+            .optional()
+            .describe(
+              "no = a waiting exclusive line does not hold its repo; yes = it does (the default); null removes the key",
+            ),
         })
         .strict(),
     },
     async args => {
       try {
         const window = args.batch_size !== undefined || args.reason !== undefined;
-        if (!window && args.archive_after_days === undefined)
+        if (!window && args.archive_after_days === undefined && args.exclusive_hold === undefined)
           throw new QueueError(
-            "queue_header needs batch_size + reason, archive_after_days, or both",
+            "queue_header needs batch_size + reason, archive_after_days, exclusive_hold, or several",
           );
         if (window && (args.batch_size === undefined || args.reason === undefined))
           throw new QueueError("batch_size and reason go together");
@@ -1364,6 +1373,10 @@ export function registerTools(
             formatHeaderKey(
               await setQueueHeaderKey(file, "archive_after_days", args.archive_after_days),
             ),
+          );
+        if (args.exclusive_hold !== undefined)
+          lines.push(
+            formatHeaderKey(await setQueueHeaderKey(file, "exclusive_hold", args.exclusive_hold)),
           );
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {

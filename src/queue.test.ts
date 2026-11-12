@@ -14,6 +14,7 @@ import {
   describeQueue,
   editQueueLine,
   explainLines,
+  exclusiveHoldOn,
   ignoreProbes,
   formatMark,
   formatTask,
@@ -286,10 +287,10 @@ describe("queue overlap: files, exclusive:, repos", () => {
       [],
     ],
     [
-      "exclusive: waits for every running line and blocks the lines after it (paths mode)",
+      "exclusive: waits for every running line and holds its repo: the line after it waits too (paths mode)",
       `- [>] R | ${T}a\n- [ ] A | ${T}b | exclusive: rename\n- [ ] B | ${T}c`,
       "batch_size: 5",
-      ["B"],
+      [],
     ],
     [
       "exclusive: admitted alone, then nothing joins it in the same pick",
@@ -306,6 +307,85 @@ describe("queue overlap: files, exclusive:, repos", () => {
   ];
   it.each(cases)("%s", (_name, body, header, expected) => {
     expect(admittedIds(body, header)).toEqual(expected);
+  });
+
+  describe("exclusive hold (ENG-EXCLUSIVE-HOLDS-REPO)", () => {
+    const OTHER = "/tmp/wf-other-repo";
+    const pick = (tasks: string, header = "batch_size: 5") =>
+      planPick(parseQueue(`${header}\ntasks:\n${tasks}`, "/tmp/hold-proj/.claude/batch/q.yaml"));
+    const t = (id: string, extra = "", status = "pending") =>
+      `  - {id: ${id}, status: ${status}, touches: [${id.toLowerCase()}], repo: /tmp/wf-repo${extra}}\n`;
+    const tOther = (id: string, status = "pending") =>
+      `  - {id: ${id}, status: ${status}, touches: [${id.toLowerCase()}], repo: ${OTHER}}\n`;
+    const four = ["R1", "R2", "R3", "R4"].map(id => t(id, "", "running")).join("");
+
+    it("a window of 5 with 4 running same-repo lines admits only other-repo lines until they end, then the exclusive", () => {
+      const tasks = four + t("E", ", exclusive: true") + t("S") + tOther("O");
+      const r = pick(tasks);
+      expect(r.admitted.map(a => a.id)).toEqual(["O"]);
+      expect(r.reasons).toEqual([
+        { id: "E", why: "overlaps R1 (exclusive E)" },
+        { id: "S", why: "held for exclusive E" },
+      ]);
+      const ended = ["R1", "R2", "R3", "R4"].map(id => t(id, "", "done")).join("");
+      expect(
+        pick(ended + t("E", ", exclusive: true") + t("S") + tOther("O")).admitted.map(a => a.id),
+      ).toEqual(["E", "O"]);
+    });
+
+    it("the same queue with exclusive_hold: no admits the line beside the running ones (today's behaviour)", () => {
+      const tasks = four + t("E", ", exclusive: true") + t("S") + tOther("O");
+      expect(pick(tasks, "batch_size: 5\nexclusive_hold: no").admitted.map(a => a.id)).toEqual([
+        "S",
+      ]);
+      const one = t("R1", "", "running") + t("E", ", exclusive: true") + t("S");
+      expect(pick(one, "batch_size: 5").admitted).toEqual([]);
+      const off = pick(one, "batch_size: 5\nexclusive_hold: no");
+      expect(off.admitted.map(a => a.id)).toEqual(["S"]);
+      expect(off.reasons.map(x => x.why)).toEqual(["overlaps R1 (exclusive E)"]);
+      expect(pick(one, "batch_size: 5\nexclusive_hold: yes").admitted).toEqual([]);
+    });
+
+    it("holds only the lines after it in priority order; a higher-priority line is admitted", () => {
+      const r = pick(
+        t("R1", "", "running") +
+          t("L") +
+          t("E", ", exclusive: true") +
+          t("H", ", priority: high") +
+          t("S"),
+      );
+      expect(r.admitted.map(a => a.id)).toEqual(["H", "L"]);
+      expect(r.reasons).toEqual([
+        { id: "E", why: "overlaps R1 (exclusive E)" },
+        { id: "S", why: "held for exclusive E" },
+      ]);
+    });
+
+    it("a waiting line that is not otherwise admissible holds nothing (after:, parked, parent-run)", () => {
+      const run = t("R1", "", "running");
+      for (const extra of [", after: [NOPE]", ", parked: true", ", model: —"]) {
+        const r = pick(run + t("E", `, exclusive: true${extra}`) + t("S"));
+        expect(r.admitted.map(a => a.id)).toEqual(["S"]);
+      }
+    });
+
+    it("an exclusive line with no running line of its repo is admitted, and holds nothing beside another repo's running line", () => {
+      const r = pick(tOther("R", "running") + t("E", ", exclusive: true") + t("S"));
+      expect(r.admitted.map(a => a.id)).toEqual(["E"]);
+    });
+
+    it("a hand mark to running ignores the hold", () => {
+      const q = parseQueue(
+        `batch_size: 5\ntasks:\n${t("R1", "", "running") + t("E", ", exclusive: true") + t("S")}`,
+        "/tmp/hold-proj/.claude/batch/q.yaml",
+      );
+      expect(planPick(q, { only: "S" }).admitted.map(a => a.id)).toEqual(["S"]);
+    });
+
+    it("--explain names the hold and the summary prints it", () => {
+      const r = pick(t("R1", "", "running") + t("E", ", exclusive: true") + t("S"));
+      expect(formatQueueNext({ ...r, dryRun: true }, true)).toContain("S: held for exclusive E");
+    });
   });
 
   describe("breaking:", () => {
@@ -983,6 +1063,30 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     expect(fs.readFileSync(file, "utf8")).toBe(before);
   });
 
+  it("setQueueHeaderKey sets and removes exclusive_hold (yes | no) and refuses any other value (ENG-EXCLUSIVE-HOLDS-REPO)", async () => {
+    const file = queueFile(`- [ ] A | touches: a`, "batch_size: 2");
+    expect(exclusiveHoldOn(readQueue(file))).toBe(true);
+    expect(await setQueueHeaderKey(file, "exclusive_hold", "no")).toEqual({
+      key: "exclusive_hold",
+      from: undefined,
+      to: "no",
+    });
+    expect(readQueue(file).header.exclusive_hold).toBe("no");
+    expect(exclusiveHoldOn(readQueue(file))).toBe(false);
+    expect((await setQueueHeaderKey(file, "exclusive_hold", "yes")).from).toBe("no");
+    expect(exclusiveHoldOn(readQueue(file))).toBe(true);
+    await setQueueHeaderKey(file, "exclusive_hold", "no");
+    expect((await setQueueHeaderKey(file, "exclusive_hold", null)).to).toBeUndefined();
+    expect(readQueue(file).header.exclusive_hold).toBeUndefined();
+    const before = fs.readFileSync(file, "utf8");
+    for (const bad of ["maybe", 1, 0])
+      await expect(setQueueHeaderKey(file, "exclusive_hold", bad)).rejects.toThrow("yes or no");
+    await expect(setQueueHeaderKey(file, "archive_after_days", "no")).rejects.toThrow(
+      "whole number ≥ 1",
+    );
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
   it("mark done and failed write the day the line ended (`ended`); a retry removes it; other marks leave it out", async () => {
     const file = queueFile(
       `- [>] A | touches: a\n- [>] B | touches: b\n- [ ] C | touches: c`,
@@ -1199,6 +1303,14 @@ describe("wf-queue CLI", () => {
       "archive_after_days 14 → (none)\n",
     );
     expect(readQueue(file).header.archive_after_days).toBeUndefined();
+    expect((await cli(file, "--header-set", "exclusive_hold=no")).out).toBe(
+      "exclusive_hold (none) → no\n",
+    );
+    expect(readQueue(file).header.exclusive_hold).toBe("no");
+    expect((await cli(file, "--header-set", "exclusive_hold=")).out).toBe(
+      "exclusive_hold no → (none)\n",
+    );
+    expect((await cli(file, "--header-set", "exclusive_hold=maybe")).code).toBe(2);
     for (const bad of [
       "nokey=3",
       "batch_size=1",

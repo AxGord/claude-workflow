@@ -12,7 +12,9 @@
 // done, its `repo:` resolves, and it overlaps neither a running task nor one admitted earlier in the
 // same pick (`touches:` path prefixes on a `/` boundary, compared only between tasks of one repo,
 // where a task without `touches:` overlaps every task; `owner:` equal or a `.`-prefix, across repos;
-// `exclusive: true` overlaps every task of its own repo; `breaking: true` is admitted only into an empty window and nothing is admitted while it runs). The header's `overlap: files` narrows
+// `exclusive: true` overlaps every task of its own repo; `breaking: true` is admitted only into an empty window and nothing is admitted while it runs).
+// A pending exclusive line that waits only for running lines of its repo HOLDS the repo: no later line (priority, then file order) of that repo is admitted
+// meanwhile, so the running ones drain and it starts; other repos are not held, and the header's `exclusive_hold: no` turns the hold off. The header's `overlap: files` narrows
 // `touches:` to its FILE entries (a regular file under the task's repo, or a path that does not
 // exist whose last segment holds a `.`): a directory or glob entry is a hint that conflicts with
 // nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
@@ -508,6 +510,20 @@ function repoKey(repo: string | null): string | null {
   }
 }
 
+/** Two repo keys name one repo; a null key (a repo that resolves nowhere) counts as the same. */
+function sameRepoKey(a: string | null, b: string | null): boolean {
+  return a === null || b === null || a === b;
+}
+
+/**
+ * The header's `exclusive_hold:` — `no` / `false` turn the hold of a waiting exclusive line off;
+ * absent or any other value = on.
+ */
+export function exclusiveHoldOn(queue: Queue): boolean {
+  const v = queue.header.exclusive_hold?.trim().toLowerCase();
+  return v !== "no" && v !== "false";
+}
+
 /**
  * Why `a` and `b` may not run together, or null. `repoA`/`repoB` are their repo keys: `touches:`
  * (and its absence) compares only within one repo (a null key, a repo that resolves nowhere, counts
@@ -520,7 +536,7 @@ function conflict(
   repoA: string | null,
   repoB: string | null,
 ): string | null {
-  const sameRepo = repoA === null || repoB === null || repoA === repoB;
+  const sameRepo = sameRepoKey(repoA, repoB);
   if (sameRepo && exclusiveOf(a)) return `exclusive ${a.id}`;
   if (sameRepo && exclusiveOf(b)) return `exclusive ${b.id}`;
   if (sameRepo) {
@@ -606,6 +622,9 @@ export function planPick(
   const admitted: AdmittedTask[] = [];
   const reasons: { id: string; why: string; index: number }[] = [];
   const free = queue.batchSize - running.length;
+  const holdOn = exclusiveHoldOn(queue);
+  /** The pending exclusive lines waiting only for running lines of their repo: the repo key each holds. */
+  const holds: { readonly id: string; readonly key: string | null }[] = [];
   const repoKeys = new Map<QueueLine, string | null>(
     running.map(l => [l, repoKey(resolveRepo(queue, l))]),
   );
@@ -650,13 +669,25 @@ export function planPick(
         if (brk !== undefined) why = `breaking ${brk.id} runs alone`;
         else if (breakingOf(l) && taken.length > 0)
           why = `breaking: window not empty (${taken[0]?.id})`;
+        const held = hand ? undefined : holds.find(h => sameRepoKey(key, h.key));
+        if (held !== undefined && why === null) why = `held for exclusive ${held.id}`;
+        let overlapped = false;
         for (const t of why === null ? taken : []) {
           const c = conflict(l, t, queue.overlap, key, repoKeys.get(t) ?? null);
           if (c !== null) {
             why = `overlaps ${t.id} (${c})`;
+            overlapped = true;
             break;
           }
         }
+        if (
+          overlapped &&
+          holdOn &&
+          !hand &&
+          exclusiveOf(l) &&
+          running.some(r => sameRepoKey(key, repoKeys.get(r) ?? null))
+        )
+          holds.push({ id: l.id, key });
       }
     }
     if (why === null && repo !== null) {
@@ -1746,33 +1777,41 @@ export async function setQueueWindow(
   });
 }
 
-/** The header keys a tool may set besides the window (`batch_size` / `reason`): each a whole number ≥ 1, or removed. */
-export const SETTABLE_HEADER_KEYS: readonly string[] = ["archive_after_days"];
+/**
+ * The header keys a tool may set besides the window (`batch_size` / `reason`): `archive_after_days`
+ * a whole number ≥ 1, `exclusive_hold` `yes` or `no`; each removed with `null`.
+ */
+export const SETTABLE_HEADER_KEYS: readonly string[] = ["archive_after_days", "exclusive_hold"];
 
 export interface HeaderKeyResult {
   readonly key: string;
   /** The value before (`undefined` = the key was absent). */
   readonly from: string | undefined;
   /** The value after (`undefined` = the key is now absent). */
-  readonly to: number | undefined;
+  readonly to: number | string | undefined;
 }
 
 /**
- * One header key of {@link SETTABLE_HEADER_KEYS} under the lock: `value` (a whole number ≥ 1) set or
- * changed, `null` removes it. The window (`batch_size` / `reason`) and every other key stay as they
- * are; an unknown key is refused.
+ * One header key of {@link SETTABLE_HEADER_KEYS} under the lock: `value` set or changed, `null`
+ * removes it. The window (`batch_size` / `reason`) and every other key stay as they are; an unknown
+ * key and a value the key does not take are refused, nothing written.
  */
 export async function setQueueHeaderKey(
   file: string,
   key: string,
-  value: number | null,
+  value: number | string | null,
 ): Promise<HeaderKeyResult> {
   if (!SETTABLE_HEADER_KEYS.includes(key))
     throw new QueueError(
       `${key} is not a header key a tool sets (${SETTABLE_HEADER_KEYS.join(", ")}; the window is batch_size + reason)`,
     );
-  if (value !== null && (!Number.isInteger(value) || value < 1))
-    throw new QueueError(`${key} is a whole number ≥ 1 (null removes it), not ${value}`);
+  if (value !== null) {
+    if (key === "exclusive_hold") {
+      if (value !== "yes" && value !== "no")
+        throw new QueueError(`${key} is yes or no (null removes it), not ${value}`);
+    } else if (typeof value !== "number" || !Number.isInteger(value) || value < 1)
+      throw new QueueError(`${key} is a whole number ≥ 1 (null removes it), not ${value}`);
+  }
   return writing(file, e => {
     const from = e.queue.header[key]?.trim() || undefined;
     if (value === null) e.doc.delete(key);
@@ -1786,7 +1825,7 @@ export async function setQueueHeaderKey(
   });
 }
 
-/** `archive_after_days 30 → 7`, `archive_after_days 30 → (none)`: what a header key set did. */
+/** `archive_after_days 30 → 7`, `exclusive_hold (none) → no`: what a header key set did. */
 export function formatHeaderKey(r: HeaderKeyResult): string {
   return `${r.key} ${r.from ?? "(none)"} → ${r.to ?? "(none)"}`;
 }
