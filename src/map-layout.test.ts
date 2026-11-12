@@ -146,7 +146,8 @@ const WORKFLOWS: Record<string, MapWorkflow> = {
   },
 };
 
-const X = (i: number): number => G.left + i * G.col;
+// the fixture's columns are as wide as its content needs (`columnNeed`), not `G.col`
+const X = (i: number): number => G.left + i * colOf(M);
 const COL = { queue: 0, recon: 1, work: 2, gate: 3, review: 4, land: 5, done: 6 } as const;
 const x = (s: keyof typeof COL): number => X(COL[s]);
 
@@ -163,6 +164,10 @@ function map(events: readonly WfEvent[] = log, extra = {}): MapLayout {
 }
 
 const M = map();
+function colOf(m: MapLayout): number {
+  const xs = m.bands[0].stations.map(s => s.x);
+  return xs[1] - xs[0];
+}
 const band = M.bands[0];
 const lane = (id: string): MapLane => band.lanes.find(l => l.session === id)!;
 
@@ -378,6 +383,31 @@ describe("layout of the fixture event log", () => {
     const wide = map(log, { width: 1500 });
     const ws = wide.bands[0].stations.map(s => s.x);
     expect(ws[1] - ws[0]).toBe(Math.floor((1500 - G.left - G.plaqueGap - G.plaqueMax) / 6));
+  });
+
+  it("a column is as wide as its content needs: narrower than the old fixed width, wide enough for every chip", () => {
+    const col = colOf(M);
+    expect(col).toBeLessThan(G.col);
+    expect(col).toBeGreaterThanOrEqual(G.minCol);
+    expect(M.width).toBeLessThan(G.left + 6 * G.col + 80 + G.plaqueMax + 20);
+    expect(M.width).toBe(band.plaqueX + G.plaqueMax + 20);
+    // a branch chip is never cut, nor a station label
+    for (const l of band.lanes) for (const b of l.branches) expect(b.chip.title).toBeUndefined();
+    for (const st of band.stations) expect(st.title).toBeUndefined();
+  });
+
+  it("a long station name widens every column of its band, up to the cap", () => {
+    const flows = {
+      ...WORKFLOWS,
+      pipe: {
+        ...WORKFLOWS.pipe,
+        stations: WORKFLOWS.pipe.stations!.map((st, i) =>
+          i === 1 ? { ...st, name: "a_station_with_a_very_long_name_indeed" } : st,
+        ),
+      },
+    };
+    const m = layout(fold([...log]), flows, { now: NOW });
+    expect(colOf(m)).toBe(G.col);
   });
 
   it("a plaque never passes 340 px: a long id is cut with an ellipsis", () => {

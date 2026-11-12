@@ -51,9 +51,17 @@ export interface MapOptions {
 /** Layout units (px at scale 1). */
 export const G = {
   left: 70,
+  /** the widest a column gets: a column is as wide as its content needs, up to this */
   col: 230,
   minCol: 120,
-  plaqueGap: 80,
+  /** the most steps of a branch a column makes room for, and the widest label it reserves room for */
+  roomSteps: 4,
+  roomLabel: 72,
+  /** what a branch chip needs beside its text: its inset from the station, the gap to the next branch */
+  chipPad: 46,
+  /** what a folded group of repeated rounds adds to its loop label: the count and the range of durations */
+  loopTag: " ×99 · 99m–99m",
+  plaqueGap: 56,
   plaqueMax: 340,
   plaqueH: 22,
   /** average glyph widths: a plaque's 12 px semibold id, its 12 px state text, a 10 px chip */
@@ -1033,6 +1041,59 @@ function classify(
   return { lanes, dispatchers };
 }
 
+/**
+ * The width a band's columns need: the widest of its station labels and of the branches its lanes
+ * hung (their chip text, their first few steps side by side with the widest label each), never past `G.col`.
+ */
+function columnNeed(
+  stations: readonly MapStation[],
+  lanes: readonly LaneInput[],
+  workflows: Readonly<Record<string, MapWorkflow>>,
+  now: number,
+  clock: (ms: number) => string,
+): number {
+  let need = Math.max(...stations.map(st => textWidth(st.name, G.charW) + 8));
+  const index = new Map(stations.map((st, i) => [st.name, i]));
+  for (const { s, children } of lanes) {
+    // a loop back one column draws its label over that column: `↺ name`, with the count and the range once rounds repeat
+    const back = new Map<string, number>();
+    for (const t of ownMoves(s))
+      if ((index.get(String(t.to)) ?? Infinity) <= (index.get(t.from) ?? -1))
+        back.set(String(t.name), (back.get(String(t.name)) ?? 0) + 1);
+    for (const [name, times] of back)
+      need = Math.max(need, textWidth(`↺ ${name}${times > 1 ? G.loopTag : ""}`, G.chipW) + 8);
+    for (const child of children) {
+      const steps = branchSteps(child, workflows[child.workflow ?? ""]?.stations, now, clock);
+      const shown = Math.min(G.roomSteps, steps.length);
+      const label = Math.max(
+        G.stepMin,
+        ...steps
+          .slice(0, shown)
+          .map(
+            st =>
+              Math.min(
+                G.roomLabel,
+                Math.max(
+                  textWidth(st.name, G.chipW),
+                  st.detail !== undefined ? textWidth(st.detail, G.chipW) : 0,
+                ),
+              ) + 4,
+          ),
+      );
+      const agent = lastAgent(child);
+      const chip = agent
+        ? chipText(agent.model, agent.effort, roleOf(child.workflow))
+        : `script · ${roleOf(child.workflow)}`;
+      need = Math.max(
+        need,
+        2 * G.stepPad + G.branchInset + Math.max(0, shown - 1) * label,
+        textWidth(chip, G.chipW) + G.chipPad,
+      );
+    }
+  }
+  return Math.min(G.col, need);
+}
+
 /** The columns of a band: the workflow's stations, else the states its lanes visited, in first-visit order (one `start` column when none has moved). */
 function bandStations(
   workflow: string,
@@ -1236,11 +1297,12 @@ export function layout(
     const stations = bandStations(workflow, group, workflows);
     if (stations.length === 0) continue;
     const n = stations.length;
+    const need = columnNeed(stations, group, workflows, opts.now, opts.clock ?? localClock);
     const fit =
       opts.width !== undefined
         ? Math.floor((opts.width - G.left - G.plaqueGap - G.plaqueMax) / Math.max(1, n - 1))
         : G.col;
-    const col = Math.max(G.minCol, Math.min(G.col, fit));
+    const col = Math.max(G.minCol, Math.min(need, fit));
     const xs = stations.map((_, i) => G.left + i * col);
     const plaqueX = xs[n - 1] + G.plaqueGap;
     const bandWidth = plaqueX + G.plaqueMax + 20;
