@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- engine (ENG-EXCLUSIVE-HOLD-SAME-PASS): the exclusive hold of `planPick` read only lines running before the pass, so a line admitted earlier in the same pass (empty window, a high line overlapping the exclusive) let later same-repo lines in and the exclusive starved. A line admitted in the pass now counts as running for the hold; `exclusive_hold: no` is unchanged.
+
 - engine (ENG-QUEUE-BASE-REPO): `queue_edit` / `wf-queue --edit` that changes only a line's `repo:` kept the old `base`, a HEAD of the previous repo; an edit that sets `repo:` to another value now re-stamps `base` (and `text_hash`) from the new repo's HEAD, as an edit of text, touches or owner does (a repo that is not git drops `base`). Setting the same `repo:` again, a priority, a model or a note still leaves both. README, the bundled workflow-authoring skill and the `queue_edit` description say so. Pin: `src/queue-base-repo.test.ts` (add, then edit only `repo:`: `base` is the new repo's HEAD).
 
 - map (ENG-MAP-LABEL-SPAN): `columnNeed` counted a loop label's whole width against one column, so a label over a loop spanning several columns widened every column to the full label. The width is now shared by the columns the loop crosses (the narrowest span of a name's loops; one column as before). Pin: `src/map-label-span.test.ts` (fails with the division removed). README and the bundled skill do not describe the column sizing.

@@ -13,7 +13,7 @@
 // same pick (`touches:` path prefixes on a `/` boundary, compared only between tasks of one repo,
 // where a task without `touches:` overlaps every task; `owner:` equal or a `.`-prefix, across repos;
 // `exclusive: true` overlaps every task of its own repo; `breaking: true` is admitted only into an empty window and nothing is admitted while it runs).
-// A pending exclusive line that waits only for running lines of its repo HOLDS the repo: no later line (priority, then file order) of that repo is admitted
+// A pending exclusive line that waits only for running lines (or lines admitted earlier in the same pass) of its repo HOLDS the repo: no later line (priority, then file order) of that repo is admitted
 // meanwhile, so the running ones drain and it starts; other repos are not held, and the header's `exclusive_hold: no` turns the hold off. The header's `overlap: files` narrows
 // `touches:` to its FILE entries (a regular file under the task's repo, or a path that does not
 // exist whose last segment holds a `.`): a directory or glob entry is a hint that conflicts with
@@ -685,7 +685,7 @@ export function planPick(
           holdOn &&
           !hand &&
           exclusiveOf(l) &&
-          running.some(r => sameRepoKey(key, repoKeys.get(r) ?? null))
+          taken.some(r => sameRepoKey(key, repoKeys.get(r) ?? null))
         )
           holds.push({ id: l.id, key });
       }
