@@ -3,7 +3,7 @@
 // `archive_after_days: N` (a pick first archives the done / failed lines that ended over N days ago)
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
 // `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
-// breaking, parked, ended, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// breaking, parked, ended, restored, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
 //
@@ -70,13 +70,14 @@ export const TASK_KEYS = [
   "breaking",
   "parked",
   "ended",
+  "restored",
   "base",
   "text_hash",
   "text",
   "notes",
 ] as const;
-/** Known state the engine writes (`ended` by the mark, `base` / `text_hash` by add and edit): never set by a caller. */
-const STATE_KEYS: ReadonlySet<string> = new Set(["ended", "base", "text_hash"]);
+/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `base` / `text_hash` by add and edit): never set by a caller. */
+const STATE_KEYS: ReadonlySet<string> = new Set(["ended", "restored", "base", "text_hash"]);
 /** The keys `queue_edit` sets (status is the mark's, state keys are the engine's, notes are appended, id is fixed). */
 export const EDIT_KEYS: ReadonlySet<string> = new Set(
   TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes" && !STATE_KEYS.has(k)),
@@ -239,6 +240,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "after",
     "touches",
     "ended",
+    "restored",
     "base",
     "text_hash",
   ]) {
@@ -723,6 +725,8 @@ export interface QueueLineView {
   readonly lastNote?: string;
   /** The day (`YYYY-MM-DD`) `queue_mark` moved the line to done or failed, when it recorded one. */
   readonly ended?: string;
+  /** The day (`YYYY-MM-DD`) `wf-queue --restore` brought the line back from the archive; the auto-archive counts its age from the later of this and `ended`. */
+  readonly restored?: string;
   /** HEAD of the line's repo when its text, touches or owner was last written (`queue_add` / `queue_edit`); absent on an older line or outside git. */
   readonly base?: string;
   /** The short hash of that text, touches and owner (`lineTextHash`); absent on an older line. */
@@ -776,6 +780,7 @@ export function describeQueue(queue: Queue): {
       ...(l.notes.at(-1)?.date !== undefined ? { lastNoteDate: l.notes.at(-1)?.date } : {}),
       ...lastNoteOf(l),
       ...(l.meta.ended !== undefined ? { ended: l.meta.ended } : {}),
+      ...(l.meta.restored !== undefined ? { restored: l.meta.restored } : {}),
       ...(l.meta.base !== undefined ? { base: l.meta.base } : {}),
       ...(l.meta.text_hash !== undefined ? { textHash: l.meta.text_hash } : {}),
       text: l.text,
@@ -1055,6 +1060,16 @@ function daysBefore(days: number, now: Date): string {
   return today(d);
 }
 
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** The day a line's archive age counts from: its `ended:`, or the later `restored:` day of a line brought back from the archive; none without a dated `ended:`. */
+function ageDay(meta: Readonly<Record<string, string>>): string | undefined {
+  const ended = meta.ended;
+  if (ended === undefined || !DAY_RE.test(ended)) return undefined;
+  const restored = meta.restored;
+  return restored !== undefined && DAY_RE.test(restored) && restored > ended ? restored : ended;
+}
+
 function archivePlan(
   queue: Queue,
   opts: { readonly olderThanDays: number; readonly includeUnended?: boolean; readonly now?: Date },
@@ -1070,8 +1085,8 @@ function archivePlan(
   let unended = 0;
   for (const l of queue.lines) {
     if (l.status !== "done" && l.status !== "failed") continue;
-    const ended = l.meta.ended;
-    const dated = ended !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(ended);
+    const ended = ageDay(l.meta);
+    const dated = ended !== undefined;
     if (!dated) {
       if (opts.includeUnended === true) {
         if (l.status === "failed" && named.has(l.id)) keptNamed.push(l.id);
@@ -1177,7 +1192,7 @@ export interface RestoreResult {
 
 /**
  * Moves one line, whole, from the queue's archive back into the queue (appended at the end), under
- * the queue's lock; its status and `ended:` stay as archived. The queue is written first, so a crash
+ * the queue's lock; its status and `ended:` stay as archived, and a done / failed line gets `restored:` (today), so the auto-archive counts its age from the restore. The queue is written first, so a crash
  * between the writes leaves the line in both files and a re-run only removes the archive's copy.
  */
 export async function restoreQueue(file: string, id: string): Promise<RestoreResult> {
@@ -1196,6 +1211,8 @@ export async function restoreQueue(file: string, id: string): Promise<RestoreRes
       const inQueue = e.queue.lines.some(l => l.id === id);
       let text = e.queue.source;
       if (!inQueue) {
+        if (isMap(node) && (status === "done" || status === "failed"))
+          setOrdered(e, node, "restored", today());
         e.tasks.items.push(node);
         text = e.doc.toString(YAML_OUT);
       }
@@ -1380,7 +1397,10 @@ export async function markQueue(
     const node = taskNode(e, line);
     node.set("status", status);
     if (status === "done" || status === "failed") setOrdered(e, node, "ended", today());
-    else if (node.has("ended")) node.delete("ended");
+    else {
+      node.delete("ended");
+      node.delete("restored");
+    }
     if (forced !== undefined) addNote(e, node, forced, opts.from ?? "mark");
     const text = note?.trim();
     if (text) addNote(e, node, text, opts.from ?? "mark");
@@ -1570,6 +1590,10 @@ export async function addQueueLine(
     throw new QueueError(
       `${id}: ended is written by queue_mark when a line ends, not set on a new one`,
     );
+  if (task.restored !== undefined)
+    throw new QueueError(
+      `${id}: restored is written by the archive restore, not set on a new line`,
+    );
   for (const k of ["base", "text_hash"])
     if (task[k] !== undefined)
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
@@ -1662,6 +1686,8 @@ export async function editQueueLine(
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
   for (const k of Object.keys(set))
     if (k === "ended") throw new QueueError(`${id}: ended is written by queue_mark, not set`);
+    else if (k === "restored")
+      throw new QueueError(`${id}: restored is written by the archive restore, not set`);
     else if (k === "base" || k === "text_hash")
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
     else if (!EDIT_KEYS.has(k))
