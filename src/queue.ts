@@ -758,7 +758,7 @@ export interface QueueLineView {
   readonly ended?: string;
   /** The day (`YYYY-MM-DD`) `wf-queue --restore` brought the line back from the archive; the auto-archive counts its age from the later of this and `ended`. */
   readonly restored?: string;
-  /** HEAD of the line's repo when its text, touches or owner was last written (`queue_add` / `queue_edit`); absent on an older line or outside git. */
+  /** HEAD of the line's repo when its text, touches, owner or repo was last written (`queue_add` / `queue_edit`); absent on an older line or outside git. */
   readonly base?: string;
   /** The short hash of that text, touches and owner (`lineTextHash`); absent on an older line. */
   readonly textHash?: string;
@@ -1350,6 +1350,14 @@ function stampBase(e: Editable, node: YAMLMap): void {
   else if (node.has("base")) node.delete("base");
 }
 
+/** Whether `repo:` now names another directory than `was`; a re-spelling of the same repo is not a change, a name that resolves nowhere is compared as written. */
+function repoChanged(queue: Queue, was: string | undefined, now: unknown): boolean {
+  const next = typeof now === "string" ? now : undefined;
+  const a = repoNamed(queue, was);
+  const b = repoNamed(queue, next);
+  return a === null || b === null ? (was?.trim() ?? "") !== (next?.trim() ?? "") : a !== b;
+}
+
 function checkNote(note: string | undefined): void {
   if (note !== undefined && note.trim() === "" && note !== "")
     throw new QueueError("a note is not blank");
@@ -1736,8 +1744,12 @@ export async function editQueueLine(
         if (v === null) node.delete(k);
         else setOrdered(e, node, k, v);
       }
-      // the brief changed: it was written now, at this HEAD (an edit that leaves it equal keeps both)
-      if (nodeTextHash(node) !== lineTextHash(line)) stampBase(e, node);
+      // the brief or the repo changed: it was written now, at this HEAD of its repo (an edit that leaves both equal keeps both)
+      if (
+        nodeTextHash(node) !== lineTextHash(line) ||
+        repoChanged(e.queue, line.meta.repo, node.get("repo"))
+      )
+        stampBase(e, node);
       if (note !== undefined) addNote(e, node, note, noteFrom);
       return { id, task: new YAML.Document(node).toString(YAML_OUT).trimEnd() };
     },
