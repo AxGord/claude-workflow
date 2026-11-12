@@ -26,9 +26,13 @@ export const EX_TEMPFAIL = 75;
 
 const POOL_FILE = "pool.json";
 const CONFIG_FILE = "config.yaml";
-// One line per orphan reaped, over-running lease and starved waiter; rotated past LOG_MAX_BYTES.
+// One line per orphan reaped, over-running lease, starved waiter, backfill and load sample; rotated past LOG_MAX_BYTES.
 const LOG_FILE = "pool.log";
 const LOG_MAX_BYTES = 1 << 20;
+// While a lease or waiter exists, a pass at least this long after the last sample logs one `sample:` line.
+const SAMPLE_EVERY_MS = 60_000;
+// A sample names this many waiters; the rest are counted.
+const SAMPLE_WAITERS_SHOWN = 4;
 // A waiter queued this long (or a pool that granted nothing this long) is starved (config `starve_after`, seconds).
 const DEFAULT_STARVE_AFTER_SEC = 900;
 // An orphaned group that survives its SIGTERM this long gets SIGKILL.
@@ -237,6 +241,8 @@ export interface PoolState {
   readonly last_grant?: number;
   /** A head nothing is backfilled past any more: a lease backfilled ahead of it ran past twice its estimate. */
   readonly backfill_off?: string;
+  /** The last `sample:` line written to `pool.log` (ms since epoch); absent while the pool is empty. */
+  readonly last_sample?: number;
   /**
    * The run times (ms, oldest first, the last `HISTORY_SAMPLES`) of finished leases by label
    * key (`labelKey`): an entry with no estimate of its own takes the p90 of its key's.
@@ -808,6 +814,7 @@ function readState(raw: string, fp: string): PoolState {
       waiting: parsed.waiting ?? [],
       ...(typeof parsed.last_grant === "number" ? { last_grant: parsed.last_grant } : {}),
       ...(typeof parsed.backfill_off === "string" ? { backfill_off: parsed.backfill_off } : {}),
+      ...(typeof parsed.last_sample === "number" ? { last_sample: parsed.last_sample } : {}),
       ...(parsed.history && typeof parsed.history === "object" ? { history: parsed.history } : {}),
     };
   } catch {
@@ -1189,6 +1196,18 @@ export class Pool {
       );
   }
 
+  /**
+   * Log a load sample when the last one is SAMPLE_EVERY_MS old; returns the new `last_sample`. The
+   * first pass with an entry starts the clock without a line, an empty pool clears it.
+   */
+  private _sample(view: PoolView, last: number | undefined, now: number): number | undefined {
+    if (view.leases.length === 0 && view.waiting.length === 0) return undefined;
+    if (last === undefined || now < last) return now;
+    if (now - last < SAMPLE_EVERY_MS) return last;
+    this._log(now, sampleLine(view));
+    return now;
+  }
+
   /** One line to `pool.log`; a log that cannot be written is not the pool's failure. */
   private _log(now: number, line: string): void {
     const fp = path.join(this.dir, LOG_FILE);
@@ -1224,6 +1243,7 @@ export class Pool {
         now,
       );
       this._logBackfill(state, view, now);
+      const lastSample = this._sample(view, state.last_sample, now);
       const next = JSON.stringify(
         {
           leases: view.leases,
@@ -1233,6 +1253,7 @@ export class Pool {
             ? { last_grant: view.last_grant }
             : {}),
           ...(view.backfill_off !== undefined ? { backfill_off: view.backfill_off } : {}),
+          ...(lastSample !== undefined ? { last_sample: lastSample } : {}),
           ...(view.history ? { history: view.history } : {}),
         },
         null,
@@ -1249,6 +1270,25 @@ export class Pool {
       await release();
     }
   }
+}
+
+/**
+ * The `pool.log` load sample: machine load, load not taken through the pool, threads held, the busy
+ * cpus the measured leases' trees run (`-`: none measured), and the waiters with what they ask.
+ */
+export function sampleLine(view: PoolView): string {
+  const measured = Object.values(view.runs);
+  const runs = measured.length > 0 ? measured.reduce((a, b) => a + b, 0).toFixed(1) : "-";
+  const asks = view.waiting
+    .slice(0, SAMPLE_WAITERS_SHOWN)
+    .map(e => describeRequest(e, view.budget).replace(/ threads/g, ""));
+  const more = view.waiting.length - asks.length;
+  const waiting =
+    view.waiting.length > 0 ? ` [${asks.join(", ")}${more > 0 ? `, +${more}` : ""}]` : "";
+  return (
+    `sample: load ${view.load.toFixed(1)} external ${view.external.toFixed(1)} ` +
+    `held ${view.held}/${view.budget} runs ${runs} leases ${view.leases.length} waiting ${view.waiting.length}${waiting}`
+  );
 }
 
 function holder(e: PoolEntry, view: PoolView): string {
