@@ -87,8 +87,8 @@ describe("calibrate", () => {
       ]),
     ).toEqual([
       ["-", "-", "-", "-", "-/-", 1, 0, 0, 0, 0, { completed: 1 }, {}],
-      ["/p1", "w", "1-3", "execute", "sonnet/low", 1, 2, 1, 15, 4, { completed: 1 }, { pass: 1 }],
-      ["/p1", "w", "1-3", "review", "opus/high", 1, 0, 0, 0, 0, { completed: 1 }, { pass: 1 }],
+      ["/p1", "w", "1-3", "execute", "sonnet/low", 1, 0, 1, 10, 0, { completed: 1 }, { pass: 1 }],
+      ["/p1", "w", "1-3", "review", "opus/high", 1, 2, 0, 5, 4, { completed: 1 }, { pass: 1 }],
       ["/p1", "w", "4-6", "-", "haiku/low", 1, 0, 0, 0, 0, { failed: 1 }, {}],
       ["/p2", "w", "7-10", "-", "-/-", 1, 0, 0, 7, 0, { completed: 1 }, {}],
     ]);

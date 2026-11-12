@@ -26,6 +26,10 @@ export interface CalibrationRow {
   escalations: number;
   tokens: number;
   findings: number;
+  /** Measured spend of the tasks on this row (`spend.usd`, a task-level sum the ledger cannot split by stage: counted once, on the first row); undefined while no task is measured, never $0. */
+  usd?: number;
+  /** Tasks whose spend is in `usd`. */
+  measured: number;
   outcomes: Record<string, number>;
   verdicts: Record<string, number>;
 }
@@ -48,6 +52,25 @@ function tokensOf(t: LedgerEntry["tokens"]): number {
   return t.total ?? Object.values(t).reduce((a, b) => a + b, 0);
 }
 
+/**
+ * A task's tokens split over its stage rows: a token key naming a stage goes to it; `worker` goes to the execute
+ * stage, else fix, plan, or the first non-review stage (the ledger keeps `agent_ids` per stage but no per-agent tokens or
+ * spend, so no finer split exists: ledger.ts `tokens`/`spend`); anything else (and the total's remainder) to the first row.
+ */
+function tokensByStage(e: LedgerEntry, stages: readonly string[]): Map<string, number> {
+  const out = new Map<string, number>();
+  if (e.tokens === undefined || stages.length === 0) return out;
+  const add = (k: string, n: number): void => void out.set(k, (out.get(k) ?? 0) + n);
+  const roles = Object.entries(e.tokens).filter(([k, n]) => k !== "total" && n > 0);
+  const worker =
+    ["execute", "fix", "plan"].find(s => stages.includes(s)) ??
+    stages.find(s => s !== "review") ??
+    stages[0];
+  for (const [k, n] of roles) add(stages.includes(k) ? k : k === "worker" ? worker : stages[0], n);
+  add(stages[0], tokensOf(e.tokens) - roles.reduce((s, [, n]) => s + n, 0));
+  return out;
+}
+
 const bump = (m: Record<string, number>, k: string): void => {
   m[k] = (m[k] ?? 0) + 1;
 };
@@ -68,6 +91,10 @@ export function calibrate(
         ? staged.map(n => [n, e.stages![n].model, e.stages![n].effort])
         : [["-", e.model ?? "-", e.effort ?? "-"]];
     const band = bandOf(e.claim_difficulty ?? e.difficulty);
+    const roundsAt = Math.max(
+      0,
+      picks.findIndex(p => p[0] === "review"),
+    );
     picks.forEach(([stage, model, effort], i) => {
       const key = JSON.stringify([project, e.workflow, band, stage, model, effort]);
       let row = rows.get(key);
@@ -84,6 +111,7 @@ export function calibrate(
           escalations: 0,
           tokens: 0,
           findings: 0,
+          measured: 0,
           outcomes: {},
           verdicts: {},
         };
@@ -92,12 +120,21 @@ export function calibrate(
       row.tasks += 1;
       bump(row.outcomes, e.outcome ?? "-");
       if (e.verdict !== undefined) bump(row.verdicts, e.verdict);
+      if (i === roundsAt) row.review_rounds += e.visits?.review ?? reviewRounds(e.visits);
+      row.tokens +=
+        tokensByStage(
+          e,
+          picks.map(p => p[0]),
+        ).get(stage) ?? 0;
       if (i === 0) {
-        row.review_rounds += reviewRounds(e.visits);
         row.escalations += e.escalations ?? 0;
-        row.tokens += tokensOf(e.tokens);
-        if (opts.findingsKey !== undefined) row.findings += e.counts?.[opts.findingsKey] ?? 0;
+        if (e.spend?.usd !== undefined) {
+          row.usd = (row.usd ?? 0) + e.spend.usd;
+          row.measured += 1;
+        }
       }
+      if (i === roundsAt && opts.findingsKey !== undefined)
+        row.findings += e.counts?.[opts.findingsKey] ?? 0;
     });
   }
   return [...rows.values()].sort((a, b) =>
@@ -124,6 +161,8 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
     "rounds",
     "esc",
     "tokens",
+    "$",
+    "$/task",
     ...(findings ? ["findings"] : []),
     "outcomes",
     "verdicts",
@@ -138,6 +177,8 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
     String(r.review_rounds),
     String(r.escalations),
     String(r.tokens),
+    r.usd === undefined ? "-" : r.usd.toFixed(2),
+    r.usd === undefined ? "-" : (r.usd / r.measured).toFixed(2),
     ...(findings ? [String(r.findings)] : []),
     fmt(r.outcomes),
     fmt(r.verdicts),
