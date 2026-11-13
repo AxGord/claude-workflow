@@ -50,7 +50,7 @@ let sessionTouch = 0
 const ran: string[] = []
 
 /** `ticking`: the clock moves only when the test advances it, and the 15 s refresh fires on that (returned). */
-function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: string }, ticking = false) {
+function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unknown) => string); ledger: string }, ticking = false) {
   panes.splice(0)
   fetched.splice(0)
   ran.splice(0)
@@ -75,7 +75,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string; ledger: str
   }))
   on('process.run', (_: unknown, e: unknown) => {
     ran.push(JSON.stringify(e))
-    return { value: landed ? { exitCode: 0, stdout: landed.git, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }
+    return { value: landed ? { exitCode: 0, stdout: typeof landed.git === 'function' ? landed.git(e) : landed.git, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }
   })
   on('http.fetch', (_: unknown, e: { url: string }) => {
     fetched.push(e.url)
@@ -1039,4 +1039,73 @@ test('cells counts wide glyphs twice; fitCells cuts to the cells with an ellipsi
   expect(fitCells('日本語日本語', 7)).toBe('日本語…')
   expect(cells(fitCells('abcdefghij', 5))).toBe(5)
   expect([spanText(45000), spanText(189835), spanText(3900000)]).toEqual(['45s', '3m10s', '1h05m'])
+})
+
+const ranOf = (task: string, ended: string, usd: number, workflow = 'engine-task') =>
+  JSON.stringify({ workflow, task, started_at: '2026-11-07T08:00:00Z', ended_at: ended, outcome: 'completed', visits: { land: 1 },
+    spend: { agents: 1, usd, input: 1, output: 1, cache_read: 1, cache_write: 1 } })
+
+/** A git whose `log` answers only for `branch` (the lands of that branch), and whose checked-out branch is `current`. */
+const gitOn = (branch: string, current: string, rows: string) => (e: unknown) => {
+  const req = JSON.stringify(e)
+  if (req.includes('"branch"')) return current + '\n'
+  return req.includes(`"${branch}"`) ? rows : ''
+}
+
+test('Landed reads the queue repo\'s checked-out branch, not a hard-coded main, and names it in the heading', async ($, on) => {
+  engine(on, true, { git: gitOn('golf-int', 'golf-int', 'aaa111\t07.11 13:49\tL-ONE\nbbb222\t07.11 09:10\tL-TWO'), ledger: '' })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(2\) · golf-int/ })).toBeDefined()
+  expect(ran.some(r => r.includes('"log"') && r.includes('"golf-int"') && !r.includes('"main"'))).toBe(true)
+  await ui.unmount()
+})
+
+test('the queue header\'s land_branch wins over the checked-out branch', async ($, on) => {
+  engine(on, true, { git: gitOn('release', 'golf-int', 'aaa111\t07.11 13:49\tL-ONE'), ledger: '' })
+  ;(API_QUEUE as Record<string, unknown>).landBranch = 'release'
+  try {
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(1\) · release/ })).toBeDefined()
+    expect(ran.some(r => r.includes('"golf-int"'))).toBe(false)
+    await ui.unmount()
+  } finally {
+    delete (API_QUEUE as Record<string, unknown>).landBranch
+  }
+})
+
+test('a git that names no usable branch reads main', async ($, on) => {
+  engine(on, true, { git: gitOn('main', 'HEAD detached at abc', 'aaa111\t07.11 13:49\tL-ONE'), ledger: '' })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(1\)$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a land with no Slice trailer is found through the ledger\'s landed rows of the queue\'s own lines, in any workflow, once', async ($, on) => {
+  const ledger = [ranOf('DONE-1', '2026-11-07T09:50:00Z', 1.5, 'golf-task'), ranOf('L-BOTH', '2026-11-07T09:00:00Z', 2), ranOf('L-OTHER', '2026-11-07T09:30:00Z', 3)].join('\n')
+  engine(on, true, { git: 'ccc333\t07.11 08:00\t\nddd444\t07.11 09:00\tL-BOTH', ledger })
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(2\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /DONE-1/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /ddd444 L-BOTH/ })).toBeDefined()
+  // a landed task of another queue (the ledger holds every project's runs) is not this pane's land
+  expect(await ui.find({ type: 'Text', text: /L-OTHER/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the ledger fallback also finds a land of a line the queue has archived', async ($, on) => {
+  engine(on, true, { git: '', ledger: ranOf('ARCH-1', '2026-11-07T09:50:00Z', 1.5) })
+  ;(API_QUEUE as Record<string, unknown>).archivedIds = ['ARCH-1']
+  try {
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(1\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /ARCH-1/ })).toBeDefined()
+    await ui.unmount()
+  } finally {
+    delete (API_QUEUE as Record<string, unknown>).archivedIds
+  }
 })

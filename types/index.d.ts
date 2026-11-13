@@ -109,6 +109,8 @@ export type Snapshot = {
   sessions: SessionRow[]
   queue: QueueView | null
   lands: Land[]
+  /** the branch `lands` was read from (the queue header's `land_branch:`, else the queue repo's checked-out branch, else `main`) */
+  landBranch?: string
   /** the lands of the last 24 hours (`lands` holds the 14 days the tree shows) */
   recent: number
   /** per `DD.MM` of `lands`: the day's spend */

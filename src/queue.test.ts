@@ -1505,6 +1505,29 @@ describe("describeQueue", () => {
     expect(reasons.F).toMatch(/^overlaps /);
   });
 
+  it("archivedIds are the ids moved to the archive, absent without one", () => {
+    expect(describeQueue(q).archivedIds).toBeUndefined();
+    expect(
+      describeQueue({ ...q, archived: new Map([["Z", "done" as const]]) }).archivedIds,
+    ).toEqual(["Z"]);
+  });
+
+  it("landBranch is the header's land_branch, absent when the header names none", () => {
+    expect(describeQueue(q).landBranch).toBeUndefined();
+    const lq = parseMd(
+      [
+        "# x",
+        "batch_size: 1",
+        "land_branch: golf-int",
+        "## Tasks",
+        "- [ ] A | repo: /tmp | text of a is long enough to be prose here",
+        "",
+      ].join("\n"),
+      "/tmp/q.md",
+    );
+    expect(describeQueue(lq).landBranch).toBe("golf-int");
+  });
+
   it("afterIds are the ids the picker resolves: a known id inside parentheses is prose", () => {
     const aq = parseMd(
       [

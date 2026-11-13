@@ -170,13 +170,13 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
   }
 }
 
-async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string }> {
+async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string; landBranch?: string; taskIds?: string[] }> {
   const res = await $.http.fetch(`${DASHBOARD}/api/queue?file=${encodeURIComponent(file)}`).catch((e: unknown) => String(e))
   if (typeof res === 'string') return { queue: null, error: 'queue: ' + res }
   try {
     const body = JSON.parse(res.text)
     if (!res.ok) return { queue: null, error: 'queue: ' + String(body?.error ?? res.status) }
-    return { queue: queueView(file, body, now), error: '' }
+    return { queue: queueView(file, body, now), error: '', ...(typeof body?.landBranch === 'string' ? { landBranch: body.landBranch } : {}), taskIds: [...(Array.isArray(body?.lines) ? body.lines.map((l: any) => String(l?.id)) : []), ...(Array.isArray(body?.archivedIds) ? body.archivedIds.map(String) : [])] }
   } catch (e) {
     return { queue: null, error: 'queue: ' + String(e) }
   }
@@ -264,8 +264,31 @@ export function projectDirOf(repo: string): string {
   return repo.replace(/[^A-Za-z0-9]/g, '-')
 }
 
-type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[] }
-const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [] }
+/** A task's latest run that went through a `land` state, of any workflow (a queue's own task workflow is not one of `TASK_WORKFLOWS`): when it began and ended, its difficulty and its own spend. */
+export type LedgerLand = { start: number; endedAt: number; difficulty: string; usd?: number }
+
+/** The landed task runs of the ledger by queue line id, whatever the workflow; the latest landed run of a line wins. */
+export function ledgerLandedOf(text: string): Map<string, LedgerLand> {
+  const out = new Map<string, LedgerLand>()
+  for (const line of text.split('\n')) {
+    if (!line.includes('"task"')) continue
+    try {
+      const j = JSON.parse(line) as Record<string, unknown>
+      const ended = Date.parse(String(j.ended_at ?? ''))
+      if (typeof j.task !== 'string' || j.task === '' || !Number.isFinite(ended) || outcomeOf(j) !== 'landed') continue
+      if ((out.get(j.task)?.endedAt ?? -Infinity) > ended) continue
+      const usd = (j.spend as { usd?: unknown } | undefined)?.usd
+      const start = Date.parse(String(j.started_at ?? ''))
+      out.set(j.task, { start: Number.isFinite(start) ? start : NaN, endedAt: ended, difficulty: typeof j.difficulty === 'number' ? String(j.difficulty) : '', ...(typeof usd === 'number' && Number.isFinite(usd) ? { usd } : {}) })
+    } catch {
+      // a torn or foreign line is not a run
+    }
+  }
+  return out
+}
+
+type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[]; landed: Map<string, LedgerLand> }
+const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [], landed: new Map() }
 let ledgerRead: Ledger = NO_LEDGER
 
 /** The ledger's runs and spend, re-read only when the file's size or mtime moved (the pane refreshes often). */
@@ -277,7 +300,7 @@ async function ledgerAt($: any, dir: string): Promise<Ledger> {
   const stamp = `${f.name}:${f.size}:${f.mtimeMs}`
   if (stamp !== ledgerSeen) {
     const text = String(await $.fs.read(`${dir}/${f.name}`).catch(() => ''))
-    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text) }
+    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text), landed: ledgerLandedOf(text) }
     ledgerSeen = stamp
   }
   return ledgerRead
@@ -413,10 +436,10 @@ export function parentUsd(parent: ParentSpend[], now: number, project: string): 
   return mine.length > 0 ? mine.reduce((a, p) => a + p.usd, 0) : undefined
 }
 
-/** `✓ Landed · 14d (434) · $1234 · parent $310 (25%)`: the count, the landed lines' spend (absent when none is measured), the parent's spend and its share of the landed sum (the share absent when there is no landed sum). */
-export function landedHeading(count: number, landed: number | undefined, parent: number | undefined): string {
+/** `✓ Landed · 14d (434) · $1234 · parent $310 (25%) · golf-int`: the count, the landed lines' spend (absent when none is measured), the parent's spend and its share of the landed sum (the share absent when there is no landed sum), the land branch when it is not `main`. */
+export function landedHeading(count: number, landed: number | undefined, parent: number | undefined, branch = 'main'): string {
   const share = landed !== undefined && landed > 0 && parent !== undefined ? ` (${String(Math.round((parent / landed) * 100))}%)` : ''
-  return `✓ Landed · ${LAND_DAYS}d (${count})${landed !== undefined ? ' · ' + usdText(landed) : ''}${parent !== undefined ? ' · parent ' + usdText(parent) + share : ''}`
+  return `✓ Landed · ${LAND_DAYS}d (${count})${landed !== undefined ? ' · ' + usdText(landed) : ''}${parent !== undefined ? ' · parent ' + usdText(parent) + share : ''}${branch !== 'main' ? ' · ' + branch : ''}`
 }
 
 /** The repo a queue file lives in (`<repo>/.claude/batch/<file>`); the file itself when it is not under one. */
@@ -424,16 +447,46 @@ function repoOf(queueFile: string): string {
   return queueFile.replace(/\/\.claude\/batch\/[^/]+$/, '')
 }
 
-async function lands($: any, queueFile: string, ledger: Ledger): Promise<Land[]> {
+/** The branch a branch name read from git or a queue header may be: no whitespace or control characters, so a stray answer is never taken for a name. */
+const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
+
+/** The branch the queue's lands target: the header's `land_branch:` when set, else the queue repo's checked-out branch, else `main`. */
+async function landBranchOf($: any, repo: string, header: string | undefined): Promise<string> {
+  const declared = (header ?? '').trim()
+  if (BRANCH_RE.test(declared)) return declared
+  const cur = await $.process.run(['git', '-C', repo, 'branch', '--show-current'], { timeoutMs: 10000 }).catch(() => undefined)
+  const name = cur && cur.exitCode === 0 ? String(cur.stdout).trim() : ''
+  return BRANCH_RE.test(name) ? name : 'main'
+}
+
+/** The landed task runs of the ledger inside the window that `seen` (the slices git shows) lacks, of the lines of THIS queue (`own`: its lines and its archive; the ledger holds every project's runs) in whatever workflow they ran: a land made before the repo wrote a `Slice:` trailer. They carry no sha. */
+function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, now: number): Land[] {
+  const since = now - LAND_DAYS * 24 * 3600 * 1000
+  const out: Land[] = []
+  for (const [slice, lp] of ledger.landed) {
+    if (!own.has(slice) || seen.has(slice) || lp.endedAt < since || lp.endedAt > now + 24 * 3600 * 1000) continue
+    const d = new Date(lp.endedAt)
+    const at = `${dayOf(lp.endedAt)} ${two(d.getHours())}:${two(d.getMinutes())}`
+    const start = ledger.runs.get(slice)?.start ?? lp.start
+    const difficulty = ledger.runs.get(slice)?.difficulty ?? lp.difficulty
+    const usd = ledger.spends.has(slice) ? ledger.spends.get(slice)?.usd : lp.usd
+    out.push({ sha: '—', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}) })
+  }
+  return out
+}
+
+/** The Landed tree's rows, newest first, and the branch they were read from: the commits of the land branch carrying a `Slice:` trailer, then the ledger's landed task runs of the window that git does not show (each slice once). */
+async function lands($: any, queueFile: string, ledger: Ledger, header: string | undefined, own: Set<string>, now: number): Promise<{ lands: Land[]; branch: string }> {
   const repo = repoOf(queueFile)
-  if (repo === queueFile) return []
+  if (repo === queueFile) return { lands: [], branch: 'main' }
+  const branch = await landBranchOf($, repo, header)
   const run = await $.process
     .run(['git', '-C', repo, 'log', `--since=${LAND_DAYS} days ago`, '--first-parent', '-n', '2000',
-      '--format=%h%x09%cd%x09%(trailers:key=Slice,valueonly,separator=)', '--date=format:%d.%m %H:%M', 'main'],
+      '--format=%h%x09%cd%x09%(trailers:key=Slice,valueonly,separator=)', '--date=format:%d.%m %H:%M', branch],
       { timeoutMs: 10000 })
     .catch(() => undefined)
-  if (!run || run.exitCode !== 0) return []
-  return String(run.stdout)
+  if (!run || run.exitCode !== 0) return { lands: [], branch }
+  const fromGit: Land[] = String(run.stdout)
     .split('\n')
     .map(l => l.split('\t'))
     .filter(p => p.length >= 3 && (p[2] ?? '').trim() !== '')
@@ -444,6 +497,8 @@ async function lands($: any, queueFile: string, ledger: Ledger): Promise<Land[]>
       const at = p[1] ?? ''
       return { sha: p[0] ?? '', at, slice, start: r ? startText(r.start, at) : '?'.padEnd(5), difficulty: r?.difficulty ?? '', ...(usd !== undefined ? { usd } : {}) }
     })
+  const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, now)
+  return { lands: extra.length === 0 ? fromGit : [...fromGit, ...extra].sort((a, b) => landMs(b.at, now) - landMs(a.at, now)), branch }
 }
 
 /** The Pool tab's data, cut to what the pane draws, from the engine's /api/pool answer (`poolSnapshot`). */
@@ -550,7 +605,8 @@ async function build($: any): Promise<Snapshot> {
       return usd !== undefined ? { ...l, usd } : l
     }),
   }
-  const landed = queue ? await lands($, queueFile, ledger) : []
+  const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), now) : { lands: [], branch: 'main' }
+  const landed = read.lands
   const recent = landed.filter(l => landMs(l.at, now) > now - 24 * 3600 * 1000).length
   const landedSum = landedUsd(landed)
   const parentSum = parentUsd(ledger.parent, now, projectDirOf(repoOf(queueFile)))
@@ -559,6 +615,7 @@ async function build($: any): Promise<Snapshot> {
     sessions,
     queue,
     lands: landed,
+    landBranch: read.branch,
     recent,
     days: daySpends(landed, ledger.spends, now),
     ...(landedSum !== undefined ? { landedUsd: landedSum } : {}),
@@ -1363,7 +1420,7 @@ export const register: Register = on => {
                 <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id} {prioCell(Text, l.priority)}</Text>
               ),
             )}
-          {header('lands', 'green', landedHeading(s.lands.length, s.landedUsd, s.parentUsd))}
+          {header('lands', 'green', landedHeading(s.lands.length, s.landedUsd, s.parentUsd, s.landBranch))}
           {isOpen('lands') &&
             [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
               // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day with its spend, its lands one level deeper

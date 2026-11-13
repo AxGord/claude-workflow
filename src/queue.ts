@@ -785,15 +785,22 @@ const lastNoteOf = (l: QueueLine): { lastNote?: string } => {
 export function describeQueue(queue: Queue): {
   readonly file: string;
   readonly batchSize: number;
+  /** The header's `land_branch:` (the branch the queue's lands target), set only when the header names one. */
+  readonly landBranch?: string;
+  /** The ids moved to the queue's archive (`<queue>.archive.yaml`), set only when there are some: a land inside the plan pane's window can be of an archived line. */
+  readonly archivedIds?: readonly string[];
   readonly lines: readonly QueueLineView[];
 } {
   const plan = planPick(queue, { ignoreWindow: true });
+  const landBranch = queue.header.land_branch?.trim() ?? "";
   const why = new Map(plan.reasons.map(r => [r.id, r.why]));
   const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
   const byId = new Map(queue.lines.map(l => [l.id, l]));
   return {
     file: queue.file,
     batchSize: queue.batchSize,
+    ...(landBranch !== "" ? { landBranch } : {}),
+    ...(queue.archived.size > 0 ? { archivedIds: [...queue.archived.keys()] } : {}),
     lines: queue.lines.map(l => ({
       id: l.id,
       afterIds: afterIdsOf(l.meta.after, byId),
