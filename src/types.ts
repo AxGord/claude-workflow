@@ -122,6 +122,8 @@ export type ModelTable = z.infer<typeof ModelTableObjectSchema>;
  * A task workflow's `driver:` — the cheap agent that drives one task session for the dispatcher.
  * `prompt_ref` = the driver's instructions: a bare name (`task-driver`) is a shipped one
  * (`templates/drivers/<name>.md`), anything else a path (absolute, `~/…`, or relative to the session's cwd).
+ * `agent_type` = the Agent call's `subagent_type` (default `workflow:driver`, the plugin's agents/driver.md:
+ * workflow tools plus Agent / SendMessage / Read only, so the driver cannot edit code).
  * `start` of a session of such a workflow answers with the exact Agent call (src/driver.ts).
  */
 export const DriverObjectSchema = z
@@ -129,6 +131,7 @@ export const DriverObjectSchema = z
     model: z.string().min(1),
     effort: EffortSchema,
     prompt_ref: z.string().min(1),
+    agent_type: z.string().min(1).optional(),
   })
   .strict();
 

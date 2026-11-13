@@ -16,6 +16,9 @@ export const SHIPPED_DRIVERS_DIR = path.resolve(
   "drivers",
 );
 
+/** The Agent call's `subagent_type` when `driver.agent_type` is not set: the plugin's own driver agent. */
+export const DEFAULT_DRIVER_AGENT_TYPE = "workflow:driver";
+
 /** The context key `start` keeps the rendered call in: `status({session_id, key: "driver_call"})` re-reads it whole. */
 export const DRIVER_CALL_KEY = "driver_call";
 
@@ -83,7 +86,7 @@ export function renderDriverCall(i: DriverCallInput): string {
     "---",
     `DRIVER — this workflow is driven by an agent, not by you. Spawn exactly this (Agent), then`,
     `\`link_agent({session_id: "${i.sessionId}", agent_id: <its id>})\` and do not drive ${i.sessionId} yourself:`,
-    `  model: ${i.driver.model}, effort: ${i.driver.effort}, run_in_background: true, description: "drive ${i.task ?? i.sessionId}", prompt:`,
+    `  model: ${i.driver.model}, effort: ${i.driver.effort}, run_in_background: true, subagent_type: ${JSON.stringify(i.driver.agent_type ?? DEFAULT_DRIVER_AGENT_TYPE)}, description: "drive ${i.task ?? i.sessionId}", prompt:`,
     prompt,
   ];
   if (!i.instructionsExist)

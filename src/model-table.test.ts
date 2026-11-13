@@ -773,7 +773,7 @@ describe("model_table (engine)", () => {
     const templates = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "templates");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-mt-"));
     dirs.push(dir);
-    // project_prepare is batch-task's extension point; review_scope is replaced to keep the run off git.
+    // project_prepare is batch-task's extension point; work_check and review_scope are replaced to keep the run off git.
     fs.writeFileSync(
       path.join(dir, "bt-heir.yaml"),
       [
@@ -787,6 +787,11 @@ describe("model_table (engine)", () => {
         "    context_set: { wt: '{{stdout}}' }",
         "    on_success: work",
         "    on_error: prepare_failed",
+        "  work_check:",
+        "    type: exec",
+        "    command: 'true'",
+        "    on_success: review_scope",
+        "    on_error: work_unverified",
         "  review_scope:",
         "    type: exec",
         "    command: printf light",
@@ -803,7 +808,7 @@ describe("model_table (engine)", () => {
       await engine.setContext(s.sessionId, "task", "T1");
       await engine.setContext(s.sessionId, "difficulty", 5);
       if (upTo !== "claim") await engine.transition(s.sessionId, "prepare");
-      if (upTo === "review") await engine.transition(s.sessionId, "review");
+      if (upTo === "review") await engine.transition(s.sessionId, "check");
       if (upTo === "claim") expect(storage.read(s.sessionId)!.context.stages_first).toBeUndefined();
       await engine.abort(s.sessionId);
       return storage.ledger.at(-1) as LedgerEntry;

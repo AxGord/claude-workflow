@@ -188,6 +188,7 @@ describe("batch-task default extension points", () => {
     );
     expect(moved.exit_code).toBe(4);
     expect(moved.stdout).toContain("HEAD moved during land_test: nothing taken back");
+    expect(moved.stdout).toContain("repo state:");
     expect(git(repo, "log", "-1", "--format=%s")).toBe("x");
     expect(git(repo, "log", "-1", "--format=%s", "HEAD~1")).toMatch(/^Merge branch 'batch\/T1'/);
   });

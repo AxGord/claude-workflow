@@ -477,7 +477,7 @@ states with contract names; bundled, each keeps the old behaviour (the agent doe
 | `project_gate` | `testing` | exec `true` — no gate | `on_success: done`, `on_error: failed` (the caller's fix round) |
 | `project_build` | `bug-fix` | prompt: build the fixed app before the visual check | `on_success: verify_visual`, `on_error: write_fix` |
 | `project_prepare` | `batch-task` | exec: `git worktree add <repo>/../.wt/<repo-name>/<ID> -b batch/<ID>`; stdout = the path alone | `on_success: work`, `on_error: prepare_failed` |
-| `project_land` | `batch-task` | exec under the lock `{{context.cwd}}-land`: `git merge --no-ff` + the queue's `land_test:` (red → the merge is taken back with `reset --keep`; unsafe → exit 4, nothing touched) | `cases: {"0": mark_done}`, `default: land_failed`, `on_timeout: land_failed` |
+| `project_land` | `batch-task` | exec under the lock `{{context.cwd}}-land`: `git merge --no-ff` + the queue's `land_test:` (red → the merge is taken back with `reset --keep`; unsafe → exit 4, nothing touched) | `cases: {"0": mark_done}`, `default: land_failed`, `on_timeout: land_timeout` (an exec: retry once when the branch is unmerged and the tree clean, else `stop_state`) |
 
 `coding` and `bug-fix` verify through `testing`, so one heir of `testing` serves both. Give every
 heavy step `on_timeout:` and a state of its own for it.
@@ -627,8 +627,8 @@ The bundled `batch` drives a queue: `plan_queue` (write or resume it; context `q
 `paused`) → `dispatch` starts one child session per admitted line in its repo → `collect` advances them
 on agent notifications and re-picks on every freed slot → one `cross_check` of the combined diff. The
 child is `batch-task`: `claim` → `project_prepare` (worktree) → `work` (one worker agent, its session
-linked) → `review_scope` (exec: the diff's class) → `review` (one `workflow:reviewer` agent, read-only, no session of its own; FIXES → `work`) →
-`project_land` (merge + `land_test` under the repo's land lock) → `mark_done` → `cleanup`.
+linked) → `work_check` (exec: one clean commit on the branch; the shell-less `workflow:driver` runs no git itself) → `review_scope` (exec: the diff's class) → `review` (one `workflow:reviewer` agent, read-only, no session of its own; FIXES → `work`) →
+`project_land` (merge + `land_test` under the repo's land lock; its exit 4 prints the repo state, a timeout goes to `land_timeout`; `stop` goes through `stop_state`, an exec that records `repo_state`) → `mark_done` → `cleanup`.
 **From a plan.** A plan has two levels. A TASK can be tested, reviewed and landed on its own and leaves
 main green; a STEP cannot, or is too small to pay for its own gate, and shares its task's check, review and
 land. `planning` writes a `## Tasks` table (`id`, `after`, `touches`, `difficulty`) with the steps under
@@ -747,10 +747,13 @@ driver:
   effort: low
   prompt_ref: task-driver      # a bare name = shipped templates/drivers/<name>.md; else a path
                                # (absolute, ~/…, or relative to the session's cwd)
+  agent_type: workflow:driver  # optional: the Agent call's subagent_type (this is the default)
 ```
 
 - `start` of a session of such a workflow ends its answer with a DRIVER block: the exact Agent call
-  (model, effort, `run_in_background: true`, the prompt filled with the session id, `context.task`,
+  (model, effort, `run_in_background: true`, `subagent_type` = `driver.agent_type`, default
+  `workflow:driver`: the plugin's `agents/driver.md`, workflow tools plus Agent / SendMessage / Read only, so
+  a dispatcher that copies the block gets a driver that cannot edit code; the prompt filled with the session id, `context.task`,
   `context.queue_file` — the session's own, else its parent's — and the instructions' path), then
   the `link_agent` to make. A missing instructions file is named there as a WARNING; a bare name that
   is no shipped driver fails the load. A heir inherits `driver:` unless it sets its own whole.
