@@ -178,6 +178,7 @@ Create-side + whole-file counterparts of the node-level writer-emit ops. **Raw `
 - A new lint/fix rule green on its unit suite + scratch probes is NOT done yet — run it over a large real tree and READ every site it would change.
 - `move` (type to another file/package), the contract measured by S64/S65 (2026-09-03):
 - Removing a temporary `Sys.stderr` probe: use `remove-element --match`, not a verbatim `patch` revert.
+- A TEMPORARY probe edit (a hand cut to see whether a pin dies) takes `--no-registry-follow` on patch / replace-node and the other post-write-fix ops, also with `--fix`: without it the write re-spells the `move.registries` records (arm find/replace under `test/testkit/arms`) that name the cut code. rename / extract-var / extract-constant / move / fmt / lint `--fix` still always follow.
 - Wrapping an EXISTING member in `#if … #end`: `patch` the ENCLOSING type, not the member.
 - A scratch fixture that `lint --fix` SKIPS reads exactly like a refusal.
 - A scratch-file probe of a LAYOUT-sensitive fix (line wrap/indent/braces) is config-blind — same root cause as the `/tmp`-canonical false-refuse and `--fix` no-op notes (../hxq/references/ops.md, references/lint.md).
