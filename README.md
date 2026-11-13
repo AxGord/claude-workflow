@@ -477,7 +477,7 @@ states with contract names; bundled, each keeps the old behaviour (the agent doe
 | `project_gate` | `testing` | exec `true` — no gate | `on_success: done`, `on_error: failed` (the caller's fix round) |
 | `project_build` | `bug-fix` | prompt: build the fixed app before the visual check | `on_success: verify_visual`, `on_error: write_fix` |
 | `project_prepare` | `batch-task` | exec: `git worktree add <repo>/../.wt/<repo-name>/<ID> -b batch/<ID>`; stdout = the path alone | `on_success: work`, `on_error: prepare_failed` |
-| `project_land` | `batch-task` | exec under the lock `{{context.cwd}}-land`: `git merge --no-ff` + the queue's `land_test:` (red → the merge is taken back with `reset --keep`; unsafe → exit 4, nothing touched) | `cases: {"0": mark_done}`, `default: land_failed`, `on_timeout: land_timeout` (an exec: retry once when the branch is unmerged and the tree clean, else `stop_state`) |
+| `project_land` | `batch-task` | exec under the lock `{{context.cwd}}-land`: `git merge --no-ff` + the queue's `land_test:` (red → the merge is taken back with `reset --keep`; unsafe → exit 4, nothing touched) | `cases: {"0": mark_done}`, `default: land_failed`, `on_timeout: land_timeout` (an exec: retry twice (`max_visits: 2`, each visit re-runs `project_land`) when the branch is unmerged and the tree clean, else `stop_state`) |
 
 `coding` and `bug-fix` verify through `testing`, so one heir of `testing` serves both. Give every
 heavy step `on_timeout:` and a state of its own for it.

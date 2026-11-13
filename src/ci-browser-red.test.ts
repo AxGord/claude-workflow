@@ -20,7 +20,8 @@ describe("browser tests with a Chrome that cannot start", () => {
   it("are skipped when only CHROME_BIN is set", () => {
     const out = run({ WF_BROWSER_TESTS: "" });
     expect(out).not.toContain("DevToolsActivePort");
-    expect(out).not.toContain("FAIL");
+    // the word, not the substring: the checkout path may itself contain FAILED
+    expect(out).not.toMatch(/\bFAIL\b/);
   }, 130_000);
 
   it("opted in, fail with a clear error, not ENOENT", () => {
