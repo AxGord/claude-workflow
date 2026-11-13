@@ -164,7 +164,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     ready: pending.filter(l => l.reason === 'ready').sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).map(strip),
     waiting: pending
       .filter(l => l.reason !== 'ready' && !l.isParked)
-      .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty })),
+      .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty, priority: l.priority ?? '' })),
     failedLines,
     marks: Object.fromEntries(api.lines.map(l => [l.id, l.mark ?? ' '])),
   }
@@ -1257,7 +1257,7 @@ export const register: Register = on => {
       const st = (await read($, poolAtom)) as PoolState | null
       body = poolBody(st, now, columns, { Box, Text })
     } else if (tab === 'waiting') {
-      const waitTwo = !fitsOneLine(q.waiting.map(w => `${BAR_W} ${markOf(w.id)} ${w.id} ${w.why}`), columns)
+      const waitTwo = !fitsOneLine(q.waiting.map(w => `${BAR_W} ${markOf(w.id)} ${w.id}${prioGlyph(w.priority) ? ' ⇈' : ''} ${w.why}`), columns)
       // the height cap counts lines: a two-line row takes two
       const waitCap = waitTwo ? Math.max(1, Math.floor(room / 2)) : room
       body = (
@@ -1267,11 +1267,11 @@ export const register: Register = on => {
             w === null ? (q.waiting.length > waitCap ? moreRow('waiting-more', `+${q.waiting.length - waitCap} more`) : null) :
             waitTwo ? (
               <Box flexDirection="column">
-                <Text>{level(w.difficulty)} {kindOf(w.id)} {fitCells(w.id, Math.max(1, columns - 8))}</Text>
+                <Text>{level(w.difficulty)} {kindOf(w.id)} {fitCells(w.id, Math.max(1, columns - (prioGlyph(w.priority) ? 10 : 8)))}{prioGlyph(w.priority) ? ' ' : ''}{prioGlyph(w.priority) ? prioCell(Text, w.priority) : ''}</Text>
                 <Text dimColor>{TAB}{fitCells(w.why, Math.max(1, columns - TAB.length))}</Text>
               </Box>
             ) : (
-              <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}<Text dimColor> {w.why}</Text></Text>
+              <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}{prioGlyph(w.priority) ? ' ' : ''}{prioGlyph(w.priority) ? prioCell(Text, w.priority) : ''}<Text dimColor> {w.why}</Text></Text>
             ),
           )}
         </Box>

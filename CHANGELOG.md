@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- plan pane (ENG-PANE-WAITING-PRIORITY-GLYPH): the priority glyph (`⇈` urgent, `↑` high, `↓` low) showed only in Next, so no arrow was visible while an exclusive line held the repo and every pending line sat in Waiting. `queueView`'s `waiting` rows carry `priority` and the Waiting tab draws the glyph right after the id, one space, as Next does; a normal line keeps none. Pin: `hooks/plan-pane.test.tsx` (a waiting high line shows `ID ↑`, a normal one no glyph). README says it.
 - plan pane (ENG-PANE-MORE-ROW-STAYS): opening a capped list (`+N more` in Sessions, Waiting, Next) moved its toggle row to the list's end. The toggle now stays after the first `cap` lines and the rest list below it. Pin: `src/pane-more-row-stays.test.ts` (toggle row index identical open vs closed). README says it.
 - engine (ENG-EXCLUSIVE-HOLD-SAME-PASS): the exclusive hold of `planPick` read only lines running before the pass, so a line admitted earlier in the same pass (empty window, a high line overlapping the exclusive) let later same-repo lines in and the exclusive starved. A line admitted in the pass now counts as running for the hold; `exclusive_hold: no` is unchanged.
 

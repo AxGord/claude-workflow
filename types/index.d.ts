@@ -46,7 +46,7 @@ export type QueueView = {
   /** pending tasks the picker would admit with the window ignored (file order) */
   ready: QueueLine[]
   /** pending tasks waiting (not parked), with the picker's own reason */
-  waiting: { id: string; why: string; difficulty: string }[]
+  waiting: { id: string; why: string; difficulty: string; priority: string }[]
   /** every failed line, newest first by the day it ended (an undated one after the dated, the later in the file first); `recent` marks the ones the pane draws before `+N older` */
   failedLines: FailedLine[]
   /** every queue line's kind glyph by id (`kindMark`, from /api/queue), drawn right after the difficulty bar; absent id = blank */

@@ -773,6 +773,19 @@ test('Waiting: the height cap counts lines, so a two-line list shows half as man
   }
 })
 
+test('Waiting: a high line shows its glyph after the id, a normal line none', async ($, on) => {
+  engine(on, true)
+  const base = API_QUEUE.lines.find(l => l.id === 'WAIT-1')!
+  API_QUEUE.lines.push({ ...base, id: 'WAIT-HI', priority: 'high' } as never, { ...base, id: 'WAIT-NO', priority: 'normal' } as never)
+  try {
+    const wide = await paneTexts($, 100, ['tab-waiting'])
+    expect(wide.some(t => /◆ WAIT-HI ↑/.test(t))).toBe(true)
+    expect(wide.some(t => /WAIT-NO +after:/.test(t) && !/[↑⇈↓]/.test(t))).toBe(true)
+  } finally {
+    API_QUEUE.lines.splice(-2)
+  }
+})
+
 test('foldFlipped: a key joins the fold list when it was absent and leaves it when present', () => {
   expect(foldFlipped([], 'next-more')).toEqual(['next-more'])
   expect(foldFlipped(['failed', 'next-more'], 'next-more')).toEqual(['failed'])

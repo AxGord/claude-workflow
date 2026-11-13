@@ -973,7 +973,7 @@ no model call, no tokens:
   a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
   or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's
   `/api/workflows`), and a link to its graph in the dashboard (`/session/<id>`).
-- **Waiting** — pending tasks (not parked) with the picker's own reason, from the dashboard's `/api/queue`.
+- **Waiting** — pending tasks (not parked) with the picker's own reason, from the dashboard's `/api/queue`; the id is followed by the line's priority glyph (`⇈` urgent, `↑` high, `↓` low; a normal line none), as in Next.
   The same rule applies: `bar kind id reason` on one line while every row fits, else two lines each (`bar kind id` / the reason
   indented, cut with `…`). The Sessions tab follows it too: a tree row too long for the pane is two lines (workflow and task /
   the state and age indented), every row of the tree. The Pool tab already cuts each of its lines to the width.
