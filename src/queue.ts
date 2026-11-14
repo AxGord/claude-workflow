@@ -93,7 +93,12 @@ export type OverlapMode = (typeof OVERLAP_MODES)[number];
 const ID_RE = /^[A-Za-z0-9._-]+$/;
 // The lock outlives a dead holder by this long; proper-lockfile refreshes it while held.
 const LOCK_STALE_MS = 10_000;
-const LOCK_RETRIES = { retries: 300, minTimeout: 10, maxTimeout: 100, randomize: true };
+const LOCK_RETRIES = {
+  retries: 300,
+  minTimeout: 10,
+  maxTimeout: 100,
+  randomize: true,
+};
 /** How every write prints the document: no folding of long scalars. */
 const YAML_OUT = { lineWidth: 0 } as const;
 
@@ -171,10 +176,15 @@ export interface PickResult {
   /** One entry per pending task not admitted, in file order. */
   readonly reasons: readonly { readonly id: string; readonly why: string }[];
   readonly dryRun: boolean;
+  /** `<ID> (<prio>) admitted ahead of exclusive <X> (<prio>)`: a same-repo line admitted in a pass that then held an exclusive line. */
+  readonly overtakes?: readonly string[];
   /** The ids the header's `archive_after_days:` moved to the archive before this pick, in file order. */
   readonly archived?: readonly string[];
   /** Lines carrying a task key this server does not know, in file order. */
-  readonly unknownKeys: readonly { readonly id: string; readonly keys: readonly string[] }[];
+  readonly unknownKeys: readonly {
+    readonly id: string;
+    readonly keys: readonly string[];
+  }[];
 }
 
 /** `unknown key priority on X: ignored by this server` — one line per task with unknown keys. */
@@ -424,7 +434,10 @@ function checkIgnore(
     input: `${rels.join("\0")}\0`,
     encoding: "utf8",
   });
-  return { out: (r.stdout ?? "").split("\0").filter(x => x !== ""), status: r.status };
+  return {
+    out: (r.stdout ?? "").split("\0").filter(x => x !== ""),
+    status: r.status,
+  };
 }
 
 /**
@@ -621,6 +634,8 @@ export function planPick(
   const taken: QueueLine[] = [...running];
   const admitted: AdmittedTask[] = [];
   const reasons: { id: string; why: string; index: number }[] = [];
+  const overtakes: string[] = [];
+  const prio = (x: QueueLine): string => priorityOf(x) ?? "normal";
   const free = queue.batchSize - running.length;
   const holdOn = exclusiveHoldOn(queue);
   /** The pending exclusive lines waiting only for running lines of their repo: the repo key each holds. */
@@ -686,8 +701,16 @@ export function planPick(
           !hand &&
           exclusiveOf(l) &&
           taken.some(r => sameRepoKey(key, repoKeys.get(r) ?? null))
-        )
+        ) {
           holds.push({ id: l.id, key });
+          for (const a of admitted) {
+            const al = byId.get(a.id);
+            if (al !== undefined && sameRepoKey(key, repoKeys.get(al) ?? null))
+              overtakes.push(
+                `${a.id} (${prio(al)}) admitted ahead of exclusive ${l.id} (${prio(l)})`,
+              );
+          }
+        }
       }
     }
     if (why === null && repo !== null) {
@@ -726,6 +749,7 @@ export function planPick(
     running: running.map(l => l.id),
     pending: queue.lines.filter(l => l.status === "pending").length,
     admitted,
+    ...(overtakes.length > 0 ? { overtakes } : {}),
     reasons: reasons.sort((a, b) => a.index - b.index).map(({ id, why }) => ({ id, why })),
     unknownKeys: queue.lines
       .filter(l => l.unknownKeys.length > 0)
@@ -1073,7 +1097,11 @@ export async function pickQueue(
           if (ids.has(l.id) && l.status === "pending") taskNode(e, l).set("status", "running");
         if (!writeText(e.queue, e.doc.toString(YAML_OUT))) return false;
       }
-      return { ...plan, dryRun: false, ...(archived.length > 0 ? { archived } : {}) };
+      return {
+        ...plan,
+        dryRun: false,
+        ...(archived.length > 0 ? { archived } : {}),
+      };
     });
   });
 }
@@ -1110,7 +1138,11 @@ function ageDay(meta: Readonly<Record<string, string>>): string | undefined {
 
 function archivePlan(
   queue: Queue,
-  opts: { readonly olderThanDays: number; readonly includeUnended?: boolean; readonly now?: Date },
+  opts: {
+    readonly olderThanDays: number;
+    readonly includeUnended?: boolean;
+    readonly now?: Date;
+  },
 ): Pick<ArchiveResult, "moved" | "keptNamed" | "unended"> {
   const cutoff = daysBefore(opts.olderThanDays, opts.now ?? new Date());
   const byId = new Map(queue.lines.map(l => [l.id, l]));
@@ -1159,7 +1191,13 @@ export async function archiveQueue(
   if (opts.dryRun === true) {
     const q = readQueue(file);
     const size = Buffer.byteLength(q.source);
-    return { archive, ...archivePlan(q, opts), bytesBefore: size, bytesAfter: size, dryRun: true };
+    return {
+      archive,
+      ...archivePlan(q, opts),
+      bytesBefore: size,
+      bytesAfter: size,
+      dryRun: true,
+    };
   }
   return withQueueLock(file, () => archiveLocked(file, opts));
 }
@@ -1167,7 +1205,11 @@ export async function archiveQueue(
 /** The archive move itself, for a caller already holding the queue's lock. */
 function archiveLocked(
   file: string,
-  opts: { readonly olderThanDays: number; readonly includeUnended?: boolean; readonly now?: Date },
+  opts: {
+    readonly olderThanDays: number;
+    readonly includeUnended?: boolean;
+    readonly now?: Date;
+  },
 ): ArchiveResult {
   const archive = archivePath(file);
   return replanning(file, () => {
@@ -1175,7 +1217,13 @@ function archiveLocked(
     const plan = archivePlan(e.queue, opts);
     const bytesBefore = Buffer.byteLength(e.queue.source);
     if (plan.moved.length === 0)
-      return { archive, ...plan, bytesBefore, bytesAfter: bytesBefore, dryRun: false };
+      return {
+        archive,
+        ...plan,
+        bytesBefore,
+        bytesAfter: bytesBefore,
+        dryRun: false,
+      };
     const adoc = YAML.parseDocument(
       fs.existsSync(archive) ? fs.readFileSync(archive, "utf8") : "tasks: []\n",
     );
@@ -1216,7 +1264,13 @@ function archiveLocked(
       fs.renameSync(tmp, archive);
     }
     if (!writeText(e.queue, text)) return false;
-    return { archive, ...plan, bytesBefore, bytesAfter: Buffer.byteLength(text), dryRun: false };
+    return {
+      archive,
+      ...plan,
+      bytesBefore,
+      bytesAfter: Buffer.byteLength(text),
+      dryRun: false,
+    };
   });
 }
 
@@ -1330,7 +1384,11 @@ export const lineTextHash = (line: QueueLine): string =>
 
 /** `textHashOf` for a task node. */
 function nodeTextHash(node: YAMLMap): string {
-  const o = node.toJSON() as { text?: unknown; touches?: unknown; owner?: unknown };
+  const o = node.toJSON() as {
+    text?: unknown;
+    touches?: unknown;
+    owner?: unknown;
+  };
   const list = Array.isArray(o.touches) ? o.touches.map(str).join(", ") : str(o.touches ?? "");
   return textHashOf(str(o.text ?? ""), list, str(o.owner ?? ""));
 }
@@ -1413,7 +1471,11 @@ export async function markQueue(
   id: string,
   to: MarkTarget,
   note?: string,
-  opts: { readonly retry?: boolean; readonly from?: string; readonly force?: string } = {},
+  opts: {
+    readonly retry?: boolean;
+    readonly from?: string;
+    readonly force?: string;
+  } = {},
 ): Promise<MarkResult> {
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
   checkNote(note);
@@ -1686,7 +1748,11 @@ export async function addQueueLine(
     const doc = YAML.parseDocument(NEW_QUEUE);
     const tasks = doc.get("tasks", true) as YAMLSeq;
     tasks.flow = false;
-    const e = { queue: parseQueue(NEW_QUEUE, abs, archivedStatuses(abs)), doc, tasks };
+    const e = {
+      queue: parseQueue(NEW_QUEUE, abs, archivedStatuses(abs)),
+      doc,
+      tasks,
+    };
     place(e);
     check(parseQueue(doc.toString(YAML_OUT), abs, e.queue.archived));
     fs.mkdirSync(path.dirname(abs), { recursive: true });
@@ -1896,6 +1962,7 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
     );
   if (r.archived !== undefined && r.archived.length > 0)
     out.push(`archived ${r.archived.length} old line(s) (archive_after_days)`);
+  for (const o of r.overtakes ?? []) out.push(o);
   out.push(...explainLines(r.reasons, explain));
   for (const u of r.unknownKeys) out.push(unknownKeyNotice(u.id, u.keys));
   return out.join("\n");
