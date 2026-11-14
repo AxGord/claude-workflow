@@ -125,7 +125,7 @@ function parseSession(text: string): Parsed | null {
 const FAILED_DAYS = 2
 
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; ended?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; unblockOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; ended?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }, now: number = Date.now()): QueueView {
@@ -141,6 +141,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     reason: l.reason ?? '',
   }))
   const order = new Map(api.lines.map(l => [l.id, l.pickOrder ?? 0]))
+  const unblockOrder = new Map(api.lines.flatMap(l => (l.unblockOrder === undefined ? [] : [[l.id, l.unblockOrder] as const])))
   // newest first by the day the line ended (else the date of its last note); an undated line after the dated; ties: the later in the file first
   const endOf = (l: ApiLine) => l.ended ?? l.lastNoteDate ?? ''
   // recent = ended within the last FAILED_DAYS days; a line with no `ended` (written before the key) is older
@@ -162,6 +163,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     pending: pending.length,
     running: lines.filter(l => l.status === 'running').map(strip),
     ready: pending.filter(l => l.reason === 'ready').sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).map(strip),
+    unblocked: pending.filter(l => unblockOrder.has(l.id)).sort((a, b) => (unblockOrder.get(a.id) ?? 0) - (unblockOrder.get(b.id) ?? 0)).map(strip),
     waiting: pending
       .filter(l => l.reason !== 'ready' && !l.isParked)
       .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty, priority: l.priority ?? '' })),
@@ -1348,7 +1350,9 @@ export const register: Register = on => {
       // a section lays out as one: when ANY of its rows does not fit the pane, EVERY row takes two lines
       const runTwo = !fitsOneLine(q.running.map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}  ${whereOf(l.id)} ${sinceOf(l.id)}`), columns)
       const nextMore = isOpen('next-more')
-      const nextTwo = !fitsOneLine((nextMore ? q.ready : q.ready.slice(0, 10)).map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id} ${prioGlyph(l.priority)?.glyph ?? ' '}`), columns)
+      // nothing admittable now: Next lists what the running lines unblock, in the picker's order
+      const nextRows = q.ready.length > 0 ? q.ready : q.unblocked
+      const nextTwo = !fitsOneLine((nextMore ? nextRows : nextRows.slice(0, 10)).map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id} ${prioGlyph(l.priority)?.glyph ?? ' '}`), columns)
       // the rows left for Next count lines: a two-line Running or Next row takes two
       const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length * (runTwo ? 2 : 1)
       const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
@@ -1405,11 +1409,11 @@ export const register: Register = on => {
               </Box>
             )
           })}
-          {header('next', 'blue', `⏭ Next (${q.ready.length})`)}
-          {isOpen('next') && q.ready.length === 0 && <Text dimColor>  nothing ready</Text>}
+          {header('next', 'blue', `⏭ Next (${nextRows.length})`)}
+          {isOpen('next') && nextRows.length === 0 && <Text dimColor>  nothing ready</Text>}
           {isOpen('next') &&
-            [...q.ready.slice(0, showReady), null, ...(nextMore ? q.ready.slice(showReady) : [])].map(l =>
-              l === null ? (q.ready.length > showReady ? moreRow('next-more', `+${q.ready.length - showReady} more can start (dependencies done), in the picker's order`, '  ') : null) :
+            [...nextRows.slice(0, showReady), null, ...(nextMore ? nextRows.slice(showReady) : [])].map(l =>
+              l === null ? (nextRows.length > showReady ? moreRow('next-more', `+${nextRows.length - showReady} more ${q.ready.length > 0 ? 'can start (dependencies done)' : 'start once the running lines end'}, in the picker's order`, '  ') : null) :
               nextTwo ? (
                 // two lines: bar, kind; the id indented under them, the priority glyph after it
                 <Box flexDirection="column">

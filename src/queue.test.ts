@@ -1505,6 +1505,65 @@ describe("describeQueue", () => {
     expect(reasons.F).toMatch(/^overlaps /);
   });
 
+  it("unblockOrder: with nothing admittable, the lines only the running ones keep out, in the order the picker admits them once those end", () => {
+    const unblock = (md: string[]) =>
+      describeQueue(
+        parseMd(["# x", "batch_size: 1", "## Tasks", ...md, ""].join("\n"), "/tmp/q.md"),
+      )
+        .lines.filter(l => l.unblockOrder !== undefined)
+        .sort((a, b) => (a.unblockOrder ?? 0) - (b.unblockOrder ?? 0))
+        .map(l => l.id);
+    const body = (id: string, rest: string) =>
+      `- [ ] ${id} | repo: /tmp | ${rest} | text of ${id} is long enough to be prose here`;
+    // a running exclusive line holds its repo: the two free lines are listed (priority, then file order), `after:` a pending line is not
+    expect(
+      unblock([
+        "- [>] RUN | repo: /tmp | exclusive: yes | text of run is long enough to be prose here",
+        body("P-LOW", "touches: src/a.ts | priority: low"),
+        body("P-HIGH", "touches: src/b.ts | priority: high"),
+        body("P-AFTER", "after: P-LOW"),
+        "- [ ] P-PARKED ⏸ | repo: /tmp | touches: src/c.ts | text of parked is long enough to be prose here",
+        body("P-PARENT", "touches: src/d.ts | model: —"),
+        "- [~] BACKLOG | repo: /tmp | touches: src/e.ts | text of backlog is long enough to be prose here",
+      ]),
+    ).toEqual(["P-HIGH", "P-LOW"]);
+    // `after:` a running line is unblocked by it
+    expect(
+      unblock([
+        "- [>] RUN | repo: /tmp | touches: src/a.ts | text of run is long enough to be prose here",
+        body("P-1", "after: RUN | touches: src/b.ts"),
+      ]),
+    ).toEqual(["P-1"]);
+    // a line admittable now: no line is marked; a pause: none either; nothing pending: none
+    expect(
+      unblock([
+        "- [>] RUN | repo: /tmp | touches: src/a.ts | text of run is long enough to be prose here",
+        body("FREE", "touches: src/b.ts"),
+        body("HELD", "touches: src/a.ts"),
+      ]),
+    ).toEqual([]);
+    expect(
+      describeQueue(
+        parseMd(
+          [
+            "# x",
+            "batch_size: 0",
+            "## Tasks",
+            "- [>] RUN | repo: /tmp | exclusive: yes | text of run is long enough to be prose here",
+            body("P", "touches: src/a.ts"),
+            "",
+          ].join("\n"),
+          "/tmp/q.md",
+        ),
+      ).lines.some(l => l.unblockOrder !== undefined),
+    ).toBe(false);
+    expect(
+      unblock([
+        "- [>] RUN | repo: /tmp | exclusive: yes | text of run is long enough to be prose here",
+      ]),
+    ).toEqual([]);
+  });
+
   it("archivedIds are the ids moved to the archive, absent without one", () => {
     expect(describeQueue(q).archivedIds).toBeUndefined();
     expect(

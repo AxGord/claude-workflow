@@ -797,6 +797,11 @@ export interface QueueLineView {
   readonly reason?: string;
   /** A ready line's place in the picker's order (priority, then file order). */
   readonly pickOrder?: number;
+  /**
+   * While no pending line is admittable now: a pending line's place in the order the picker admits it once the running lines
+   * have ended (it is kept out only by them). Absent on every other line.
+   */
+  readonly unblockOrder?: number;
   /** Set when not `normal`. */
   readonly priority?: Priority;
 }
@@ -810,6 +815,25 @@ const lastNoteOf = (l: QueueLine): { lastNote?: string } => {
   const first = (l.notes.at(-1)?.text ?? "").trim().split("\n")[0]?.trim() ?? "";
   return first === "" ? {} : { lastNote: first };
 };
+
+/**
+ * With nothing admittable now and lines running: the ids the picker would admit once the running lines are done, by their place
+ * in that pass. The pass is the picker's own, run on the queue with the running lines marked done (window ignored).
+ */
+function unblockedByRunning(
+  queue: Queue,
+  now: Pick<ReturnType<typeof planPick>, "admitted">,
+): ReadonlyMap<string, number> {
+  if (now.admitted.length > 0 || !queue.lines.some(l => l.status === "running")) return new Map();
+  const after = planPick(
+    {
+      ...queue,
+      lines: queue.lines.map(l => (l.status === "running" ? { ...l, status: "done" as const } : l)),
+    },
+    { ignoreWindow: true },
+  );
+  return new Map(after.admitted.map((a, i) => [a.id, i]));
+}
 
 /** Every line of a queue with, for each pending one, the picker's reason evaluated without the window. */
 export function describeQueue(queue: Queue): {
@@ -825,6 +849,7 @@ export function describeQueue(queue: Queue): {
   const landBranch = queue.header.land_branch?.trim() ?? "";
   const why = new Map(plan.reasons.map(r => [r.id, r.why]));
   const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
+  const unblock = unblockedByRunning(queue, plan);
   const byId = new Map(queue.lines.map(l => [l.id, l]));
   return {
     file: queue.file,
@@ -856,6 +881,7 @@ export function describeQueue(queue: Queue): {
         ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }
         : {}),
       ...(ready.has(l.id) ? { pickOrder: ready.get(l.id) } : {}),
+      ...(unblock.has(l.id) ? { unblockOrder: unblock.get(l.id) } : {}),
       ...(prioOf(l) !== undefined ? { priority: prioOf(l) } : {}),
     })),
   };

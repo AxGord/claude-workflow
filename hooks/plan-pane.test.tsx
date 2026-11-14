@@ -571,6 +571,59 @@ test('ready lines come in the picker\'s order, the priority named', () => {
   expect(view.ready[0].priority).toBe('high')
 })
 
+// the engine's /api/queue answer for one running exclusive line and pending lines of its repo: `unblockOrder` is the picker's own
+// pass with the running lines done; a line kept out by something else (`after:` a pending line) has none
+const unblockQueue = (pending: { id: string; unblockOrder?: number; priority?: string }[]) => {
+  const base = API_QUEUE.lines.find(l => l.id === 'NEXT-1')!
+  const mk = (id: string, status: string, extra: object = {}) => ({ ...base, id, status, priority: undefined, pickOrder: undefined, ...extra })
+  return {
+    ...API_QUEUE,
+    lines: [mk('EXCL-RUN', 'running', { exclusive: true, reason: undefined }), ...pending.map(p => mk(p.id, 'pending', { reason: 'overlaps EXCL-RUN (exclusive EXCL-RUN)', ...p }))],
+  }
+}
+
+test('nothing admittable: Next lists what the running lines unblock, in the picker\'s order; a line still blocked after them is not listed', () => {
+  const view = queueView('/proj/q.yaml', unblockQueue([
+    { id: 'P-2', unblockOrder: 1 },
+    { id: 'P-AFTER' },
+    { id: 'P-1', unblockOrder: 0, priority: 'high' },
+  ]) as never)
+  expect(view.ready).toEqual([])
+  expect(view.unblocked.map(l => l.id)).toEqual(['P-1', 'P-2'])
+  expect(view.unblocked[0].priority).toBe('high')
+  expect(queueView('/proj/q.yaml', API_QUEUE as never).unblocked).toEqual([])
+})
+
+test('Next: with a running exclusive line the pane lists the two lines it unblocks and not the one that waits for a pending line', async ($, on) => {
+  engine(on, true)
+  const saved = API_QUEUE.lines.splice(0, API_QUEUE.lines.length)
+  API_QUEUE.lines.push(...(unblockQueue([{ id: 'P-1', unblockOrder: 0 }, { id: 'P-2', unblockOrder: 1 }, { id: 'P-AFTER' }]).lines as never[]))
+  try {
+    const all = (await paneTexts($, 100, [])).join('\n')
+    expect(all).toContain('Next (2)')
+    expect(all).not.toContain('nothing ready')
+    expect(all).toContain('P-1')
+    expect(all).toContain('P-2')
+    // P-AFTER shows in Waiting only (a tab the pane has not opened)
+    expect(all).not.toContain('P-AFTER')
+  } finally {
+    API_QUEUE.lines.splice(0, API_QUEUE.lines.length, ...saved)
+  }
+})
+
+test('Next: nothing pending keeps `nothing ready`', async ($, on) => {
+  engine(on, true)
+  const saved = API_QUEUE.lines.splice(0, API_QUEUE.lines.length)
+  API_QUEUE.lines.push(...(unblockQueue([]).lines as never[]))
+  try {
+    const all = (await paneTexts($, 100, [])).join('\n')
+    expect(all).toContain('Next (0)')
+    expect(all).toContain('nothing ready')
+  } finally {
+    API_QUEUE.lines.splice(0, API_QUEUE.lines.length, ...saved)
+  }
+})
+
 test('failed lines come newest first, undated last, each with its reason', () => {
   const view = queueView('/proj/q.yaml', API_QUEUE as never, NOW)
   expect(view.failedLines.map(l => l.id)).toEqual(['FAIL-LONG', 'FAIL-NEW', 'FAIL-OLD', 'FAIL-BARE'])

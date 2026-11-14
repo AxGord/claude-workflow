@@ -45,6 +45,8 @@ export type QueueView = {
   running: QueueLine[]
   /** pending tasks the picker would admit with the window ignored (file order) */
   ready: QueueLine[]
+  /** while `ready` is empty: the pending lines kept out only by the running ones, in the order the picker admits them once those end (the picker's own pass with the running lines done); `[]` otherwise */
+  unblocked: QueueLine[]
   /** pending tasks waiting (not parked), with the picker's own reason */
   waiting: { id: string; why: string; difficulty: string; priority: string }[]
   /** every failed line, newest first by the day it ended (an undated one after the dated, the later in the file first); `recent` marks the ones the pane draws before `+N older` */
