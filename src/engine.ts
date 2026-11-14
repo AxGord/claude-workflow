@@ -959,7 +959,12 @@ export class Engine {
     if (!s || s.stack.length === 0 || !this._declaresDriver(s)) return [];
     try {
       const children = this._storage.readAll().filter(c => c.parent_session_id === sessionId);
-      return linkedAgentLines(s, children);
+      const frame = s.stack[s.active_frame];
+      const isRoute = (state: string): boolean => {
+        const def = frame ? this._resolveState(s, frame.workflow, state) : undefined;
+        return def?.type === "exec" || def?.type === "fetch" || def?.station === false;
+      };
+      return linkedAgentLines(s, children, isRoute);
     } catch {
       return [];
     }

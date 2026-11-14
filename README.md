@@ -791,7 +791,12 @@ driver:
   marked stale nor skipped. (The ledger's per-agent spend is independent of this: every `link_agent` call is also recorded
   with its time, the parent's state and that state's stage in `agent_links`, under any parent.) `status` of the parent lists `LINKED AGENTS at <state> (visit N)`: each child agent
   linked at the current state — `linked at visit N → current`, or `linked at visit 1, now visit 2 →
-  stale` (its session ended; an earlier visit's whose session still runs is named so). A re-spawned
+  stale` (its session ended; an earlier visit's whose session still runs is named so). At a `_spawn` state
+  (`work_spawn`, `plan_spawn`) the running agent linked at the state the parent stood at just before it (routing steps
+  such as an exec `plan_route` skipped; its session started there) is also listed, `→ live (its session still
+  runs): SendMessage it, spawn no second agent` — a worker linked while the parent stood at `work` is still the
+  one the spawn state would start; a recon agent or a warm reviewer linked elsewhere is never listed. A driver answers a harness `[handback-send-enforce]` prompt that arrives while
+  its session has not ended with the WAITING line only, never a hand-back. A re-spawned
   driver takes only a `current` agent as this visit's, so no prompt renders a visit key: a fix round
   that SendMessages the same worker calls `link_agent` again, which re-records the step. After a
   restart, `resume`'s and the SessionStart pickup's sub-agent lines name such an earlier visit's agent

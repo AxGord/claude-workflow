@@ -43,6 +43,10 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 - A `[Subagent hand-back]` message comes BEFORE the agent's notification and carries no token number: set no
   tokens and transition nothing on it; end the turn with the WAITING line, then set tokens and transition on
   the notification.
+- A harness prompt `[handback-send-enforce] Your report has not been delivered…` that arrives while P has not
+  ended (not terminal) is NOT a request to hand back: answer it with the WAITING line only — never a
+  NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
+  a reason to hand back. Only the conditions under "Stop and hand back" end your run.
 - On a notification that says the agent "is waiting on its own background work", or on any turn the awaited
   agent's line did not start: PROBE it ONCE — SendMessage it "Driver ping: if your session has ended, repeat
   your one line; otherwise carry on." A reply that it was stopped or is unknown -> it is gone: hand back
@@ -63,6 +67,10 @@ a `current` agent is this visit's. None current → follow the prompt from its f
 visit. Its own steps still apply — a fix round's SendMessage of the cause to `worker_agent`, then its
 `link_agent`, included — but never ask an earlier visit's agent where it stands, never take it as this
 visit's. The reviewer has no session or link, so at `review` none is ever current: always spawn a fresh reviewer, whatever review.md holds (it may be an earlier round's).
+At a `_spawn` state (`work_spawn`, `plan_spawn`) the status also lists, as `live`, the running agent linked at the state P stood at just before it (routing
+steps skipped; its session started there): it is the worker this state would spawn — treat it as current (message it,
+never spawn a second worker on the session). An agent linked at any other state (a recon agent, a warm reviewer)
+is never `live`: spawn a fresh one as the prompt says.
 With a current agent, never start a new W session or agent at once:
 1. SendMessage the current agent asking where it stands; its answer is its notification.
 2. Gone → at `work`, check the tree: its commit on `batch/<ID>` and a clean worktree → follow the
