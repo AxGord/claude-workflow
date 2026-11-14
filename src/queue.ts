@@ -500,6 +500,12 @@ function touchesWarnings(queue: Queue, line: QueueLine): string[] {
       `touches ${ign} is git-ignored in ${repo}: the picker treats ${line.id} as parent-run`,
     );
   for (const t of touchesOf(line) ?? []) {
+    if (queue.overlap === "files" && !/[*?[\]{}]/.test(t) && !isFileEntry(t, repo))
+      out.push(
+        `${t} is a directory: under overlap: files it conflicts with nothing — name the files`,
+      );
+  }
+  for (const t of touchesOf(line) ?? []) {
     if (/[*?[\]{}]/.test(t) || !(t.split("/").pop() ?? "").includes(".")) continue;
     const dir = path.dirname(path.resolve(repo, t));
     let isDir = false;

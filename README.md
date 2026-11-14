@@ -548,7 +548,7 @@ A pick fills the window (`batch_size` minus the running tasks) in `priority:` or
   same file in another task — a FILE is no glob and a regular file under the task's repo (`Makefile`,
   `bin/hxq`), or, when the path does not exist yet, one whose last segment holds a `.`
   (`src/x/Foo.hx`, `.gitattributes`); a directory or glob entry (`src/query`, `src/format/Doc*`) is a
-  hint and conflicts with nothing. `overlap: paths` (the default) keeps every entry a path prefix; any
+  hint and conflicts with nothing (`queue_add` / `queue_edit` warn for each directory entry, never refuse). `overlap: paths` (the default) keeps every entry a path prefix; any
   other value refuses the pick (exit 2) while marks, edits and `queue_header` still work;
 - name a `repo:` that resolves (absolute path; a name = the `base:` repo of that basename, else the
   directory of that name beside the queue's project; none = the queue's project);
