@@ -47,7 +47,7 @@ import {
 } from "./model-table.js";
 import { render } from "./template.js";
 import { DRIVER_CALL_KEY, renderDriverCall, resolveDriverRef } from "./driver.js";
-import { currentStep, linkedAgentLines } from "./agent-link.js";
+import { currentStep, linkedAgentLines, type IsRoute } from "./agent-link.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
 import { activeParents, staleNote, staleness, type Staleness } from "./stale.js";
@@ -123,6 +123,8 @@ export interface ResumeResult {
   readonly suspendedChildren: SessionState[];
   /** The resumed session as stored once its status is built: the parent its children's links are read against. */
   readonly session: SessionState;
+  /** Whether a state of the resumed session's active frame is a routing step (exec / fetch / `station: false`). */
+  readonly isRoute: IsRoute;
 }
 
 export class Engine {
@@ -838,7 +840,13 @@ export class Engine {
       this._isActionState(state) && !resumed.pending_pop
         ? await this._executeActionState(resumed, state!, [], 0, resumed.running_exec)
         : this._buildStatus(resumed, []);
-    return { status, suspendedChildren, session: this._storage.read(sessionId) ?? resumed };
+    const isRoute = this._routeTest(resumed);
+    return {
+      status,
+      suspendedChildren,
+      session: this._storage.read(sessionId) ?? resumed,
+      isRoute,
+    };
   }
 
   /**
@@ -953,18 +961,21 @@ export class Engine {
     }
   }
 
+  private _routeTest(s: SessionState): IsRoute {
+    const frame = s.stack[s.active_frame];
+    return state => {
+      const def = frame ? this._resolveState(s, frame.workflow, state) : undefined;
+      return def?.type === "exec" || def?.type === "fetch" || def?.station === false;
+    };
+  }
+
   /** status()'s LINKED AGENTS block of a session: its children's agents linked at its current state. */
   public linkedAgentLines(sessionId: string): string[] {
     const s = this._storage.read(sessionId);
     if (!s || s.stack.length === 0 || !this._declaresDriver(s)) return [];
     try {
       const children = this._storage.readAll().filter(c => c.parent_session_id === sessionId);
-      const frame = s.stack[s.active_frame];
-      const isRoute = (state: string): boolean => {
-        const def = frame ? this._resolveState(s, frame.workflow, state) : undefined;
-        return def?.type === "exec" || def?.type === "fetch" || def?.station === false;
-      };
-      return linkedAgentLines(s, children, isRoute);
+      return linkedAgentLines(s, children, this._routeTest(s));
     } catch {
       return [];
     }

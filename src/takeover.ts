@@ -5,7 +5,7 @@ import type { Storage } from "./storage.js";
 import type { SessionState } from "./types.js";
 import { isPidAlive } from "./process.js";
 import { Executor } from "./executor.js";
-import { currentStep, linkStanding } from "./agent-link.js";
+import { currentStep, listedStanding, type IsRoute } from "./agent-link.js";
 
 export const RESUME_TOOL = "mcp__plugin_workflow_wf__resume";
 export const STATUS_TOOL = "mcp__plugin_workflow_wf__status";
@@ -176,15 +176,16 @@ export function drivenByRootAgent(
 export function earlierVisitNote(
   s: SessionState,
   parent: SessionState | undefined,
+  isRoute: IsRoute = () => false,
 ): string | undefined {
   const now = parent && parent.stack.length > 0 ? currentStep(parent) : undefined;
-  const standing = now && linkStanding(s, now);
+  const standing = now && listedStanding(s, now, parent, isRoute);
   if (!now || !s.agent_id || !s.agent_step) return undefined;
   if (!standing) {
     const at = s.agent_step;
     return `linked at its parent's ${at.state} visit ${at.visit}, the parent is now at ${now.state}: an earlier step's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
   }
-  if (standing === "current") return undefined;
+  if (standing === "current" || standing === "spawned") return undefined;
   return `linked at its parent's ${now.state} visit ${s.agent_step.visit}, the parent is now at visit ${now.visit}: an earlier visit's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
 }
 
@@ -201,6 +202,7 @@ export function subAgentLines(
   indent: string,
   yours: (s: SessionState) => boolean = () => false,
   parentOf: (s: SessionState) => SessionState | undefined = () => undefined,
+  isRoute: IsRoute = () => false,
 ): string[] {
   const lines: string[] = [];
   const how =
@@ -216,7 +218,7 @@ export function subAgentLines(
       );
       continue;
     }
-    const earlier = earlierVisitNote(c, parentOf(c));
+    const earlier = earlierVisitNote(c, parentOf(c), isRoute);
     if (earlier) {
       lines.push(`${indent}${c.agent_id} → ${c.session_id} → ${where(c)}${step} — ${earlier}`);
       continue;

@@ -278,6 +278,7 @@ export function formatResume(result: ResumeResult): string {
         "  ",
         s => drivenByRootAgent(s, result.status.sessionId, byId),
         s => (s.parent_session_id ? parents.get(s.parent_session_id) : undefined),
+        result.isRoute,
       ),
       "",
       "A session whose agent cannot be woken: abort({ session_id, force: true }).",
