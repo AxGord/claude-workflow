@@ -202,7 +202,7 @@ export function subAgentLines(
   indent: string,
   yours: (s: SessionState) => boolean = () => false,
   parentOf: (s: SessionState) => SessionState | undefined = () => undefined,
-  isRoute: IsRoute = () => false,
+  routeOf: (parent: SessionState) => IsRoute = () => () => false,
 ): string[] {
   const lines: string[] = [];
   const how =
@@ -218,7 +218,8 @@ export function subAgentLines(
       );
       continue;
     }
-    const earlier = earlierVisitNote(c, parentOf(c), isRoute);
+    const parent = parentOf(c);
+    const earlier = earlierVisitNote(c, parent, parent ? routeOf(parent) : undefined);
     if (earlier) {
       lines.push(`${indent}${c.agent_id} → ${c.session_id} → ${where(c)}${step} — ${earlier}`);
       continue;

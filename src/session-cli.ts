@@ -5,6 +5,13 @@
 // new process's server answers, and writes go through Storage's file locks.
 import { Storage } from "./storage.js";
 import type { SessionState } from "./types.js";
+import type { IsRoute } from "./agent-link.js";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Loader } from "./loader.js";
+import { Engine } from "./engine.js";
+import { Executor } from "./executor.js";
 import {
   STATUS_TOOL,
   drivenByRootAgent,
@@ -48,6 +55,7 @@ export async function pickupReport(
   claudeSessionId: string,
   pid: number,
   at: string = new Date().toISOString(),
+  routeOf?: (parent: SessionState) => IsRoute,
 ): Promise<string> {
   const roots = await pickUpConversation(storage, claudeSessionId, pid, at);
   if (roots.length === 0) return "";
@@ -77,6 +85,7 @@ export async function pickupReport(
           "      ",
           s => drivenByRootAgent(s, root.session_id, byId),
           s => (s.parent_session_id ? byId.get(s.parent_session_id) : undefined),
+          routeOf,
         ),
       );
     }
@@ -114,6 +123,21 @@ export function activeReport(storage: Storage, pid: number): string {
   return lines.join("\n");
 }
 
+/** The workflows the server loads, for the route test of each session's own workflow. */
+export function cliLoader(): Loader {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const env = process.env["WORKFLOW_DIR"];
+  const global = env
+    ? path.resolve(process.cwd(), env)
+    : path.join(os.homedir(), ".claude", "workflows");
+  const project = path.resolve(process.cwd(), ".claude", "workflows");
+  return new Loader(
+    path.resolve(here, "..", "templates"),
+    global,
+    project !== global ? project : null,
+  );
+}
+
 async function main(argv: readonly string[]): Promise<void> {
   const [command, stateDir, ...rest] = argv;
   const pid = Number(rest.at(-1));
@@ -123,8 +147,10 @@ async function main(argv: readonly string[]): Promise<void> {
     );
   const storage = new Storage(stateDir, { eventLog: false });
   let text: string;
-  if (command === "pickup" && rest.length === 2) text = await pickupReport(storage, rest[0], pid);
-  else if (command === "active" && rest.length === 1) text = activeReport(storage, pid);
+  if (command === "pickup" && rest.length === 2) {
+    const engine = new Engine(storage, cliLoader(), new Executor());
+    text = await pickupReport(storage, rest[0], pid, undefined, s => engine.routeTest(s));
+  } else if (command === "active" && rest.length === 1) text = activeReport(storage, pid);
   else throw new Error(`usage: session-cli.js pickup|active <state-dir> …, got: ${argv.join(" ")}`);
   if (text) process.stdout.write(text + "\n");
 }

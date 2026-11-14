@@ -123,8 +123,8 @@ export interface ResumeResult {
   readonly suspendedChildren: SessionState[];
   /** The resumed session as stored once its status is built: the parent its children's links are read against. */
   readonly session: SessionState;
-  /** Whether a state of the resumed session's active frame is a routing step (exec / fetch / `station: false`). */
-  readonly isRoute: IsRoute;
+  /** The routing-step test (exec / fetch / `station: false` states) of a session's own workflow: each parent is judged by its own. */
+  readonly routeOf: (parent: SessionState) => IsRoute;
 }
 
 export class Engine {
@@ -840,12 +840,11 @@ export class Engine {
       this._isActionState(state) && !resumed.pending_pop
         ? await this._executeActionState(resumed, state!, [], 0, resumed.running_exec)
         : this._buildStatus(resumed, []);
-    const isRoute = this._routeTest(resumed);
     return {
       status,
       suspendedChildren,
       session: this._storage.read(sessionId) ?? resumed,
-      isRoute,
+      routeOf: parent => this.routeTest(parent),
     };
   }
 
@@ -961,11 +960,16 @@ export class Engine {
     }
   }
 
-  private _routeTest(s: SessionState): IsRoute {
+  /** Whether a state of the session's active frame is a routing step, by that session's own workflow. */
+  public routeTest(s: SessionState): IsRoute {
     const frame = s.stack[s.active_frame];
     return state => {
-      const def = frame ? this._resolveState(s, frame.workflow, state) : undefined;
-      return def?.type === "exec" || def?.type === "fetch" || def?.station === false;
+      try {
+        const def = frame ? this._resolveState(s, frame.workflow, state) : undefined;
+        return def?.type === "exec" || def?.type === "fetch" || def?.station === false;
+      } catch {
+        return false;
+      }
     };
   }
 
@@ -975,7 +979,7 @@ export class Engine {
     if (!s || s.stack.length === 0 || !this._declaresDriver(s)) return [];
     try {
       const children = this._storage.readAll().filter(c => c.parent_session_id === sessionId);
-      return linkedAgentLines(s, children, this._routeTest(s));
+      return linkedAgentLines(s, children, this.routeTest(s));
     } catch {
       return [];
     }
