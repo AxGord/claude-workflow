@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/claude-mcp-workflow"><img src="https://img.shields.io/npm/v/claude-mcp-workflow" alt="npm"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
-  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-3178c6" alt="TypeScript"></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-7-3178c6" alt="TypeScript"></a>
   <a href="https://code.claude.com/docs/en/plugins"><img src="https://img.shields.io/badge/Claude_Code-Plugin-ff6600" alt="Claude Code Plugin"></a>
 </p>
 
@@ -1117,17 +1117,20 @@ Then in `~/.claude/settings.json`:
 ## Development
 
 ```bash
-npm run build    # tsc → compiles src/ to build/
-npm run dev      # tsc --watch
+npm run build    # tsc 7 (the `typescript7` alias) → compiles src/ to build/
+npm run dev      # tsc 7 --watch
 npm start        # node build/index.js
 npm test         # vitest run
-npm run check    # tsc --noEmit + format:check + lint + scan + vitest + check:ci (the pre-commit gate)
+npm run check    # tsc 7 --noEmit + format:check + lint + scan + vitest + check:ci (the pre-commit gate)
 npm run check:ci # the suite as CI runs it (scripts/check-ci.sh): env -i, an empty HOME, no system git
                  # config, TMPDIR inside it, git user.useConfigOnly (no guessed identity), TZ America/St_Johns (CHECK_CI_TZ),
                  # LANG=C — plus CI's package.json / plugin.json version check
 npm run lint     # typescript-eslint (type-checked); fails only on findings absent from eslint-baseline.json
 npm run lint:baseline  # re-record eslint-baseline.json (after fixing findings, to ratchet down)
 npm run format:check   # biome format check (formatter only; part of check)
+                       # TypeScript: the compiler is 7 (devDependency `typescript7`, `npm:typescript@^7`, run as
+                       # node_modules/typescript7/bin/tsc); `typescript` stays ^5.9 because typescript-eslint (peer <6.1),
+                       # the tests that transpile dashboard sources and tsserver (editor LSP) need the JS compiler API 7 lacks
 npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.yml), e.g. .then() without .catch(); 0 findings
 ```
 

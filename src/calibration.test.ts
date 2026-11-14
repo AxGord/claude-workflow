@@ -114,7 +114,7 @@ describe("calibrate", () => {
 
 describe("wf-calibration bin", () => {
   it("runs through a symlink", () => {
-    execFileSync("npx", ["tsc", "-p", "."], { cwd: process.cwd() });
+    execFileSync("node", ["node_modules/typescript7/bin/tsc", "-p", "."], { cwd: process.cwd() });
     const dir = mkdtempSync(path.join(os.tmpdir(), "cal-bin-"));
     const f = path.join(dir, "l.jsonl");
     writeFileSync(f, JSON.stringify(ledger[0]) + "\n");

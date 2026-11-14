@@ -17,8 +17,8 @@
     "wf-calibration": "build/calibration-cli.js"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "build": "node node_modules/typescript7/bin/tsc",
+    "dev": "node node_modules/typescript7/bin/tsc --watch",
     "start": "node build/index.js",
     "test": "vitest run",
     "lint": "node scripts/lint-new.mjs",
@@ -27,7 +27,7 @@
     "scan": "ast-grep scan --error",
     "check:ci": "sh scripts/check-ci.sh",
     "test:pane": "sh scripts/test-pane.sh",
-    "check": "tsc --noEmit && npm run format:check && npm run lint && npm run scan && vitest run && npm run test:pane && npm run check:ci"
+    "check": "node node_modules/typescript7/bin/tsc --noEmit && npm run format:check && npm run lint && npm run scan && vitest run && npm run test:pane && npm run check:ci"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
@@ -57,8 +57,9 @@
     "@types/node": "^22.10.0",
     "@types/proper-lockfile": "^4.1.4",
     "eslint": "^9.39.5",
-    "typescript": "^5.7.0",
+    "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1",
+    "typescript7": "npm:typescript@^7.0.2",
     "vitest": "4.0.18"
   }
 }
