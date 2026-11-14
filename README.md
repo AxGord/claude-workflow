@@ -439,6 +439,8 @@ its own `.claude/workflows/` (a worktree counts as its main checkout; the home d
 name over the server's — a name only the server has is still found: a dispatcher in one repo can run a task by the
 procedure another repo defines (a queue line's `repo:` + `workflow:`).
 
+The SessionStart hook's CLI (`build/session-cli.js`) builds its loader from the same owner (`src/workflow-dirs.ts`) as the server, so a resumed session's routing steps are judged against the same three tiers, the cwd's project tier included.
+
 ### `extends:` — inherit a workflow
 
 ```yaml
@@ -1133,7 +1135,8 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 
 | File | Responsibility |
 |------|---------------|
-| `src/index.ts` | Entry point — resolves dirs, wires components, starts stdio transport |
+| `src/index.ts` | Entry point — wires components, starts stdio transport |
+| `src/workflow-dirs.ts` | The one owner of the workflow directories (`WORKFLOW_DIR`, the cwd's `.claude/workflows/`, bundled `templates/`): `workflowDirs` / `workflowLoader`, built by the server and by `session-cli.js` alike |
 | `src/engine.ts` | FSM core — start, transition, abort, context, stack push/pop |
 | `src/loader.ts` | YAML loading + Zod validation + fs.watch hot-reload |
 | `src/storage.ts` | JSON persistence with atomic writes and lockfile mutex |

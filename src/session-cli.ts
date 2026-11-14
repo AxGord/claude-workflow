@@ -6,10 +6,8 @@
 import { Storage } from "./storage.js";
 import type { SessionState } from "./types.js";
 import type { IsRoute } from "./agent-link.js";
-import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { Loader } from "./loader.js";
+import type { Loader } from "./loader.js";
+import { workflowLoader } from "./workflow-dirs.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import {
@@ -123,22 +121,13 @@ export function activeReport(storage: Storage, pid: number): string {
   return lines.join("\n");
 }
 
-/** The workflows the server loads, for the route test of each session's own workflow. */
+/** The workflows the server loads (`workflowLoader`), for the route test of each session's own workflow. */
 export function cliLoader(): Loader {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const env = process.env["WORKFLOW_DIR"];
-  const global = env
-    ? path.resolve(process.cwd(), env)
-    : path.join(os.homedir(), ".claude", "workflows");
-  const project = path.resolve(process.cwd(), ".claude", "workflows");
-  return new Loader(
-    path.resolve(here, "..", "templates"),
-    global,
-    project !== global ? project : null,
-  );
+  return workflowLoader();
 }
 
-async function main(argv: readonly string[]): Promise<void> {
+/** What `pickup` / `active` print for `argv` (the hook's arguments after the script), or "". */
+export async function cliReport(argv: readonly string[]): Promise<string> {
   const [command, stateDir, ...rest] = argv;
   const pid = Number(rest.at(-1));
   if (!stateDir || !Number.isInteger(pid) || pid <= 1)
@@ -146,12 +135,16 @@ async function main(argv: readonly string[]): Promise<void> {
       `usage: session-cli.js pickup|active <state-dir> … <claude-pid>, got: ${argv.join(" ")}`,
     );
   const storage = new Storage(stateDir, { eventLog: false });
-  let text: string;
   if (command === "pickup" && rest.length === 2) {
     const engine = new Engine(storage, cliLoader(), new Executor());
-    text = await pickupReport(storage, rest[0], pid, undefined, s => engine.routeTest(s));
-  } else if (command === "active" && rest.length === 1) text = activeReport(storage, pid);
-  else throw new Error(`usage: session-cli.js pickup|active <state-dir> …, got: ${argv.join(" ")}`);
+    return pickupReport(storage, rest[0], pid, undefined, s => engine.routeTest(s));
+  }
+  if (command === "active" && rest.length === 1) return activeReport(storage, pid);
+  throw new Error(`usage: session-cli.js pickup|active <state-dir> …, got: ${argv.join(" ")}`);
+}
+
+async function main(argv: readonly string[]): Promise<void> {
+  const text = await cliReport(argv);
   if (text) process.stdout.write(text + "\n");
 }
 

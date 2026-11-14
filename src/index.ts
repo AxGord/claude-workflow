@@ -1,34 +1,18 @@
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { Storage } from "./storage.js";
-import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { Modifier } from "./modifier.js";
 import { registerTools, setContextEpochFile } from "./tools.js";
 import { createDashboard } from "./dashboard.js";
-
-// Resolve dir: env override → absolute default under ~/.claude/
-function resolveDir(envVar: string, defaultAbs: string): string {
-  const val = process.env[envVar];
-  if (!val) return defaultAbs;
-  return path.isAbsolute(val) ? val : path.resolve(process.cwd(), val);
-}
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const BUNDLED_DIR = path.resolve(__dirname, "..", "templates");
+import { resolveDir, workflowLoader } from "./workflow-dirs.js";
 
 const home = os.homedir();
-const GLOBAL_WORKFLOW_DIR = resolveDir("WORKFLOW_DIR", path.join(home, ".claude", "workflows"));
 const STATE_DIR = resolveDir("STATE_DIR", path.join(home, ".claude", "workflow-state"));
 const DASHBOARD_PORT = parseInt(process.env["DASHBOARD_PORT"] ?? "3100", 10);
-
-// Project-level workflows: .claude/workflows/ relative to CWD (if different from global)
-const projectDir = path.resolve(process.cwd(), ".claude", "workflows");
-const PROJECT_WORKFLOW_DIR = projectDir !== GLOBAL_WORKFLOW_DIR ? projectDir : null;
 
 // Last-resort net: one stray rejection or throw in a callback must not take the
 // MCP server (and every session it holds) down. Staying alive after an
@@ -47,7 +31,7 @@ process.on("uncaughtException", err => {
 
 // Initialize components
 const storage = new Storage(STATE_DIR);
-const loader = new Loader(BUNDLED_DIR, GLOBAL_WORKFLOW_DIR, PROJECT_WORKFLOW_DIR);
+const loader = workflowLoader();
 
 // Validate cross-references
 const refErrors = loader.validateReferences();
