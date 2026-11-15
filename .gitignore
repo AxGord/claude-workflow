@@ -6,3 +6,5 @@ build/
 # Override global gitignore for Claude plugin files
 !CLAUDE.md
 !.mcp.json
+docs/.vitepress/cache/
+docs/.vitepress/dist/

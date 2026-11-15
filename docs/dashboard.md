@@ -1,0 +1,154 @@
+---
+title: Dashboard and plan pane
+description: The plan pane, the web dashboard with the live map, and the status line
+---
+
+# Dashboard and plan pane
+
+## Plan pane
+
+`/wf-plan` toggles a pane beside the chat (a Claude Code hooks module, `hooks/plan-pane.tsx`, needs a Claude Code
+that loads plugin `modules`; older ones simply have no pane). It refreshes every 15 s from the engine's own state —
+no model call, no tokens:
+
+- **Plan** — for a session whose root workflow has a work queue (`context.queue_file`): `▶ Running n/window` (each
+  line's pipeline state and time in it), `⏭ Next` (lines whose `after:` are done, in the picker's order: priority, then file order; while no line is admittable but lines run, it lists what the running ones unblock instead — the pending lines kept out only by them, in the order the picker admits them once they end (GET `/api/queue` gives each such line `unblockOrder`, from the picker's own pass with the running lines done; a parked, backlog, parent-run or `after:`-a-pending line is not listed, nor is anything under a pause), the same cap and `+N more` fold; nothing to list = `nothing ready`; the priority as a coloured one-cell glyph after the id, one space after the id, never padded to a column: `⇈` urgent red, `↑` high orange, `↓` low grey, normal none and a blank cell; the dashboard's plan rows use the same glyphs, and its `next:` strip lists the same unblocked rows), `✓ Landed · 14d (n) · $landed · parent $P (S%) · branch`
+  (the queue repo's `git log --first-parent` lines carrying a `Slice:` trailer, the Cost tab's 14 days, of the branch the queue's lands target: the header's `land_branch:` when set, else the repo's checked-out branch (`git branch --show-current`), else `main`; the heading names the branch when it is not `main`; a land made before the repo wrote the trailer, which git does not show, is read from the ledger's task runs that went through a `land` state in the window, of whatever workflow, only for a line of this queue or its archive (the ledger holds every project's runs; each slice once, `—` in the sha column); the heading's `$landed` is the sum of the ledger's real `spend.usd` over those lines, each line once, a line with no spend row adding nothing, absent when no line is measured; `parent $P` is the top-level Claude Code session's own spend recorded in the same 14 days, of the queue repo's own conversations only (ledger `parent_spend`, below; its `project` is matched to the repo by Claude Code's project directory name) and `S%` its share of `$landed`, absent without a landed sum; a title longer than the pane is cut with `…`) as a tree: one foldable `▦ DD.MM (n) <day spend>` row per day (today open, the older days folded until a click; a day the person folded or opened stays so past midnight),
+  under it `▰▰▱▱▱ ◆ $cost start-end sha id` per land — the difficulty bar first on every row that has one (`?????` when
+  unknown), then the line's kind glyph (a blank cell for a land that is not in the queue), start from the ledger's `started_at` of the line's task session (matched by its `task`, which the
+  ledger records from the session context; `?` for a land with no ledger row, a `DD.MM` prefix when the run began
+  the day before). Lands of other repos do not appear: the list is the queue repo's log. Each section and day folds on a click. Every `+N more` row of a capped list (it follows the first lines and stays at that place: opening it lists the rest below it) (Next's `+N more can start (dependencies done), in the picker's order`, the Waiting tab's `+N more`, the Sessions tab's `+N more`) is a fold row too: closed (`▸`) by default, a click opens it (`▾`) and the list shows every line it had folded, in the same order and row form as the shown ones (bar, kind, id, priority glyph); a second click caps it again. One mechanism for all of them (the pane's `folded` atom, keys `next-more`, `waiting-more`, `sessions-more`), so the state survives a refresh and a closed and reopened pane. A day's spend counts a failed or closed line only when its latest run ended on that very date (not the same `DD.MM` of another year). The status band's `✓ n` still counts the last 24 hours.
+  **Cost.** Each Landed and Failed row carries `$cost` right after the kind glyph (the difficulty bar stays first): the ledger's real `spend.usd` summed over every task run of the line (`slice-pipeline` / `engine-task` rows with a `task`); a line any of whose runs recorded no spend, or that has no ledger row, shows `—`, never `$0.00`. A figure is `$1.23` under $100, whole dollars above, right-aligned to the section's widest, and never cut: in the two-line form it is on the first line and the id is cut before it. A day row carries the day's sum: its landed lines plus the failed and closed lines whose latest run ended that day (a line counted once; `closed` = completed without a `land` state, as the Cost tab reads it), and says what it includes (`$14.75 incl. 2 failed, 1 closed`); a day with no measured line reads `—`. A line's whole cost (all its runs) sits on one day of the sums: the day it landed, or for a failed or closed line the day its latest run ended; a run on an earlier day adds nothing to that day.
+  `✗ Failed (n)` (followed by `· $41.20 (parent $6.10)`: the ledger's `spend.usd` of every run of the `n` lines (a row nested under a row of the same line, by `parent_session_id`, adds only its parent spend: the parent row's `spend` already covers it), plus the `parent_spend.usd` of those rows, and `· k not in the ledger` for the lines with no row, which add 0; `· no ledger rows` when none has one; nothing while there is no ledger file) follows, folded until a click: the `failed` lines that ended in the last 2 days (queue_mark's `ended:`; `n` and the header's `failed` count are of these), newest first, then one dim row `▸ +N older` that opens the rest (a line with no `ended:` counts as older), `bar kind $cost id DD.MM reason`
+  — the reason is the first line of the line's last note (`no note` without one), cut to the pane body width, the date that
+  note's (`date unknown` for a line with no dated note, listed last).
+  A section lays out as one, by the pane's width (`bodyColumns` of each refresh, so a resized pane re-lays out, wide glyphs
+  counted as two cells): while every row of the section fits on one line, each is one line as above; as soon as ANY row
+  does not, EVERY row of that section takes two lines, the second indented one tab. Running: bar, kind, id / the state,
+  the next step, the age. Next: bar, kind, id, priority glyph / the id and its glyph. Landed (measured over the rows of the open days only: a row of a folded day neither flips the section to the two-line form nor widens its cost column): bar, kind, cost, times, sha / the id.
+  Failed: bar, kind, cost, id, date / the reason (the full reason is measured, so a long one makes the section two-line). An id
+  or text still too long for its line (either line) is cut with `…`, never wrapped. The height caps count lines, so a two-line
+  section shows half as many rows.
+- **Sessions** — the workflow sessions of THIS Claude Code session as a tree (`◆` a root with children, bright `⚙`
+  a working leaf). A click opens a session's card: where it came from (its last moves), where it is (visit, working
+  or waiting), where it can go (the state's transitions and exec cases, read from the dashboard's
+  `/api/workflows`), and a link to its graph in the dashboard (`/session/<id>`).
+- **Waiting** — pending tasks (not parked) with the picker's own reason, from the dashboard's `/api/queue`, in the order the picker admits them (priority urgent, high, normal, low, then file order: `/api/queue` gives each pending line that place as `admitOrder`), so the top row is the line that goes next once its wait clears; the id is followed by the line's priority glyph (`⇈` urgent, `↑` high, `↓` low; a normal line none), as in Next.
+  The same rule applies: `bar kind id reason` on one line while every row fits, else two lines each (`bar kind id` / the reason
+  indented, cut with `…`). The Sessions tab follows it too: a tree row too long for the pane is two lines (workflow and task /
+  the state and age indented), every row of the tree. The Pool tab already cuts each of its lines to the width.
+- **Pool** (`4`; its label reads `Pool <held>/<budget>`, like `Plan <running>/<window>`) — the machine-wide thread pool, as the dashboard's Pool tab shows it, fitted to the narrow pane: budget, threads held, load, external load and threshold, held locks, the pool-wide `STARVED` note, then each lease (what it holds, priority, time held, an `OVERRUN ~N` flag; under it project, session, step and label, cut to the pane width with `…`) and each waiter in admission order (what it wants, priority, wait time, a `STARVED` flag). It reads the dashboard's `GET /api/pool` and nothing else reads the pool. The label's `held`/`budget` come from `GET /api/pool?counts=1` (one plain pool pass, no measuring window, `{budget, held}`), read by every refresh while the pane is open on a tab other than Pool (the Pool tab's full read gives them itself); a dashboard that does not answer it leaves the bare `Pool`. The full read costs nothing while the tab is closed: `/api/pool` is called only by a refresh (every 15 s) whose open tab is Pool, and once when the tab is pressed or the pane is opened on it, never on the other tabs and never while the pane is closed. One call takes about 0.6 s on the engine (the pool's measuring window; it runs `ps -A` in the engine process for its two passes, about 25 ms each) and returns about 5 KB; the pool read is the last step of a refresh, so the other tabs' data is stored before it; a pane opened on the Pool tab comes up about 0.6 s later, because opening waits for its first read. Every line is cut to the pane width (the header is two lines; on a lease or waiter the flags keep their cells and the request, priority and age are cut with `…`). When only the pool answer fails (an older engine without the route, an answer that is not the pool), the tab shows one dim `Pool: …` line. When the whole dashboard is down the queue read fails too: the pane has no queue, so it shows the Sessions tree without the tab row and the red `queue: …` line, and the pool is not called. The tab shows with a work queue, like the other tabs.
+
+The pane's header links to the live map (`map ↗`, the dashboard's `/map`); `/wf-map` prints the map's URL.
+
+An Agent call of a workflow pipeline (the plugin's `workflow:*` subagent types, or any agent linked to a session by
+`link_agent`) draws as ONE line in the style of the engine-call group's line, in the place of the harness's row
+(`⏺ workflow:driver(drive ENG-X) Haiku 5.5`): `⚙ [ENG-X] driver · haiku 5.5 · batch-task @ review › reviewer @ read 3m lane ↗`
+— the role, the queue line's id, the model, the workflow and the state (and the deepest one under it), the age in the
+state, and the link to the lane (`/map/<session id>`). Before the session is linked it reads off the call's own input
+(`workflow:*` subagent type, description `drive <ID>`, model alias), as `⚙ [ENG-X] driver · haiku`; once the pipeline
+ended, the agent is remembered: `ended at <state>` or `✓ landed <sha>`. A call of no workflow, an expanded row (ctrl+o)
+and a failed or interrupted spawn keep the harness's row, so an error stays readable. The call's input is never
+rewritten: the hook only draws. The harness folds only reads, searches and listings into a tool group, so a spawn cannot
+join the group's line (`⚙ [slice] transition→state …`); it is the next line, drawn alike. The agent's id is read from the
+call's stored result (`agentId`, an object) and, failing that, from the `agentId:` line of a text reply.
+A move row (`a→b`) names the state of the reply's `← ACTIVE` frame when the reply prints a stack (a sub-workflow), else the flat `<workflow> @ <state>` line; a reply naming none shows `?`.
+
+Difficulty shows as a five-cell track `▰▰▰▱▱` (one cell per two points), coloured by the model tier; right after it every queue row shows the line's `kind` as one text glyph (none an emoji): bug `※`, research `⚑`, feature `◆` (a line with no `kind`, or a kind that is not one of the three own keys (`constructor` too), reads as feature). The glyph is `mark` in the `/api/queue` answer, from `kindMark` in `src/map-layout.ts`. A session with
+no workflow shows "No active workflow"; nothing opens by itself.
+
+## Dashboard
+
+The web dashboard runs on `localhost:3100` and provides real-time monitoring:
+
+- **Sessions panel** — active sessions plus the most recent finished ones (terminal history is capped)
+- **Plan tab** — each queue named by a session's `context.queue_file`: running lines (with the pipeline state and time in it, linked to the session), ready lines in the picker's order (priority, then file order; the priority beside the id), waiting lines with the picker's reason (window ignored), failed, done today (a done line counts when its text holds today's date, `LANDED <sha> YYYY-MM-DD`; marks carry no date). Click a line (or a node of the graph) to open a sticky card beside the list (below it on a narrow window) with its full text and a small dependency graph (dagre, left to right): the lines its `after:` names and the lines that name it, each node coloured by state (done / running / ready / waiting / failed); a node click selects that line, `close` or a second click on the row closes the card. The graph is `queueGraph` in `src/map-layout.ts`; the ids come from `/api/queue` lines' `afterIds`, resolved by the picker's own tokenizer (text in parentheses is prose); a link inside a row follows its link and selects nothing
+- **Timeline tab** — one bar per task pipeline of a day (the children of a root session, or a root without children), cut into segments by state from the session's history and its child sessions' (thin sub-rows), coloured by stage group (`recon`, `plan`, `work`, `gate`, `review`, `land`, `wait`; a name match with `work` as the default, and `$STATE_DIR/timeline-groups.conf` (JSON; not `.json`, which the session store would read as a session), `{"<state>": "<group>"}`, overrides a state); a pool-lease wait of an exec (`wait_ms`) is hatched inside its segment; hover = state, group, start, duration; a time axis over the day's activity (today by default, `/timeline/<YYYY-MM-DD>` any day, arrows for the neighbours). `GET /api/timeline?day=YYYY-MM-DD&root=<id>` answers it from the session files; a pipeline whose file is pruned is drawn from the `segs` its ledger line recorded (state, start, end, pool waits); a line written before that record stays one undivided bar. Pure builder: `src/timeline.ts`
+- **Pool tab** — the machine-wide thread pool, live (refreshed every 2 s): budget, threads held, load and external load, held locks, the pool-wide `STARVED` line, then each lease (pid, threads/locks, priority and level, time held, project, session linked to `/session/<id>`, step, label, an `OVERRUN ~N` plaque when its processes run well above its threads) and each waiter in admission order with its wait time and a `STARVED` plaque. `GET /api/pool` answers the same data `wf-run --status` / `pool_status` print, read through the pool module (`poolSnapshot` in `src/pool.ts`; one measured admission pass per request, as `pool_status` runs).
+- **Cost tab** — what the finished task pipelines cost, for a day range (today by default; `from` / `to` date inputs, drawn dark with their calendar popup by the page's `color-scheme`): per task its outcome (`landed` = completed through a `land` state (`land_failed` is not one), `closed` = completed without landing, `failed`, `unknown` = completed on a line that recorded no visits), review rounds, tokens, USD, and the stages as run (model, tokens, USD); the range's totals and USD per landed (landed tasks that recorded tokens); a bar trend of USD per landed over the last 14 days. A task's tokens and USD are its ledger `spend` when it has one (one `spend` row, the transcripts' real figure; a `spend` with unmeasured agents makes the task unmeasured), else the old estimate from `tokens*` at the blended price. The tab states its price table and the date it was updated: `PRICES_USD_PER_MTOK` / `PRICES_UPDATED` in `src/calibration.ts` (blended USD per million tokens by model family; edit both together). `GET /api/cost?from=YYYY-MM-DD&to=YYYY-MM-DD` answers it (`buildCost`)
+- **Workflow list** — all loaded workflows with state counts
+- **Session detail** — state history, stack depth, context data
+- **Workflow graphs** — interactive DAG visualization rendered with dagre
+- **Map** — the live workflow map: every session at once, as a live history of the workflows (below)
+
+Every view has a real path, driven by the History API (links are plain anchors; back and forward work, a path can be opened or shared directly):
+
+| Path | View |
+|------|------|
+| `/`, `/sessions` | Sessions list |
+| `/session/<id>` | One session's detail |
+| `/workflows` | Workflow list |
+| `/workflow/<name>` | One workflow's graph and states |
+| `/plan` | Plan tab |
+| `/timeline`, `/timeline/<YYYY-MM-DD>` | Timeline tab (today, or that day) |
+| `/pool` | Pool tab |
+| `/cost` | Cost tab |
+| `/map` | The live workflow map |
+| `/map/<session id>` | The map, scrolled to that session's lane and highlighting it |
+
+The server answers every `GET` that is not an `/api` call or a static file with the page; an unknown `/api/...` path is a JSON 404. The route table is `src/dashboard-routes.ts`, served to the page as `/routes.js`.
+
+### Live workflow map
+
+`/map` draws every workflow session in one space, like a live git history of the workflows. Top-down by project, then queue, then workflow: a **band** per project, queue (`context.queue_file`, recorded at the start and on every change as a `queue` event, a child takes its ancestor's; a project's sessions with no queue come last) and workflow kind, headed `project › queue · workflow` (the queue as `<owner>/<file>`), with its **stations** as columns (`/api/workflows` `stations`; a column is as wide as its band's content needs, up to 230 px: the widest of the station names, the branch chips, the first four steps of a branch with their labels and the loop labels, then shrunk to the page's room, never below 120 px; the plaque stands 56 px past the last station); a **lane** per task session: landed on top (oldest first; ended over an hour ago they fold into `landed earlier: … +N`; a band with no running lane whose newest lane ended over two hours ago is not drawn, `MapOptions.hideBandAfterMs`, and a running or recent lane brings it back; `/map/<id>` of a lane in a hidden band draws that band), the parent rail and the running lanes below, the queue's ready lines at the bottom, one `next: <owner>/<file> … +N` row per queue (named the way the band headings name it, sorted like them; up to six lines each, then `+N`). A lane starts at a dot on the first station and ends IN its plaque (difficulty bar `▰▰▰▱▱`, the kind glyph, id, state, age; 340 px at most, the id cut with `…`; the bar leads the plaque in the difficulty colour whatever the plaque's border says, and a lane with no known difficulty keeps its width blank; the glyph is the `kind` of the queue line the lane's `task` names (`※` bug, `⚑` research, `◆` feature), a blank of the same width when no queue line carries that id); its line is coloured by the difficulty (a rescore recolours it); a running lane reaches the plaque through a faint dotted tail over the stations still ahead. Under a station hangs whoever ran it: a child session as a **branch** (its states as steps: done = ring, live = glowing dot with its time, ahead = faint), its chip `model ▮▮▮▯ effort · role` in the model's colour; a finished branch joins back up. A backward move (a review verdict back to work) **loops** the line: down, dashed back to the target station, down again, the next pass below. Consecutive rounds of one shape **fold** into one drawn round: the same stations with the same exec verdicts (a duration does not count), the same branches (workflow, outcome, states) and the same back-edge name. The loop of a fold reads `↺ <name> ×64 · 1m–3m` (the count and the shortest–longest round) and a click on the loop or its label opens the group (every round drawn, the first loop marked `▾`) and folds it again; the open groups are kept in `sessionStorage` (`wf-map-open`), so a live update and F5 keep them (`MapOptions.open`, the key `<session>:g<first round>`). A round that differs stays in place and splits the run (a red exec such as `gate ✗ exit 10`, another path, another branch); a round with a question to the parent, a round with a branch still running, and the lane's last round (the running one) are never folded. A replaced or stopped agent is a red step and the branch goes on; an exec station carries its verdict (`gate ✓ 14m`, red on a failing exit). The driver chip under a running plaque reads `driver · <model> <effort> · waits on <who>` (the model the workflow's `driver:` declares). Which sessions are lanes: a root that is not a dispatcher, or a child of a dispatcher (a taskless root with children, or a taskless session whose children have tasks, e.g. a dispatcher started under a conversation; so each queue line is its own lane; a root with its own task is one lane and its children are branches), which draws as the **parent rail** above the running lanes; a question to the parent (a state tagged `ask: parent`, or a driver's `ask_parent` from any state, § Question states) is a yellow dashed link up to the rail (`? <state>`, glowing while open, the question as its tooltip) and its answer a green one back down (`→ <next state> · <wait>`), and a question the dispatcher itself asks is a glowing mark on the rail (`⏸ … asked the user · open 3h`). With four or more running lanes the landed ones drop their step labels.
+
+Which sessions are bands: a workflow-level `map: false` keeps a root session of that workflow with no children (a conversation, not a task) off the map; the bundled `master` and `file-review` carry it, a dispatcher's child lane of such a workflow (`file-review` under `coding`) is left off too, while a dispatcher itself (a taskless `map: false` root with children) stays, while a tasked one is no longer a dispatcher and leaves the map with its children. A workflow with no declared stations gets the states its lanes visited as columns, and one column `start` when no lane has moved. Every band is one project, queue and workflow, headed `project › queue · workflow`; a project is the directory name of the session's cwd, and a linked git worktree is named for its main checkout, so every worktree of a repo is one project (the server resolves it in `/api/sessions` and the event log, `projectNameOf` in `src/pool.ts`).
+
+No text is drawn over another: every text of a band (station names too: cut to their column, the whole name as a tooltip) is measured with the layout's glyph widths (`G.chipW` at 10 px, `G.charW` at 12 px) and `src/map-layout.test.ts` asserts that no two text rectangles of a band intersect, at the normal and narrow widths, with step labels on and off. A branch chip sits on its own text row above its steps (a second branch under one station takes the next row) and is cut to its branch's width; a branch shows as many steps as keep every name and detail clear of its neighbours (`…` stands for the hidden ones), a name still too long is cut; the parent rail's own label, the questions, the answers and the user question each take the first free text row above the rail. Whatever is cut keeps its full text as the SVG tooltip (a `<title>`).
+
+The picture is a pure function `layout(fold(events))` (`src/event-fold.ts`, `src/map-layout.ts`, served as `/event-fold.js` and `/map-layout.js`; `dashboard/map.js` draws it). The page folds the session files (`/api/sessions`, re-read every 30 s) first and the event log over them, so a map opened after a server restart still shows each session's recorded story; it follows `/api/events/stream` (SSE) and falls back to polling `/api/events` every 2 s. Every change animates from the previous layout to the next over ~300 ms, keyed by session ids: a new lane opens space and fades in, a new segment draws itself, a landed lane slides up and dims; between events only the live step's glow moves and the ages (re-laid once a minute). The view holds still: nothing moves it between events. `/map/<session id>` glides to the lane (re-aimed when a scene lands in its first second; your first input ends it), never follows a new lane, and its pill counts events and returns to the plain map. Follow mode scrolls only when a NEW lane appears and you were at the bottom, and then to the bottom; scroll away to read history and a pill `↓ N new events` brings you back. When lanes above the one at the top of your view grow, shrink or land, the view moves with that lane (its place on the screen is kept; the lanes jump instead of sliding for that one scene).
+
+### Look
+
+One style for every view (sessions, session detail, workflow graphs, plan): `dashboard/tokens.css` holds the design tokens (surfaces, text, state colours, model colours, the difficulty scale 1 -> 10, fonts) and is the only file with a colour literal (its `:root` also declares `color-scheme: dark`, and the page's head carries `<meta name="color-scheme" content="dark">`, so every native control, the date inputs of the Cost tab and their calendar popup, selects and scrollbars, is drawn dark; the Timeline tab's day navigation is links, not native controls); `dashboard/components.css` holds each component once (plaque, difficulty bar `▰▰▰▱▱` (five cells, `?????` when unknown, first in every row or card that shows a difficulty: Plan tab, map lane plaques and `next:` / `landed earlier:` rows; one `difficultyBar` in `src/map-layout.ts`; the kind glyph `※` bug / `⚑` research / `◆` feature (absent `kind` = feature) follows it in the same places, one `kindMark` beside it, a blank cell when there is no queue line), agent chip `model ▮▮▮▯ effort · role`, step dot, script square, section label, band panel, the `next:` / `landed earlier:` rows) and reads colours only through `var(--…)`. A state reads the same everywhere: running = the model's colour with a glow, waiting on the pool = pink, waiting on a parent (the active step is a state tagged `ask: parent`) = yellow, in the session list, the detail and the plan, stopped or failed = red, landed = green and dimmed. The dagre graphs use the same palette (state nodes are plaques, exec states squares, the current state glows, backward edges dashed). Inter is used when installed, else the system font; nothing is downloaded, so the page works offline. A refresh on a timer takes its markup into the live nodes in place (`dashboard/stable.js` `patchHtml`: rows matched by their link, id or `data-key`, the rest by place; only differing attributes and text are written), so scroll, focus, the text you selected and running animations survive the 2 s refresh of the lists, a session's detail and the plan. A reload (F5) returns to the same scroll position, on every view including the map and `/map/<id>` (`pagehide` saves it per path in `sessionStorage`; the page builds its content after load, where the browser's own restoration finds nothing). The map saves the lane at the top of the view and its offset (`noteScroll` in `dashboard/stable.js`) and puts the lane back, not the pixel offset: the first scene is drawn from the session files and grows when the event log arrives (landed lanes of pruned sessions come on top), so a pixel offset is clamped by the shorter page and lands on another lane. The position is held until the full scene stands, or until you wheel, touch, press a key or click. The page's script builds its markup from the `ui` helpers in `index.html`; `src/dashboard-style.test.ts` renders every view and fails on a colour literal outside the tokens file.
+
+### REST API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/sessions` | List all sessions |
+| `GET` | `/api/events?since=<run>:<seq>` | Event log of the dashboard-holding server process's run after that position (a bare seq = this run; another run's = from 0): `{run, events: [{seq, run, ts, kind, session, data}]}` (kinds: session_start, transition, exec_start, exec_end, agent_link, agent_respawn, agent_stop, rescore, queue, ask, answer, session_end) |
+| `GET` | `/api/events/stream` | Server-sent events of the same log; resumes from `?since=N` or `Last-Event-ID`, then streams live |
+| `GET` | `/api/session/:id` | Get session detail |
+| `POST` | `/api/session/:id/abandon` | Abandon a session |
+| `GET` | `/api/workflows` | List all workflow definitions, each with its `stations` (the live map's columns), `map: false` where set and, for a task workflow, its `driver` model and effort |
+| `GET` | `/api/queues` | Queue files named by sessions' `context.queue_file` |
+| `GET` | `/api/queue?file=<path>` | Every line of that queue with the picker's reason per pending line, its `kind` and the kind's glyph `mark` |
+
+## Status Line
+
+Show this Claude Code instance's workflow sessions in the status bar:
+
+![Status line showing coding:think](/screenshots/statusline.png)
+
+Source `scripts/statusline-workflows.sh` from your statusline script — it sets two variables and prints
+nothing:
+
+```sh
+# in ~/.claude/statusline-command.sh
+. /path/to/mcp-workflow-engine/scripts/statusline-workflows.sh
+printf "%b\n" "<your line 1> ${wf_info}"          # the root session, inline
+[ -n "$wf_lines" ] && printf "%b\n" "$wf_lines"    # the others, on their own lines
+```
+
+- Only the sessions of THIS instance (`context.claude_code_pid` = the statusline's parent pid), read with one
+  `jq` pass over `~/.claude/workflow-state`.
+- `wf_info` — the root session. Alone it is drawn like any session; once it has children it is marked `◆` in
+  bold and the other sessions add their count: `◆ slice-dispatch:collect (5)`.
+- `wf_lines` — empty by default. With `WF_STATUS_LIST=1` the other sessions are listed there instead of
+  counted, oldest first, three per line, at most nine (eight and `+N workflows` past nine); each as
+  `workflow[slice or task]:state`.
+- Bright cyan `⚙` — a leaf session an agent or an engine step is working in; plain cyan `⚙` — waiting (on a
+  child, or idle).
+- `STATUSLINE_PID` / `WF_STATE_DIR` override the parent pid and the state directory (for testing).
+
+Then in `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline-command.sh"
+  }
+}
+```
