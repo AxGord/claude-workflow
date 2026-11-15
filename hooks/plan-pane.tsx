@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { AgentSeen, DaySpend, FailedLine, Land, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
+import type { AgentSeen, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
 
 const PANE = 'workflow-plan'
 const PERIOD_MS = 15000
@@ -9,7 +9,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-8' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-9' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -18,6 +18,8 @@ const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, {
 const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, { shape: 'agents-seen-1' })
 /** The last read of the engine's /api/pool, kept only while the pane is open on the Pool tab ('null' otherwise). */
 const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shape: 'pool-1' })
+/** The pool's `held`/`budget` as of the last refresh with the pane open on any tab: the `Pool <held>/<budget>` tab label (null: not read, or the dashboard did not answer). */
+const poolCountsAtom = atom({ plugin: 'workflow', key: 'poolCounts' } as const, null, { shape: 'pool-counts-1' })
 /** The Plan tab sections whose fold the person flipped (running, next, lands, failed) and the `+N more` rows whose list the person opened (`next-more`, `waiting-more`, `sessions-more`): none by default, so all sections show but FOLDED_BY_DEFAULT ones, and every capped list stops at its cap. A Landed day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-2' })
 /** Sections that start folded: a click on one unfolds it. Each `+N more` fold row of the pane is one (`next-more`, `waiting-more`, `sessions-more`): closed, the list stops at its cap; open, it lists every row. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
@@ -125,7 +127,7 @@ function parseSession(text: string): Parsed | null {
 const FAILED_DAYS = 2
 
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; unblockOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; ended?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; ended?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }, now: number = Date.now()): QueueView {
@@ -141,6 +143,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     reason: l.reason ?? '',
   }))
   const order = new Map(api.lines.map(l => [l.id, l.pickOrder ?? 0]))
+  const admitOrder = new Map(api.lines.flatMap(l => (l.admitOrder === undefined ? [] : [[l.id, l.admitOrder] as const])))
   const unblockOrder = new Map(api.lines.flatMap(l => (l.unblockOrder === undefined ? [] : [[l.id, l.unblockOrder] as const])))
   // newest first by the day the line ended (else the date of its last note); an undated line after the dated; ties: the later in the file first
   const endOf = (l: ApiLine) => l.ended ?? l.lastNoteDate ?? ''
@@ -164,8 +167,10 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     running: lines.filter(l => l.status === 'running').map(strip),
     ready: pending.filter(l => l.reason === 'ready').sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).map(strip),
     unblocked: pending.filter(l => unblockOrder.has(l.id)).sort((a, b) => (unblockOrder.get(a.id) ?? 0) - (unblockOrder.get(b.id) ?? 0)).map(strip),
+    // the picker's own visiting order (`admitOrder`: priority, then file order): the top row is the line that goes next once its wait clears
     waiting: pending
       .filter(l => l.reason !== 'ready' && !l.isParked)
+      .sort((a, b) => (admitOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (admitOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER))
       .map(l => ({ id: l.id, why: l.reason, difficulty: l.difficulty, priority: l.priority ?? '' })),
     failedLines,
     marks: Object.fromEntries(api.lines.map(l => [l.id, l.mark ?? ' '])),
@@ -289,8 +294,67 @@ export function ledgerLandedOf(text: string): Map<string, LedgerLand> {
   return out
 }
 
-type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[]; landed: Map<string, LedgerLand> }
-const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [], landed: new Map() }
+/** What the ledger rows of a queue line add up to: the agents' `spend.usd` and the parent's `parent_spend.usd` (a row records either as absent: it adds 0). */
+export type TaskTotals = { usd: number; parentUsd: number }
+
+/** The totals of the ledger's rows by queue line id, over every run of a line and whatever workflow ran it; a row with no `task` is skipped. A row's `spend` already covers its descendant sessions, so a row whose `parent_session_id` is a row of the same task (a recon child of the pipeline) adds only its `parent_spend`. */
+export function ledgerTotalsOf(text: string): Map<string, TaskTotals> {
+  type Row = { task: string; session: string; parentSession: string; usd: number; parentUsd: number }
+  const rows: Row[] = []
+  const usdOf = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  for (const line of text.split('\n')) {
+    if (!line.includes('"task"')) continue
+    try {
+      const j = JSON.parse(line) as { task?: unknown; session_id?: unknown; parent_session_id?: unknown; spend?: { usd?: unknown }; parent_spend?: { usd?: unknown } }
+      if (typeof j.task !== 'string' || j.task === '') continue
+      rows.push({
+        task: j.task,
+        session: typeof j.session_id === 'string' ? j.session_id : '',
+        parentSession: typeof j.parent_session_id === 'string' ? j.parent_session_id : '',
+        usd: usdOf(j.spend?.usd),
+        parentUsd: usdOf(j.parent_spend?.usd),
+      })
+    } catch {
+      // a torn or foreign line is not a run
+    }
+  }
+  const sessions = new Set(rows.filter(r => r.session !== '').map(r => `${r.task}\n${r.session}`))
+  const out = new Map<string, TaskTotals>()
+  for (const r of rows) {
+    const cur = out.get(r.task) ?? { usd: 0, parentUsd: 0 }
+    if (r.parentSession === '' || !sessions.has(`${r.task}\n${r.parentSession}`)) cur.usd += r.usd
+    cur.parentUsd += r.parentUsd
+    out.set(r.task, cur)
+  }
+  return out
+}
+
+/** The Failed header's spend over the lines it counts: the sum of their ledger totals, and how many have no ledger row. */
+export function failedSpend(lines: FailedLine[], totals: Map<string, TaskTotals>): FailedSpend {
+  let usd = 0
+  let parentUsd = 0
+  let missing = 0
+  for (const l of lines) {
+    const t = totals.get(l.id)
+    if (!t) missing++
+    else {
+      usd += t.usd
+      parentUsd += t.parentUsd
+    }
+  }
+  return { usd, parentUsd, missing }
+}
+
+/** `✗ Failed (28) · $41.20 (parent $6.10) · 3 not in the ledger`: the count, the lines' spend, the parent's spend when it has one, how many lines the ledger has no row of (they add 0; `no ledger rows` when none has). */
+export function failedHeading(count: number, spend: FailedSpend | undefined): string {
+  const head = `✗ Failed (${count})`
+  if (!spend || count === 0) return head
+  const measured = count - spend.missing
+  return `${head}${measured > 0 ? ' · ' + usdText(spend.usd) + (spend.parentUsd > 0 ? ` (parent ${usdText(spend.parentUsd)})` : '') : ''}${spend.missing === count ? ' · no ledger rows' : spend.missing > 0 ? ` · ${spend.missing} not in the ledger` : ''}`
+}
+
+type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[]; landed: Map<string, LedgerLand>; totals: Map<string, TaskTotals> }
+const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [], landed: new Map(), totals: new Map() }
 let ledgerRead: Ledger = NO_LEDGER
 
 /** The ledger's runs and spend, re-read only when the file's size or mtime moved (the pane refreshes often). */
@@ -302,7 +366,7 @@ async function ledgerAt($: any, dir: string): Promise<Ledger> {
   const stamp = `${f.name}:${f.size}:${f.mtimeMs}`
   if (stamp !== ledgerSeen) {
     const text = String(await $.fs.read(`${dir}/${f.name}`).catch(() => ''))
-    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text), landed: ledgerLandedOf(text) }
+    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text), landed: ledgerLandedOf(text), totals: ledgerTotalsOf(text) }
     ledgerSeen = stamp
   }
   return ledgerRead
@@ -555,18 +619,43 @@ async function loadPool($: any): Promise<void> {
       }
     }
     await update($, poolAtom, () => state)
+    await update($, poolCountsAtom, () => (state.pool ? { held: state.pool.held, budget: state.pool.budget } : null))
   } finally {
     poolBusy = false
   }
 }
 
-/** A refresh's pool step: reads the pool only while the pane is open on the Pool tab of a queue session, else drops what an earlier read left. */
+/** One GET /api/pool?counts=1 into the counts atom: the pool's `held` and `budget` with no measuring window, for the tab label. */
+async function loadPoolCounts($: any): Promise<void> {
+  if (poolBusy) return
+  poolBusy = true
+  try {
+    const res = await $.http.fetch(`${DASHBOARD}/api/pool?counts=1`).catch(() => undefined)
+    let counts: PoolCounts | null = null
+    if (res?.ok) {
+      try {
+        const body = JSON.parse(res.text)
+        if (typeof body?.held === 'number' && typeof body?.budget === 'number') counts = { held: body.held, budget: body.budget }
+      } catch {
+        // an answer that is not the counts leaves the label bare
+      }
+    }
+    await update($, poolCountsAtom, () => counts)
+  } finally {
+    poolBusy = false
+  }
+}
+
+/** A refresh's pool step, for a queue session with the pane open: the full read on the Pool tab (it also gives the label's counts), the cheap counts read on any other tab; else it drops what an earlier read left. */
 async function refreshPool($: any, s: Snapshot): Promise<void> {
-  if (s.queue && (await read($, paneOpen)) && (await read($, view)) === 'pool') {
+  const isOpen = Boolean(s.queue) && (await read($, paneOpen))
+  if (isOpen && (await read($, view)) === 'pool') {
     await loadPool($)
     return
   }
   if ((await read($, poolAtom)) !== null) await update($, poolAtom, () => null)
+  if (isOpen) await loadPoolCounts($)
+  else if ((await read($, poolCountsAtom)) !== null) await update($, poolCountsAtom, () => null)
 }
 
 async function build($: any): Promise<Snapshot> {
@@ -606,6 +695,7 @@ async function build($: any): Promise<Snapshot> {
       const usd = ledger.spends.get(l.id)?.usd
       return usd !== undefined ? { ...l, usd } : l
     }),
+    ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(loaded.queue.failedLines.filter(l => l.recent), ledger.totals) } : {}),
   }
   const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), now) : { lands: [], branch: 'main' }
   const landed = read.lands
@@ -1200,12 +1290,13 @@ export const register: Register = on => {
     }
     const roots = s.sessions.filter(r => r.parent === '' || !byId.has(r.parent))
     const q = s.queue
+    const poolCounts = (await read($, poolCountsAtom)) as PoolCounts | null
     const tabs: { id: View; key: string; label: string }[] = [
       { id: 'plan', key: '1', label: q ? `Plan ${q.running.length}/${q.window}` : 'Plan' },
       { id: 'sessions', key: '2', label: `Sessions ${s.sessions.length}` },
       { id: 'waiting', key: '3', label: `Waiting ${q?.waiting.length ?? 0}` },
-      // no count: the pool is read only while this tab is open
-      { id: 'pool', key: '4', label: 'Pool' },
+      // held/budget from the cheap counts read of every refresh; bare until one answered
+      { id: 'pool', key: '4', label: poolCounts ? `Pool ${poolCounts.held}/${poolCounts.budget}` : 'Pool' },
     ]
     // difficulty as a five-cell track (one cell per two points): its fill the level, its colour the model the
     // table gives it — 1–3 sonnet (green), 4–6 sonnet/high (yellow), 7–10 opus (red)
@@ -1450,7 +1541,7 @@ export const register: Register = on => {
                   : []),
               ]
             })}
-          {header('failed', 'red', `✗ Failed (${recentFailed.length})`)}
+          {header('failed', 'red', failedHeading(recentFailed.length, q.failedSpend))}
           {isOpen('failed') && q.failedLines.length === 0 && <Text dimColor>  nothing</Text>}
           {isOpen('failed') && q.failedLines.length > 0 && recentFailed.length === 0 && <Text dimColor>  none in the last {FAILED_DAYS} days</Text>}
           {isOpen('failed') &&

@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { agentIdOf, cells, dayOf, dayText, daySpends, fitCells, foldFlipped, prioGlyph, landedHeading, landedUsd, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
+import { agentIdOf, cells, dayOf, dayText, daySpends, failedHeading, failedSpend, fitCells, foldFlipped, prioGlyph, landedHeading, landedUsd, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spanText, spawnOf, startText, usdText } from './plan-pane'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -35,6 +35,8 @@ let queueDown = false
 /** `ui.open` fails (the pane cannot be seated). */
 let openFails = false
 let poolReply: { status: number; text: string } | undefined = { status: 200, text: JSON.stringify(API_POOL) }
+/** What GET /api/pool?counts=1 answers (the tab label's cheap read): a status, or undefined for a refused connection. */
+let countsReply: { status: number; text: string } | undefined = { status: 200, text: JSON.stringify({ budget: 12, held: 6 }) }
 const NOW = Date.parse('2026-11-07T10:05:00Z')
 
 /** What a session file reads as; a test that needs an agent linked to it swaps it. */
@@ -60,6 +62,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
   queueDown = false
   openFails = false
   poolReply = { status: 200, text: JSON.stringify(API_POOL) }
+  countsReply = { status: 200, text: JSON.stringify({ budget: 12, held: 6 }) }
   const clock = ticking ? mock.clock(on, { now: NOW }) : undefined
   on('session.id', () => ({ value: SID }))
   if (!ticking) on('clock.now', () => ({ value: NOW + clockShift }))
@@ -80,6 +83,10 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
   on('http.fetch', (_: unknown, e: { url: string }) => {
     fetched.push(e.url)
     if (queueDown) throw new Error('ECONNREFUSED')
+    if (e.url.endsWith('/api/pool?counts=1')) {
+      if (!countsReply) throw new Error('ECONNREFUSED')
+      return { value: { status: countsReply.status, ok: countsReply.status === 200, headers: {}, text: countsReply.text } }
+    }
     if (e.url.endsWith('/api/pool')) {
       if (!poolReply) throw new Error('ECONNREFUSED')
       return { value: { status: poolReply.status, ok: poolReply.status === 200, headers: {}, text: poolReply.text } }
@@ -571,6 +578,41 @@ test('ready lines come in the picker\'s order, the priority named', () => {
   expect(view.ready[0].priority).toBe('high')
 })
 
+// Waiting is in the picker's own visiting order: the engine's `admitOrder` (priority, then file order), not the file's
+test('Waiting lists the lines in the picker\'s order: a high line below a low one in the file shows above it', () => {
+  const held = (id: string, extra: object) => ({ id, status: 'pending' as const, exclusive: false, paused: false, reason: 'overlaps RUN (exclusive RUN)', ...extra })
+  const view = queueView('/q.yaml', {
+    batchSize: 1,
+    lines: [
+      held('W-LOW', { priority: 'low', admitOrder: 2 }),
+      held('W-NORMAL', { admitOrder: 1 }),
+      held('W-HIGH', { priority: 'high', admitOrder: 0 }),
+      held('W-OLD-ENGINE', {}),
+    ],
+  })
+  expect(view.waiting.map(w => w.id)).toEqual(['W-HIGH', 'W-NORMAL', 'W-LOW', 'W-OLD-ENGINE'])
+  // an answer with no `admitOrder` at all keeps the file's order
+  const plain = queueView('/q.yaml', { batchSize: 1, lines: [held('B', {}), held('A', {})] })
+  expect(plain.waiting.map(w => w.id)).toEqual(['B', 'A'])
+})
+
+test('the Waiting tab draws the top row first: the high line, though it sits below a low one in the file', async ($, on) => {
+  engine(on, true)
+  const saved = API_QUEUE.lines.splice(0, API_QUEUE.lines.length)
+  const base = saved.find(l => l.id === 'WAIT-1')!
+  API_QUEUE.lines.push(
+    { ...base, id: 'W-LOW', priority: 'low', admitOrder: 1 },
+    { ...base, id: 'W-HIGH', priority: 'high', admitOrder: 0 },
+  ) as never
+  try {
+    const all = await paneTexts($, 100, ['tab-waiting'])
+    const order = all.map(t => /W-(LOW|HIGH)/.exec(t)?.[0]).filter(Boolean)
+    expect(order).toEqual(['W-HIGH', 'W-LOW'])
+  } finally {
+    API_QUEUE.lines.splice(0, API_QUEUE.lines.length, ...saved)
+  }
+})
+
 // the engine's /api/queue answer for one running exclusive line and pending lines of its repo: `unblockOrder` is the picker's own
 // pass with the running lines done; a line kept out by something else (`after:` a pending line) has none
 const unblockQueue = (pending: { id: string; unblockOrder?: number; priority?: string }[]) => {
@@ -668,6 +710,47 @@ test('Failed is folded by default, shows its count, and unfolds on a click with 
   await ui.unmount()
 })
 
+/** A task's ledger row with the parent's own spend of that stretch beside the agents' (`parent_spend`). */
+const withParent = (row: string, usd: number) => JSON.stringify({ ...JSON.parse(row), parent_spend: { conversation: 'c1', project: '-proj', from: '2026-11-07T08:00:00Z', to: '2026-11-07T09:00:00Z', usd } })
+
+test('ledgerTotalsOf sums every run of a line: the agents\' usd and the parent\'s, a row with neither adding 0, a row with no task skipped', () => {
+  const text = [
+    ran1('F-1', noon(5), 1.5, 'failed'),
+    withParent(ran1('F-1', noon(6), 2, 'failed'), 0.25),
+    ran1('F-2', noon(6), undefined, 'failed'),
+    '{"workflow":"x","spend":{"usd":99}}',
+    'not json',
+  ].join('\n')
+  expect([...ledgerTotalsOf(text)]).toEqual([['F-1', { usd: 3.5, parentUsd: 0.25 }], ['F-2', { usd: 0, parentUsd: 0 }]])
+})
+
+test('ledgerTotalsOf: a row nested under a same-task row adds only its parent spend (the parent row\'s spend already covers it); a row under another task\'s row counts whole', () => {
+  const row = (task: string, session: string, parent: string | null, usd: number, parentUsd?: number) =>
+    JSON.stringify({ workflow: 'x', task, session_id: session, parent_session_id: parent, spend: { usd }, ...(parentUsd !== undefined ? { parent_spend: { usd: parentUsd } } : {}) })
+  const text = [row('F-1', 'pipe', null, 5, 0.5), row('F-1', 'recon', 'pipe', 2, 0.25), row('F-2', 'other', 'pipe', 1)].join('\n')
+  expect([...ledgerTotalsOf(text)]).toEqual([['F-1', { usd: 5, parentUsd: 0.75 }], ['F-2', { usd: 1, parentUsd: 0 }]])
+})
+
+test('failedSpend sums the counted lines and counts the ones the ledger has no row of; the heading says both, the parent only when it spent', () => {
+  const line = (id: string) => ({ id, difficulty: '', date: '', reason: '', recent: true })
+  const totals = new Map([['F-1', { usd: 3.5, parentUsd: 0.25 }], ['F-2', { usd: 0, parentUsd: 0 }]])
+  const sp = failedSpend([line('F-1'), line('F-2'), line('F-3')], totals)
+  expect(sp).toEqual({ usd: 3.5, parentUsd: 0.25, missing: 1 })
+  expect(failedHeading(3, sp)).toBe('✗ Failed (3) · $3.50 (parent $0.25) · 1 not in the ledger')
+  expect(failedHeading(2, { usd: 41.2, parentUsd: 0, missing: 0 })).toBe('✗ Failed (2) · $41.20')
+  expect(failedHeading(2, { usd: 0, parentUsd: 0, missing: 2 })).toBe('✗ Failed (2) · no ledger rows')
+  expect(failedHeading(0, { usd: 0, parentUsd: 0, missing: 0 })).toBe('✗ Failed (0)')
+  expect(failedHeading(2, undefined)).toBe('✗ Failed (2)')
+})
+
+test('the Failed header carries the summed spend of the lines it counts over every run of each, the parent beside it, and how many the ledger lacks', async ($, on) => {
+  const ledger = [ran1('FAIL-LONG', noon(6), 2, 'failed'), withParent(ran1('FAIL-LONG', noon(7), 7.5, 'failed'), 1.25), ran1('FAIL-OLD', noon(7), 100, 'failed')].join('\n')
+  engine(on, true, { git: '', ledger })
+  const all = await paneTexts($, 200)
+  // the recent lines are FAIL-LONG and FAIL-NEW (no row); FAIL-OLD is older and not summed
+  expect(all.some(t => t.includes('✗ Failed (2) · $9.50 (parent $1.25) · 1 not in the ledger'))).toBe(true)
+})
+
 /** A ledger run ended at noon, local time, of the given `DD` of November 2026. */
 const noon = (d: number) => new Date(2026, 10, d, 12).toISOString()
 const DAY_GIT = ['aaa111\t07.11 13:49\tL-ONE', 'bbb222\t07.11 09:10\tL-TWO', 'ccc333\t07.11 08:00\tL-THREE'].join('\n')
@@ -718,7 +801,7 @@ test('a narrow pane keeps the cost and cuts the id: Landed and Failed rows on tw
   // the first line is cut (times, sha) before the cost is
   expect(land).toMatch(/\$12\.50 .*…$/)
   expect(all.some(t => t.includes('L-AN-IDENT') && t.includes('…'))).toBe(true)
-  const fail = all.find(t => t.includes('$7.50')) ?? ''
+  const fail = all.find(t => t.includes('$7.50') && !t.includes('Failed')) ?? ''
   expect(fail).toContain('…')
   expect(fail).toMatch(/FAIL-/)
   for (const t of [land, fail, ...all.filter(t => /L-AN-|FAIL-|▦/.test(t))]) expect(cells(t)).toBeLessThanOrEqual(30)
@@ -969,6 +1052,40 @@ test('the Pool tab reads /api/pool only while the pane is open on it: never on t
   // a pane opened on the Pool tab reads the pool with its first refresh
   await $.command.run({ command: 'wf-plan', args: '' })
   expect(poolFetches()).toBe(4)
+  await ui.unmount()
+})
+
+const countsFetches = () => fetched.filter(u => u.endsWith('/api/pool?counts=1')).length
+
+test('the Pool tab label reads `Pool <held>/<budget>` from the cheap counts read of every refresh with the pane open, on any tab, and the full read stays for the open tab', async ($, on) => {
+  const clock = engine(on, true, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // the pane is closed: the label is not drawn, so nothing reads the counts
+  await clock.advance(15000)
+  expect(countsFetches()).toBe(0)
+  await $.command.run({ command: 'wf-plan', args: '' })
+  expect(countsFetches()).toBeGreaterThan(0)
+  expect((await ui.find({ key: 'tab-pool' }))?.text ?? '').toBe('Pool 6/12')
+  const before = countsFetches()
+  countsReply = { status: 200, text: JSON.stringify({ budget: 12, held: 9 }) }
+  await clock.advance(15000)
+  expect(countsFetches()).toBe(before + 1)
+  expect(poolFetches()).toBe(0)
+  expect((await ui.find({ key: 'tab-pool' }))?.text ?? '').toBe('Pool 9/12')
+  // on the Pool tab the full read is the one that refreshes the label: no counts call beside it
+  await ui.press({ key: 'tab-pool' })
+  const open = countsFetches()
+  await clock.advance(15000)
+  expect(poolFetches()).toBeGreaterThan(0)
+  expect(countsFetches()).toBe(open)
+  expect((await ui.find({ key: 'tab-pool' }))?.text ?? '').toBe('Pool 6/12')
+  // an engine that does not answer the counts leaves the label bare
+  await ui.press({ key: 'tab-plan' })
+  countsReply = undefined
+  await clock.advance(15000)
+  expect((await ui.find({ key: 'tab-pool' }))?.text ?? '').toBe('Pool')
   await ui.unmount()
 })
 

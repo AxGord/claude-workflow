@@ -35,6 +35,9 @@ export type QueueLine = {
 /** A `failed` queue line: `recent` = it ended within the last two days (queue_mark's `ended`; a line with none is older), its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured). */
 export type FailedLine = { id: string; difficulty: string; date: string; reason: string; recent: boolean; usd?: number }
 
+/** The Failed header's spend over the lines it counts (the recent ones): the ledger's agent `usd` and parent `parentUsd` summed over every run of each line, and how many of those lines have no ledger row (they add 0). */
+export type FailedSpend = { usd: number; parentUsd: number; missing: number }
+
 export type QueueView = {
   file: string
   window: number
@@ -51,6 +54,8 @@ export type QueueView = {
   waiting: { id: string; why: string; difficulty: string; priority: string }[]
   /** every failed line, newest first by the day it ended (an undated one after the dated, the later in the file first); `recent` marks the ones the pane draws before `+N older` */
   failedLines: FailedLine[]
+  /** the ledger's spend over the recent failed lines, for the header; absent until the pane has read the ledger */
+  failedSpend?: FailedSpend
   /** every queue line's kind glyph by id (`kindMark`, from /api/queue), drawn right after the difficulty bar; absent id = blank */
   marks: Record<string, string>
 }
@@ -103,6 +108,9 @@ export type PoolView = {
 /** What the last read of /api/pool left: the pool and when it was read, or why there is none ('' none). */
 export type PoolState = { at: number; pool: PoolView | null; error: string }
 
+/** The pool's `held` threads of its `budget`, from `GET /api/pool?counts=1`. */
+export type PoolCounts = { held: number; budget: number }
+
 /** The pane's tab. */
 export type View = 'plan' | 'sessions' | 'waiting' | 'pool'
 
@@ -126,6 +134,6 @@ export type Snapshot = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]>; paneOpen: Shaped<boolean>; agentsSeen: Shaped<Record<string, AgentSeen>>; pool: Shaped<PoolState | null> }
+    'workflow': { snapshot: Shaped<Snapshot | null>; view: Shaped<View>; expanded: Shaped<string>; folded: Shaped<string[]>; paneOpen: Shaped<boolean>; agentsSeen: Shaped<Record<string, AgentSeen>>; pool: Shaped<PoolState | null>; poolCounts: Shaped<PoolCounts | null> }
   }
 }

@@ -163,8 +163,14 @@ export function buildApp(
   });
 
   // The Pool tab: the machine-wide pool through the pool module, as `pool_status` reads it (one measured pass).
-  app.get("/api/pool", async (_req, res) => {
+  // `?counts=1` is the cheap read for a label (`budget`, `held` of one plain pass, no measuring window).
+  app.get("/api/pool", async (req, res) => {
     try {
+      if (req.query.counts === "1") {
+        const { budget, held } = poolSnapshot(await pool.status());
+        res.json({ budget, held });
+        return;
+      }
       res.json(poolSnapshot(await pool.measuredStatus()));
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });

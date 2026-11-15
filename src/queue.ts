@@ -375,6 +375,10 @@ function priorityOf(line: QueueLine): Priority | null {
 /** Rank for sorting: urgent first; an unreadable priority ranks as normal (the pick refuses it). */
 const priorityRank = (l: QueueLine): number => PRIORITIES.indexOf(priorityOf(l) ?? "normal");
 
+/** The order the picker visits pending lines in: priority, then file order. One comparator for the pick and for `admitOrder`. */
+const admissionOrder = (a: QueueLine, b: QueueLine): number =>
+  priorityRank(a) - priorityRank(b) || a.index - b.index;
+
 export const KINDS = ["bug", "feature", "research"] as const;
 export type Kind = (typeof KINDS)[number];
 
@@ -666,9 +670,7 @@ export function planPick(
     queue,
     opts.only === undefined ? queue.lines.filter(l => l.status === "pending") : [],
   );
-  const order = [...queue.lines].sort(
-    (a, b) => priorityRank(a) - priorityRank(b) || a.index - b.index,
-  );
+  const order = [...queue.lines].sort(admissionOrder);
   for (const l of order) {
     if (l.status !== "pending") continue;
     // `only`: a hand mark asks about one line; the window, a pause and parent-run are not its concern.
@@ -815,6 +817,8 @@ export interface QueueLineView {
    * have ended (it is kept out only by them). Absent on every other line.
    */
   readonly unblockOrder?: number;
+  /** A pending line's place among the pending lines in the picker's visiting order (priority, then file order), whatever keeps it out now: the top of the waiting ones is the line that goes next once its wait clears. */
+  readonly admitOrder?: number;
   /** Set when not `normal`. */
   readonly priority?: Priority;
 }
@@ -864,6 +868,12 @@ export function describeQueue(queue: Queue): {
   const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
   const unblock = unblockedByRunning(queue, plan);
   const byId = new Map(queue.lines.map(l => [l.id, l]));
+  const admit = new Map(
+    queue.lines
+      .filter(l => l.status === "pending")
+      .sort(admissionOrder)
+      .map((l, i) => [l.id, i]),
+  );
   return {
     file: queue.file,
     batchSize: queue.batchSize,
@@ -895,6 +905,7 @@ export function describeQueue(queue: Queue): {
         : {}),
       ...(ready.has(l.id) ? { pickOrder: ready.get(l.id) } : {}),
       ...(unblock.has(l.id) ? { unblockOrder: unblock.get(l.id) } : {}),
+      ...(admit.has(l.id) ? { admitOrder: admit.get(l.id) } : {}),
       ...(prioOf(l) !== undefined ? { priority: prioOf(l) } : {}),
     })),
   };

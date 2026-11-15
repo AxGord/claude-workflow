@@ -226,6 +226,31 @@ describe("GET /api/pool", () => {
   });
 });
 
+describe("GET /api/pool?counts=1", () => {
+  it("answers budget and held of one plain pass, with no measuring window", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashpool-"));
+    dirs.push(dir);
+    fs.writeFileSync(
+      path.join(dir, "config.yaml"),
+      JSON.stringify({ budget: 5, load_threshold: 0 }),
+    );
+    const pool = new Pool(dir, { ...systemProbes, loadavg: () => 0 });
+    const held = await pool.acquire({ threads: 3, label: "held" });
+    if (held.status !== "granted") throw new Error("not granted");
+    const storage = new Storage(path.join(dir, "state"));
+    const server = buildApp(storage, {} as Loader, undefined, pool).listen(0, "127.0.0.1");
+    servers.push(server);
+    await new Promise(r => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const started = Date.now();
+    const body = (await (await fetch(`${base}/api/pool?counts=1`)).json()) as object;
+    expect(body).toEqual({ budget: 5, held: 3 });
+    // the full read waits out a measuring window; the counts read does not
+    expect(Date.now() - started).toBeLessThan(400);
+    await held.lease.release();
+  });
+});
+
 describe("GET /api/cost", () => {
   it("answers the ledger's tasks with prices; a bad range is a 400", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashcost-"));

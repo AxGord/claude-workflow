@@ -29,7 +29,8 @@ export const API_QUEUE = {
       "notes": 0,
       "text": "n",
       "reason": "ready",
-      "pickOrder": 1
+      "pickOrder": 1,
+      "admitOrder": 1
     },
     {
       "id": "NEXT-2",
@@ -45,6 +46,7 @@ export const API_QUEUE = {
       "text": "n2",
       "reason": "ready",
       "pickOrder": 0,
+      "admitOrder": 0,
       "priority": "high"
     },
     {
@@ -62,7 +64,8 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 0,
       "text": "w",
-      "reason": "after: NEXT-1 (pending)"
+      "reason": "after: NEXT-1 (pending)",
+      "admitOrder": 2
     },
     {
       "id": "PARK-1",
@@ -75,7 +78,8 @@ export const API_QUEUE = {
       "paused": true,
       "notes": 0,
       "text": "p",
-      "reason": "parked"
+      "reason": "parked",
+      "admitOrder": 3
     },
     {
       "id": "DONE-1",
@@ -100,8 +104,8 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 1,
       "lastNoteDate": "2026-11-08",
-      "ended": "2026-11-07",
       "lastNote": "a reason that runs on and on well past the width of any plan pane a person would open beside the chat",
+      "ended": "2026-11-07",
       "text": "f4"
     },
     {
@@ -115,8 +119,8 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 1,
       "lastNoteDate": "2026-11-06",
-      "ended": "2026-11-04",
       "lastNote": "gate red: the suite",
+      "ended": "2026-11-04",
       "text": "f"
     },
     {
@@ -129,8 +133,8 @@ export const API_QUEUE = {
       "paused": false,
       "notes": 1,
       "lastNoteDate": "2026-11-07",
-      "ended": "2026-11-06",
       "lastNote": "closed as a split",
+      "ended": "2026-11-06",
       "text": "f2"
     },
     {

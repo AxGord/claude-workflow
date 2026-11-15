@@ -1571,6 +1571,35 @@ describe("describeQueue", () => {
     expect(reasons.F).toMatch(/^overlaps /);
   });
 
+  it("admitOrder: every pending line carries its place in the picker's visiting order (priority, then file order), whatever keeps it out; other lines carry none", () => {
+    const md = (id: string, rest: string) =>
+      `- [ ] ${id} | repo: /tmp | ${rest} | text of ${id} is long enough to be prose here`;
+    const lines = describeQueue(
+      parseMd(
+        [
+          "# x",
+          "batch_size: 1",
+          "## Tasks",
+          "- [>] RUN | repo: /tmp | exclusive: yes | text of run is long enough to be prose here",
+          md("P-LOW", "touches: src/a.ts | priority: low"),
+          md("P-NORMAL", "touches: src/b.ts"),
+          md("P-AFTER", "after: P-LOW | priority: urgent"),
+          md("P-HIGH", "touches: src/c.ts | priority: high"),
+          "- [x] DONE | repo: /tmp | text of done is long enough to be prose here",
+          "",
+        ].join("\n"),
+        "/tmp/q.md",
+      ),
+    ).lines;
+    const order = lines
+      .filter(l => l.admitOrder !== undefined)
+      .sort((a, b) => (a.admitOrder ?? 0) - (b.admitOrder ?? 0))
+      .map(l => l.id);
+    expect(order).toEqual(["P-AFTER", "P-HIGH", "P-NORMAL", "P-LOW"]);
+    expect(lines.find(l => l.id === "RUN")?.admitOrder).toBeUndefined();
+    expect(lines.find(l => l.id === "DONE")?.admitOrder).toBeUndefined();
+  });
+
   it("unblockOrder: with nothing admittable, the lines only the running ones keep out, in the order the picker admits them once those end", () => {
     const unblock = (md: string[]) =>
       describeQueue(
