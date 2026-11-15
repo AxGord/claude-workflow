@@ -121,7 +121,8 @@ describe("the dashboard has one style", () => {
   it("every var(--x) names a token", () => {
     const defined = new Set([...TOKENS.matchAll(/(--[\w-]+)\s*:/g)].map(m => m[1]));
     // component-local custom properties: set by a state class or an inline style, read with var()
-    const local = new Set(["--c"]);
+    // (--lab / --stat: the timeline's column widths; --f: the now-line's place in the window)
+    const local = new Set(["--c", "--lab", "--stat", "--f"]);
     const used = new Set(
       [COMPONENTS, PAGE, MAP].flatMap(t =>
         [...t.matchAll(/var\((--[\w-]+)/g)].map(m => m[1] ?? ""),
@@ -673,40 +674,69 @@ describe("every view renders with the shared components", () => {
 
   it("timeline: a bar per pipeline, segments in the stage group classes, waits hatched, a day axis", () => {
     const at = (hms: string): number => Date.parse(`2026-11-08T${hms}`);
+    const seg = (state: string, group: string, a: string, b: string, waits: object[] = []) => ({
+      state,
+      group,
+      start: at(a),
+      end: at(b),
+      waits,
+    });
+    const row = (session: string, name: string, depth: number, segments: object[]) => ({
+      session,
+      workflow: "w",
+      depth,
+      role: depth ? name.split(" ")[0] : null,
+      model: null,
+      round: null,
+      name,
+      segments,
+    });
+    const bar = (id: string, label: string, project: string, extra: object = {}) => ({
+      id,
+      root: "r",
+      kind: "task",
+      task: label,
+      label,
+      workflow: "w",
+      outcome: "completed",
+      result: "landed",
+      project,
+      duration_ms: 3600000,
+      rounds: 2,
+      usd: 1.5,
+      start: at("10:00:00"),
+      end: at("11:00:00"),
+      detailed: true,
+      rows: [
+        row(id, label, 0, [
+          seg("gate", "gate", "10:00:00", "11:00:00", [
+            { start: at("10:00:00"), end: at("10:15:00") },
+          ]),
+        ]),
+        row(`${id}-w`, "worker r2 · opus", 1, [seg("work", "work", "10:00:00", "10:30:00")]),
+        row(`${id}-late`, "review", 1, [seg("review", "review", "11:00:00", "11:00:01")]),
+      ],
+      ...extra,
+    });
     const t = {
       day: "2026-11-08",
       from: at("00:00:00"),
       to: Date.parse("2026-11-09T00:00:00"),
       bars: [
-        {
-          id: "t1",
-          root: "r",
-          task: "LINE-1",
-          workflow: "w",
-          outcome: "completed",
-          start: at("10:00:00"),
-          end: at("11:00:00"),
-          detailed: true,
+        bar("t1", "LINE-1", "anyparse"),
+        bar("t2", "LINE-2", "golf", { result: "failed", usd: null, rounds: 0 }),
+        bar("d", "parent · slice-dispatch", "anyparse", {
+          kind: "parent",
           rows: [
-            {
-              session: "t1",
-              workflow: "w",
-              depth: 0,
-              segments: [
-                {
-                  state: "gate",
-                  group: "gate",
-                  start: at("10:00:00"),
-                  end: at("11:00:00"),
-                  waits: [{ start: at("10:00:00"), end: at("10:15:00") }],
-                },
-              ],
-            },
+            row("d", "parent · slice-dispatch", 0, [
+              seg("dispatch", "work", "10:00:00", "11:00:00"),
+            ]),
           ],
-        },
+        }),
       ],
     };
-    const html = loadPage().run(`renderTimeline(${JSON.stringify(t)})`) as string;
+    const page = loadPage();
+    const html = page.run(`renderTimeline(${JSON.stringify(t)})`) as string;
     expect(html).toContain('<span class="tl-seg gate" style="left:0.000%;width:50.000%"');
     expect(html).toContain('class="tl-wait" style="left:0.000%;width:25.000%"');
     expect(html).toContain('title="gate (gate) · ');
@@ -716,6 +746,85 @@ describe("every view renders with the shared components", () => {
     expect(literals(html)).toEqual([]);
     expect(PAGE).toContain('id="tab-timeline"');
     expect(PAGE).toContain("/api/timeline");
+
+    // folded by default: one row per task (and the dispatcher), a fold button naming how many sessions hide
+    expect(html.match(/class="tl-row/g)?.length).toBe(3);
+    expect(html).not.toContain("worker r2 · opus");
+    expect(html).toContain('data-fold="t1" aria-expanded="false"');
+
+    // the right column: duration, review rounds, $, outcome
+    const stats = (html.match(/<div class="tl-stats">(.*?)<\/div>/g) ?? [])[0] ?? "";
+    expect(stats).toContain("1h00m");
+    expect(stats).toContain(">r2<");
+    expect(stats).toContain("$1.50");
+    expect(stats).toContain("landed");
+    expect(html).toContain(">—<");
+    expect(html).toContain("failed");
+    // the dispatcher's row is last and carries no $ or outcome
+    expect(html.lastIndexOf("parent · slice-dispatch")).toBeGreaterThan(html.indexOf("LINE-2"));
+
+    // an unfold shows the agent rows named by role, model and round; a row with no segment in the window stays out
+    page.run('tlOpen.add("t1")');
+    const open = page.run(`renderTimeline(${JSON.stringify(t)})`) as string;
+    expect(open).toContain('aria-expanded="true"');
+    expect(open).toContain(">worker r2 · opus</a>");
+    expect(open).toContain('<div class="tl-row sub" data-key="tl:t1-w">');
+
+    // zoom buttons, project chips from the bars' projects (none selected = all)
+    expect(html).toContain('data-zoom="1"');
+    expect(html).toContain('data-zoom="6"');
+    expect(html).toContain('data-zoom="day"');
+    expect(html).toContain('data-project="anyparse"');
+    expect(html).toContain('data-project="golf"');
+    page.run('tlProjects.add("golf")');
+    const golf = page.run(`renderTimeline(${JSON.stringify(t)})`) as string;
+    expect(golf).toContain("LINE-2");
+    expect(golf).not.toContain("LINE-1</a>");
+
+    // a zoom of 1 h makes the track wider than the screen; the day fits it again
+    page.run('tlProjects.clear(); tlZoom = "1"');
+    expect(page.run(`renderTimeline(${JSON.stringify(t)})`)).toMatch(
+      /class="tl" style="width:2[0-9]{2}\./,
+    );
+    page.run('tlZoom = "day"');
+    expect(page.run(`renderTimeline(${JSON.stringify(t)})`)).toContain(
+      'class="tl" style="width:100.00%"',
+    );
+    page.run('tlZoom = "fit"; tlOpen.clear()');
+
+    // the now-line is drawn where now falls in the window: today's page only
+    expect(html).not.toContain("tl-now");
+    const d = new Date();
+    const pad = (n: number): string => String(n).padStart(2, "0");
+    const day = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const todayAt = (h: number): number =>
+      new Date(d.getFullYear(), d.getMonth(), d.getDate(), h).getTime();
+    const today = {
+      day,
+      from: todayAt(0),
+      to: todayAt(24),
+      bars: [
+        bar("n", "LINE-N", "anyparse", {
+          start: Date.now() - 3600000,
+          end: Date.now() - 60000,
+          rows: [
+            row(
+              "n",
+              "LINE-N",
+              0,
+              [seg("work", "work", "10:00:00", "11:00:00")].map(g => ({
+                ...g,
+                start: Date.now() - 3600000,
+                end: Date.now() - 60000,
+              })),
+            ),
+          ],
+        }),
+      ],
+    };
+    expect(page.run(`renderTimeline(${JSON.stringify(today)})`)).toContain(
+      '<div class="tl-now" style="--f:',
+    );
   });
 
   it("cost: totals, the price table's source and date, a trend bar per day", () => {

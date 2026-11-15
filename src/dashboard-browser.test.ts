@@ -726,6 +726,88 @@ describe.skipIf(!HAVE_CHROME)("the Timeline tab in a real browser", () => {
   }, 60_000);
 });
 
+describe.skipIf(!HAVE_CHROME)("the Timeline tab reads as a list of tasks in a real browser", () => {
+  it("folds a task's agents until a click, keeps that across the refresh, zooms with sticky labels, draws a now-line, filters by project", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashtl2-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const storage = new Storage(path.join(dir, "state"), { eventLog: false });
+    const now = Date.now();
+    const iso = (ago: number) => new Date(now - ago * 60_000).toISOString();
+    const live = (id: string, parent: string | undefined, ctx: object, workflow: string) => {
+      const s = session(id, "b", ctx);
+      s.started_at = iso(50);
+      s.updated_at = iso(1);
+      s.history = [
+        { frame: 0, event: "start", workflow, at: iso(50) },
+        { frame: 0, event: "transition", from: "a", to: "b", at: iso(25) },
+      ] as SessionState["history"];
+      return parent === undefined
+        ? s
+        : { ...s, parent_session_id: parent, root_session_id: "disp" };
+    };
+    // a dispatcher, three pipelines under it (two in one project), each with one agent session
+    await storage.write("disp", live("disp", undefined, {}, "slice-dispatch"));
+    for (const [i, proj] of ["alpha", "alpha", "beta"].entries()) {
+      const id = `p${i}`;
+      await storage.write(
+        id,
+        live(id, "disp", { slice: `TASK-${i}`, cwd: `/nowhere/${proj}` }, "slice-pipeline"),
+      );
+      await storage.write(`${id}-w`, live(`${id}-w`, id, {}, "slice-worker"));
+    }
+    const base = await serve(storage, routesModule(dir));
+    const page = await openPage(`${base}/timeline`);
+    const rows = "document.querySelectorAll('#timeline-content .tl-row').length";
+    // folded: one row per task, plus the dispatcher's row
+    await until(page, `${rows} === 4`, "3 task rows and the dispatcher");
+    expect(
+      await page.eval(
+        "[...document.querySelectorAll('#timeline-content .tl-name a')].map(a => a.textContent).join('|')",
+      ),
+    ).toBe("TASK-0|TASK-1|TASK-2|parent · slice-dispatch");
+
+    // a click unfolds the agents of one task; the choice and the nodes survive the 2 s refresh
+    await page.eval("document.querySelector('[data-fold=\"p0\"]').click()");
+    await until(page, `${rows} === 5`, "the unfolded agent row");
+    expect(await page.eval("document.querySelector('.tl-row.sub .tl-name a').textContent")).toBe(
+      "worker",
+    );
+    await page.eval("window.__sub = document.querySelector('.tl-row.sub')");
+    await sleep(4500);
+    expect(await page.eval(`${rows}`)).toBe(5);
+    expect(await page.eval("window.__sub === document.querySelector('.tl-row.sub')")).toBe(true);
+
+    // 1 h zoom: the track is wider than the window; scrolled right, the label and the stats column stay in view
+    await page.eval("document.querySelector('[data-zoom=\"1\"]').click()");
+    const geo = (await page.eval(`(() => {
+      const sc = document.querySelector('.tl-scroll');
+      return { wide: sc.scrollWidth > sc.clientWidth * 1.5, now: !!document.querySelector('.tl-now') };
+    })()`)) as { wide: boolean; now: boolean };
+    expect(geo).toEqual({ wide: true, now: true });
+    await page.eval(
+      "(() => { const sc = document.querySelector('.tl-scroll'); sc.scrollLeft = sc.scrollWidth; })()",
+    );
+    const pinned = (await page.eval(`(() => {
+      const sc = document.querySelector('.tl-scroll').getBoundingClientRect();
+      const name = document.querySelector('.tl-name').getBoundingClientRect();
+      const stats = document.querySelector('.tl-stats').getBoundingClientRect();
+      return { name: Math.abs(name.left - sc.left) < 2, stats: Math.abs(stats.right - sc.right) < 2 };
+    })()`)) as { name: boolean; stats: boolean };
+    expect(pinned).toEqual({ name: true, stats: true });
+    await page.eval("document.querySelector('[data-zoom=\"fit\"]').click()");
+
+    // the project chip keeps one project's tasks (none selected = all)
+    await page.eval("document.querySelector('[data-project=\"beta\"]').click()");
+    await until(
+      page,
+      "[...document.querySelectorAll('#timeline-content .tl-name a')].map(a => a.textContent).join('|') === 'TASK-2'",
+      "only the beta task",
+    );
+    await page.eval("document.querySelector('[data-project=\"beta\"]').click()");
+    await until(page, `${rows} >= 4`, "all rows again");
+  }, 60_000);
+});
+
 describe.skipIf(!HAVE_CHROME)("the Cost tab in a real browser", () => {
   it("the date inputs and every native control take the page's dark scheme", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashcost-"));

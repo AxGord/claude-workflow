@@ -338,6 +338,231 @@ describe("buildTimeline", () => {
   });
 });
 
+describe("buildTimeline: a bar per task pipeline", () => {
+  const hist = (workflow: string, moves: [string, string, string][], end?: string) => [
+    { frame: 0, at: T("10:00:00"), event: "start", workflow },
+    ...moves.map(([at, from, to]) => ({ frame: 0, at: T(at), from, to })),
+    ...(end ? [{ frame: 0, at: T(end), event: "complete" }] : []),
+  ];
+  const child = (
+    id: string,
+    parent: string,
+    workflow: string,
+    start: string,
+    end: string,
+    ctx: Record<string, unknown> = {},
+  ): SessionState =>
+    session(id, {
+      parent_session_id: parent,
+      root_session_id: "top",
+      started_at: T(start),
+      updated_at: T(end),
+      context: ctx,
+      history: [
+        { frame: 0, at: T(start), event: "start", workflow },
+        { frame: 0, at: T(end), from: "run", to: "done" },
+      ] as never,
+    });
+  const pipeline = (id: string, task: string, end: string, extra: Partial<SessionState> = {}) =>
+    session(id, {
+      parent_session_id: "disp",
+      root_session_id: "top",
+      started_at: T("10:00:00"),
+      updated_at: T(end),
+      context: { slice: task },
+      history: hist(
+        "slice-pipeline",
+        [
+          ["10:10:00", "claim", "work"],
+          ["10:30:00", "work", "review"],
+          ["10:40:00", "review", "work"],
+          ["10:50:00", "work", "review"],
+          ["11:00:00", "review", "land"],
+        ],
+        end,
+      ),
+      ...extra,
+    });
+  const top = session("top", { stack: [{}] as never, active_frame: 0 });
+  const disp = session("disp", {
+    parent_session_id: "top",
+    root_session_id: "top",
+    stack: [{ workflow: "slice-dispatch", current_state: "dispatch" }] as never,
+    active_frame: 0,
+    started_at: T("09:50:00"),
+    updated_at: T("11:30:00"),
+    history: hist("slice-dispatch", []),
+  });
+  const p1 = pipeline("p1", "LINE-1", "11:05:00");
+  const p2 = pipeline("p2", "LINE-2", "11:20:00", { outcome: "failed" });
+  const kids = [
+    child("p1-recon", "p1", "slice-recon", "10:01:00", "10:09:00", { model: "claude-sonnet-4-5" }),
+    child("p1-w1", "p1", "slice-worker", "10:11:00", "10:29:00", { model: "claude-opus-4-5" }),
+    child("p1-w2", "p1", "slice-worker", "10:41:00", "10:49:00", { model: "claude-opus-4-5" }),
+    child("p1-rev", "p1", "slice-review", "10:31:00", "10:39:00"),
+    // a helper that inherited the task id is a row of the pipeline, not a bar
+    child("p1-helper", "p1", "slice-recon", "10:02:00", "10:04:00", { slice: "LINE-1" }),
+    // ran another day: no segment in this one, so no row
+    {
+      ...child("p1-old", "p1", "slice-probe", "10:00:00", "10:01:00"),
+      started_at: "2026-11-01T10:00:00.000Z",
+      updated_at: "2026-11-01T10:01:00.000Z",
+      history: [
+        { frame: 0, at: "2026-11-01T10:00:00.000Z", event: "start", workflow: "slice-probe" },
+        { frame: 0, at: "2026-11-01T10:01:00.000Z", from: "run", to: "done" },
+      ] as never,
+    },
+  ];
+  const led = (s: SessionState, over: Partial<LedgerEntry>): LedgerEntry => ({
+    ...ledgerEntry(s),
+    ...over,
+  });
+  const spend = (usd: number) => ({
+    agents: 1,
+    usd,
+    input: 0,
+    output: 0,
+    cache_read: 0,
+    cache_write: 0,
+  });
+  const run = (sessions: SessionState[], ledger: LedgerEntry[] = []) =>
+    buildTimeline({ sessions, ledger, day: "2026-11-08", now: ms("12:00:00") })!;
+
+  it("a pipeline under a dispatcher is its own bar named by its task; the dispatcher is one row at the bottom", () => {
+    const tl = run([top, disp, p1, p2, ...kids]);
+    expect(tl.bars.map(b => [b.id, b.kind, b.label])).toEqual([
+      ["p1", "task", "LINE-1"],
+      ["p2", "task", "LINE-2"],
+      ["disp", "parent", "parent · slice-dispatch"],
+    ]);
+    expect(tl.bars.at(-1)?.rows.map(r => r.session)).toEqual(["disp"]);
+    // the session above the dispatcher is no bar
+    expect(tl.bars.some(b => b.id === "top")).toBe(false);
+  });
+
+  it("the same pipelines with no dispatcher are the same bars, one per task", () => {
+    const loose = [p1, p2].map(p => ({
+      ...p,
+      parent_session_id: undefined,
+      root_session_id: undefined,
+    }));
+    const tl = run([...loose, ...kids]);
+    expect(tl.bars.map(b => [b.id, b.kind])).toEqual([
+      ["p1", "task"],
+      ["p2", "task"],
+    ]);
+  });
+
+  it("a bar's rows are the pipeline and its agent sessions, named by role, model and round; a row with no segment in the day is dropped", () => {
+    const tl = run([top, disp, p1, p2, ...kids]);
+    const p = tl.bars.find(b => b.id === "p1")!;
+    expect(p.rows.map(r => [r.session, r.depth, r.name])).toEqual([
+      ["p1", 0, "LINE-1"],
+      ["p1-recon", 1, "recon r1 · sonnet"],
+      ["p1-helper", 1, "recon r2"],
+      ["p1-w1", 1, "worker r1 · opus"],
+      ["p1-rev", 1, "review"],
+      ["p1-w2", 1, "worker r2 · opus"],
+    ]);
+    expect(p.rows.slice(1).map(r => [r.role, r.model, r.round])).toEqual([
+      ["recon", "sonnet", 1],
+      ["recon", null, 2],
+      ["worker", "opus", 1],
+      ["review", null, 1],
+      ["worker", "opus", 2],
+    ]);
+    expect(p.rows.some(r => r.session === "p1-old")).toBe(false);
+  });
+
+  it("each bar carries its duration, review rounds, spend, project and how it ended", () => {
+    const ledger = [
+      led(p1, {
+        project: "/work/anyparse",
+        spend: spend(1.25),
+        parent_spend: { usd: 0.5 } as never,
+      }),
+      led(p2, { project: "/work/other" }),
+      // a same-task child adds its own parent turns, not its spend (the head's already covers the subtree)
+      led(kids[4], { spend: spend(9), parent_spend: { usd: 0.25 } as never }),
+    ];
+    const tl = run([top, disp, p1, p2, ...kids], ledger);
+    const [a, b] = tl.bars;
+    expect(a).toMatchObject({
+      id: "p1",
+      duration_ms: ms("11:05:00") - ms("10:00:00"),
+      rounds: 2,
+      usd: 2,
+      project: "anyparse",
+      result: "landed",
+    });
+    // no spend recorded is not $0; a failed run is failed
+    expect(b).toMatchObject({ id: "p2", usd: null, project: "other", result: "failed" });
+  });
+
+  it("review rounds are entries into `review`, not the segments of its spawn and route states", () => {
+    const moves: [string, string, string][] = [
+      ["10:10:00", "claim", "work"],
+      ["10:20:00", "work", "review_spawn"],
+      ["10:21:00", "review_spawn", "review"],
+      ["10:30:00", "review", "review_route"],
+      ["10:31:00", "review_route", "work"],
+      ["10:40:00", "work", "review_spawn"],
+      ["10:41:00", "review_spawn", "review"],
+      ["10:50:00", "review", "review_route"],
+      ["10:51:00", "review_route", "land"],
+    ];
+    const rr = session("r1", {
+      context: { task: "LINE-5" },
+      history: hist("engine-task", moves, "11:00:00"),
+    });
+    expect(run([rr]).bars[0]?.rounds).toBe(2);
+    // a pruned session: the ledger line's visits say it
+    const old = led(rr, { visits: { review: 3 } });
+    expect(run([], [old]).bars[0]?.rounds).toBe(3);
+  });
+
+  it("only a state named land (or <x>_land) lands a pipeline: land_failed does not", () => {
+    const via = (id: string, state: string) =>
+      session(id, {
+        context: { task: `L-${id}` },
+        history: hist("engine-task", [["10:10:00", "work", state]], "10:20:00"),
+      });
+    const tl = run([via("a", "project_land"), via("b", "land_failed"), via("c", "land")]);
+    expect(tl.bars.map(b => [b.id, b.result])).toEqual([
+      ["a", "landed"],
+      ["b", "closed"],
+      ["c", "landed"],
+    ]);
+  });
+
+  it("a completed pipeline that never reached land is closed; one still on the stack is running", () => {
+    const noLand = session("n1", {
+      context: { task: "LINE-3" },
+      history: hist("engine-task", [["10:10:00", "claim", "work"]], "10:20:00"),
+    });
+    const live = session("n2", {
+      context: { task: "LINE-4" },
+      stack: [{ workflow: "engine-task", current_state: "work" }] as never,
+      active_frame: 0,
+      history: hist("engine-task", []),
+    });
+    const tl = run([noLand, live]);
+    expect(tl.bars.map(b => [b.id, b.result])).toEqual([
+      ["n1", "closed"],
+      ["n2", "running"],
+    ]);
+    expect(tl.bars[1]?.duration_ms).toBe(ms("12:00:00") - ms("10:00:00"));
+  });
+
+  it("the older rule still holds where no task hangs under a session: a child of a root is a bar", () => {
+    const tl = run([top, child("c1", "top", "w", "10:00:00", "10:10:00")]);
+    expect(tl.bars.map(b => [b.id, b.kind, b.task])).toEqual([["c1", "task", null]]);
+    // no task: the label is the workflow
+    expect(tl.bars[0]?.label).toBe("w");
+    expect(tl.bars[0]?.rows[0]?.name).toBe("w");
+  });
+});
+
 describe("the ledger does not count a push as a move", () => {
   it("transitions and visits ignore the `to` a push carries", () => {
     const e = ledgerEntry(
