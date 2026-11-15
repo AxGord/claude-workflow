@@ -42,6 +42,8 @@ export interface MapOptions {
   readonly pool?: readonly string[];
   /** ended lanes older than this fold into `landed earlier:` (default one hour) */
   readonly foldAfterMs?: number;
+  /** a band with no running lane whose newest lane ended longer ago than this is not drawn (default two hours); the highlighted lane's band always is */
+  readonly hideBandAfterMs?: number;
   /** a clock label for a timestamp (default: local HH:MM) */
   readonly clock?: (ms: number) => string;
   /** keys of the folded groups of repeated rounds that are open (`MapLoop.group`): their rounds are drawn one by one */
@@ -1266,6 +1268,7 @@ export function layout(
 ): MapLayout {
   const { lanes, dispatchers } = classify(folded, workflows);
   const foldAfter = opts.foldAfterMs ?? 3600_000;
+  const hideAfter = opts.hideBandAfterMs ?? 7200_000;
   const bandKey = (l: LaneInput): string =>
     [l.s.project, queueLabel(l.s.queue), l.s.workflow].filter(p => p).join("|");
   const byWorkflow = new Map<string, LaneInput[]>();
@@ -1306,6 +1309,10 @@ export function layout(
     const title = `${project ?? "?"} › ${queue ?? "no queue"} · ${workflow}`;
     const stations = bandStations(workflow, group, workflows);
     if (stations.length === 0) continue;
+    const idle =
+      group.every(l => l.s.outcome !== undefined && l.s.id !== opts.highlight) &&
+      opts.now - Math.max(...group.map(l => time(l.s.ended))) > hideAfter;
+    if (idle) continue;
     const n = stations.length;
     const need = columnNeed(stations, group, workflows, opts.now, opts.clock ?? localClock);
     const fit =

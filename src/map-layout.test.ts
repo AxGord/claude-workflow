@@ -1049,7 +1049,16 @@ describe("the kind mark", () => {
         ev("session_end", id, "08:30", { outcome: "completed" });
       }
     });
-    const om = layout(fold(old), {}, { now: NOW, clock: () => "hh:mm", kinds: KINDS });
+    const om = layout(
+      fold(old),
+      {},
+      {
+        now: NOW,
+        clock: () => "hh:mm",
+        kinds: KINDS,
+        hideBandAfterMs: Infinity,
+      },
+    );
     expect(om.bands[0].earlier!.items.map(i => [i.id, i.kind])).toEqual([
       ["NO-L1", " "],
       ["BUG-1", "※"],
@@ -1594,5 +1603,29 @@ describe("repeated rounds of a lane fold into one drawn round with a count", () 
     };
     walkG(scene(m));
     expect(els.filter(e => e.attrs["data-group"] === "R:g1")).toHaveLength(2);
+  });
+});
+
+describe("a band with nothing running and nothing recent is not drawn", () => {
+  const idleBand = (endedAt: string): WfEvent[] =>
+    scenario(() => {
+      start("L", P, "07:00", null, { task: "RUN-1", difficulty: 3 });
+      start("Z", "pipe-recon", "07:00", null, { task: "OLD-9", difficulty: 3 });
+      move("Z", "pipe-recon", endedAt, "brief", "finish");
+      ev("session_end", "Z", endedAt, { outcome: "completed" });
+    });
+  const titles = (m: MapLayout): string[] => m.bands.map(b => b.workflow);
+
+  it("idle for 3 h: one band", () => {
+    expect(titles(map(idleBand("08:30")))).toEqual(["pipe"]);
+  });
+  it("idle for 1 h: both bands", () => {
+    expect(titles(map(idleBand("10:30"))).sort()).toEqual(["pipe", "pipe-recon"]);
+  });
+  it("hideBandAfterMs moves the limit", () => {
+    expect(titles(map(idleBand("08:30"), { hideBandAfterMs: 4 * 3600_000 }))).toHaveLength(2);
+  });
+  it("the highlighted lane's band is drawn", () => {
+    expect(titles(map(idleBand("08:30"), { highlight: "Z" }))).toHaveLength(2);
   });
 });
