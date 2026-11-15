@@ -20,7 +20,8 @@
 // nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
 // task's own task workflow (the dispatcher's default otherwise); `difficulty:` (1..10) is what a
 // task workflow's `model_table` maps to model/effort; `kind:` (`bug|feature|research`, absent = feature) is the
-// task's type, reported by the pick. `backlog` tasks are never picked.
+// task's type, reported by the pick. `backlog` tasks are never picked. A write that leaves a pending
+// line (not parked, not `model: —`) with no `difficulty:` is refused; lines already without one stay.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -347,6 +348,18 @@ function difficultyOf(line: QueueLine): number | undefined | null {
   const v = line.meta.difficulty?.trim();
   if (!v || v === "-" || v === "—") return undefined;
   return parseDifficulty(v);
+}
+
+/**
+ * The refusal of a pending line a pick would run that carries no `difficulty:`: the pane draws it
+ * `?????` and the model table has no row for it. Backlog, parked, finished and parent-run (`model: —`)
+ * lines need none. A write that makes a line read so is refused; lines already in the file are never.
+ */
+function difficultyRequired(line: QueueLine): string | null {
+  if (line.status !== "pending" || line.paused) return null;
+  if ((line.meta.model ?? "").trim().startsWith("—")) return null;
+  if (difficultyOf(line) !== undefined) return null;
+  return `${line.id}: difficulty: <1-10> is required on a pending line (backlog, parked and model: — lines need none)`;
 }
 
 export const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
@@ -1534,6 +1547,10 @@ export async function markQueue(
         forced = `forced running over: ${why}; ${reason}`;
       }
     }
+    if (to === "promoted") {
+      const why = difficultyRequired({ ...line, status: "pending" });
+      if (why !== null) throw new QueueError(why);
+    }
     const node = taskNode(e, line);
     node.set("status", status);
     if (status === "done" || status === "failed") setOrdered(e, node, "ended", today());
@@ -1713,7 +1730,7 @@ function lineNoOf(text: string, id: string): number {
  * A new pending (or backlog) task under the lock: after the task `after`, before the task `before`,
  * or last. The task must read as a pick reads it: a unique id, known keys, `after:` naming only
  * tasks of the queue (and no cycle), a one-word `workflow:`, a `repo:` that resolves, a
- * `difficulty:` of 1..10.
+ * `difficulty:` of 1..10 (required on a pending line, see `difficultyRequired`).
  */
 export async function addQueueLine(
   file: string,
@@ -1770,7 +1787,10 @@ export async function addQueueLine(
     return at;
   };
   const check = (next: Queue): void => {
-    checkFields(next, lineOf(next, id));
+    const line = lineOf(next, id);
+    checkFields(next, line);
+    const why = difficultyRequired(line);
+    if (why !== null) throw new QueueError(why);
   };
   const abs = path.resolve(file);
   let created = false;
@@ -1839,10 +1859,12 @@ export async function editQueueLine(
   const note = appendNote?.trim() || undefined;
   if (Object.keys(set).length === 0 && note === undefined)
     throw new QueueError("nothing to edit: give fields to set or a note");
+  let wasMissing = false;
   const done = await writing(
     file,
     e => {
       const line = lineOf(e.queue, id);
+      wasMissing = difficultyRequired(line) !== null;
       const node = taskNode(e, line);
       for (const [k, raw] of Object.entries(set)) {
         const v = fieldValue(e, k, raw);
@@ -1858,7 +1880,13 @@ export async function editQueueLine(
       if (note !== undefined) addNote(e, node, note, noteFrom);
       return { id, task: new YAML.Document(node).toString(YAML_OUT).trimEnd() };
     },
-    next => checkFields(next, lineOf(next, id), new Set(Object.keys(set))),
+    next => {
+      const line = lineOf(next, id);
+      checkFields(next, line, new Set(Object.keys(set)));
+      // an edit is refused only when it MAKES the line lack a difficulty: a line written before the rule stays editable
+      const why = wasMissing ? null : difficultyRequired(line);
+      if (why !== null) throw new QueueError(why);
+    },
   );
   if (!("touches" in set) && !("repo" in set)) return done;
   const q = readQueue(file);

@@ -38,7 +38,7 @@ describe("queue_edit that changes only repo:", () => {
     const file = path.join(proj, ".claude", "batch", "q.yaml");
     fs.writeFileSync(file, "batch_size: 2\ntasks: []\n");
 
-    await addQueueLine(file, { id: "A", touches: "a", text: "Do A." });
+    await addQueueLine(file, { id: "A", difficulty: 3, touches: "a", text: "Do A." });
     const baseOf = (): unknown =>
       (
         YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: { id: string; base?: string }[] }
@@ -64,7 +64,13 @@ describe("queue_edit that changes only repo:", () => {
         YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: { id: string; base?: string }[] }
       ).tasks.find(t => t.id === "A")?.base;
 
-    await addQueueLine(file, { id: "A", touches: "a", text: "Do A.", repo: "other" });
+    await addQueueLine(file, {
+      id: "A",
+      difficulty: 3,
+      touches: "a",
+      text: "Do A.",
+      repo: "other",
+    });
     expect(baseOf()).toBe(otherHead);
     git(other, "commit", "--allow-empty", "-m", "o2");
     await editQueueLine(file, "A", { repo: other });

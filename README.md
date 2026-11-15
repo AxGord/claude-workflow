@@ -573,7 +573,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
 - `queue_mark({ queue?, file?, id, to, note?, from?, retry?, force? })` — `done` and `failed` also write the line's `ended:` (today); `running` pending→running (refused, with the reason, when the picker would not admit the line: overlap, `after:`, `exclusive`, `breaking`, `parked`; `force: "<reason>"` marks it anyway and writes the reason into its `notes:`; the window, a pause and `model: —` do not count) (with `retry: true`
   failed→running: a failed task runs again, and its `difficulty: N` becomes `N+1`, at most 10 — the
   answer says `(difficulty 4 → 5)`), `done` running→done, `failed` running→failed, `released`
-  running→pending, `promoted` backlog→pending, `shelved` pending→backlog; any other current status is
+  running→pending, `promoted` backlog→pending (refused for a line with no `difficulty:`), `shelved` pending→backlog; any other current status is
   refused; `note` is appended to the task's `notes:` as `{from, date, text}` (`from` default `mark`).
   A write lands only while the file still reads as the pick read it — a hand edit in between makes it
   plan again, never lost.
@@ -581,11 +581,11 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
 - `queue_add({ queue?, file?, task, after_id? | before_id? })` — a new task (`{id, status?: pending|backlog, …}`)
   after / before a task, else last; it writes the line's `base` and `text_hash` (see the task keys above). Refused unless a pick reads it as meant: a new id, known keys
   only, every id in `after:` a task of the queue and no cycle (prose beside the ids stays a manual
-  condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, a `kind:` of bug|feature|research, a `priority:` of urgent|high|normal|low.
+  condition), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, **required on a pending line** (`B: difficulty: <1-10> is required on a pending line`; `backlog`, `parked`, finished and `model: —` lines need none), a `kind:` of bug|feature|research, a `priority:` of urgent|high|normal|low.
 - `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task
   (`""`/null removes one; a set field keeps its place, a new one goes in key order; `after`/`touches`
   a list or a comma-separated string; `text` is written as a block scalar), and/or a note appended to
-  `notes:`; checked as `queue_add` checks them; the status stays `queue_mark`'s. An edit of `text`, `touches`
+  `notes:`; checked as `queue_add` checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused, while a line written before the rule stays editable; the status stays `queue_mark`'s. An edit of `text`, `touches`
   or `owner` that changes the brief, or of `repo` to another value, rewrites `base` (at the HEAD of the line's repo then) and `text_hash`; any other edit leaves them.
 - `queue_header({ queue?, file?, batch_size?, reason?, archive_after_days?, exclusive_hold? })` — header keys, under the lock: the
   window, `batch_size: N` with `reason:` (`0` pauses; the two go together), and/or `archive_after_days: N` (a whole

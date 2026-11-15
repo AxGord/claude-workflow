@@ -1180,7 +1180,7 @@ export function registerTools(
       description:
         "Change one task's status in a YAML task queue under its lock: running pending→running (with `retry: true`: " +
         "failed→running, a failed task run again; its `difficulty: N` becomes N+1, at most 10, so the new session starts a row up), done running→done, failed running→failed, released running→pending " +
-        "(nothing of the task was made), promoted backlog→pending, shelved pending→backlog. Refuses any other current status. " +
+        "(nothing of the task was made), promoted backlog→pending (refused for a line with no `difficulty:`), shelved pending→backlog. Refuses any other current status. " +
         '`running` also refuses a pending line the picker would not admit (overlap, after, exclusive, breaking, parked) and names why; `force: "<reason>"` marks it anyway and notes the reason. ' +
         "`note` is appended to the task's `notes:` as `{from, date, text}` (`from` defaults to `mark`).",
       inputSchema: z
@@ -1231,7 +1231,7 @@ export function registerTools(
         "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, kind: bug|feature|research (absent = feature; any other value is refused), priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], owner, exclusive, breaking, parked, text, notes: [{from, date, text}]}`; `ended` (the day a line reached done or failed) is queue_mark's: a new task cannot set it. " +
         "The line records where it was written: `base` (HEAD of the line's repo — `repo:` or the queue's project; left out when that is not a git repo) and `text_hash` (short sha256 of text + touches + owner), both set by queue_add / queue_edit only; `ended` (queue_mark's) and `restored` (the archive restore's) are never set on a new line. " +
         "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
-        "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10, a `kind:` of bug|feature|research. Goes after `after_id`, before `before_id`, " +
+        "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10 (REQUIRED on a pending line: `difficulty: <1-10> is required on a pending line`; backlog, `parked` and `model: —` lines need none), a `kind:` of bug|feature|research. Goes after `after_id`, before `before_id`, " +
         "else last. A queue addressed by `queue` or by default that does not exist yet is CREATED (`batch_size: 1`, `tasks: []`) and the answer says so (a full `file` path that does not exist is an error, never created).",
       inputSchema: z
         .object({
@@ -1279,7 +1279,7 @@ export function registerTools(
         "Change one task's fields in a YAML task queue under the queue's lock: `set: { field: value }` " +
         '(difficulty, kind: bug|feature|research — anything else is refused, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, owner, exclusive, breaking, parked, text (`ended` is set by queue_mark only, read-only here; so is `restored` (written by the archive restore); so are `base` / `text_hash`: an edit that changes text, touches, owner or repo rewrites both — base = HEAD of its repo now — and any other edit leaves them); `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
         "(appended to `notes:` as `{from, date, text}`, `from` default `parent`). The status is queue_mark's. " +
-        "A set field keeps its place; values are checked as queue_add checks them. Returns the task as written (YAML).",
+        "A set field keeps its place; values are checked as queue_add checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused (a line already without one stays editable). Returns the task as written (YAML).",
       inputSchema: z
         .object({
           ...QUEUE_SEL,

@@ -351,7 +351,10 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
     fs.mkdirSync(path.join(proj, ".git"));
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(proj);
     try {
-      const made = await call("queue_add", { queue: "n", task: { id: "A", touches: ["a"] } });
+      const made = await call("queue_add", {
+        queue: "n",
+        task: { id: "A", difficulty: 3, touches: ["a"] },
+      });
       expect(made.isError).toBeUndefined();
       expect(made.text).toContain("the queue did not exist — created");
       const file = path.join(proj, ".claude", "batch", "n.yaml");
@@ -359,7 +362,7 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
       // every queue tool on the YAML queue
       await call("queue_add", {
         queue: "n",
-        task: { id: "B", after: ["A"], touches: "b", text: "Do B." },
+        task: { id: "B", difficulty: 3, after: ["A"], touches: "b", text: "Do B." },
       });
       expect((await call("queue_header", { queue: "n", batch_size: 2, reason: "two" })).text).toBe(
         "batch_size 1 → 2  # two",
@@ -408,7 +411,7 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
       const text = fs.readFileSync(file, "utf8");
       expect(text).toContain("reason: two\n");
       expect(text).toMatch(
-        /- id: A\n {4}status: done\n {4}touches: \[ a \]\n {4}ended: \d{4}-\d\d-\d\d\n {4}text_hash: [0-9a-f]{12}\n {4}notes:\n {6}- from: land\n/,
+        /- id: A\n {4}status: done\n {4}difficulty: 3\n {4}touches: \[ a \]\n {4}ended: \d{4}-\d\d-\d\d\n {4}text_hash: [0-9a-f]{12}\n {4}notes:\n {6}- from: land\n/,
       );
       expect((await call("queue_next", { queue: "n", dry_run: true })).text).toContain(
         "admitted 0",

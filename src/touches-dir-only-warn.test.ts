@@ -9,7 +9,7 @@ async function add(header: string) {
   const file = path.join(dir, "queue.yaml");
   fs.writeFileSync(file, `${header}\ntasks: []\n`);
   fs.mkdirSync(path.join(dir, "src", "pkg"), { recursive: true });
-  return addQueueLine(file, { id: "A", repo: dir, touches: ["src/pkg"], text: "a" });
+  return addQueueLine(file, { id: "A", difficulty: 3, repo: dir, touches: ["src/pkg"], text: "a" });
 }
 
 describe("touchesWarnings: directory entry", () => {
