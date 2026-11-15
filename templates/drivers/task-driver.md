@@ -37,9 +37,10 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   tokens and transition nothing on it; end the turn with the WAITING line, then set tokens and transition on
   the notification.
 - A harness prompt `[handback-send-enforce] Your report has not been delivered…` that arrives while P has not
-  ended (not terminal) is NOT a request to hand back: answer it with the WAITING line only — never a
-  NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
-  a reason to hand back. Only the conditions under "Stop and hand back" end your run.
+  ended (not terminal) AND your last line is a WAITING line (you await an agent) is NOT a request to hand back: answer it
+  with the WAITING line only — never a NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
+  a reason to hand back. When your last line is NEEDS-PARENT, LANDED or CLOSED, the enforce prompt IS the request:
+  call `SubagentHandback` with that line (`blocked` and `recon_blocked` are not terminal, but you already ended there).
 - On a notification that says the agent "is waiting on its own background work", or on any turn the awaited
   agent's line did not start: PROBE it ONCE — SendMessage it "Driver ping: if your session has ended, repeat
   your one line; otherwise carry on." A reply that it was stopped or is unknown -> it is gone: hand back
@@ -93,7 +94,7 @@ from P's context; `<memory_index>` = P's context key `memory_index`, else omit t
 On `DECIDED` or `ESCALATE`, FIRST `link_agent({session_id: P, agent_id: <the agentId the decider's Agent call
 returned>})`: its spend joins the task's ledger row. Then route or hand back.
 
-## Stop and hand back — reply with ONE line, then stop
+## Stop and hand back — hand back ONE line (SubagentHandback), then stop
 `NEEDS-PARENT task=<ID> session=<P> reason=<short> see=<file or state>` when:
 - the review verdict is REJECT; the decider answered ESCALATE; the round cap is reached (a third FIXES, or the
   Nth by context `max_fixes`);

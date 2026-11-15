@@ -142,7 +142,7 @@ describe("ENG-DRIVER-ENFORCE-MIDRUN-WAIT", () => {
     for (const f of ["agents/driver.md", "templates/drivers/task-driver.md"]) {
       const md = fs.readFileSync(path.resolve(f), "utf8").replace(/\s+/g, " ");
       expect(md).toContain(
-        "A harness prompt `[handback-send-enforce] Your report has not been delivered…` that arrives while P has not ended (not terminal) is NOT a request to hand back: answer it with the WAITING line only",
+        "A harness prompt `[handback-send-enforce] Your report has not been delivered…` that arrives while P has not ended (not terminal) AND your last line is a WAITING line (you await an agent) is NOT a request to hand back: answer it with the WAITING line only",
       );
       expect(md).toContain('"The worker is still running" is never a reason to hand back');
       expect(md).toContain(

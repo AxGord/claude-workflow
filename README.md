@@ -798,7 +798,7 @@ driver:
   such as an exec `plan_route` skipped; its session started there) is also listed, `→ live (its session still
   runs): SendMessage it, spawn no second agent` — a worker linked while the parent stood at `work` is still the
   one the spawn state would start; a recon agent or a warm reviewer linked elsewhere is never listed. A driver answers a harness `[handback-send-enforce]` prompt that arrives while
-  its session has not ended with the WAITING line only, never a hand-back. A re-spawned
+  its session has not ended with the WAITING line only while its last line is a WAITING line, never a hand-back; when its last line is NEEDS-PARENT, LANDED or CLOSED the prompt is the request and it calls SubagentHandback with that line. A re-spawned
   driver takes only a `current` agent as this visit's, so no prompt renders a visit key: a fix round
   that SendMessages the same worker calls `link_agent` again, which re-records the step. After a
   restart, `resume`'s and the SessionStart pickup's sub-agent lines name such an earlier visit's agent
