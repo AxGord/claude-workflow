@@ -442,7 +442,7 @@ export const START_CWD_DESCRIPTION =
   "exec states without their own cwd run there. Default: the server's cwd";
 
 export const START_PRIORITY_DESCRIPTION =
-  "Priority level of the session's pool leases: low | normal | high | urgent. Default: the parent session's level, else normal";
+  "Priority level of the session's pool leases: low | normal | high | urgent. Default: the parent session's level, else the project's `.claude/workflows/settings.json` priority, else normal";
 
 export const WorkflowStartInputSchema = z.object({
   workflow: z.string().optional().describe('Name of the workflow to start. Defaults to "master"'),

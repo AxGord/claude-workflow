@@ -4,7 +4,8 @@
 //   wf-run --status
 // The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
 // and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
-// (a session exec's), and the run keeps WF_PRIORITY_LEVEL so `set_priority` can re-rank it.
+// (a session exec's), else the project's `.claude/workflows/settings.json` `priority` level, else 0;
+// the run keeps WF_PRIORITY_LEVEL so `set_priority` can re-rank it.
 // --est SEC is the run's expected time; without it the pool takes the p90 of the last runs of the
 // same label (its history, recorded when a run exits 0), once it has 3.
 // --fail-open: a pool that cannot be used (unwritable dir, broken config) runs the command
@@ -21,8 +22,10 @@ import {
 } from "./pool.js";
 import { curveOf } from "./estimate.js";
 import { killProcessGroup } from "./process.js";
+import { projectDefaultPriority } from "./project-settings.js";
 import {
   LOCK_NAME_PATTERN,
+  PRIORITY_LEVELS,
   PriorityLevelSchema,
   RESOURCE_THREADS_BUDGET,
   type PriorityLevel,
@@ -47,7 +50,7 @@ interface Options {
   readonly waitFullSec?: number;
   readonly locks: readonly string[];
   readonly priority: number;
-  /** The session level the priority came with (only when it came from WF_PRIORITY). */
+  /** The session level the priority came with (only when it came from WF_PRIORITY or the project settings). */
   readonly level?: PriorityLevel;
   readonly waitTimeoutSec?: number;
   /** The run's expected time: the pool may start it ahead of a waiting head it cannot delay. */
@@ -167,8 +170,10 @@ function parseArgs(argv: readonly string[]): Options {
     throw new Error("--wait-full needs --threads MIN-MAX");
   if (estByThreads !== undefined && minThreads === undefined)
     throw new Error("--est-by-threads needs --threads MIN-MAX");
-  // A session exec's own priority (its level's plus its step's) is the default.
-  const inherited = priority === undefined ? fromEnvironment() : undefined;
+  // A session exec's own priority (its level's plus its step's) is the default; outside a session
+  // the project's settings level is.
+  const inherited =
+    priority === undefined ? (fromEnvironment() ?? fromProjectSettings(failOpen)) : undefined;
   return {
     status,
     threads: threads ?? (locks.length > 0 ? 0 : 1),
@@ -185,6 +190,20 @@ function parseArgs(argv: readonly string[]): Options {
     failOpen,
     command,
   };
+}
+
+/** The level of the cwd project's settings file, as a priority and its level; a bad file is an error, or under --fail-open one stderr line and no default. */
+function fromProjectSettings(
+  failOpen: boolean,
+): { priority: number; level: PriorityLevel } | undefined {
+  let level: PriorityLevel | undefined;
+  try {
+    level = projectDefaultPriority(process.cwd());
+  } catch (err) {
+    if (!failOpen) throw err;
+    process.stderr.write(`wf-run: project settings ignored — ${(err as Error).message}\n`);
+  }
+  return level === undefined ? undefined : { priority: PRIORITY_LEVELS[level], level };
 }
 
 /** WF_PRIORITY (and WF_PRIORITY_LEVEL) of the environment; a malformed value counts as absent. */

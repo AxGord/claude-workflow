@@ -488,6 +488,17 @@ function fakeProbes(load = 0): PoolProbes {
   };
 }
 
+// A throwaway project (a `.git` directory) whose `.claude/workflows/settings.json` holds `settings`, if any.
+function projectWithSettings(settings?: string): string {
+  const root = fs.realpathSync(tmp("wf-proj-"));
+  fs.mkdirSync(path.join(root, ".git"));
+  if (settings !== undefined) {
+    fs.mkdirSync(path.join(root, ".claude", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude", "workflows", "settings.json"), settings);
+  }
+  return root;
+}
+
 function poolDir(config: object = { budget: 10, load_threshold: 0 }): string {
   const dir = tmp("wf-pool-");
   fs.writeFileSync(path.join(dir, "config.yaml"), JSON.stringify(config));
@@ -1211,6 +1222,62 @@ describe("session priority levels", () => {
     }
   }, 10_000);
 
+  it("a project's settings level is the default of a root session; an explicit level and a parent beat it", async () => {
+    const { loader, dir: wfDir } = createTestLoader({
+      p: {
+        initial: "a",
+        states: {
+          a: { prompt: "x", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    tmpDirs.push(wfDir);
+    const storage = new InMemoryStorage();
+    const engine = new Engine(storage, loader, new Executor(new Pool(poolDir(), fakeProbes())));
+    const levelOf = (id: string) => storage.read(id)!.priority;
+    const proj = projectWithSettings('{ "priority": "urgent" }');
+    const bare = projectWithSettings();
+    // a worktree of `proj` resolves to it
+    const wt = fs.realpathSync(tmp("wf-wt-"));
+    fs.writeFileSync(
+      path.join(wt, ".git"),
+      `gitdir: ${path.join(proj, ".git", "worktrees", "w")}\n`,
+    );
+
+    const absent = await engine.start("p", undefined, undefined, bare);
+    expect(levelOf(absent.sessionId)).toBe("normal");
+    await engine.abort(absent.sessionId);
+
+    const keyed = await engine.start("p", undefined, undefined, proj);
+    expect(levelOf(keyed.sessionId)).toBe("urgent");
+    const child = await engine.start("p", undefined, keyed.sessionId, bare);
+    expect(levelOf(child.sessionId)).toBe("urgent");
+    await engine.setPriority(keyed.sessionId, "low");
+    const later = await engine.start("p", undefined, keyed.sessionId, proj);
+    expect(levelOf(later.sessionId)).toBe("low");
+    await engine.abort(keyed.sessionId);
+
+    const explicit = await engine.start("p", undefined, undefined, proj, "high");
+    expect(levelOf(explicit.sessionId)).toBe("high");
+    await engine.abort(explicit.sessionId);
+
+    const viaWorktree = await engine.start("p", undefined, undefined, wt);
+    expect(levelOf(viaWorktree.sessionId)).toBe("urgent");
+    await engine.abort(viaWorktree.sessionId);
+
+    for (const bad of ['{ "priority": "max" }', '{ "prio": "high" }', "not json"]) {
+      const broken = projectWithSettings(bad);
+      await expect(engine.start("p", undefined, undefined, broken)).rejects.toThrow(
+        /settings\.json/,
+      );
+      // an explicit level never reads the file
+      const ok = await engine.start("p", undefined, undefined, broken, "low");
+      expect(levelOf(ok.sessionId)).toBe("low");
+      await engine.abort(ok.sessionId);
+    }
+  }, 10_000);
+
   it("set_priority re-ranks a session's waiting exec at once, survives the exec, reaches descendants; a running lease keeps its priority", async () => {
     const dir = poolDir();
     const pool = new Pool(dir, fakeProbes());
@@ -1446,12 +1513,14 @@ describe("wf-run CLI (real processes)", () => {
     dir: string,
     args: string[],
     extra: Record<string, string> = {},
+    cwd?: string,
   ): { child: ChildProcess; done: Promise<Run> } {
     // A test run from inside a session exec must not hand its own session's priority to these runs.
     const { WF_PRIORITY: _p, WF_PRIORITY_LEVEL: _l, WF_SESSION_ID: _s, ...base } = process.env;
     const env = { ...base, WF_THREADS: "99", WF_POOL_DIR: dir, ...extra };
     const child = spawn(process.execPath, [cli, ...args], {
       env,
+      ...(cwd ? { cwd } : {}),
       stdio: ["ignore", "pipe", "pipe"],
     });
     children.push(child);
@@ -1844,6 +1913,25 @@ describe("wf-run CLI (real processes)", () => {
     }).done;
     expect(explicit.stdout).toBe("5 unset");
     expect((await wfRun(dir, show).done).stdout).toBe("0 unset");
+  }, 20_000);
+
+  it("outside a session a run takes the project's settings level; the environment and --priority win; a bad file is refused, or ignored under --fail-open", async () => {
+    const dir = poolDir(quiet);
+    const proj = projectWithSettings('{ "priority": "urgent" }');
+    const bare = projectWithSettings();
+    const show = ["--", "sh", "-c", 'printf "%s %s" "$WF_PRIORITY" "${WF_PRIORITY_LEVEL-unset}"'];
+    expect((await wfRun(dir, show, {}, proj).done).stdout).toBe("200 urgent");
+    expect((await wfRun(dir, show, {}, bare).done).stdout).toBe("0 unset");
+    expect((await wfRun(dir, ["--priority", "5", ...show], {}, proj).done).stdout).toBe("5 unset");
+    const session = { WF_PRIORITY: "103", WF_PRIORITY_LEVEL: "high" };
+    expect((await wfRun(dir, show, session, proj).done).stdout).toBe("103 high");
+    const bad = projectWithSettings('{ "priority": "max" }');
+    const refused = await wfRun(dir, show, {}, bad).done;
+    expect([refused.code, refused.stdout]).toEqual([64, ""]);
+    expect(refused.stderr).toContain("settings.json");
+    const open = await wfRun(dir, ["--fail-open", ...show], {}, bad).done;
+    expect([open.code, open.stdout]).toEqual([0, "0 unset"]);
+    expect(open.stderr).toContain("project settings ignored");
   }, 20_000);
 
   it.runIf(process.platform === "darwin")(

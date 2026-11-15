@@ -28,6 +28,7 @@ import {
   PriorityLevelSchema,
 } from "./types.js";
 import { projectNameOf, projectRoot } from "./pool.js";
+import { projectDefaultPriority } from "./project-settings.js";
 import { LEDGER_FILE, type Storage } from "./storage.js";
 import { Estimates } from "./estimate.js";
 import type { Loader } from "./loader.js";
@@ -309,6 +310,14 @@ export class Engine {
     const wf = workflows.get(workflowName);
     if (!wf) throw new Error(`Workflow "${workflowName}" not found`);
 
+    // explicit > the parent's > the project's settings file > normal; read before anything is recorded
+    const parent = parentSessionId ? this._storage.read(parentSessionId) : null;
+    const level =
+      priority ??
+      parent?.priority ??
+      projectDefaultPriority(cwd ?? process.cwd()) ??
+      DEFAULT_PRIORITY_LEVEL;
+
     // Snapshot all workflows for this session
     this._snapshots.set(sessionId, workflows);
 
@@ -321,7 +330,6 @@ export class Engine {
     };
 
     const globalKey = `${workflowName}:${wf.initial}`;
-    const parent = parentSessionId ? this._storage.read(parentSessionId) : null;
     const rootSessionId = parentSessionId
       ? rootSessionIdOf(parent ?? { session_id: parentSessionId })
       : sessionId;
@@ -330,7 +338,7 @@ export class Engine {
       session_id: sessionId,
       ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
       root_session_id: rootSessionId,
-      priority: priority ?? parent?.priority ?? DEFAULT_PRIORITY_LEVEL,
+      priority: level,
       stack: [frame],
       active_frame: 0,
       started_at: now,
