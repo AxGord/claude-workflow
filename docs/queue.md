@@ -268,7 +268,7 @@ own (long, expensive) context spends a few calls per task instead of every trans
 ```yaml
 driver:
   model: haiku
-  effort: low
+  effort: medium
   prompt_ref: task-driver      # a bare name = shipped templates/drivers/<name>.md; else a path
                                # (absolute, ~/…, or relative to the session's cwd)
   agent_type: workflow:driver  # optional: the Agent call's subagent_type (this is the default)
@@ -276,7 +276,7 @@ driver:
 
 - `start` of a session of such a workflow ends its answer with a DRIVER block: the exact Agent call
   (model, effort, `run_in_background: true`, `subagent_type` = `driver.agent_type`, default
-  `workflow:driver`: the plugin's `agents/driver.md`, workflow tools plus Agent / SendMessage / Read only, so
+  `workflow:driver`: the plugin's `agents/driver.md`, the workflow tools `start` / `status` / `transition` / `context_set` / `link_agent` / `queue_mark` / `queue_edit` plus Agent / SendMessage / Read only, so
   a dispatcher that copies the block gets a driver that cannot edit code; the prompt filled with the session id, `context.task`,
   `context.queue_file` — the session's own, else its parent's — and the instructions' path), then
   the `link_agent` to make. A missing instructions file is named there as a WARNING; a bare name that

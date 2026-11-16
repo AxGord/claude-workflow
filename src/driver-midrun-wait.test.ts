@@ -10,7 +10,7 @@ import { InMemoryStorage, cleanupDir, createTestLoader } from "./test-helpers.js
 // then reads status at `plan_spawn` and must see that live worker, else it spawns a second one.
 const TASK = {
   initial: "work",
-  driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+  driver: { model: "haiku", effort: "medium", prompt_ref: "task-driver" },
   states: {
     work: { prompt: "work", transitions: { next: "plan_spawn", other: "gate" } },
     gate: { prompt: "gate", transitions: { done: "fin" } },
@@ -21,7 +21,7 @@ const TASK = {
 // the real pipelines: recon, then work -> plan_route (exec) -> plan_spawn; a warm review that gives no verdict -> review_spawn
 const PIPE = {
   initial: "recon_spawn",
-  driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+  driver: { model: "haiku", effort: "medium", prompt_ref: "task-driver" },
   states: {
     recon_spawn: { prompt: "recon", transitions: { skip: "work" } },
     work: { prompt: "work", transitions: { started: "plan_route" } },

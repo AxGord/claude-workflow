@@ -26,7 +26,7 @@ function tmp(): string {
 
 const TASK = {
   initial: "claim",
-  driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+  driver: { model: "haiku", effort: "medium", prompt_ref: "task-driver" },
   states: {
     claim: { prompt: "claim {{context.task}}", transitions: { go: "done" } },
     done: { terminal: true, outcome: "complete" },
@@ -275,7 +275,7 @@ describe("driver (loader + engine)", () => {
     });
     expect(s.prompt).toBe("claim T7");
     const call = s.driverCall!;
-    expect(call).toContain("model: haiku, effort: low, run_in_background: true");
+    expect(call).toContain("model: haiku, effort: medium, run_in_background: true");
     expect(call).toContain(`link_agent({session_id: "${s.sessionId}"`);
     expect(call).toContain("task T7 of the queue /q/queue.md");
     expect(call).toContain(resolveDriverRef("task-driver", "/"));
@@ -301,7 +301,7 @@ describe("driver (loader + engine)", () => {
       difficulty: "9",
     });
     expect(s.context).toMatchObject({ model: "opus", effort: "xhigh" });
-    expect(s.driverCall).toContain("model: haiku, effort: low");
+    expect(s.driverCall).toContain("model: haiku, effort: medium");
     await expect(
       engine.start("batch-task", undefined, s.sessionId, empty, undefined, { difficulty: "11" }),
     ).rejects.toThrow("not a whole number 1..10");

@@ -29,7 +29,7 @@ function call(driver: Record<string, string>): string {
 
 const TASK = {
   initial: "claim",
-  driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+  driver: { model: "haiku", effort: "medium", prompt_ref: "task-driver" },
   states: {
     claim: { prompt: "claim", transitions: { go: "done" } },
     done: { terminal: true, outcome: "complete" },

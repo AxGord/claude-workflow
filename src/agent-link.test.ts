@@ -11,7 +11,7 @@ import type { SessionState } from "./types.js";
 // A task that loops work ⇄ review, as bundled batch-task does; each agent runs its own child session.
 const TASK = {
   initial: "work",
-  driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+  driver: { model: "haiku", effort: "medium", prompt_ref: "task-driver" },
   states: {
     work: { prompt: "work", transitions: { review: "review" } },
     review: { prompt: "review", transitions: { fix: "work", land: "done" } },

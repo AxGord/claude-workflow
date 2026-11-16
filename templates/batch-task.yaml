@@ -46,7 +46,7 @@ model_table:
 # is `agent_type` (default `workflow:driver`, the plugin's tool-limited driver agent).
 driver:
   model: haiku
-  effort: low
+  effort: medium
   prompt_ref: task-driver
 
 # Agents' outputs are FILES in the task's log dir ({{context.wt}}.log, beside the worktree, kept after

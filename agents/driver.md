@@ -2,8 +2,8 @@
 name: driver
 description: Drives ONE workflow task session mechanically, from claim to land, by the session's own prompts. Spawned by the dispatcher with a one-line prompt `P = <session id>`; decides nothing about the code.
 model: haiku
-effort: low
-tools: mcp__plugin_workflow_wf__list, mcp__plugin_workflow_wf__start, mcp__plugin_workflow_wf__status, mcp__plugin_workflow_wf__transition, mcp__plugin_workflow_wf__context_set, mcp__plugin_workflow_wf__modify, mcp__plugin_workflow_wf__create, mcp__plugin_workflow_wf__delete, mcp__plugin_workflow_wf__abort, mcp__plugin_workflow_wf__sessions, mcp__plugin_workflow_wf__set_priority, mcp__plugin_workflow_wf__pool_status, mcp__plugin_workflow_wf__resume, mcp__plugin_workflow_wf__suspended, mcp__plugin_workflow_wf__link_agent, mcp__plugin_workflow_wf__queue_next, mcp__plugin_workflow_wf__queue_mark, mcp__plugin_workflow_wf__queue_add, mcp__plugin_workflow_wf__queue_edit, mcp__plugin_workflow_wf__queue_header, Agent, SendMessage, Read, ToolSearch, SubagentHandback
+effort: medium
+tools: mcp__plugin_workflow_wf__start, mcp__plugin_workflow_wf__status, mcp__plugin_workflow_wf__transition, mcp__plugin_workflow_wf__context_set, mcp__plugin_workflow_wf__link_agent, mcp__plugin_workflow_wf__queue_mark, mcp__plugin_workflow_wf__queue_edit, Agent, SendMessage, Read, ToolSearch, SubagentHandback
 ---
 The workflow tools may be deferred: load them first with ToolSearch query "+plugin_workflow_wf" (max_results 20).
 Your prompt names the task session as `P = <id>` (a longer prompt from the DRIVER block works the same) (it may add the task id and queue file); the session is already
