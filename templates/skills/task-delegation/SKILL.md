@@ -137,6 +137,7 @@ top-tier rates, so file bodies must not flow through it:
 - **Identical-change auto-merge is silent and WRONG for shared counters.** When every parallel branch applies the same textual bump to a shared aggregate (a hard-coded count assertion, a registry size), merging them produces ONE bump, not N — git treats identical hunks as already-applied, so no conflict fires. Loud conflicts appear only where branch texts differ (distinct list-append entries). Rule: after merging parallel branches, recompute every shared aggregate as base + Σ(per-branch deltas) and fix it explicitly; the tell is a merge that conflicts on the append-list files but is suspiciously clean on the counter files every branch touched.
 
 - **Is a background agent alive / stalled?** (watchdog kills, transcript mtime, symlinked output paths, macOS `date -r`, whole-fleet death) → Read references/agent-liveness.md before concluding anything.
+- **A background agent that ends its turn with live background work of its own never notifies its parent** — before its final line it stops or awaits every background task it started, and each wait loop ends on failure or a timeout, not on the success marker alone (details: references/agent-liveness.md).
 
 ## ALWAYS Delegate to Subagent
 

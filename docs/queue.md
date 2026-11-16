@@ -288,6 +288,7 @@ driver:
   DRIVER block still follows): the state's prompt and the workflow rules are left out, for a parent that
   starts a child only to hand its id on; the child's own agent reads the prompt with `status`. Without
   `reply` the answer is the full prompt as before. Only the value `id` exists.
+- The shipped worker and reviewer prompts (`batch-task`) forbid ending a turn with live background work (the task notification fires only when the agent stops with none) and require every wait loop to end on failure or a timeout; the `task-driver` (and `agents/driver.md`) answers a notice that the agent waits on its own background work with "finish or kill that work, then repeat your one line", and probes a WAITING agent once on a later wake (an enforce prompt, a parent message) that comes after the agent's hand-back and before its notification, never on the hand-back turn itself; the driver has no clock.
 - The shipped `task-driver` instructions (a message after its last line means P still holds the step: `status` on P once and continue): one `status` at the start, after that every transition
   reply is the next prompt; spawn the prompts' agents exactly as written and wait for their
   notification; hand back with one line `NEEDS-PARENT task=… session=… reason=… see=<file>` on a

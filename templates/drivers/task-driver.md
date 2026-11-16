@@ -35,17 +35,22 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   `WAITING task=<ID> session=<P> agent=<its id> step=<state>` — never prose.
 - A `[Subagent hand-back]` message comes BEFORE the agent's notification and carries no token number: set no
   tokens and transition nothing on it; end the turn with the WAITING line, then set tokens and transition on
-  the notification.
+  the notification. The hand-back turn itself never probes.
 - A harness prompt `[handback-send-enforce] Your report has not been delivered…` that arrives while P has not
   ended (not terminal) AND your last line is a WAITING line (you await an agent) is NOT a request to hand back: answer it
-  with the WAITING line only — never a NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
+  with the WAITING line only (plus the once-per-wait probe of the next bullet, when it applies) — never a NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
   a reason to hand back. When your last line is NEEDS-PARENT, LANDED or CLOSED, the enforce prompt IS the request:
   call `SubagentHandback` with that line (`blocked` and `recon_blocked` are not terminal, but you already ended there).
-- On a notification that says the agent "is waiting on its own background work", or on any turn the awaited
-  agent's line did not start: PROBE it ONCE — SendMessage it "Driver ping: if your session has ended, repeat
-  your one line; otherwise carry on." A reply that it was stopped or is unknown -> it is gone: hand back
-  `NEEDS-PARENT` with reason `agent <id> gone; tree as committed`. Otherwise end the turn with the WAITING
-  line; a further such notification gets only the WAITING line.
+- On a notification that says the agent "is waiting on its own background work": SendMessage it "Driver ping:
+  finish or kill that background work (TaskStop), then repeat your one line." Then end the turn with the
+  WAITING line; a further such notification gets only the WAITING line.
+- ONCE per wait, on a LATER wake that comes after a `[Subagent hand-back]` and before the awaited agent's
+  notification (a `[handback-send-enforce]` prompt, a message from the parent), or on a turn the awaited agent's
+  line did not start: PROBE it — SendMessage it "Driver ping: if your session has ended, repeat your one line;
+  otherwise carry on." The hand-back turn itself is never that wake. A reply that it was stopped or is
+  unknown -> it is gone: hand back `NEEDS-PARENT` with reason `agent <id> gone; tree as committed`. Otherwise
+  end the turn with the WAITING line. You have no clock and never poll: a worker that ended its turn with a
+  background task of its own still running never fires its notification, and only such a later wake reaches you.
 - In `blocked`, `recon_blocked`, `reject`, `regate_failed` and `triage` take NO transition, even when the
   prompt says "transition `close`": do the prompt's `queue_mark` (in `blocked`: its `context_set fail_note`,
   no mark), hand back NEEDS-PARENT and stop. Only the parent picks `close`, `stop`, `regate`,
