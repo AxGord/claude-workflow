@@ -32,6 +32,10 @@ Agent                       Engine                          Storage
 2. `transition()` — validates the transition, advances state, handles sub-workflow push/pop, returns the new prompt
 3. Every mutation is atomically persisted to JSON (temp file + rename + lockfile)
 4. Dashboard visualizes sessions and workflow graphs at `localhost:3100`
+5. Sub-workflows form a stack: a state with `sub_workflow:` pushes a nested workflow (max depth 10) and the engine pops it when it completes
+6. Snapshot isolation: workflow definitions are frozen at session start, so a hot-reload never changes a running session
+7. Runtime overlays: `modify` adds, changes or removes states and transitions of one session without touching the YAML files
+8. The SessionStart hook auto-provisions missing skills and injects the workflow context
 
 ## Bundled Workflows
 

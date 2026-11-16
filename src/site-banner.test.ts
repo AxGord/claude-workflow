@@ -166,12 +166,11 @@ describe("scripts/render-banner.mjs: the banner and the social preview are rende
     expect(again.length).toBe(unstamped.length + 12 + "Description\0hello".length);
   });
 
-  it("is one command: npm run docs:banner, documented in the README, the images shown from docs/", () => {
+  it("is one command: npm run docs:banner, documented in docs/development.md, the images shown from docs/", () => {
     const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
     expect(pkg.scripts["docs:banner"]).toBe("node scripts/render-banner.mjs");
-    const readme = read("README.md");
-    expect(readme).toContain("`npm run docs:banner`");
-    expect(readme).toContain('<img src="docs/banner.png"');
+    expect(read("docs/development.md")).toContain("`npm run docs:banner`");
+    expect(read("README.md")).toContain('<img src="docs/banner.png"');
     // it captures the scene the way the recorders do: through the shared capture, not a second one
     const script = read("scripts/render-banner.mjs");
     expect(script).toContain('from "./scene-capture.mjs"');

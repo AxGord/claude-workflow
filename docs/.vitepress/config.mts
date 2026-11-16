@@ -55,6 +55,7 @@ export default defineConfig({
         ],
       },
       { text: "FAQ", link: "/faq" },
+      { text: "Development", link: "/development" },
     ],
     socialLinks: [{ icon: "github", link: "https://github.com/AxGord/claude-workflow" }],
     search: { provider: "local" },
