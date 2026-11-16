@@ -11,6 +11,8 @@ export default defineConfig({
   // A dead link fails the build; `src/...` and `scripts/...` mentions in the text are code paths,
   // not pages, and are written as code, not as links.
   ignoreDeadLinks: false,
+  // The brand's logo 2 as the tab icon (docs/public/favicon.svg, written by scripts/render-banner.mjs); `head` hrefs take the base by hand.
+  head: [["link", { rel: "icon", type: "image/svg+xml", href: "/claude-workflow/favicon.svg" }]],
   srcExclude: ["**/*.test.*"],
   markdown: {
     // The text is full of `{{mustache}}` examples; Vue must not read them as interpolations.
@@ -27,6 +29,8 @@ export default defineConfig({
     server: { fs: { allow: [fileURLToPath(new URL("../..", import.meta.url))] } },
   },
   themeConfig: {
+    // Logo 2 in the nav, one file per colour scheme (docs/public/logo.svg for dark, logo-light.svg for light).
+    logo: { light: "/logo-light.svg", dark: "/logo.svg", alt: "Claude Workflow" },
     nav: [
       { text: "Get started", link: "/getting-started" },
       { text: "Docs", link: "/concepts" },
