@@ -5,9 +5,6 @@ hero:
   name: Claude Workflow
   text: Workflows for Claude Code agents
   tagline: States, gates, a machine-wide thread pool and a live map of everything that runs.
-  image:
-    src: /screenshots/workflow-master.png
-    alt: The live workflow map
   actions:
     - theme: brand
       text: Get started
@@ -46,8 +43,6 @@ features:
       width: 96
       height: 96
 ---
-
-<!-- Hero visual slot: the replay of the live map (ENG-SITE-MAP-REPLAY) and the recorded scene (ENG-SITE-DEPLOY-GIF) go here. -->
 
 ## The problem
 

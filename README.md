@@ -40,7 +40,7 @@ Other install channels (this repository, npm, a local checkout, manual) and the 
 
 ## Documentation
 
-The full documentation is the site **https://axgord.github.io/claude-workflow/** (sources in `docs/`, built with VitePress: `npm run docs:dev`, `npm run docs:build`).
+The full documentation is the site **https://axgord.github.io/claude-workflow/** (sources in `docs/`, built with VitePress: `npm run docs:dev`, `npm run docs:build`). Its landing page replays the live map: a recorded window of real sessions of the open-source anyparse project (`docs/public/replay/anyparse.json`, written from the event log by `npm run build && npm run docs:replay -- --project-dir <the anyparse checkout>`, that project's sessions only) played on a clock (play / pause, 1x to 60x, scrub) through the dashboard's own `layout` and renderer, no server.
 
 | Page | Covers |
 |------|--------|
@@ -95,7 +95,8 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/dashboard-routes.ts` | The dashboard's route table (path <-> view), shared by the page and the tests |
 | `src/event-fold.ts` | The event log's `fold` and `seedEvents` (a session file's events), pure; served as `/event-fold.js` |
 | `src/map-layout.ts` | The live map's `layout` (bands, lanes, branches, loops, stops, questions) and keyed `scene`, pure; served as `/map-layout.js` |
-| `dashboard/` | The page: `index.html` (views, `ui` component helpers), `map.js` (the live map: events, keyed SVG transitions, follow mode, view anchoring), `stable.js` (in-place refresh, scroll memory), `tokens.css` (the only colour literals), `components.css` |
+| `src/replay.ts` | The landing page's replay, pure: `buildReplay` (one project's sessions from the event log, a window of whole pipelines under a size limit, nothing of another project), `expandReplay` (its rows back to events) and the player's clock (`SPEEDS`, `advance`, `rowsUntil`); `scripts/export-replay.mjs` writes `docs/public/replay/anyparse.json` with it |
+| `dashboard/` | The page: `index.html` (views, `ui` component helpers), `map.js` (the live map: events, follow mode, view anchoring), `scene-dom.js` (the keyed SVG reconciliation, shared with the docs site's replay), `stable.js` (in-place refresh, scroll memory), `tokens.css` (the only colour literals), `components.css` |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 
 ## License

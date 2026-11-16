@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
 
 // A GitHub project page: https://axgord.github.io/claude-workflow/
@@ -20,6 +21,10 @@ export default defineConfig({
         }
       });
     },
+  },
+  vite: {
+    // The landing's replay imports the live map's own code (src/, dashboard/), outside the docs root.
+    server: { fs: { allow: [fileURLToPath(new URL("../..", import.meta.url))] } },
   },
   themeConfig: {
     nav: [

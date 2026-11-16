@@ -19,6 +19,7 @@ const TOKENS = read("tokens.css");
 const COMPONENTS = read("components.css");
 const PAGE = read("index.html");
 const MAP = read("map.js");
+const SCENE_DOM = read("scene-dom.js");
 const SCRIPT = PAGE.split("<script>")[1]?.split("</script>")[0] ?? "";
 
 /** A colour written out: a hex literal, or an rgb()/hsl()/hwb()/lab()/lch()/oklch() function. */
@@ -52,6 +53,7 @@ describe("the dashboard has one style", () => {
     expect(literals(COMPONENTS)).toEqual([]);
     expect(literals(PAGE)).toEqual([]);
     expect(literals(MAP)).toEqual([]);
+    expect(literals(SCENE_DOM)).toEqual([]);
   });
 
   it("the colour scan sees a literal", () => {
@@ -112,7 +114,7 @@ describe("the dashboard has one style", () => {
   });
 
   it("works offline: no web font, no remote stylesheet or script", () => {
-    for (const text of [TOKENS, COMPONENTS, PAGE, MAP]) {
+    for (const text of [TOKENS, COMPONENTS, PAGE, MAP, SCENE_DOM]) {
       expect(text).not.toMatch(/@import|@font-face|url\(\s*["']?https?:|googleapis|gstatic/);
       expect(text.replaceAll("http://www.w3.org/2000/svg", "")).not.toMatch(/https?:\/\//);
     }
@@ -124,7 +126,7 @@ describe("the dashboard has one style", () => {
     // (--lab / --stat: the timeline's column widths; --f: the now-line's place in the window)
     const local = new Set(["--c", "--lab", "--stat", "--f"]);
     const used = new Set(
-      [COMPONENTS, PAGE, MAP].flatMap(t =>
+      [COMPONENTS, PAGE, MAP, SCENE_DOM].flatMap(t =>
         [...t.matchAll(/var\((--[\w-]+)/g)].map(m => m[1] ?? ""),
       ),
     );
@@ -224,6 +226,11 @@ describe("GET /routes.js", () => {
     expect(MAP).toContain("from '/event-fold.js'");
     expect(MAP).toContain("from '/map-layout.js'");
     expect(MAP).toContain("from '/stable.js'");
+    // the keyed renderer is its own static file, shared with the documentation site's replay
+    expect(MAP).toContain("from '/scene-dom.js'");
+    const dom = await fetch(`${base}/scene-dom.js`);
+    expect(dom.status).toBe(200);
+    expect(await dom.text()).toBe(SCENE_DOM);
   });
 
   it("the map hands the layout every queue line's kind and each ready line's own", () => {
