@@ -678,7 +678,7 @@ async function refresh($: any): Promise<Snapshot> {
       return Object.fromEntries(keys.map(k => [k, merged[k]!]))
     })
   }
-  // the status line keeps the engine statusline script compact; the pane holds the detail
+  // clear Claude Code's own status line text; the pane holds the detail
   $.ui.status(undefined)
   // last: the pool read (about 0.6 s) delays nothing above; only the caller waits for it
   await refreshPool($, s)

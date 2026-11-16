@@ -331,7 +331,7 @@ export function paneTree(input: PaneInput): PaneNode {
   )
   const footer = text({ dimColor: true }, `updated ${age(now - s.at) || 'just now'}`)
 
-  // as the engine statusline script draws them: a root with children ◆ bold; a working leaf (agent or exec, no
+  // a root with children ◆ bold; a working leaf (agent or exec, no
   // child) bright ⚙; any other session plain ⚙
   const sessionPlain = (r: SessionRow, depth: number) =>
     `${'  '.repeat(depth)}⚙ ${r.workflow}${r.tag !== '' ? `[${r.tag}]` : ''} @ ${r.state} ${age(now - r.since)}${open === r.id ? ' ▾' : ''}`

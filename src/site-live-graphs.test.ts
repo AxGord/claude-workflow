@@ -259,15 +259,20 @@ describe("the install steps come right after the scene", () => {
   });
 });
 
-describe("the Status Line page section describes the band, not the old script", () => {
+describe("the Status Line page section describes the band; the old script is gone", () => {
   const section = read("docs/dashboard.md").split("## Status Line")[1]?.split("\n## ")[0] ?? "";
 
-  it("says what the band shows and keeps only a note on scripts/statusline-workflows.sh", () => {
+  it("says what the band shows and names the last commit that ships the removed script", () => {
     expect(section).toMatch(/^<StatusLine \/>$/m);
     expect(section).toContain("hooks/plan-pane.tsx");
     expect(section).toContain("`[plan]`");
-    expect(section).toContain("still exists for setups without the mod");
+    expect(section).toContain("is removed");
+    expect(section).toContain("`4f17809`");
     expect(section).not.toContain("statusLine");
     expect(section).not.toContain("WF_STATUS_LIST");
+  });
+
+  it("no script of that name ships", () => {
+    expect(fs.existsSync(path.join(ROOT, "scripts/statusline-workflows.sh"))).toBe(false);
   });
 });
