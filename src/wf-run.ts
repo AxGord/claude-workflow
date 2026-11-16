@@ -5,7 +5,7 @@
 //   wf-run --usage [--since 90m|24h|2d]    per label over the leases that ended in the window: n, mean held, mean used, idle and overrun thread-minutes
 // The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
 // and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
-// (a session exec's), else the project's `.claude/workflows/settings.json` `priority` level, else 0;
+// (a session exec's), else the project's `.claude/workflows/settings.json` `priority` level, else 0 (--status and --usage read neither);
 // the run keeps WF_PRIORITY_LEVEL so `set_priority` can re-rank it.
 // --est SEC is the run's expected time; without it the pool takes the p90 of the last runs of the
 // same label (its history, recorded when a run exits 0), once it has 3.
@@ -199,9 +199,12 @@ function parseArgs(argv: readonly string[]): Options {
   if (estByThreads !== undefined && minThreads === undefined)
     throw new Error("--est-by-threads needs --threads MIN-MAX");
   // A session exec's own priority (its level's plus its step's) is the default; outside a session
-  // the project's settings level is.
+  // the project's settings level is. --status and --usage queue nothing, so they read neither.
+  const queues = !status && !usage;
   const inherited =
-    priority === undefined ? (fromEnvironment() ?? fromProjectSettings(failOpen)) : undefined;
+    priority === undefined && queues
+      ? (fromEnvironment() ?? fromProjectSettings(failOpen))
+      : undefined;
   return {
     status,
     usage,
