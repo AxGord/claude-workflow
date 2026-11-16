@@ -9,6 +9,13 @@
 // every run of the line, as the plan pane reads it): the same allowlist, a row whose task is not a task of the replay
 // is never read into the file, and a task with no measured spend carries none (the pane draws `—`).
 //
+// The queue the plan pane shows (Next, Waiting) comes from the queue file (--queue, default the project's own): the engine's
+// own pick (`planPick`, `describeQueue`, the code `wf-queue` and `queue_next` run) over the file rolled back to the window's
+// start (the lines that ran at or after the window start set back to pending), written as ids, difficulty, priority, kind and one of a fixed
+// set of reasons (after X, overlaps X, parked, parent-run) for the lines of --project and --also only, never a line's text or
+// notes; the replay moves them Waiting -> Next -> Running as the sessions start and end. A line added to the queue after the
+// window cannot be rebuilt (the file's `queue.note` says so). `--queue none` writes no queue section.
+//
 // The machine's thread pool over the same window comes from the pool's log (<pool dir>/pool.log.1 and pool.log): a
 // lease or waiter keeps its label only when it names a session or slice of the replay (an ALLOWLIST: the pool is
 // shared by every project on the machine), every other one is a thread count in a row of leases the log does not name (this
@@ -17,7 +24,7 @@
 // refuses the write. Only a window the pool log covers is chosen.
 //
 //   npm run build && node scripts/export-replay.mjs [--project anyparse] [--also mcp-workflow-engine] [--project-dir DIR]
-//        [--workflows DIR,DIR] [--events DIR] [--ledger FILE|none] [--pool DIR|none] [--queue FILE] [--from ISO] [--hours 4]
+//        [--workflows DIR,DIR] [--events DIR] [--ledger FILE|none] [--pool DIR|none] [--queue FILE|none] [--from ISO] [--hours 4]
 //        [--max-kb 300] [--out FILE]
 //
 // --project-dir  the project's checkout: its .claude/workflows give the stations of the workflows the sessions
@@ -25,6 +32,7 @@
 // --workflows    more `.claude/workflows` directories, comma separated: a workflow of a kept --also project that lives in its
 //                own directory (the engine's `engine-task`) takes its stations from there; a name already loaded keeps its own
 // --also         more projects kept the same way, comma separated (default mcp-workflow-engine; `none` keeps --project alone)
+// --queue        the queue file: the kind of each task and the queue the pane shows (default: <project-dir>/.claude/batch/queue.yaml)
 // --ledger       the ledger file (default: <state dir>/ledger.jsonl); `none` writes no spend
 // --events       the event log directory (default: $STATE_DIR or ~/.claude/workflow-state, then /events)
 // --pool         the pool directory (default: $WF_POOL_DIR or ~/.claude/workflow-pool); `none` writes no pool
@@ -116,6 +124,8 @@ async function main() {
   const { Loader } = await load("loader.js");
   const { computeStations } = await load("stations.js");
   const { resolvePoolDir, RESERVED_CORES } = await load("pool.js");
+  const { readQueue } = await load("queue.js");
+  const { captureReplayQueue } = await load("replay-queue.js");
 
   const dirs = workflowDirs(process.env, projectDir);
   const loader = new Loader(dirs.bundled, dirs.global, dirs.project);
@@ -134,6 +144,16 @@ async function main() {
       workflows[name] = entry(wf);
     }
   }
+  const queueFile = args.queue === "none" ? undefined : path.resolve(args.queue ?? path.join(projectDir, ".claude", "batch", "queue.yaml"));
+  let queue;
+  if (queueFile !== undefined && fs.existsSync(queueFile)) {
+    try {
+      queue = readQueue(queueFile);
+    } catch (err) {
+      // a queue the pick cannot read still gives the kinds; the replay then has no queue section
+      console.error(`export-replay: no queue section, ${err.message}`);
+    }
+  }
   const poolDir = args.pool === undefined ? resolvePoolDir(process.env) : args.pool === "none" ? undefined : path.resolve(args.pool);
   const poolLines = poolDir === undefined ? [] : readPoolLog(poolDir);
   const file = buildReplay(readEvents(eventsDir), {
@@ -141,7 +161,8 @@ async function main() {
     also,
     workflows,
     ...(ledger === undefined ? {} : { ledger }),
-    taskKinds: await readKinds(args.queue ?? path.join(projectDir, ".claude", "batch", "queue.yaml")),
+    taskKinds: queueFile === undefined ? {} : await readKinds(queueFile),
+    ...(queue === undefined ? {} : { queue: ranSince => captureReplayQueue(queue, ranSince, [project, ...also]) }),
     ...(args.from === undefined ? {} : { from: args.from }),
     ...(args.hours === undefined ? {} : { hours: Number(args.hours) }),
     maxBytes: Number(args["max-kb"] ?? 300) * 1000,
@@ -154,7 +175,7 @@ async function main() {
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, text);
   console.log(
-    `${path.relative(process.cwd(), out)}: ${(Buffer.byteLength(text) / 1000).toFixed(1)} KB, ${file.sessions.length} sessions, ${file.events.length} events, ${Object.keys(file.spend ?? {}).length} tasks with spend, ${file.pool?.frames.length ?? 0} pool samples, ${(file.durationMs / 3600_000).toFixed(2)} h from ${file.start}`,
+    `${path.relative(process.cwd(), out)}: ${(Buffer.byteLength(text) / 1000).toFixed(1)} KB, ${file.sessions.length} sessions, ${file.events.length} events, ${Object.keys(file.spend ?? {}).length} tasks with spend, ${file.queue?.lines.length ?? 0} queue lines, ${file.pool?.frames.length ?? 0} pool samples, ${(file.durationMs / 3600_000).toFixed(2)} h from ${file.start}`,
   );
   // the loader watches its directories: the process ends by itself only without them
   process.exit(0);

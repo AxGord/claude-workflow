@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -19,6 +19,7 @@ import {
   fitView,
   renderReplay,
   REPLAY_QUEUE,
+  REPLAY_QUEUE_NOTE,
   rowsUntil,
   SPEEDS,
   type ReplayFile,
@@ -418,7 +419,8 @@ describe("scripts/export-replay.mjs", () => {
     for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  it("writes the replay of one project from an event log directory", () => {
+  /** The export script run over a temp event log, ledger and a project whose queue file is `queueYaml`: its output file, text and stderr. */
+  function exportWith(queueYaml: string): { file: ReplayFile; text: string; stderr: string } {
     // the script runs from build/, as `npm run build && node scripts/export-replay.mjs` does
     execFileSync("node", ["node_modules/typescript7/bin/tsc", "-p", "."], { cwd: ROOT });
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-replay-"));
@@ -436,10 +438,7 @@ describe("scripts/export-replay.mjs", () => {
       path.join(dir, "engine", "workflows", "engine-task.yaml"),
       "name: engine-task\ndescription: test\ninitial: claim\nstates:\n  claim:\n    type: prompt\n    prompt: go\n    transitions:\n      go: done\n  done:\n    terminal: true\n    outcome: complete\n",
     );
-    fs.writeFileSync(
-      path.join(dir, "project", ".claude", "batch", "queue.yaml"),
-      "tasks:\n  - id: TASK-aaaa1111\n    kind: bug\n  - id: GOLF-PRIVATE-TASK\n    kind: feature\n",
-    );
+    fs.writeFileSync(path.join(dir, "project", ".claude", "batch", "queue.yaml"), queueYaml);
     const lines = [
       ...pipeline("aaaa1111", 0, 30, { reviews: 1 }),
       ...pipeline("eeee5555", 5, 35, {
@@ -459,7 +458,7 @@ describe("scripts/export-replay.mjs", () => {
     );
     fs.writeFileSync(path.join(dir, "events", "run-a.jsonl"), `${lines.join("\n")}\n{"torn`);
     const out = path.join(dir, "out", "replay.json");
-    execFileSync(
+    const run = spawnSync(
       "node",
       [
         "scripts/export-replay.mjs",
@@ -480,10 +479,18 @@ describe("scripts/export-replay.mjs", () => {
         cwd: ROOT,
         // the default ledger and event log are the state directory's: never the real one
         env: { ...process.env, WORKFLOW_DIR: path.join(dir, "global"), STATE_DIR: dir },
+        encoding: "utf8",
       },
     );
+    if (run.status !== 0) throw new Error(`export-replay failed: ${run.stderr}`);
     const text = fs.readFileSync(out, "utf8");
-    const file = JSON.parse(text) as ReplayFile;
+    return { file: JSON.parse(text) as ReplayFile, text, stderr: run.stderr };
+  }
+
+  it("writes the replay of one project from an event log directory", () => {
+    const { file, text, stderr } = exportWith(
+      "tasks:\n  - id: TASK-aaaa1111\n    kind: bug\n  - id: GOLF-PRIVATE-TASK\n    kind: feature\n",
+    );
     expect(file.sessions).toEqual(["aaaa1111", "aaaa1111-k0", "aaaa1111-k1", "eeee5555"]);
     expect(file.projects).toEqual(["anyparse", "mcp-workflow-engine"]);
     expect(file.spend).toEqual({ "ENG-X": 0.5, "TASK-aaaa1111": 1.25 });
@@ -492,5 +499,41 @@ describe("scripts/export-replay.mjs", () => {
     // --workflows: the engine lane's workflow has the stations the map draws it on
     expect(file.workflows["engine-task"]?.stations?.map(st => st.name)).toEqual(["claim", "done"]);
     for (const secret of ["golf", "GOLF", "someone", "/Users/"]) expect(text).not.toContain(secret);
+    // a queue file the pick cannot read (no header) writes no queue section
+    expect(file.queue).toBeUndefined();
+    expect(stderr).toContain("no queue section");
+  }, 120_000);
+
+  it("writes the queue the engine's pick sees, rolled back to the window's start, for the replay's projects only", () => {
+    const line = (id: string, o: string): string =>
+      `  - id: ${id}\n    difficulty: 4\n    text: PRIVATE TEXT OF ${id}\n${o}`;
+    const { file, text } = exportWith(
+      [
+        "batch_size: 2",
+        "tasks:",
+        line(
+          "TASK-aaaa1111",
+          "    status: done\n    kind: bug\n    repo: /anyparse\n    touches: [ src/a ]",
+        ),
+        line("ENG-X", "    status: done\n    repo: /mcp-workflow-engine\n    touches: [ src/e ]"),
+        line(
+          "NEXT-ONE",
+          "    repo: /anyparse\n    after: [ TASK-aaaa1111 ]\n    touches: [ src/n ]",
+        ),
+        line("GOLF-PRIVATE-TASK", "    repo: /golf\n    touches: [ src/g ]"),
+      ].join("\n"),
+    );
+    expect(file.queue?.lines.map(l => l.id)).toEqual(["TASK-aaaa1111", "ENG-X", "NEXT-ONE"]);
+    expect(file.queue?.lines.find(l => l.id === "NEXT-ONE")?.after).toEqual(["TASK-aaaa1111"]);
+    expect(file.queue?.note).toBe(REPLAY_QUEUE_NOTE);
+    for (const secret of ["golf", "GOLF", "PRIVATE TEXT", "/Users/"])
+      expect(text).not.toContain(secret);
+    // played back: before the first task lands the line that waits for it is Waiting, after it Next
+    const t0 = Date.parse(file.start);
+    const sec = (min: number): number => min * 60_000 - (Date.parse(at(0)) - t0);
+    expect(snapshotAt(file, sec(10)).queue?.waiting.map(w => `${w.id}: ${w.why}`)).toEqual([
+      "NEXT-ONE: after: TASK-aaaa1111 (running)",
+    ]);
+    expect(snapshotAt(file, sec(31)).queue?.ready.map(l => l.id)).toEqual(["NEXT-ONE"]);
   }, 120_000);
 });

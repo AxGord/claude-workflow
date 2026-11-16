@@ -589,34 +589,60 @@ function conflict(
   return null;
 }
 
-/** null = every dependency is done; otherwise why the line must wait. */
+/**
+ * What keeps a pending line out of a pick, as ids: `after` the queue lines its `after:` waits on that are not done, `stuck`
+ * when part of that wait is no line's end (a prose condition, an unknown or archived id), `against` the line it may not run
+ * beside (an overlap, a hold, a breaking line). `planPick` fills one per line it does not admit when it is asked (`PickOpts.blocks`).
+ */
+export interface PickBlock {
+  readonly after: readonly string[];
+  readonly stuck: boolean;
+  readonly against?: {
+    readonly how: "overlap" | "hold" | "runs-alone" | "window-not-empty";
+    readonly id: string;
+  };
+}
+
+/** null = every dependency is done; otherwise why the line must wait, and the queue lines whose end ends the wait. */
 function blockedBy(
   line: QueueLine,
   byId: ReadonlyMap<string, QueueLine>,
   archived: ReadonlyMap<string, Status>,
-): string | null {
+): { readonly why: string; readonly ids: readonly string[]; readonly stuck: boolean } | null {
   const v = line.meta.after;
   if (v === undefined) return null;
   const waits: string[] = [];
+  const ids: string[] = [];
+  let stuck = false;
   // Every id token is consumed; a plain word stays and makes the residue non-empty: prose beside
   // the ids is a condition only a human can judge.
   const rest = stripParens(v).replace(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g, tok => {
     const dep = byId.get(tok);
     const gone = dep ? undefined : archived.get(tok);
     if (dep) {
-      if (dep.status !== "done") waits.push(`${tok} (${dep.status})`);
+      if (dep.status !== "done") {
+        waits.push(`${tok} (${dep.status})`);
+        if (!ids.includes(tok)) ids.push(tok);
+      }
     } else if (gone !== undefined) {
-      if (gone !== "done") waits.push(`${tok} (${gone}, archived)`);
+      if (gone !== "done") {
+        waits.push(`${tok} (${gone}, archived)`);
+        stuck = true;
+      }
     } else if (/^[A-Z]/.test(tok) && /\d/.test(tok)) {
       waits.push(`${tok}?`);
+      stuck = true;
     } else {
       return tok;
     }
     return " ";
   });
   const residue = rest.replace(/[\s,+&;✅—–-]+/g, "");
-  if (residue !== "") waits.push(`manual: "${stripParens(v).trim()}"`);
-  return waits.length === 0 ? null : waits.join(", ");
+  if (residue !== "") {
+    waits.push(`manual: "${stripParens(v).trim()}"`);
+    stuck = true;
+  }
+  return waits.length === 0 ? null : { why: waits.join(", "), ids, stuck };
 }
 
 /**
@@ -648,7 +674,12 @@ function repoNamed(queue: Queue, repo: string | undefined): string | null {
 /** The admission pass over a parsed queue; writes nothing. A bad `overlap:` header is refused. */
 export function planPick(
   queue: Queue,
-  opts: { readonly ignoreWindow?: boolean; readonly only?: string } = {},
+  opts: {
+    readonly ignoreWindow?: boolean;
+    readonly only?: string;
+    /** filled with what keeps each line out that waits on other lines (not a parked, paused or malformed one) */
+    readonly blocks?: Map<string, PickBlock>;
+  } = {},
 ): Omit<PickResult, "dryRun"> {
   if (opts.only === undefined && queue.overlapError !== undefined)
     throw new QueueError(queue.overlapError);
@@ -678,14 +709,17 @@ export function planPick(
     const hand = opts.only !== undefined;
     let why: string | null = null;
     let repo: string | null = null;
+    let block: PickBlock | undefined;
     if (!hand && queue.batchSize === 0) why = "paused (batch_size 0)";
     else if (!hand && opts.ignoreWindow !== true && free <= admitted.length) why = "window full";
     else if (!hand && (l.meta.model ?? "").startsWith("—")) why = "parent-run (model —)";
     else if (l.paused) why = "parked";
     else {
       const after = blockedBy(l, byId, queue.archived);
-      if (after !== null) why = `after: ${after}`;
-      else {
+      if (after !== null) {
+        why = `after: ${after.why}`;
+        block = { after: after.ids, stuck: after.stuck };
+      } else {
         repo = resolveRepo(queue, l);
         if (repo === null) why = `repo: "${l.meta.repo}" resolves to no directory`;
         else if (workflowOf(l) === null)
@@ -702,16 +736,28 @@ export function planPick(
       if (why === null) {
         const key = repoKey(repo);
         const brk = taken.find(breakingOf);
-        if (brk !== undefined) why = `breaking ${brk.id} runs alone`;
-        else if (breakingOf(l) && taken.length > 0)
+        if (brk !== undefined) {
+          why = `breaking ${brk.id} runs alone`;
+          block = { after: [], stuck: false, against: { how: "runs-alone", id: brk.id } };
+        } else if (breakingOf(l) && taken.length > 0) {
           why = `breaking: window not empty (${taken[0]?.id})`;
+          block = {
+            after: [],
+            stuck: false,
+            against: { how: "window-not-empty", id: taken[0]?.id ?? "" },
+          };
+        }
         const held = hand ? undefined : holds.find(h => sameRepoKey(key, h.key));
-        if (held !== undefined && why === null) why = `held for exclusive ${held.id}`;
+        if (held !== undefined && why === null) {
+          why = `held for exclusive ${held.id}`;
+          block = { after: [], stuck: false, against: { how: "hold", id: held.id } };
+        }
         let overlapped = false;
         for (const t of why === null ? taken : []) {
           const c = conflict(l, t, queue.overlap, key, repoKeys.get(t) ?? null);
           if (c !== null) {
             why = `overlaps ${t.id} (${c})`;
+            block = { after: [], stuck: false, against: { how: "overlap", id: t.id } };
             overlapped = true;
             break;
           }
@@ -752,7 +798,10 @@ export function planPick(
       });
       taken.push(l);
       repoKeys.set(l, repoKey(repo));
-    } else reasons.push({ id: l.id, why: why ?? "?", index: l.index });
+    } else {
+      reasons.push({ id: l.id, why: why ?? "?", index: l.index });
+      if (block !== undefined) opts.blocks?.set(l.id, block);
+    }
   }
   const code: PickCode =
     admitted.length > 0

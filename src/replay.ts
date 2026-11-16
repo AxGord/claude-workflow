@@ -43,7 +43,50 @@ export interface ReplayFile {
   readonly spend?: Readonly<Record<string, number>>;
   /** the machine's thread pool over the same window, as `pool.log` sampled it; absent when no log covered the window */
   readonly pool?: ReplayPool;
+  /** the queue as the engine's own pick saw it at the window's start (absent: a file from before the queue was kept) */
+  readonly queue?: ReplayQueue;
   readonly events: readonly ReplayRow[];
+}
+
+/** Why a queue line is never admitted whatever ends (`ReplayQueueLine.hold`): the only texts the file may carry there. */
+export const QUEUE_HOLDS: readonly string[] = [
+  "parked",
+  "parent-run (model —)",
+  "overlaps a line outside the replay",
+];
+
+/** How a line may not run beside another (`ReplayQueueLine.against`), as the pick words it. */
+export type QueueAgainst = "overlap" | "hold" | "runs-alone" | "window-not-empty";
+
+/**
+ * One pending line of the queue at the window's start, cut to what the pane draws and what clears its wait: the ids and
+ * enums of an allowlisted project's lines, never a line's text, notes, paths or free-form reason. `after` and `against`
+ * name lines of `ReplayQueue.lines`; the replay clears them as those lines' sessions end.
+ */
+export interface ReplayQueueLine {
+  readonly id: string;
+  readonly difficulty: string;
+  /** `urgent`, `high`, `low`; `""` normal */
+  readonly priority: string;
+  readonly kind: string;
+  /** one of `QUEUE_HOLDS`: the pick never admits it, whatever ends */
+  readonly hold?: string;
+  /** the queue lines whose end (landed) its `after:` waits for */
+  readonly after?: readonly string[];
+  /** the parts of its `after:` no line's end clears: `X (failed)`, `manual condition` */
+  readonly fixed?: readonly string[];
+  /** the line it may not run beside, and how: the wait ends when that line's session ends */
+  readonly against?: readonly [how: QueueAgainst, id: string];
+}
+
+/**
+ * The queue the replay plays: the pending lines of the engine's own pick, in the order it visits them (priority, then
+ * file order), computed with the window ignored over the queue rolled back to the window's start (the lines that ran
+ * in the window set back to pending). `note` says what cannot be rebuilt.
+ */
+export interface ReplayQueue {
+  readonly note: string;
+  readonly lines: readonly ReplayQueueLine[];
 }
 
 /** What a pool-log line names: a lease that was backfilled ahead of the head, one that over-runs its threads, a waiter that starved. */
@@ -161,6 +204,12 @@ export interface BuildOptions {
    * window (`buildPool`) and only a window the log covers is chosen
    */
   readonly pool?: { readonly lines: readonly string[]; readonly threshold: number };
+  /**
+   * the queue at the window's start (`captureReplayQueue`, src/replay-queue.ts): called with the task ids of EVERY root session of
+   * the kept projects that started at or after the window's start (the window's own and those that ran after it, which were
+   * pending at the start too); undefined writes none
+   */
+  readonly queue?: (ranSince: ReadonlySet<string>) => ReplayQueue | undefined;
 }
 
 const ms = (ts: string): number => Date.parse(ts);
@@ -311,6 +360,10 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
             threshold: opts.pool.threshold,
           });
     const spend = opts.ledger === undefined ? {} : ledgerSpend(opts.ledger, tasks);
+    const ranSince = new Set<string>();
+    for (const t of all)
+      if (t.parent === null && typeof t.task === "string" && t.start >= first) ranSince.add(t.task);
+    const queue = opts.queue?.(ranSince);
     return {
       version: 1,
       project: opts.project,
@@ -322,6 +375,7 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
       taskKinds,
       ...(Object.keys(spend).length === 0 ? {} : { spend }),
       ...(pool === undefined ? {} : { pool }),
+      ...(queue === undefined ? {} : { queue }),
       events: rows.map(e => {
         const data = scrubData(e, keep);
         const base = [ms(e.ts) - first, e.kind, index.get(e.session) as number] as const;
@@ -604,9 +658,10 @@ const windows = new WeakMap<ReplayFile, number>();
 
 /**
  * The plan pane's Snapshot at `at` ms into the replay, as the mod builds it from the engine's state files and
- * queue (hooks/plan-pane.tsx): the live sessions, the queue (a root session with a task is a queue line: Next
+ * queue (hooks/plan-pane.tsx): the live sessions, the queue (a root session with a task is a queue line: pending
  * before it starts, Running until it ends, then done — Landed when it moved through `land` — or failed when it
- * did not complete) and the lands, newest first. A task the ledger measured (`ReplayFile.spend`) carries its `usd` on
+ * did not complete; the pending ones are the file's `queue` read at the moment, `queueAt`: Next when the pick would admit
+ * them, Waiting with its reason while a line it waits for is still going, else the lines that start later) and the lands, newest first. A task the ledger measured (`ReplayFile.spend`) carries its `usd` on
  * its Landed and Failed row and in the day sums (`days`, `landedUsd`) as the live pane's do; one with none stays
  * unmeasured (the pane draws `—`). The replay carries no commit, so no `sha`. Pure; the site's scene draws it with the mod's own pane code (hooks/pane-view.ts).
  */
@@ -628,7 +683,7 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
   const running = lines
     .filter(r => r.start <= at && r.end === undefined)
     .sort((a, b) => a.start - b.start);
-  const ready = lines.filter(r => r.start > at).sort((a, b) => a.start - b.start);
+  const pendingNow = queueAt(file, lines, at);
   const ended = lines.filter(r => r.end !== undefined).sort((a, b) => (b.end ?? 0) - (a.end ?? 0));
   const failed = ended.filter(r => r.outcome !== "completed");
   const landed = ended.filter(r => r.outcome === "completed" && r.landed);
@@ -637,6 +692,7 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
     marks[r.task] = kindMark(
       Object.hasOwn(file.taskKinds, r.task) ? { kind: file.taskKinds[r.task] } : {},
     );
+  for (const q of file.queue?.lines ?? []) marks[q.id] ??= kindMark({ kind: q.kind });
   let window = windows.get(file);
   if (window === undefined) {
     window = windowOf(file);
@@ -679,11 +735,11 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
     window,
     done: ended.length - failed.length,
     failed: failed.length,
-    pending: ready.length,
+    pending: pendingNow.pending,
     running: running.map(r => line(r, "running")),
-    ready: ready.map(r => line(r, "pending")),
-    unblocked: [],
-    waiting: [],
+    ready: pendingNow.ready,
+    unblocked: pendingNow.unblocked,
+    waiting: pendingNow.waiting,
     failedLines: failed.map(r => {
       const d = new Date(t0 + (r.end as number));
       return {
@@ -706,6 +762,102 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
     days: daySpends(lands, ended, usdOf, t0),
     ...landedSum(lands),
     error: "",
+  };
+}
+
+/** The pending part of the pane's queue at `at`: what `snapshotAt` fills `ready`, `unblocked`, `waiting` and `pending` with. */
+interface PendingView {
+  readonly pending: number;
+  readonly ready: QueueLine[];
+  readonly unblocked: QueueLine[];
+  readonly waiting: QueueView["waiting"];
+}
+
+const AGAINST_TEXT: Readonly<Record<QueueAgainst, (id: string) => string>> = {
+  overlap: id => `overlaps ${id}`,
+  hold: id => `held for exclusive ${id}`,
+  "runs-alone": id => `breaking ${id} runs alone`,
+  "window-not-empty": id => `breaking: window not empty (${id})`,
+};
+
+/**
+ * The queue's pending lines at `at`, as the live pane's `queueView` splits them. With the file's `queue`: a line that
+ * has not started waits for the lines its `after:` names to land (`after`) and for the line it may not run beside to end
+ * (`against`); with neither left it is Next, in the pick's visiting order, and the lines whose only wait is a running
+ * line are `unblocked` while Next is empty. A line of the replay the queue does not list (a file with no `queue`, or a
+ * line archived since) is Next from the start of the window, in the order it starts.
+ */
+function queueAt(file: ReplayFile, lines: readonly Seen[], at: number): PendingView {
+  const run = new Map<string, Seen>();
+  for (const r of lines)
+    if (!run.has(r.task) || (run.get(r.task) as Seen).start < r.start) run.set(r.task, r);
+  const started = (id: string): boolean => (run.get(id)?.start ?? Infinity) <= at;
+  const landed = (id: string): boolean =>
+    run.get(id)?.end !== undefined && run.get(id)?.outcome === "completed";
+  const ended = (id: string): boolean => run.get(id)?.end !== undefined;
+  const state = (id: string): string =>
+    !started(id) ? "pending" : ended(id) ? (landed(id) ? "done" : "failed") : "running";
+  const plain = (r: Seen): QueueLine => ({
+    id: r.task,
+    status: "pending",
+    difficulty: r.difficulty,
+    isParked: false,
+    isExclusive: false,
+    isParentRun: false,
+    after: [],
+  });
+  const listed = new Set((file.queue?.lines ?? []).map(l => l.id));
+  const unlisted = lines
+    .filter(r => r.start > at && !listed.has(r.task))
+    .sort((a, b) => a.start - b.start)
+    .map(plain);
+  const ready: QueueLine[] = [];
+  const waiting: { id: string; why: string; difficulty: string; priority: string }[] = [];
+  const unblocked: QueueLine[] = [];
+  let pending = unlisted.length;
+  for (const q of file.queue?.lines ?? []) {
+    if (started(q.id)) continue;
+    pending++;
+    const row: QueueLine = {
+      id: q.id,
+      status: "pending",
+      difficulty: q.difficulty,
+      isParked: q.hold === "parked",
+      isExclusive: false,
+      isParentRun: q.hold === "parent-run (model —)",
+      after: [...(q.after ?? [])],
+      priority: q.priority,
+    };
+    if (q.hold === "parked") continue;
+    const left = (q.after ?? []).filter(id => !landed(id));
+    const against = q.against !== undefined && !ended(q.against[1]) ? q.against : undefined;
+    const parts = [...left.map(id => `${id} (${state(id)})`), ...(q.fixed ?? [])];
+    const why =
+      q.hold ??
+      (parts.length > 0
+        ? `after: ${parts.join(", ")}`
+        : against === undefined
+          ? ""
+          : AGAINST_TEXT[against[0]](against[1]));
+    if (why === "") {
+      ready.push(row);
+      continue;
+    }
+    waiting.push({ id: q.id, why, difficulty: q.difficulty, priority: q.priority });
+    const running = (id: string): boolean => started(id) && !ended(id);
+    if (
+      q.hold === undefined &&
+      (q.fixed ?? []).length === 0 &&
+      left.every(running) &&
+      (against === undefined || running(against[1]))
+    )
+      unblocked.push(row);
+  }
+  return {
+    pending,
+    ready: [...ready, ...unlisted],
+    unblocked: ready.length + unlisted.length > 0 ? [] : unblocked,
+    waiting,
   };
 }
 
@@ -1052,6 +1204,62 @@ function replayNames(file: ReplayFile): Map<string, string> {
 const ownLocks = (file: ReplayFile): ReadonlySet<string> =>
   new Set((file.projects ?? [file.project]).map(p => `${p}-land`));
 
+const QUEUE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
+const QUEUE_FIXED =
+  /^(?:manual condition|[A-Za-z0-9][A-Za-z0-9_.-]{0,79} \((?:pending|running|failed|backlog|done)(?:, archived)?\))$/;
+const QUEUE_KINDS: readonly string[] = ["bug", "feature", "research"];
+const QUEUE_PRIORITIES: readonly string[] = ["", "urgent", "high", "low"];
+/** The note a replay's queue carries: what the engine's pick saw cannot be rebuilt for a line added after the window. */
+export const REPLAY_QUEUE_NOTE =
+  "the queue is the one at export, rolled back to the window's start by the lines that ran in it; a line added to it after the window cannot be rebuilt";
+const QUEUE_KEYS: readonly string[] = [
+  "id",
+  "difficulty",
+  "priority",
+  "kind",
+  "hold",
+  "after",
+  "fixed",
+  "against",
+];
+
+/** What the queue section may carry: line ids and enums, a fixed set of reason texts, nothing a line wrote (its text, a note, a path). */
+function queueLeaks(queue: ReplayQueue): string[] {
+  const bad: string[] = [];
+  const ids = new Set(queue.lines.map(l => l.id));
+  if (queue.note !== REPLAY_QUEUE_NOTE)
+    bad.push("the queue's note is not the one the export writes");
+  for (const l of queue.lines) {
+    const named = (id: unknown): boolean => typeof id === "string" && QUEUE_ID.test(id);
+    const extra = Object.keys(l).filter(k => !QUEUE_KEYS.includes(k));
+    if (extra.length > 0)
+      bad.push(`a queue line has a field the export does not write: ${JSON.stringify(extra)}`);
+    if (!named(l.id)) bad.push(`a queue line id is not a plain id: ${JSON.stringify(l.id)}`);
+    if (!/^\d{0,2}$/.test(l.difficulty))
+      bad.push(`a queue line's difficulty is not a number: ${JSON.stringify(l.difficulty)}`);
+    if (!QUEUE_PRIORITIES.includes(l.priority))
+      bad.push(`a queue line's priority is not one of the pick's: ${JSON.stringify(l.priority)}`);
+    if (!QUEUE_KINDS.includes(l.kind))
+      bad.push(`a queue line's kind is not one of the pick's: ${JSON.stringify(l.kind)}`);
+    if (l.hold !== undefined && !QUEUE_HOLDS.includes(l.hold))
+      bad.push(`a queue line's hold is not a known one: ${JSON.stringify(l.hold)}`);
+    for (const a of l.after ?? [])
+      if (!ids.has(a))
+        bad.push(`a queue line waits on a line the queue does not list: ${JSON.stringify(a)}`);
+    for (const f of l.fixed ?? [])
+      if (!QUEUE_FIXED.test(f))
+        bad.push(`a queue line's fixed wait is not a known one: ${JSON.stringify(f)}`);
+    if (
+      l.against !== undefined &&
+      (!Object.hasOwn(AGAINST_TEXT, l.against[0]) || !ids.has(l.against[1]))
+    )
+      bad.push(
+        `a queue line runs against a line the queue does not list: ${JSON.stringify(l.against)}`,
+      );
+  }
+  return bad;
+}
+
 /** Every way the file could leak what the replay must not carry; throws naming each one. */
 export function assertReplayClean(file: ReplayFile, forbid: readonly string[] = []): void {
   const bad: string[] = [];
@@ -1081,6 +1289,7 @@ export function assertReplayClean(file: ReplayFile, forbid: readonly string[] = 
   for (const [task, usd] of Object.entries(file.spend ?? {}))
     if (!tasks.has(task) || typeof usd !== "number" || !Number.isFinite(usd) || usd < 0)
       bad.push(`a spend is not a task of the replay: ${JSON.stringify(task)}`);
+  if (file.queue !== undefined) bad.push(...queueLeaks(file.queue));
   if (bad.length > 0)
     throw new Error(`the replay is not clean:\n  ${[...new Set(bad)].join("\n  ")}`);
 }
