@@ -353,6 +353,21 @@ describe("the committed replay (docs/public/replay/anyparse.json)", () => {
     for (const id of Object.keys(spend)) expect(tasks.has(id)).toBe(true);
   });
 
+  it("carries the queue as the engine's pick sees it: lines with reasons, and a Waiting count above zero at some moment", () => {
+    expect(file.queue?.lines.length).toBeGreaterThan(0);
+    const blocked =
+      file.queue?.lines.filter(l => l.after !== undefined || l.against !== undefined) ?? [];
+    expect(blocked.length).toBeGreaterThan(0);
+    const step = 60_000;
+    const waiting: number[] = [];
+    for (let at = 0; at <= file.durationMs; at += step) {
+      waiting.push(snapshotAt(file, at).queue?.waiting.length ?? 0);
+    }
+    expect(Math.max(...waiting)).toBeGreaterThan(0);
+    // Waiting drains as the sessions that block its lines end, so the lines do not all wait for the whole window
+    expect(Math.min(...waiting)).toBeLessThan(Math.max(...waiting));
+  });
+
   it("is under 300 KB", () => {
     expect(Buffer.byteLength(raw)).toBeLessThan(300_000);
   });
