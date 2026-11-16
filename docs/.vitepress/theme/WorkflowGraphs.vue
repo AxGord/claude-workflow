@@ -118,8 +118,13 @@ onMounted(async () => {
   font-size: 13px;
 }
 .wfg-view {
-  max-height: 760px;
-  overflow: auto;
+  overflow: visible;
+}
+/* the graph takes the width it has and the height its viewBox gives at that width: the PAGE scrolls through it, never a box of its own */
+.wfg-view :deep(svg) {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 /* the page's prose styles (.vp-doc h2: a rule, a margin, a size) must not reach the section label of the view */
 .wfg :deep(h2.label) {
