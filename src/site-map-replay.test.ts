@@ -79,7 +79,7 @@ describe("the replay player", () => {
 
 describe("the landing page shows it", () => {
   it("the theme puts the component in the home hero's after-slot, outside the v-pre markdown", () => {
-    expect(THEME).toContain('"home-hero-after": () => h(MapReplay)');
+    expect(THEME).toContain('"home-hero-after": () => h(Scene)');
     expect(THEME).toContain("extends: DefaultTheme");
     expect(CONFIG).toContain('attrSet("v-pre"');
     expect(read("docs/index.md")).not.toContain("<MapReplay");

@@ -9,6 +9,10 @@
   <a href="https://code.claude.com/docs/en/plugins"><img src="https://img.shields.io/badge/Claude_Code-Plugin-ff6600" alt="Claude Code Plugin"></a>
 </p>
 
+<p align="center">
+  <img src="docs/media/scene.gif" alt="The terminal plan pane and the live workflow map, replayed from real sessions" width="100%">
+</p>
+
 A Claude Code plugin that drives agents through YAML-defined state machines. The engine tracks state, enforces guards, manages nested sub-workflow stacks, and visualizes everything in a web dashboard.
 
 ![Master workflow graph](docs/public/screenshots/workflow-master.png)
@@ -40,7 +44,7 @@ Other install channels (this repository, npm, a local checkout, manual) and the 
 
 ## Documentation
 
-The full documentation is the site **https://axgord.github.io/claude-workflow/** (sources in `docs/`, built with VitePress: `npm run docs:dev`, `npm run docs:build`). Its landing page replays the live map: a recorded window of real sessions of the open-source anyparse project (`docs/public/replay/anyparse.json`, written from the event log by `npm run build && npm run docs:replay -- --project-dir <the anyparse checkout>`, that project's sessions only) played on a clock (play / pause, 1x to 60x, scrub) through the dashboard's own `layout` and renderer, no server.
+The full documentation is the site **https://axgord.github.io/claude-workflow/** (sources in `docs/`, built with VitePress: `npm run docs:dev`, `npm run docs:build`). Its landing page replays the live map: a recorded window of real sessions of the open-source anyparse project (`docs/public/replay/anyparse.json`, written from the event log by `npm run build && npm run docs:replay -- --project-dir <the anyparse checkout>`, that project's sessions only) played on a clock (play / pause, 1x to 60x, scrub) through the dashboard's own `layout` and renderer, no server, beside a terminal imitation of the plan pane (Running / Next / Landed with difficulty bars, from the same events and clock: `TerminalPane.vue`, `planAt` in `src/replay.ts`). `npm run docs:record` re-records that scene into `docs/media/scene.mp4` (1920x1080) and `docs/media/scene.gif` (960 px, under 4 MB, the banner above); it needs the `playwright` devDependency with its Chromium (`npx playwright install chromium`) and ffmpeg. `.github/workflows/pages.yml` builds the site and deploys it to GitHub Pages on a push to `master` (once: Settings > Pages > Source: GitHub Actions).
 
 | Page | Covers |
 |------|--------|
@@ -96,6 +100,8 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/event-fold.ts` | The event log's `fold` and `seedEvents` (a session file's events), pure; served as `/event-fold.js` |
 | `src/map-layout.ts` | The live map's `layout` (bands, lanes, branches, loops, stops, questions) and keyed `scene`, pure; served as `/map-layout.js` |
 | `src/replay.ts` | The landing page's replay, pure: `buildReplay` (one project's sessions from the event log, a window of whole pipelines under a size limit, nothing of another project), `expandReplay` (its rows back to events) and the player's clock (`SPEEDS`, `advance`, `rowsUntil`); `scripts/export-replay.mjs` writes `docs/public/replay/anyparse.json` with it |
+| `scripts/record-scene.mjs` | `npm run docs:record`: builds the site, plays the landing's scene (terminal plan pane + live map) frame by frame in headless Chromium through the page's `?record` seek hook, and encodes `docs/media/scene.mp4` and `scene.gif` with ffmpeg |
+| `.github/workflows/pages.yml` | Builds the VitePress site and deploys it to GitHub Pages on a push to `master` |
 | `dashboard/` | The page: `index.html` (views, `ui` component helpers), `map.js` (the live map: events, follow mode, view anchoring), `scene-dom.js` (the keyed SVG reconciliation, shared with the docs site's replay), `stable.js` (in-place refresh, scroll memory), `tokens.css` (the only colour literals), `components.css` |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 

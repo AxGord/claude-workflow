@@ -334,3 +334,124 @@ export function elapsed(at: number): string {
   const pad = (n: number): string => String(n).padStart(2, "0");
   return `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 }
+
+/** One task pipeline of the replay, as the plan pane's Running / Next / Landed rows show it. */
+export interface PlanRow {
+  readonly task: string;
+  /** the line's difficulty as the queue wrote it ('' when unknown) */
+  readonly difficulty: string;
+  /** the state the pipeline is at (its last transition) */
+  readonly state: string;
+  /** the model of the pipeline's own agent ('' when unknown) */
+  readonly model: string;
+  /** review sessions started under it so far */
+  readonly rounds: number;
+  /** ms into the replay when it started */
+  readonly startedAt: number;
+  /** ms into the replay when it ended (undefined while running or not started) */
+  readonly endedAt: number | undefined;
+}
+
+export interface PlanView {
+  readonly running: readonly PlanRow[];
+  /** pipelines that start later in the replay: the queue's next lines */
+  readonly next: readonly PlanRow[];
+  /** ended by a land, newest first */
+  readonly landed: readonly PlanRow[];
+  /** ended without a land (closed, split), newest first */
+  readonly closed: readonly PlanRow[];
+}
+
+/** The cells of the difficulty bar the pane draws (of 5): n/2 rounded, at least one, none when unknown. */
+export function difficultyCells(difficulty: string): number {
+  const n = Number(difficulty);
+  return Number.isFinite(n) && n >= 1 ? Math.min(5, Math.max(1, Math.round(n / 2))) : 0;
+}
+
+/**
+ * The plan pane's rows at `at` ms into the replay: a root session with a task is a pipeline; it is Next
+ * before it starts, Running until it ends, then Landed (it moved through `land`) or Closed. Pure.
+ */
+export function planAt(file: ReplayFile, at: number): PlanView {
+  interface Acc {
+    task: string;
+    difficulty: string;
+    state: string;
+    model: string;
+    rounds: number;
+    start: number;
+    end: number | undefined;
+    outcome: unknown;
+    landed: boolean;
+    root: boolean;
+  }
+  const acc = new Map<number, Acc>();
+  const rootOfSession = new Map<string, number>();
+  const sessionIndex = new Map(file.sessions.map((id, i) => [id, i]));
+  for (const [ts, kind, s, data] of file.events) {
+    if (kind !== "session_start") continue;
+    const parent = typeof data?.parent === "string" ? sessionIndex.get(data.parent) : undefined;
+    if (parent === undefined && typeof data?.task === "string") {
+      acc.set(s, {
+        task: data.task,
+        difficulty: typeof data.difficulty === "string" ? data.difficulty : "",
+        state: "",
+        model: "",
+        rounds: 0,
+        start: ts,
+        end: undefined,
+        outcome: undefined,
+        landed: false,
+        root: true,
+      });
+      rootOfSession.set(file.sessions[s], s);
+    } else if (parent !== undefined) {
+      const root = rootOfSession.get(file.sessions[parent]) ?? parent;
+      rootOfSession.set(file.sessions[s], root);
+    }
+  }
+  const rounds = new Map<number, number>();
+  for (const [ts, kind, s, data] of file.events) {
+    const a = acc.get(s);
+    if (kind === "session_start" && a === undefined) {
+      const root = rootOfSession.get(file.sessions[s]);
+      if (root !== undefined && ts <= at && data?.workflow === "slice-review")
+        rounds.set(root, (rounds.get(root) ?? 0) + 1);
+    }
+    if (a === undefined || ts > at) continue;
+    if (kind === "transition" && typeof data?.to === "string") {
+      a.state = data.to;
+      if (data.to === "land") a.landed = true;
+    } else if (kind === "agent_link" && typeof data?.model === "string") a.model = data.model;
+    else if (kind === "session_end") {
+      a.end = ts;
+      a.outcome = data?.outcome;
+    }
+  }
+  const row = (id: number, a: Acc): PlanRow => ({
+    task: a.task,
+    difficulty: a.difficulty,
+    state: a.state,
+    model: a.model,
+    rounds: rounds.get(id) ?? 0,
+    startedAt: a.start,
+    endedAt: a.end,
+  });
+  const running: PlanRow[] = [];
+  const next: PlanRow[] = [];
+  const landed: PlanRow[] = [];
+  const closed: PlanRow[] = [];
+  for (const [id, a] of acc) {
+    const r = row(id, a);
+    if (a.start > at) next.push(r);
+    else if (a.end === undefined) running.push(r);
+    else (a.landed && a.outcome === "completed" ? landed : closed).push(r);
+  }
+  const byEnd = (x: PlanRow, y: PlanRow): number => (y.endedAt ?? 0) - (x.endedAt ?? 0);
+  return {
+    running: running.sort((x, y) => x.startedAt - y.startedAt),
+    next: next.sort((x, y) => x.startedAt - y.startedAt),
+    landed: landed.sort(byEnd),
+    closed: closed.sort(byEnd),
+  };
+}

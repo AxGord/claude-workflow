@@ -3,11 +3,12 @@
 // scripts/export-replay.mjs) is fed, on a clock, to the SAME code the dashboard map runs: `fold` and `layout`
 // of src/ lay the picture out and dashboard/scene-dom.js draws it, so lanes advance, branches open, lands fold,
 // hover (a tooltip) and click (a folded group opens) work as on /map. No server: the page fetches one JSON file.
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { withBase } from "vitepress";
 import { reconcile } from "../../../dashboard/scene-dom.js";
 import tokens from "../../../dashboard/tokens.css?raw";
 import components from "../../../dashboard/components.css?raw";
+import { shared } from "./replay-store";
 import { fold } from "../../../src/event-fold";
 import { layout, scene } from "../../../src/map-layout";
 import {
@@ -47,6 +48,19 @@ const open = new Set<string>();
 let resize: ResizeObserver | null = null;
 let seen: IntersectionObserver | null = null;
 let started = false;
+
+watch(at, v => {
+  shared.at = v;
+});
+
+/** The recorder's hook (`?record`): jump to a position and draw it before the promise settles. */
+async function seek(ms: number): Promise<void> {
+  pause();
+  at.value = Math.max(0, Math.min(duration.value, ms));
+  follow = true;
+  render();
+  await nextTick();
+}
 
 function render(): void {
   if (!file || !svg.value || !wrap.value) return;
@@ -138,10 +152,15 @@ onMounted(async () => {
     status.value = "The replay could not be loaded.";
     return;
   }
+  shared.file = file;
   events = expandReplay(file);
   t0 = Date.parse(file.start);
   duration.value = file.durationMs;
   render();
+  if (location.search.includes("record")) {
+    (window as unknown as { __replay: unknown }).__replay = { seek, durationMs: file.durationMs };
+    return;
+  }
   if (wrap.value) {
     resize = new ResizeObserver(() => render());
     resize.observe(wrap.value);
@@ -207,9 +226,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .map-replay {
-  max-width: 1152px;
-  margin: 0 auto 56px;
-  padding: 0 24px;
+  min-width: 0;
 }
 .mr-frame {
   border: 1px solid var(--panel-border);
