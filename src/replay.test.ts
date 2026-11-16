@@ -15,6 +15,7 @@ import {
   cameraTop,
   conversationAt,
   conversationTail,
+  snapshotAt,
   fitView,
   renderReplay,
   REPLAY_QUEUE,
@@ -323,16 +324,32 @@ describe("the committed replay (docs/public/replay/anyparse.json)", () => {
   const events = expandReplay(file);
   const sessions = fold(events);
 
-  it("keys every line of its conversation uniquely, though two of its lines share a millisecond, kind and label", () => {
+  it("keys every line of its conversation uniquely, and a line keeps its key as the window scrolls", () => {
     const all = conversationAt(file, file.durationMs);
-    const own = all.map(l => `${l.at}-${l.kind}-${l.label}`);
-    expect(new Set(own).size).toBeLessThan(own.length);
     const keys = conversationTail(file, file.durationMs, all.length).map(t => t.key);
     expect(new Set(keys).size).toBe(all.length);
     // a line keeps its key as the window scrolls: the tail's keys are the whole conversation's indices
     const tail = conversationTail(file, file.durationMs, 5);
     expect(tail.map(t => t.key)).toEqual([0, 1, 2, 3, 4].map(i => all.length - 5 + i));
     expect(tail.map(t => t.line)).toEqual(all.slice(-5));
+  });
+
+  it("carries the ledger's spend of its landed tasks and the engine's own lanes on their stations", () => {
+    const spend = file.spend ?? {};
+    const landed = snapshotAt(file, file.durationMs).lands;
+    expect(landed.length).toBeGreaterThan(0);
+    // every landed row the scene draws shows $x.xx, and the Landed heading its sum
+    for (const l of landed) expect(spend[l.slice]).toBeGreaterThan(0);
+    expect(landed.every(l => typeof l.usd === "number")).toBe(true);
+    expect(snapshotAt(file, file.durationMs).landedUsd).toBeGreaterThan(0);
+    const engine = [...sessions.values()].filter(s => s.workflow === "engine-task");
+    expect(engine.length).toBeGreaterThan(0);
+    expect(engine.every(s => s.parent === null && s.project === "mcp-workflow-engine")).toBe(true);
+    expect(engine.some(s => s.outcome === "completed" && typeof s.task === "string")).toBe(true);
+    expect(file.workflows["engine-task"]?.stations?.length).toBeGreaterThan(0);
+    // the task ids of the spend are the replay's own tasks only
+    const tasks = new Set([...sessions.values()].map(s => s.task));
+    for (const id of Object.keys(spend)) expect(tasks.has(id)).toBe(true);
   });
 
   it("is under 300 KB", () => {
@@ -413,6 +430,12 @@ describe("scripts/export-replay.mjs", () => {
       path.join(dir, "project", ".claude", "workflows", "slice-pipeline.yaml"),
       "name: slice-pipeline\ndescription: test\ninitial: claim\nstates:\n  claim:\n    type: prompt\n    prompt: go\n    transitions:\n      go: done\n  done:\n    terminal: true\n    outcome: complete\n",
     );
+    // the engine's own workflow lives in ITS project directory, not in the replay's project's
+    fs.mkdirSync(path.join(dir, "engine", "workflows"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "engine", "workflows", "engine-task.yaml"),
+      "name: engine-task\ndescription: test\ninitial: claim\nstates:\n  claim:\n    type: prompt\n    prompt: go\n    transitions:\n      go: done\n  done:\n    terminal: true\n    outcome: complete\n",
+    );
     fs.writeFileSync(
       path.join(dir, "project", ".claude", "batch", "queue.yaml"),
       "tasks:\n  - id: TASK-aaaa1111\n    kind: bug\n  - id: GOLF-PRIVATE-TASK\n    kind: feature\n",
@@ -446,6 +469,8 @@ describe("scripts/export-replay.mjs", () => {
         path.join(dir, "project"),
         "--ledger",
         path.join(dir, "ledger.jsonl"),
+        "--workflows",
+        path.join(dir, "engine", "workflows"),
         "--from",
         at(-1),
         "--out",
@@ -464,6 +489,8 @@ describe("scripts/export-replay.mjs", () => {
     expect(file.spend).toEqual({ "ENG-X": 0.5, "TASK-aaaa1111": 1.25 });
     expect(file.taskKinds).toEqual({ "TASK-aaaa1111": "bug" });
     expect(Object.keys(file.workflows)).toContain("slice-pipeline");
+    // --workflows: the engine lane's workflow has the stations the map draws it on
+    expect(file.workflows["engine-task"]?.stations?.map(st => st.name)).toEqual(["claim", "done"]);
     for (const secret of ["golf", "GOLF", "someone", "/Users/"]) expect(text).not.toContain(secret);
   }, 120_000);
 });

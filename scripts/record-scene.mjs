@@ -24,7 +24,7 @@ function option(name, fallback) {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? fallback : Number(process.argv[i + 1]);
 }
-const from = option("from", 5400) * 1000; // ms into the replay
+const from = option("from", 10500) * 1000; // ms into the replay: its Landed rows are there, with their spend
 const seconds = option("seconds", 15);
 const speed = option("speed", 120); // times real time
 const fps = option("fps", 30);

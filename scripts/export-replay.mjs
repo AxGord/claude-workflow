@@ -17,10 +17,13 @@
 // refuses the write. Only a window the pool log covers is chosen.
 //
 //   npm run build && node scripts/export-replay.mjs [--project anyparse] [--also mcp-workflow-engine] [--project-dir DIR]
-//        [--events DIR] [--ledger FILE|none] [--pool DIR|none] [--queue FILE] [--from ISO] [--hours 4] [--max-kb 300] [--out FILE]
+//        [--workflows DIR,DIR] [--events DIR] [--ledger FILE|none] [--pool DIR|none] [--queue FILE] [--from ISO] [--hours 4]
+//        [--max-kb 300] [--out FILE]
 //
 // --project-dir  the project's checkout: its .claude/workflows give the stations of the workflows the sessions
 //                ran, its .claude/batch/queue.yaml (or --queue) the kind of each task (default: the cwd)
+// --workflows    more `.claude/workflows` directories, comma separated: a workflow of a kept --also project that lives in its
+//                own directory (the engine's `engine-task`) takes its stations from there; a name already loaded keeps its own
 // --also         more projects kept the same way, comma separated (default mcp-workflow-engine; `none` keeps --project alone)
 // --ledger       the ledger file (default: <state dir>/ledger.jsonl); `none` writes no spend
 // --events       the event log directory (default: $STATE_DIR or ~/.claude/workflow-state, then /events)
@@ -117,12 +120,19 @@ async function main() {
   const dirs = workflowDirs(process.env, projectDir);
   const loader = new Loader(dirs.bundled, dirs.global, dirs.project);
   const workflows = {};
+  const entry = wf => ({
+    stations: computeStations(wf),
+    ...(wf.map === false ? { map: false } : {}),
+    ...(wf.driver ? { driver: { model: wf.driver.model, effort: wf.driver.effort } } : {}),
+  });
   for (const [name, wf] of loader.getAll()) {
-    workflows[name] = {
-      stations: computeStations(wf),
-      ...(wf.map === false ? { map: false } : {}),
-      ...(wf.driver ? { driver: { model: wf.driver.model, effort: wf.driver.effort } } : {}),
-    };
+    workflows[name] = entry(wf);
+  }
+  for (const extra of (args.workflows ?? "").split(",").filter(d => d !== "")) {
+    for (const [name, wf] of new Loader(dirs.bundled, dirs.global, path.resolve(extra)).getAll()) {
+      if (Object.hasOwn(workflows, name)) continue;
+      workflows[name] = entry(wf);
+    }
   }
   const poolDir = args.pool === undefined ? resolvePoolDir(process.env) : args.pool === "none" ? undefined : path.resolve(args.pool);
   const poolLines = poolDir === undefined ? [] : readPoolLog(poolDir);
