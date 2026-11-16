@@ -235,8 +235,9 @@ load. The ledger's `stages` records the as-run row of each stage a state spawned
 - `review_class` set (by an exec's `context_set`, e.g. `scripts/review-class.sh <base> <tip>`: `light`
   when every changed path is a test or a doc — `docs/` / `specs/` at the repo root, `tests/` /
   `__tests__/` anywhere, `*.md` / `.rst` / `.adoc`, `*.test.*` / `*Test.*`, CHANGELOG / LICENSE /
-  README; a nested `docs/` package or a `.txt` build file is code — else `code`; doubt is `code`;
-  `REVIEW_LIGHT_PATHS` overrides the regex) writes `review_model` /
+  README; a nested `docs/` package, a `.txt` build file, `docs/**/.vitepress/` and any script
+  (`.ts`/`.js`/`.vue`…) under `docs/` / `specs/` are code — else `code`; doubt is `code`;
+  `REVIEW_LIGHT_PATHS` overrides the light regex, `REVIEW_CODE_PATHS` the code one, checked first) writes `review_model` /
   `review_effort`: the class's `review` entry, else the `review` stage's row, else (no stages) the
   task's own model and effort. Under `stages` they always equal `model_review` / `effort_review`.
 - Escalation is per session: fix rounds, and a blocked re-entry within one session — a workflow

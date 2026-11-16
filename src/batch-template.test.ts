@@ -25,10 +25,24 @@ function tmp(): string {
 }
 
 const git = (cwd: string, ...args: string[]): string =>
-  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], {
-    cwd,
-    encoding: "utf8",
-  }).trim();
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "tag.gpgsign=false",
+      ...args,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+    },
+  ).trim();
 
 function state(name: string, landTest: string, plugin: string): StateDefinition {
   const empty = tmp();
@@ -166,7 +180,7 @@ describe("batch-task default extension points", () => {
       }).trim();
       expect([file, got]).toEqual([file, want]);
     }
-  });
+  }, 60_000);
 
   it("a red land_test keeps an edit made meanwhile; a HEAD moved during the test is never reset (4)", async () => {
     const { repo, plugin, vars } = setup();

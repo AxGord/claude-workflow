@@ -12,10 +12,24 @@ afterEach(() => {
   for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
 });
 const git = (cwd: string, ...a: string[]) =>
-  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], {
-    cwd,
-    encoding: "utf8",
-  }).trim();
+  execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "tag.gpgsign=false",
+      ...a,
+    ],
+    {
+      cwd,
+      encoding: "utf8",
+    },
+  ).trim();
 
 it("cleanup removes the branch when its worktree directory is already gone (prunable)", () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "wf-cleanup-")));

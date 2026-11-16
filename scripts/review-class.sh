@@ -5,6 +5,8 @@
 #
 # Args: <base> <tip> — the change is `git diff <base>...<tip>`: the tip's side since the merge base.
 # Env:  REVIEW_LIGHT_PATHS — extended regex a light path matches (default below: docs, tests).
+#       REVIEW_CODE_PATHS  — extended regex of paths that are code even where a light one matches
+#       (default below: a site's own code under docs/ — `.vitepress/`, scripts, Vue components).
 # Exit: 0 with the class. A change that cannot be measured (not a repo, a bad ref, an empty diff)
 #       is `code`, with the reason on stderr: doubt takes the full reviewer. 2 = usage.
 
@@ -13,6 +15,10 @@
 # docs/ and specs/ count at the repo root only (a nested `docs/` package may hold code); a nested
 # tests/ or __tests__/ is tests anywhere. `.txt` is no doc extension (CMakeLists.txt, requirements.txt).
 light=${REVIEW_LIGHT_PATHS:-'^(docs?|specs?)/|(^|/)(tests?|__tests__)/|\.(md|markdown|rst|adoc)$|[._-](test|spec)\.[^/]+$|Tests?\.[^/]+$|(^|/)(CHANGELOG|LICENSE|README)[^/]*$'}
+
+# Checked before `light`: docs/ holds a site's config, theme and components (docs/.vitepress/**, any
+# script or .vue under it), and those are code; prose .md under docs/ stays light.
+code=${REVIEW_CODE_PATHS:-'^(docs?|specs?)/(.*/)?\.vitepress/|^(docs?|specs?)/.*\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|vue)$'}
 
 # git's own message goes to stderr as it is; stdout holds the paths only.
 if ! files=$(git -c core.quotePath=false diff --no-renames --name-only "$1...$2" --); then
@@ -25,7 +31,7 @@ if [ -z "$files" ]; then
     echo code
     exit 0
 fi
-heavy=$(printf '%s\n' "$files" | grep -Ev -e "$light" | head -3)
+heavy=$({ printf '%s\n' "$files" | grep -E -e "$code"; printf '%s\n' "$files" | grep -Ev -e "$light"; } | head -3)
 if [ -n "$heavy" ]; then
     echo "review-class: code — $(printf '%s' "$heavy" | tr '\n' ' ')" >&2
     echo code
