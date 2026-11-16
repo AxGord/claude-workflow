@@ -34,6 +34,7 @@
     "docs:replay": "node scripts/export-replay.mjs",
     "docs:workflows": "node scripts/export-workflows.mjs",
     "docs:record": "node scripts/record-scene.mjs",
+    "docs:banner": "node scripts/render-banner.mjs",
     "video": "node video/render.mjs"
   },
   "dependencies": {
