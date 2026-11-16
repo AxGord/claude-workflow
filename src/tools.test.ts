@@ -632,7 +632,10 @@ describe("abort tool kills before queueing", () => {
       await new Promise(r => setTimeout(r, 10));
     const grandchild = Number(fs.readFileSync(pidFile, "utf8"));
     try {
-      const abort = handlers.get("abort")!({ session_id: sessionId });
+      const abort = handlers.get("abort")!({
+        session_id: sessionId,
+        caller_session_id: sessionId,
+      });
       for (let i = 0; i < 50 && alive(grandchild); i++) await new Promise(r => setTimeout(r, 20));
       expect(alive(grandchild)).toBe(false);
       expect((await abort).isError).toBeUndefined();

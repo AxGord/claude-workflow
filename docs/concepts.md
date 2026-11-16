@@ -125,14 +125,14 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list` | List all available workflow definitions | — |
-| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree), `priority` (`low`/`normal`/`high`/`urgent`; default: the parent's level, else `normal`), `context` (string map the session starts with; not `cwd`), `reply: "id"` (answer only `SESSION: <id> @ <state>`, no prompt or rules) — a workflow with `driver:` ends the answer with the driver's Agent call |
+| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree), `priority` (`low`/`normal`/`high`/`urgent`; default: the parent's level, else `normal`), `context` (string map the session starts with; not `cwd`), `reply: "id"` (answer only `SESSION: <id> @ <state>`, no prompt or rules), `force: "<reason>"` (a second root; without `parent_session_id` a start in a process that already has an active root is refused, naming the root by workflow and state, never its id — a sub-agent never gets a root) — a workflow with `driver:` ends the answer with the driver's Agent call |
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
-| `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition` |
+| `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition`, `caller_session_id`, `force` + `reason` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
 | `modify` | Runtime overlay — add/change/remove states and transitions | `session_id`, `add_state`, `add_transition` |
 | `create` | Create new workflow definition (saves YAML) | `name`, `definition`, `scope` |
 | `delete` | Delete a workflow definition | `name`, `scope` |
-| `abort` | Abort workflow, pop all stack frames | `session_id` |
+| `abort` | Abort workflow, pop all stack frames (its active descendants end with it; the cascade is logged to stderr with the caller and the session count). Refused for a root or a session with active descendants unless `caller_session_id` is the target or an ancestor of it, or `force: true` with a `reason` | `session_id`, `caller_session_id`, `force`, `reason` |
 | `sessions` | List all sessions (active first); `[STALE: …]` marks one whose state saw no engine call past its `stale_after` | `all` |
 | `set_priority` | Set the priority level of a session and its descendants; re-rank their waiting pool entries (no preemption) | `session_id`, `level` |
 | `pool_status` | The machine-wide pool: one line per lease and waiter (as `wf-run --status`) | — |

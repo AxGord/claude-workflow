@@ -374,7 +374,15 @@ describe("Skill Gate", () => {
 
       // Actually, the auto-transition happens at _handleSkillGate time.
       // Start a new session and manually set loaded_skills before the engine checks
-      const { sessionId: sid2 } = await engine.start("wf");
+      const { sessionId: sid2 } = await engine.start(
+        "wf",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "second root of the test",
+      );
       // This blocks at gate — but let's pre-load and then transition
       session = storage.read(sid2)!;
       await storage.write(sid2, {

@@ -128,7 +128,7 @@ Auto-allow the workflow tools so the agent is not interrupted with a permission 
 }
 ```
 
-`abort` is deliberately **not** allowlisted: sub-agents inherit permissions, and an auto-allowed `abort` would let a sub-agent silently kill its parent's session. Keep it behind a manual prompt.
+`abort` is deliberately **not** allowlisted: sub-agents inherit permissions, and an auto-allowed `abort` would let a sub-agent silently kill its parent's session. Keep it behind a manual prompt. The engine adds its own guard: an `abort` of a root, or of a session with active descendants, is refused unless the call names `caller_session_id` (its own session, an ancestor of the target) or passes `force: true` with a `reason`.
 
 ## Configuration
 

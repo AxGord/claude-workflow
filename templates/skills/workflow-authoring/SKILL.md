@@ -247,6 +247,7 @@ start_build:
 - `on_success` fires immediately (process started OK)
 - `timeout` is **ignored** on background exec — the process runs until it exits or the session is aborted
 - Abort (and a parent's abort cascade) kills each background exec's whole process group — `sh -c` and its children; a timeout on a foreground exec does the same
+- Session scope: `start` without `parent_session_id` while this process already has an active root is REFUSED (the reply names the root by workflow @ state, never its id; `force: "<reason>"` starts a second root on purpose) — a sub-agent always passes `parent_session_id`, and reads its own session with `status`. `abort` of a root or of a session with active descendants is refused unless `caller_session_id` (your own session id) is the target or an ancestor of it, or `force: true` + `reason`; `transition` with a `caller_session_id` outside that subtree is refused the same way. Every cascade abort is logged to stderr with the caller and the session count
 - Abort also kills a FOREGROUND exec still running in that session (or a descendant) at once — it does not wait for the exec to finish; the interrupted transition returns an error instead of routing the killed result
 
 ### Restart: suspended sessions and execs in flight

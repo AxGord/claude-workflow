@@ -17,6 +17,7 @@ import {
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
 import { withProgress, type ProgressSink } from "./progress.js";
 import { activeParents, staleNote } from "./stale.js";
+import { scopeVerdict } from "./session-scope.js";
 import { RESUME_TOOL, activeSubtree, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
 import {
   MARK_TARGETS,
@@ -174,6 +175,15 @@ function syncContextEpoch(): void {
   seenContextEpoch = epoch;
   deliveredFullPrompts.clear();
 }
+
+const START_FORCE_DESCRIPTION =
+  "A reason, to start a SECOND root session (no parent_session_id) in a process that already has an active root; without it that start is refused. A sub-agent never needs it: it passes parent_session_id";
+const FORCE_DESCRIPTION =
+  "Skip the PID ownership check (for cross-process operations); with `reason`, also overrides the session-scope refusal (a session outside the caller's own subtree)";
+const REASON_DESCRIPTION =
+  "Why a session outside the caller's own subtree must be touched (needs force: true); logged";
+const CALLER_DESCRIPTION =
+  "Your own session id. Only that session and the sessions it started may be touched; any other target is refused unless force: true with a reason. Without it, aborting a root or a session with active descendants is refused";
 
 const START_REPLY_DESCRIPTION =
   "Reply shape. \"id\": answer `SESSION: <id> @ <state>` only (plus a driver workflow's DRIVER block), without the state's prompt and the rules; the session's own agent reads the prompt with status. For a parent that starts a child only to pass the id on.";
@@ -436,7 +446,7 @@ export function registerTools(
     "start",
     {
       description:
-        "Start a workflow. Returns the first prompt, session ID, and available transitions.",
+        "Start a workflow. Returns the first prompt, session ID, and available transitions. A start without parent_session_id while this process already has an active root session is refused (a sub-agent never gets a root: pass parent_session_id).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
@@ -458,6 +468,7 @@ export function registerTools(
               "Context keys the session starts with (e.g. a dispatched task's `task`, `queue_file`, `difficulty`); not `cwd`",
             ),
           reply: z.literal("id").optional().describe(START_REPLY_DESCRIPTION),
+          force: z.string().min(1).optional().describe(START_FORCE_DESCRIPTION),
         })
         .strict(),
     },
@@ -472,6 +483,7 @@ export function registerTools(
               args.cwd,
               args.priority,
               args.context,
+              args.force,
             ),
           );
           // No forceFullPrompt here: a digest_on_repeat initial state (master
@@ -587,10 +599,9 @@ export function registerTools(
           session_id: z.string().optional().describe("Session identifier"),
           transition: z.string().describe("Name of the transition to take"),
           actor: z.string().optional().describe("Identity of the agent performing this action"),
-          force: z
-            .boolean()
-            .optional()
-            .describe("Skip PID ownership check (for cross-process operations)"),
+          force: z.boolean().optional().describe(FORCE_DESCRIPTION),
+          reason: z.string().optional().describe(REASON_DESCRIPTION),
+          caller_session_id: z.string().optional().describe(CALLER_DESCRIPTION),
         })
         .strict(),
     },
@@ -600,6 +611,14 @@ export function registerTools(
           const progress = progressOf(extra);
           const sid = engine.resolveSessionId(args.session_id);
           engine.assertNotSuspended(sid);
+          const scope = scopeVerdict(storage, {
+            tool: "transition",
+            target: sid,
+            caller: args.caller_session_id,
+            force: args.force,
+            reason: args.reason,
+          });
+          if (scope.refusal) throw new Error(scope.refusal);
           const warning = engine.assertOwnership(sid, args.force);
           const how = engine.orphanedStep(sid);
           const adopted = how
@@ -812,27 +831,34 @@ export function registerTools(
   server.registerTool(
     "abort",
     {
-      description: "Abort the workflow (pop all stack frames, end session).",
+      description:
+        "Abort the workflow (pop all stack frames, end session; its active descendants end with it). Refused for a root or a session with active descendants unless caller_session_id names the target or an ancestor of it, or force: true with a reason.",
       inputSchema: z
         .object({
           session_id: z.string().optional().describe("Session identifier"),
-          force: z
-            .boolean()
-            .optional()
-            .describe(
-              "Skip PID ownership check (for cross-process operations, e.g. aborting stale sessions from dead processes)",
-            ),
+          force: z.boolean().optional().describe(FORCE_DESCRIPTION),
+          reason: z.string().optional().describe(REASON_DESCRIPTION),
+          caller_session_id: z.string().optional().describe(CALLER_DESCRIPTION),
         })
         .strict(),
     },
     args => {
+      const scopeOf = (sid: string) =>
+        scopeVerdict(storage, {
+          tool: "abort",
+          target: sid,
+          caller: args.caller_session_id,
+          force: args.force,
+          reason: args.reason,
+        });
       // Kill first, outside the queue: the session's own running transition
       // holds the queue for as long as its foreground exec runs. An unresolved
-      // id or a refused ownership kills nothing; the queued run reports it.
+      // id, a refused ownership or a refused scope kills nothing; the queued
+      // run reports it.
       try {
         const sid = engine.resolveSessionId(args.session_id);
         engine.assertOwnership(sid, args.force);
-        engine.killSessionTree(sid);
+        if (scopeOf(sid).refusal === undefined) engine.killSessionTree(sid);
       } catch {
         /* reported below */
       }
@@ -840,8 +866,17 @@ export function registerTools(
         try {
           const sid = engine.resolveSessionId(args.session_id);
           const warning = engine.assertOwnership(sid, args.force);
+          const scope = scopeOf(sid);
+          if (scope.refusal) throw new Error(scope.refusal);
+          const count = activeSubtree(storage, sid).length;
+          console.error(
+            `abort: session ${sid} by ${args.caller_session_id ?? "an unnamed caller"} ends ${count} session(s)` +
+              (scope.overridden ? `; forced: ${scope.overridden}` : ""),
+          );
           await engine.abort(sid);
-          const text = (warning ? warning + "\n" : "") + `Session "${sid}" aborted.`;
+          const text =
+            (warning ? warning + "\n" : "") +
+            `Session "${sid}" aborted${count > 1 ? ` (${count} sessions ended with it)` : ""}.`;
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {

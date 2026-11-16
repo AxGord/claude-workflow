@@ -83,6 +83,7 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/index.ts` | Entry point — wires components, starts stdio transport |
 | `src/workflow-dirs.ts` | The one owner of the workflow directories (`WORKFLOW_DIR`, the cwd's `.claude/workflows/`, bundled `templates/`): `workflowDirs` / `workflowLoader`, built by the server and by `session-cli.js` alike |
 | `src/engine.ts` | FSM core — start, transition, abort, context, stack push/pop |
+| `src/session-scope.ts` | Who may end or step a session: `scopeVerdict` (abort / transition outside the caller's own subtree refused without `force` + `reason`), `secondRootRefusal` (a parentless `start` beside an active root) |
 | `src/loader.ts` | YAML loading + Zod validation + fs.watch hot-reload |
 | `src/storage.ts` | JSON persistence with atomic writes and lockfile mutex |
 | `src/modifier.ts` | Runtime overlays + create (YAML writer) |

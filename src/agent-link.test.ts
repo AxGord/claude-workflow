@@ -117,7 +117,17 @@ describe("agent links (engine)", () => {
     expect(storage.read(w)!.agent_id).toBe("a1");
     expect(storage.read(w)!.linked_agents).toEqual(["a1", "a1b"]);
     // a session without a parent records no step
-    const root = (await engine.start("child")).sessionId;
+    const root = (
+      await engine.start(
+        "child",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "second root of the test",
+      )
+    ).sessionId;
     expect(await engine.linkAgent(root, "r")).toBeUndefined();
     expect(storage.read(root)!.agent_step).toBeUndefined();
 
@@ -236,7 +246,17 @@ describe("agent links (engine)", () => {
       const spy = vi.spyOn(m.storage, "readAll");
       expect(m.engine.linkedAgentLines(d)).toEqual([]);
       expect(spy).not.toHaveBeenCalled();
-      const p = (await m.engine.start("task")).sessionId;
+      const p = (
+        await m.engine.start(
+          "task",
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          "second root of the test",
+        )
+      ).sessionId;
       spy.mockImplementation(() => {
         throw new Error("boom");
       });

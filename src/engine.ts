@@ -51,6 +51,7 @@ import { DRIVER_CALL_KEY, renderDriverCall, resolveDriverRef } from "./driver.js
 import { currentStep, linkedAgentLines, type IsRoute } from "./agent-link.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
+import { secondRootRefusal } from "./session-scope.js";
 import { activeParents, staleNote, staleness, type Staleness } from "./stale.js";
 
 /** Template vars with an action's result laid over them; the lazy getters (`stale_sessions`) carried along. */
@@ -267,6 +268,7 @@ export class Engine {
     cwd?: string,
     priority?: PriorityLevel,
     initialContext?: Readonly<Record<string, string>>,
+    forceReason?: string,
   ): Promise<StatusResult> {
     if (cwd !== undefined) Engine._assertSessionCwd(cwd);
     if (priority !== undefined) PriorityLevelSchema.parse(priority);
@@ -275,31 +277,15 @@ export class Engine {
       if (key === "cwd" || key === "claude_code_pid" || key === "project")
         throw new Error(`start context: "${key}" is the engine's (pass cwd as its own argument)`);
 
-    // Guard: prevent duplicate top-level sessions from the same Claude Code process.
-    // Sub-agent sessions (with parent_session_id) are exempt — they run alongside the parent.
+    // A parentless start while this process holds an active root is refused: the old idempotent
+    // reply handed the root's id to whoever asked (a sub-agent that then aborted it).
     if (!parentSessionId) {
-      const pid = process.ppid;
-      const active = this._storage
-        .readAll()
-        .filter(
-          s => s.context.claude_code_pid === pid && !s.parent_session_id && s.stack.length > 0,
+      const refusal = secondRootRefusal(this._storage, process.ppid, forceReason);
+      if (refusal) throw new Error(refusal);
+      if (forceReason?.trim())
+        console.error(
+          `start: a second root session on purpose in PID ${process.ppid}: ${forceReason.trim()}`,
         );
-      if (active.length > 0) {
-        // Idempotent start: return existing session with a short message
-        // instead of the full state prompt. This prevents sub-agents
-        // (who inherit the "call start() first" rule) from seeing
-        // transition instructions and hijacking the parent session.
-        const existing = active[0];
-        const frame = existing.stack[existing.active_frame];
-        const status = this._buildStatus(existing, []);
-        return {
-          ...status,
-          prompt:
-            `Session already active: ${existing.session_id} (${frame.workflow} @ ${frame.current_state}). ` +
-            `If you are a sub-agent, pass parent_session_id to start your own session. ` +
-            `If you lost context, call status() to re-read the full prompt.`,
-        };
-      }
     }
 
     let sessionId: string;
