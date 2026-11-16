@@ -373,6 +373,8 @@ states:
         [ -z "$dirty" ] || { echo "kept $WT: not clean"; echo "$dirty" | head -5; exit 1; }
         git worktree remove --force "$WT" || exit 1
       fi
+      # A wiped directory leaves a prunable entry that still holds the branch; prune drops only those.
+      git worktree prune
       git branch -d "batch/$TASK" || exit 1
       echo "removed $WT and batch/$TASK"
     env:
