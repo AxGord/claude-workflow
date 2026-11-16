@@ -345,7 +345,7 @@ let ledgerRead: Ledger = NO_LEDGER
 /** The ledger's runs and spend, re-read only when the file's size or mtime moved (the pane refreshes often). */
 async function ledgerAt($: any, dir: string): Promise<Ledger> {
   const entries = await $.fs.list(dir).catch(() => [])
-  // the full ledger outgrows the 4 MiB the plugin API reads; the engine keeps the recent lines in a small file beside it
+  // the full ledger outgrows the 4 MiB the plugin API reads; the engine keeps the recent lines in a small file beside it; a failed line's totals over the whole ledger come from the engine (fullTotalsAt)
   const f = entries.find((x: any) => x.name === 'ledger-recent.jsonl') ?? entries.find((x: any) => x.name === 'ledger.jsonl')
   if (!f) return NO_LEDGER
   const stamp = `${f.name}:${f.size}:${f.mtimeMs}`
@@ -355,6 +355,22 @@ async function ledgerAt($: any, dir: string): Promise<Ledger> {
     ledgerSeen = stamp
   }
   return ledgerRead
+}
+
+let fullSeen: { key: string; totals: Map<string, TaskTotals> } | undefined
+
+/** The totals of the queue lines `ids` over the WHOLE ledger, from the engine's /api/ledger-rows (the plugin API cannot read the ledger: it is over 4 MiB). Asked again only when `ledger.jsonl`'s size or mtime or the ids moved; an unanswered call is not kept and gives nothing, so the caller falls back on the recent window. */
+async function fullTotalsAt($: any, dir: string, ids: string[]): Promise<Map<string, TaskTotals>> {
+  if (ids.length === 0) return new Map()
+  const entries = await $.fs.list(dir).catch(() => [])
+  const f = entries.find((x: any) => x.name === 'ledger.jsonl')
+  const key = `${f ? `${f.size}:${f.mtimeMs}` : ''}|${[...ids].sort().join(',')}`
+  if (fullSeen?.key === key) return fullSeen.totals
+  const res = await $.http.fetch(`${DASHBOARD}/api/ledger-rows?tasks=${encodeURIComponent(ids.join(','))}`).catch(() => undefined)
+  if (!res?.ok) return new Map()
+  const totals = ledgerTotalsOf(String(res.text))
+  fullSeen = { key, totals }
+  return totals
 }
 
 /** `HH:MM` of a start, with its `DD.MM ` when it fell on another day than the land (a run across midnight). */
@@ -636,13 +652,16 @@ async function build($: any): Promise<Snapshot> {
   const loaded = queueFile !== '' ? await loadQueue($, queueFile, now) : { queue: null, error: '' }
   const ledger = loaded.queue ? await ledgerAt($, dir) : NO_LEDGER
   // a failed line carries what the ledger says it cost
+  const failedRecent = loaded.queue ? loaded.queue.failedLines.filter(l => l.recent) : []
+  // a failed line's runs may all be older than the recent window: its cost comes from the whole ledger
+  const failedTotals = ledger !== NO_LEDGER ? new Map([...ledger.totals, ...(await fullTotalsAt($, dir, failedRecent.map(l => l.id)))]) : ledger.totals
   const queue = loaded.queue && {
     ...loaded.queue,
     failedLines: loaded.queue.failedLines.map(l => {
       const usd = ledger.spends.get(l.id)?.usd
       return usd !== undefined ? { ...l, usd } : l
     }),
-    ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(loaded.queue.failedLines.filter(l => l.recent), ledger.totals) } : {}),
+    ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(failedRecent, failedTotals) } : {}),
   }
   const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), now) : { lands: [], branch: 'main' }
   const landed = read.lands

@@ -4,7 +4,7 @@ import lockfile from "proper-lockfile";
 import type { SessionState } from "./types.js";
 import { LOCK_STALE_MS } from "./types.js";
 import { EventLog } from "./event-log.js";
-import { parseLedger, type LedgerEntry } from "./ledger.js";
+import { parseLedger, taskCostRows, type LedgerEntry } from "./ledger.js";
 
 export const LEDGER_FILE = "ledger.jsonl";
 /** The ledger lines of the last `LEDGER_RECENT_DAYS` days: the plan pane reads this one, since the plugin API rejects a read of a file over 4 MiB and the ledger is never pruned. */
@@ -19,6 +19,7 @@ const LOCK_RETRIES = { retries: 100, minTimeout: 5, maxTimeout: 50, randomize: t
 
 export class Storage {
   private readonly _stateDir: string;
+  private _taskRows: { stamp: string; rows: Map<string, string[]> } | undefined;
   /** What sessions did in this server run: derived from every session write. */
   public readonly events: EventLog;
 
@@ -177,6 +178,21 @@ export class Storage {
   public readLedger(): LedgerEntry[] {
     const fp = path.join(this._stateDir, LEDGER_FILE);
     return fs.existsSync(fp) ? parseLedger(fs.readFileSync(fp, "utf8")) : [];
+  }
+
+  /** The cost rows (`taskCostRows`) of the queue lines `tasks` over the WHOLE ledger, not its recent window: the plan pane's Failed header counts a line whose runs are older than `ledger-recent.jsonl`. The index is rebuilt only when the ledger's size or mtime moved. */
+  public readLedgerTaskRows(tasks: readonly string[]): string[] {
+    const fp = path.join(this._stateDir, LEDGER_FILE);
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(fp);
+    } catch {
+      return [];
+    }
+    const stamp = `${st.size}:${st.mtimeMs}`;
+    if (this._taskRows?.stamp !== stamp)
+      this._taskRows = { stamp, rows: taskCostRows(fs.readFileSync(fp, "utf8")) };
+    return tasks.flatMap(t => this._taskRows?.rows.get(t) ?? []);
   }
 
   /** A JSON file of the state directory (an operator's setting), or null when absent or damaged. */

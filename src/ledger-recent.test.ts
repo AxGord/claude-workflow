@@ -61,4 +61,30 @@ describe("ENG-PANE-LANDED-ROW-BROKEN: ledger-recent.jsonl", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("readLedgerTaskRows answers a task's rows from the whole ledger, rebuilt when the file moved", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-ledger-recent."));
+    try {
+      const st = new Storage(dir);
+      await st.appendLedger({
+        task: "OLD",
+        session_id: "s1",
+        ended_at: "2020-01-01T00:00:00Z",
+        spend: { usd: 2 },
+        junk: "x",
+      });
+      const rows = st.readLedgerTaskRows(["OLD", "NONE"]).map(l => JSON.parse(l) as unknown);
+      expect(rows).toEqual([{ task: "OLD", session_id: "s1", spend: { usd: 2 } }]);
+      await st.appendLedger({
+        task: "OLD",
+        session_id: "s2",
+        ended_at: "2020-01-02T00:00:00Z",
+        parent_spend: { usd: 1 },
+      });
+      expect(st.readLedgerTaskRows(["OLD"])).toHaveLength(2);
+      expect(new Storage(path.join(dir, "empty")).readLedgerTaskRows(["OLD"])).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

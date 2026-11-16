@@ -123,6 +123,13 @@ export function buildApp(
     }
   });
 
+  // The cost rows of the named queue lines from the whole ledger (the plan pane cannot read the ledger itself: the plugin API refuses a file over 4 MiB). JSON lines, one per ledger row; ids are comma-separated.
+  app.get("/api/ledger-rows", (req, res) => {
+    const tasks =
+      typeof req.query.tasks === "string" ? req.query.tasks.split(",").filter(t => t !== "") : [];
+    res.type("text/plain").send(storage.readLedgerTaskRows(tasks).join("\n"));
+  });
+
   // The Timeline tab: the day's task pipelines cut into segments by state, from the session files and the ledger.
   app.get("/api/timeline", (req, res) => {
     const now = Date.now();

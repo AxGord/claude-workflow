@@ -298,3 +298,28 @@ export function parseLedger(content: string): LedgerEntry[] {
   }
   return out;
 }
+
+/** The ledger's task lines by queue line id, each cut to what a task's cost needs (`task`, `session_id`, `parent_session_id`, `spend.usd`, `parent_spend.usd`): the plan pane sums them. */
+export function taskCostRows(content: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const line of content.split("\n")) {
+    if (!line.includes('"task"')) continue;
+    try {
+      const j = JSON.parse(line) as LedgerEntry;
+      if (typeof j.task !== "string" || j.task === "") continue;
+      const row = JSON.stringify({
+        task: j.task,
+        ...(j.session_id !== undefined ? { session_id: j.session_id } : {}),
+        ...(j.parent_session_id ? { parent_session_id: j.parent_session_id } : {}),
+        ...(j.spend?.usd !== undefined ? { spend: { usd: j.spend.usd } } : {}),
+        ...(j.parent_spend?.usd !== undefined ? { parent_spend: { usd: j.parent_spend.usd } } : {}),
+      });
+      const rows = out.get(j.task);
+      if (rows) rows.push(row);
+      else out.set(j.task, [row]);
+    } catch {
+      // a half-written line
+    }
+  }
+  return out;
+}

@@ -287,4 +287,31 @@ describe("GET /api/cost", () => {
     expect(body.trend).toHaveLength(14);
     expect((await fetch(`${base}/api/cost?from=2026-11-09&to=2026-11-08`)).status).toBe(400);
   });
+
+  it("/api/ledger-rows answers the cost rows of the named lines from the whole ledger", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashl-"));
+    dirs.push(dir);
+    const storage = new Storage(path.join(dir, "state"));
+    await storage.appendLedger({
+      task: "A",
+      session_id: "s1",
+      ended_at: "2020-01-01T00:00:00Z",
+      spend: { usd: 4 },
+    });
+    await storage.appendLedger({
+      task: "B",
+      session_id: "s2",
+      ended_at: "2020-01-01T00:00:00Z",
+      spend: { usd: 5 },
+    });
+    const server = buildApp(storage, {} as Loader).listen(0, "127.0.0.1");
+    servers.push(server);
+    await new Promise(r => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const text = await (await fetch(`${base}/api/ledger-rows?tasks=A,C`)).text();
+    expect(text.split("\n").map(l => JSON.parse(l) as unknown)).toEqual([
+      { task: "A", session_id: "s1", spend: { usd: 4 } },
+    ]);
+    expect(await (await fetch(`${base}/api/ledger-rows`)).text()).toBe("");
+  });
 });
