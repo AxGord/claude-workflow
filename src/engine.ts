@@ -177,6 +177,7 @@ export class Engine {
     this._loader = loader;
     this._executor = executor;
     this._options = options;
+    storage.events?.setDriverResolver(session => this._driverOf(session));
     storage.events?.setStateResolver((session, workflow, state) => {
       try {
         return this._resolveState(session, workflow, state);
@@ -945,13 +946,18 @@ export class Engine {
     };
   }
 
+  /** The `driver:` block of the workflow the session was started with (undefined: none, or the workflow is gone). */
+  private _driverOf(s: SessionState): Driver | undefined {
+    try {
+      return this._getWorkflow(s.session_id, s.stack[0].workflow).driver;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** The session runs a `driver:` workflow: the workflow it was started with declares one. */
   private _declaresDriver(s: SessionState): boolean {
-    try {
-      return this._getWorkflow(s.session_id, s.stack[0].workflow).driver !== undefined;
-    } catch {
-      return false;
-    }
+    return this._driverOf(s) !== undefined;
   }
 
   /** Whether a state of the session's active frame is a routing step, by that session's own workflow. */

@@ -950,7 +950,10 @@ export type ConversationLine =
  */
 export function conversationAt(file: ReplayFile, at: number): ConversationLine[] {
   const out: ConversationLine[] = [];
-  const roots = new Map<number, { task: string; start: number; state: string; landed: boolean }>();
+  const roots = new Map<
+    number,
+    { task: string; workflow: string; start: number; state: string; landed: boolean }
+  >();
   const ids = new Set(file.sessions);
   for (const [ts, kind, s, data] of file.events) {
     if (ts > at) break;
@@ -959,7 +962,7 @@ export function conversationAt(file: ReplayFile, at: number): ConversationLine[]
       if (!isRoot || typeof data?.task !== "string") continue;
       const workflow = typeof data.workflow === "string" ? data.workflow : "";
       const first = file.workflows[workflow]?.stations?.[0]?.name ?? "";
-      roots.set(s, { task: data.task, start: ts, state: first, landed: false });
+      roots.set(s, { task: data.task, workflow, start: ts, state: first, landed: false });
       out.push({
         at: ts,
         kind: "move",
@@ -974,9 +977,12 @@ export function conversationAt(file: ReplayFile, at: number): ConversationLine[]
     if (kind === "transition" && typeof data?.to === "string") {
       r.state = data.to;
       if (data.to === "land") r.landed = true;
-    } else if (kind === "agent_link" && typeof data?.model === "string")
-      out.push({ at: ts, kind: "spawn", label: r.task, role: "driver", model: data.model });
-    else if (kind === "ask" && typeof data?.state === "string")
+    } else if (kind === "agent_link" && typeof data?.model === "string") {
+      // the root's agent is the driver of a `driver:` workflow: an event from before the engine recorded the driver's
+      // model carries the task's execute model, so the workflow's own driver spec wins
+      const model = file.workflows[r.workflow]?.driver?.model ?? data.model;
+      out.push({ at: ts, kind: "spawn", label: r.task, role: "driver", model });
+    } else if (kind === "ask" && typeof data?.state === "string")
       out.push({ at: ts, kind: "needs", label: r.task, reason: data.state });
     else if (kind === "answer" && typeof data?.to === "string")
       out.push({ at: ts, kind: "move", label: r.task, name: "answer", to: data.to });

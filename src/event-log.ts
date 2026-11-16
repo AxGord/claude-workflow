@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { stagesRead } from "./model-table.js";
 import { isPidAlive } from "./process.js";
-import type { HistoryEntry, SessionState } from "./types.js";
+import type { Driver, HistoryEntry, SessionState } from "./types.js";
 import { openAsk } from "./event-fold.js";
 import { projectNameOf } from "./pool.js";
 import type { EventKind, WfEvent } from "./event-fold.js";
@@ -25,6 +25,9 @@ const EVENTS_DIR = "events";
 /** A state's definition as the session sees it (undefined when gone). */
 export type StateResolver = (session: SessionState, workflow: string, state: string) => unknown;
 
+/** The `driver:` block of the workflow a session was started with (undefined: it declares none, or the workflow is gone). */
+export type DriverResolver = (session: SessionState) => Driver | undefined;
+
 type Listener = (e: WfEvent) => void;
 
 export class EventLog {
@@ -34,6 +37,7 @@ export class EventLog {
   private readonly _listeners = new Set<Listener>();
   private _seq = 0;
   private _state: StateResolver = () => undefined;
+  private _driver: DriverResolver = () => undefined;
   private _parent: SessionState | null = null;
 
   /** `stateDir` absent = memory only. */
@@ -57,6 +61,10 @@ export class EventLog {
 
   public setStateResolver(r: StateResolver): void {
     this._state = r;
+  }
+
+  public setDriverResolver(r: DriverResolver): void {
+    this._driver = r;
   }
 
   private _isAsk(session: SessionState, workflow: string, state: string): boolean {
@@ -224,8 +232,14 @@ export class EventLog {
     }
   }
 
-  /** The model and effort the agent runs on: the parent's stage row of the step it was linked at, else the session's own. */
+  /**
+   * The model and effort the agent runs on: the driver block of a `driver:` workflow (its agent IS the driver, whatever
+   * the parent's step or the task's own execute model say), else the parent's stage row of the step it was linked at,
+   * else the session's own.
+   */
   private _modelInForce(next: SessionState): { model: unknown; effort: unknown } {
+    const driver = this._driver(next);
+    if (driver) return { model: driver.model, effort: driver.effort };
     const step = next.agent_step;
     const parent = this._parent;
     if (step && parent) {
