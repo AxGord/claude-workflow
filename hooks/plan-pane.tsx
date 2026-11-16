@@ -466,6 +466,15 @@ async function landBranchOf($: any, repo: string, header: string | undefined): P
   return BRANCH_RE.test(name) ? name : 'main'
 }
 
+/** The start, difficulty and cost a Landed row draws for a slice: the pipeline runs and spend of the ledger when it has them, else the slice's landed run of ANY workflow (a queue's own task workflow is not one of `TASK_WORKFLOWS`). Read from the ledger on disk, so they survive a restart of the host process. */
+function landFigures(ledger: Ledger, slice: string): { start: number; difficulty: string; usd?: number } {
+  const lp = ledger.landed.get(slice)
+  const start = ledger.runs.get(slice)?.start ?? lp?.start ?? NaN
+  const difficulty = ledger.runs.get(slice)?.difficulty ?? lp?.difficulty ?? ''
+  const usd = ledger.spends.has(slice) ? ledger.spends.get(slice)?.usd : lp?.usd
+  return { start, difficulty, ...(usd !== undefined ? { usd } : {}) }
+}
+
 /** The landed task runs of the ledger inside the window that `seen` (the slices git shows) lacks, of the lines of THIS queue (`own`: its lines and its archive; the ledger holds every project's runs) in whatever workflow they ran: a land made before the repo wrote a `Slice:` trailer. They carry no sha. */
 function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, now: number): Land[] {
   const since = now - LAND_DAYS * 24 * 3600 * 1000
@@ -474,9 +483,7 @@ function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, now: n
     if (!own.has(slice) || seen.has(slice) || lp.endedAt < since || lp.endedAt > now + 24 * 3600 * 1000) continue
     const d = new Date(lp.endedAt)
     const at = `${dayOf(lp.endedAt)} ${two(d.getHours())}:${two(d.getMinutes())}`
-    const start = ledger.runs.get(slice)?.start ?? lp.start
-    const difficulty = ledger.runs.get(slice)?.difficulty ?? lp.difficulty
-    const usd = ledger.spends.has(slice) ? ledger.spends.get(slice)?.usd : lp.usd
+    const { start, difficulty, usd } = landFigures(ledger, slice)
     out.push({ sha: '—', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}) })
   }
   return out
@@ -499,10 +506,9 @@ async function lands($: any, queueFile: string, ledger: Ledger, header: string |
     .filter(p => p.length >= 3 && (p[2] ?? '').trim() !== '')
     .map(p => {
       const slice = (p[2] ?? '').trim()
-      const r = ledger.runs.get(slice)
-      const usd = ledger.spends.get(slice)?.usd
+      const { start, difficulty, usd } = landFigures(ledger, slice)
       const at = p[1] ?? ''
-      return { sha: p[0] ?? '', at, slice, start: r ? startText(r.start, at) : '?'.padEnd(5), difficulty: r?.difficulty ?? '', ...(usd !== undefined ? { usd } : {}) }
+      return { sha: p[0] ?? '', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}) }
     })
   const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, now)
   return { lands: extra.length === 0 ? fromGit : [...fromGit, ...extra].sort((a, b) => landMs(b.at, now) - landMs(a.at, now)), branch }
