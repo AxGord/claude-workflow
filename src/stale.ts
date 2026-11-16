@@ -1,6 +1,7 @@
 // Stall detection: a session whose state saw no engine call for longer than the state's
 // `stale_after` is STALE — its agent may be dead or stuck. Pure: the engine resolves the state,
 // `sessions` / `status` / the `{{stale_sessions}}` template var print what this decides.
+import { POOL_WAIT_CEILING_FACTOR } from "./types.js";
 import type { SessionState, StateDefinition } from "./types.js";
 
 /**
@@ -10,7 +11,10 @@ import type { SessionState, StateDefinition } from "./types.js";
  */
 export const STALE_AFTER_DEFAULTS = { prompt: 1800, exec: 3600, heavy_exec: 14400 } as const;
 
-/** An exec's default never fires before its own `timeout` plus this: until then the timeout bounds it. */
+/**
+ * An exec's default never fires before its own `timeout` stretched by a pool wait to its ceiling
+ * (`POOL_WAIT_CEILING_FACTOR` times) plus this: until then the timeout bounds it.
+ */
 export const STALE_EXEC_GRACE_S = 300;
 
 /** The state's `stale_after` in seconds, 0 = never stale (a terminal state always). */
@@ -21,7 +25,9 @@ export function staleAfter(state: StateDefinition | undefined): number {
     const heavy = state.resource !== undefined || state.fanout !== undefined;
     const base = heavy ? STALE_AFTER_DEFAULTS.heavy_exec : STALE_AFTER_DEFAULTS.exec;
     const own =
-      state.timeout === undefined ? 0 : Math.ceil(state.timeout / 1000) + STALE_EXEC_GRACE_S;
+      state.timeout === undefined
+        ? 0
+        : Math.ceil((state.timeout * POOL_WAIT_CEILING_FACTOR) / 1000) + STALE_EXEC_GRACE_S;
     return Math.max(base, own);
   }
   return STALE_AFTER_DEFAULTS.prompt;

@@ -5,7 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { StateDefinition, ActionResult, ShardResult, DetachedRun } from "./types.js";
-import { DEFAULT_PRIORITY_LEVEL, RESOURCE_THREADS_BUDGET, type PriorityLevel } from "./types.js";
+import {
+  DEFAULT_PRIORITY_LEVEL,
+  POOL_WAIT_CEILING_FACTOR,
+  RESOURCE_THREADS_BUDGET,
+  type PriorityLevel,
+} from "./types.js";
 import { render } from "./template.js";
 import { bootTimeMs, isGroupAlive, killProcessGroup, sameBoot } from "./process.js";
 import {
@@ -43,6 +48,8 @@ const SHARD_TAIL = 2_000;
 const ADOPT_POLL_MS = 200;
 // how often a timed-out group is checked for its death
 const REAP_POLL_MS = 50;
+// how often a running exec asks the pool whether its session has a waiter queued
+const POOL_WAIT_POLL_MS = 1_000;
 // two boot-time readings closer than this are the same boot (clock adjustments)
 // A starved wait is noticed within this long of crossing the pool's `starve_after`.
 const STARVE_CHECK_MS = 10_000;
@@ -105,6 +112,57 @@ function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
   return TRUNCATED_MARK + s.slice(-limit);
 }
 
+/**
+ * An exec's deadline: its `timeout` from the start, stretched by the time its session had a waiter
+ * queued in the pool (a `wf-run` the command started leases per branch under the session's id; the
+ * exec itself holds no lease). The stretch is capped at `POOL_WAIT_CEILING_FACTOR` times the
+ * timeout, so a pool that never grants still ends the exec.
+ */
+class DeadlineClock {
+  private _waited: number;
+  private _last: number;
+
+  /**
+   * `waited`: the wait already counted (by a server that started the run); `store` is told
+   * whenever the count grows, so a server that takes the run over can start from it.
+   */
+  constructor(
+    private readonly _start: number,
+    private readonly _timeout: number,
+    private readonly _waitingSince: (() => number | undefined) | undefined,
+    waited = 0,
+    private readonly _store?: (waited: number) => void,
+  ) {
+    this._waited = waited;
+    this._last = Date.now();
+  }
+
+  /** The pool wait counted so far (ms). */
+  get waited(): number {
+    return this._waited;
+  }
+
+  /** Count the pool wait since the previous tick; returns the deadline (ms since epoch). */
+  tick(now: number): number {
+    const since = this._waitingSince?.();
+    if (since !== undefined) {
+      const add = Math.max(0, now - Math.max(this._last, since));
+      if (add > 0) {
+        this._waited += add;
+        this._store?.(this._waited);
+      }
+    }
+    this._last = now;
+    return this.deadline();
+  }
+
+  deadline(): number {
+    return (
+      this._start + Math.min(this._timeout + this._waited, this._timeout * POOL_WAIT_CEILING_FACTOR)
+    );
+  }
+}
+
 export class Executor {
   // Foreground exec groups still running, per session — abort kills them.
   private readonly _running = new Map<string, Set<number>>();
@@ -121,11 +179,16 @@ export class Executor {
   /** How often a lease wait checks whether it is starved (`ExecContext.onStarved`). */
   readonly starveCheckMs: number;
 
+  /** How often a running exec asks the pool whether its session has a waiter (`DeadlineClock`). */
+  readonly poolWaitPollMs: number;
+
   constructor(
     pool: Pool = new Pool(resolvePoolDir()),
     runDir: string = path.join(os.tmpdir(), "wf-exec"),
     starveCheckMs: number = STARVE_CHECK_MS,
+    poolWaitPollMs: number = POOL_WAIT_POLL_MS,
   ) {
+    this.poolWaitPollMs = poolWaitPollMs;
     this.pool = pool;
     this.runDir = runDir;
     this.starveCheckMs = starveCheckMs;
@@ -153,6 +216,42 @@ export class Executor {
       ...result,
       duration_ms: Math.round(performance.now() - started) - (result.wait_ms ?? 0),
     };
+  }
+
+  /**
+   * The deadline clock of a run of `ctx`'s session: its `wf-run` waiters stretch the `timeout`.
+   * `waitFile` keeps the counted wait with the run, so `adopt` after a restart resumes from it.
+   */
+  private _clock(
+    start: number,
+    timeout: number,
+    ctx: ExecContext | undefined,
+    waitFile: string,
+  ): DeadlineClock {
+    const sid = ctx?.sessionId;
+    return new DeadlineClock(
+      start,
+      timeout,
+      sid ? () => this.pool.waitingSince(sid, process.pid) : undefined,
+      Executor._readWait(waitFile),
+      waited => {
+        try {
+          fs.writeFileSync(waitFile, String(waited));
+        } catch {
+          /* the run's files are gone: nothing to keep the count for */
+        }
+      },
+    );
+  }
+
+  /** The pool wait a run's file records (ms); 0 when none. */
+  private static _readWait(file: string): number {
+    try {
+      const n = Number(fs.readFileSync(file, "utf8"));
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
   }
 
   /** Kill every foreground exec group still running for the session and withdraw its lease waits. */
@@ -298,7 +397,11 @@ export class Executor {
         detached,
       );
       failed = !result.success;
-      return { ...result, wait_ms, threads_granted: got.lease.threads };
+      return {
+        ...result,
+        wait_ms: wait_ms + (result.wait_ms ?? 0),
+        threads_granted: got.lease.threads,
+      };
     } finally {
       await got.lease.release({ failed });
     }
@@ -593,15 +696,30 @@ export class Executor {
       };
 
       let killedAt: number | undefined;
-      const timer = setTimeout(() => {
-        killed = true;
-        killedAt = Date.now();
-        killGroup("SIGTERM");
-      }, timeout);
+      const clock = this._clock(Date.now(), timeout, ctx, `${files.rc}.wait`);
+      let timer: NodeJS.Timeout;
+      const check = () => {
+        const now = Date.now();
+        const deadline = clock.tick(now);
+        if (now >= deadline) {
+          killed = true;
+          killedAt = now;
+          killGroup("SIGTERM");
+          return;
+        }
+        // without a session there is no pool wait to watch: sleep to the plain deadline
+        const step = ctx?.sessionId
+          ? Math.min(deadline - now, this.poolWaitPollMs)
+          : deadline - now;
+        timer = setTimeout(check, step);
+      };
+      timer = setTimeout(check, ctx?.sessionId ? Math.min(timeout, this.poolWaitPollMs) : timeout);
 
       const finish = (result: ActionResult) => {
         this._track(ctx?.sessionId, child.pid, false);
         clearTimeout(timer);
+        // the pool wait of the command is not its run: it is recorded beside duration_ms
+        if (clock.waited > 0) result = { ...result, wait_ms: clock.waited };
         // a run that failed to spawn has no process to take over: its files go too
         if (!detached || !child.pid) Executor.discardRun(files);
         // ast-grep-ignore: then-without-catch -- `recorded` cannot reject: its failure is caught where it is made
@@ -667,10 +785,21 @@ export class Executor {
   ): Promise<ActionResult | null> {
     const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
     const started = Date.parse(run.started_at);
-    const done = (exit_code: number, error?: string): ActionResult => ({
-      ...Executor._runResult(run, maxOutput, exit_code, error),
-      duration_ms: Math.max(0, Date.now() - started),
-    });
+    // the pool wait of the command, counted from this server's takeover on
+    const clock = this._clock(
+      started,
+      state.timeout ?? DEFAULT_EXEC_TIMEOUT,
+      ctx,
+      `${run.rc}.wait`,
+    );
+    const done = (exit_code: number, error?: string): ActionResult => {
+      const waited = clock.waited;
+      return {
+        ...Executor._runResult(run, maxOutput, exit_code, error),
+        duration_ms: Math.max(0, Date.now() - started - waited),
+        ...(waited > 0 ? { wait_ms: waited } : {}),
+      };
+    };
     const alive = () => Executor.sameBoot(run) && isGroupAlive(run.pgid);
 
     const first = Executor._readExitCode(run.rc);
@@ -681,7 +810,6 @@ export class Executor {
       return late === undefined ? null : done(late);
     }
 
-    const deadline = started + (state.timeout ?? DEFAULT_EXEC_TIMEOUT);
     this._track(ctx?.sessionId, run.pgid, true);
     try {
       let killedAt: number | undefined;
@@ -692,6 +820,7 @@ export class Executor {
         if (code !== undefined) return done(code);
         if (ended) return done(1, NO_EXIT_CODE);
         const now = Date.now();
+        const deadline = clock.tick(now);
         if (killedAt === undefined && now >= deadline) {
           killedAt = now;
           killProcessGroup(run.pgid, "SIGTERM");
@@ -750,7 +879,8 @@ export class Executor {
 
   /** Remove a run's files (a missing one is fine). */
   static discardRun(run: Pick<DetachedRun, "out" | "err" | "rc">): void {
-    for (const f of [run.out, run.err, run.rc, `${run.rc}.tmp`]) fs.rmSync(f, { force: true });
+    for (const f of [run.out, run.err, run.rc, `${run.rc}.tmp`, `${run.rc}.wait`])
+      fs.rmSync(f, { force: true });
   }
 
   /** The run started under this boot of the machine, so its pgid still names it. */

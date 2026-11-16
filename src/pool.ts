@@ -884,6 +884,27 @@ export class Pool {
     };
   }
 
+  /**
+   * When the earliest live waiter of `sessionId` arrived (ms since epoch), read from `pool.json`
+   * without an admission pass or a write; undefined: none queued. A `wf-run` inside a session's
+   * exec queues under that session's id, so this is how the exec sees its command's pool wait.
+   * Waiters of `exceptPid` (the engine's own lease waits: a sibling shard or exec) are not the
+   * command's and do not count.
+   */
+  waitingSince(sessionId: string, exceptPid?: number): number | undefined {
+    const fp = path.join(this.dir, POOL_FILE);
+    let raw: string;
+    try {
+      raw = fs.readFileSync(fp, "utf8");
+    } catch {
+      return undefined;
+    }
+    const mine = readState(raw, fp).waiting.filter(
+      e => e.session_id === sessionId && e.pid !== exceptPid && this._probes.isAlive(e.pid),
+    );
+    return mine.length === 0 ? undefined : Math.min(...mine.map(e => e.arrived));
+  }
+
   /** Reap dead entries, grant what fits, and report the pool. */
   status(): Promise<PoolView> {
     return this._pass();

@@ -10,6 +10,7 @@ import {
   staleness,
 } from "./stale.js";
 import { registerTools } from "./tools.js";
+import { POOL_WAIT_CEILING_FACTOR } from "./types.js";
 import { InMemoryStorage, cleanupDir, createTestLoader } from "./test-helpers.js";
 import type { SessionState, StateDefinition } from "./types.js";
 
@@ -50,8 +51,11 @@ describe("staleAfter: per state, else by type", () => {
       STALE_AFTER_DEFAULTS.exec,
     );
     expect(staleAfter({ type: "exec", command: "x", timeout: 7_200_000 })).toBe(
-      7200 + STALE_EXEC_GRACE_S,
+      7200 * POOL_WAIT_CEILING_FACTOR + STALE_EXEC_GRACE_S,
     );
+    // a plain exec under a long timeout is not STALE inside its stretched deadline
+    const plain: StateDefinition = { type: "exec", command: "x", timeout: 1_800_000 };
+    expect(staleness(session(), plain, none, T0 + 3700 * 1000, true)).toBeUndefined();
   });
 
   it("an explicit stale_after wins, 0 = never; a terminal state is never stale", () => {

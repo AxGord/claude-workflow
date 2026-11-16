@@ -5,6 +5,9 @@ import { z } from "zod";
 /** `threads: "budget"` asks for the pool's whole budget as configured when the request is made; a later raise of `budget` does not grow a waiting or held lease. */
 export const RESOURCE_THREADS_BUDGET = "budget";
 
+/** An exec's deadline stretches by its command's pool wait, up to this many times its `timeout`. */
+export const POOL_WAIT_CEILING_FACTOR = 4;
+
 /** A named lock: one word, no whitespace (`port:3000`, `ios-simulator`). */
 export const LOCK_NAME_PATTERN = /^\S+$/;
 
@@ -190,6 +193,7 @@ export const StateDefinitionSchema = z
     // exec
     command: z.string().optional(),
     cwd: z.string().optional(),
+    // ms; counts the run, not a pool wait (its own lease's, or its session's `wf-run` waiter's, up to 4x)
     timeout: z.number().positive().optional(),
     env: z.record(z.string()).optional(),
     background: z.boolean().optional(),
