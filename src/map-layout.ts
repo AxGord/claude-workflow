@@ -25,7 +25,7 @@ export interface MapWorkflow {
 export interface MapOptions {
   /** ms since the epoch: ages and the landed fold are measured against it */
   readonly now: number;
-  /** the room the map has: columns shrink to fit it, never below `G.minCol` */
+  /** the room the map has: columns shrink to fit it, never below `G.fitCol` (or their own width when narrower) */
   readonly width?: number;
   /** a lane to highlight (`/map/<session id>`) */
   readonly highlight?: string;
@@ -53,9 +53,11 @@ export interface MapOptions {
 /** Layout units (px at scale 1). */
 export const G = {
   left: 70,
-  /** the widest a column gets: a column is as wide as its content needs, up to this */
+  /** the widest a column gets: each column is as wide as its own content needs, between `minCol` and this */
   col: 230,
-  minCol: 120,
+  minCol: 64,
+  /** the least a column shrinks to when the room is short: a column already narrower keeps its width */
+  fitCol: 120,
   /** the most steps of a branch a column makes room for, and the widest label it reserves room for */
   roomSteps: 4,
   roomLabel: 72,
@@ -310,7 +312,13 @@ export interface MapLayout {
   readonly next: readonly MapStrip[];
 }
 
-const EFFORT_BARS: Record<string, number> = { low: 1, medium: 2, high: 3, xhigh: 4, max: 4 };
+const EFFORT_BARS: Record<string, number> = {
+  low: 1,
+  medium: 2,
+  high: 3,
+  xhigh: 4,
+  max: 4,
+};
 
 /** A recorded value as text: a string or a number, else '' (event data is untyped). */
 function str(v: unknown): string {
@@ -357,7 +365,10 @@ export function difficultyBar(d: unknown): {
   const n = Number(d);
   if (!difficultyKnown(d)) return { text: "?????", token: difficultyToken(d) };
   const full = Math.min(5, Math.max(1, Math.round(n / 2)));
-  return { text: "▰".repeat(full) + "▱".repeat(5 - full), token: difficultyToken(d) };
+  return {
+    text: "▰".repeat(full) + "▱".repeat(5 - full),
+    token: difficultyToken(d),
+  };
 }
 
 /** The glyph of each task kind: text, none an emoji. */
@@ -412,7 +423,10 @@ const BAR_W = textWidth("?????") + 6;
  * The bar is drawn exactly into its room: the font's `▰▱` are wider than the average glyph the room is
  * measured with, and an unfitted bar ran under the kind mark after it.
  */
-const BAR_FIT = { textLength: BAR_W - 6, lengthAdjust: "spacingAndGlyphs" } as const;
+const BAR_FIT = {
+  textLength: BAR_W - 6,
+  lengthAdjust: "spacingAndGlyphs",
+} as const;
 
 /** The room the kind mark takes after the bar: one cell and a gap, drawn or blank. */
 const KIND_W = textWidth("◆") + 6;
@@ -579,7 +593,11 @@ function pickSteps(steps: readonly StepIn[], max: number): StepIn[] {
       const hidden = steps.filter(st => st !== shown[0] && !kept.includes(st));
       shown = [
         shown[0],
-        { name: "…", kind: "done", title: hidden.map(st => st.name).join(", ") },
+        {
+          name: "…",
+          kind: "done",
+          title: hidden.map(st => st.name).join(", "),
+        },
         ...kept,
       ];
     }
@@ -646,6 +664,20 @@ interface LaneInput {
   children: FoldedSession[];
 }
 
+/** The station a child branch hangs from: its agent's step when that is a station the parent stood at, else where the parent stood when it started. */
+function branchStation(
+  child: FoldedSession,
+  visits: readonly Visit[],
+  index: ReadonlyMap<string, number>,
+): number {
+  const at = visitAt(visits, child.started);
+  const stepState = (child.agents[0]?.step as { state?: unknown } | null | undefined)?.state;
+  const stepI = typeof stepState === "string" ? index.get(stepState) : undefined;
+  return stepI !== undefined && visits.some(v => v.pass === at.pass && v.i === stepI)
+    ? stepI
+    : at.i;
+}
+
 function layLane(
   input: LaneInput,
   stations: readonly MapStation[],
@@ -673,10 +705,7 @@ function layLane(
     .sort((a, b) => (a.started ?? "").localeCompare(b.started ?? ""))
     .map(child => {
       const at = visitAt(visits, child.started);
-      const stepState = (child.agents[0]?.step as { state?: unknown } | null | undefined)?.state;
-      const stepI = typeof stepState === "string" ? index.get(stepState) : undefined;
-      const i =
-        stepI !== undefined && visits.some(v => v.pass === at.pass && v.i === stepI) ? stepI : at.i;
+      const i = branchStation(child, visits, index);
       const slot = `${at.pass}:${i}`;
       const row = branchRows.get(slot) ?? 0;
       branchRows.set(slot, row + 1);
@@ -754,7 +783,13 @@ function layLane(
     ]);
   };
   const open = new Set(opts.open ?? []);
-  const groups: { key: string; first: number; last: number; open: boolean; label: string }[] = [];
+  const groups: {
+    key: string;
+    first: number;
+    last: number;
+    open: boolean;
+    label: string;
+  }[] = [];
   for (let p = 0; p < passCount; ) {
     const sh = shapeOf(p);
     let q = p;
@@ -771,7 +806,13 @@ function layLane(
           ? ` · ${age(lo)}${age(hi) === age(lo) ? "" : "–" + age(hi)}`
           : "";
       const key = `${s.id}:g${p}`;
-      groups.push({ key, first: p, last: q, open: open.has(key), label: `×${q - p + 1}${range}` });
+      groups.push({
+        key,
+        first: p,
+        last: q,
+        open: open.has(key),
+        label: `×${q - p + 1}${range}`,
+      });
     }
     p = q + 1;
   }
@@ -860,7 +901,12 @@ function layLane(
       x1: xs[vs[k].i],
       x2: xs[v.i],
     }));
-    passes.push({ index: p, y: passY[p], stops: stopsOf.get(p)?.stops ?? [], segments });
+    passes.push({
+      index: p,
+      y: passY[p],
+      stops: stopsOf.get(p)?.stops ?? [],
+      segments,
+    });
   }
 
   // a folded group draws the loop that closes its last round (from the row of its first); an open
@@ -1034,46 +1080,60 @@ function classify(
     if (!s.workflow) continue;
     if (dispatches(s)) dispatchers.add(s.id);
     else if (isRoot(s) && workflows[s.workflow]?.map !== false)
-      lanes.push({ s, children: (childrenOf.get(s.id) ?? []).filter(c => c.workflow) });
+      lanes.push({
+        s,
+        children: (childrenOf.get(s.id) ?? []).filter(c => c.workflow),
+      });
   }
   for (const d of dispatchers)
     for (const s of childrenOf.get(d) ?? [])
       if (s.workflow && !dispatchers.has(s.id) && workflows[s.workflow]?.map !== false)
-        lanes.push({ s, children: (childrenOf.get(s.id) ?? []).filter(c => c.workflow) });
+        lanes.push({
+          s,
+          children: (childrenOf.get(s.id) ?? []).filter(c => c.workflow),
+        });
   return { lanes, dispatchers };
 }
 
 /**
- * The width a band's columns need: the widest of its station labels and of the branches its lanes
- * hung (their chip text, their first few steps side by side with the widest label each), never past `G.col`.
+ * The width each column of a band needs, left to right: its own station label, the branches hung
+ * from it (their chip text, their first few steps side by side with the widest label each) and its
+ * share of a loop label spanning it. Each is at least `G.minCol` and never past `G.col`.
  */
-function columnNeed(
+function columnNeeds(
   stations: readonly MapStation[],
   lanes: readonly LaneInput[],
   workflows: Readonly<Record<string, MapWorkflow>>,
   now: number,
   clock: (ms: number) => string,
-): number {
-  let need = Math.max(...stations.map(st => textWidth(st.name, G.charW) + 8));
+): number[] {
+  const names = stations.map(st => textWidth(st.name, G.charW) + 8);
+  const need = [...names];
   const index = new Map(stations.map((st, i) => [st.name, i]));
   for (const { s, children } of lanes) {
-    // a loop back one column draws its label over that column: `↺ name`, with the count and the range once rounds repeat
-    // a label spanning several columns is counted across them: its width shared by the columns it crosses
-    const back = new Map<string, { times: number; span: number }>();
+    const { visits } = walk(s, index);
+    // a loop back draws its label over the columns it crosses: `↺ name`, with the count and the range once rounds repeat;
+    // its width is shared by them
+    const back = new Map<string, { times: number; from: number; to: number }>();
     for (const t of ownMoves(s)) {
-      const span = (index.get(t.from) ?? -1) - (index.get(String(t.to)) ?? Infinity);
-      if (span < 0) continue;
+      const from = index.get(t.from) ?? -1;
+      const to = index.get(String(t.to)) ?? Infinity;
+      if (from - to < 0) continue;
       const prev = back.get(String(t.name));
+      const span = Math.max(1, from - to);
+      const kept = prev !== undefined && prev.from - prev.to <= span ? prev : { from, to };
       back.set(String(t.name), {
         times: (prev?.times ?? 0) + 1,
-        span: Math.min(prev?.span ?? Infinity, Math.max(1, span)),
+        from: kept.from,
+        to: kept.to,
       });
     }
-    for (const [name, { times, span }] of back)
-      need = Math.max(
-        need,
-        (textWidth(`↺ ${name}${times > 1 ? G.loopTag : ""}`, G.chipW) + 8) / span,
-      );
+    for (const [name, { times, from, to }] of back) {
+      const span = Math.max(1, from - to);
+      const share = (textWidth(`↺ ${name}${times > 1 ? G.loopTag : ""}`, G.chipW) + 8) / span;
+      for (let i = Math.max(0, to); i < Math.max(0, to) + span && i < need.length; i++)
+        need[i] = Math.max(need[i], share);
+    }
     for (const child of children) {
       const steps = branchSteps(child, workflows[child.workflow ?? ""]?.stations, now, clock);
       const shown = Math.min(G.roomSteps, steps.length);
@@ -1096,14 +1156,19 @@ function columnNeed(
       const chip = agent
         ? chipText(agent.model, agent.effort, roleOf(child.workflow))
         : `script · ${roleOf(child.workflow)}`;
-      need = Math.max(
-        need,
-        2 * G.stepPad + G.branchInset + Math.max(0, shown - 1) * label,
-        textWidth(chip, G.chipW) + G.chipPad,
-      );
+      const i = branchStation(child, visits, index);
+      // the last station's branch runs into the plaque gap, which does not grow
+      if (i < need.length - 1)
+        need[i] = Math.max(
+          need[i],
+          2 * G.stepPad + G.branchInset + Math.max(0, shown - 1) * label,
+          textWidth(chip, G.chipW) + G.chipPad,
+        );
     }
   }
-  return Math.min(G.col, need);
+  return need.map((w, i) =>
+    i === need.length - 1 ? Math.min(G.col, w) : Math.max(G.minCol, Math.min(G.col, w)),
+  );
 }
 
 /** The columns of a band: the workflow's stations, else the states its lanes visited, in first-visit order (one `start` column when none has moved). */
@@ -1225,7 +1290,11 @@ function draftRail(
   const items: { x0: number; x1: number }[] = [
     { x0: G.left - 50, x1: G.left - 50 + textWidth(label, G.chipW) },
   ];
-  if (userFit) items.push({ x0: userX + 12, x1: userX + 12 + textWidth(userFit.text, G.chipW) });
+  if (userFit)
+    items.push({
+      x0: userX + 12,
+      x1: userX + 12 + textWidth(userFit.text, G.chipW),
+    });
   const first = items.length;
   const order = asks.map((_, i) => i).sort((i, j) => asks[i].x - asks[j].x || i - j);
   for (const i of order) {
@@ -1314,13 +1383,14 @@ export function layout(
       opts.now - Math.max(...group.map(l => time(l.s.ended))) > hideAfter;
     if (idle) continue;
     const n = stations.length;
-    const need = columnNeed(stations, group, workflows, opts.now, opts.clock ?? localClock);
-    const fit =
-      opts.width !== undefined
-        ? Math.floor((opts.width - G.left - G.plaqueGap - G.plaqueMax) / Math.max(1, n - 1))
-        : G.col;
-    const col = Math.max(G.minCol, Math.min(need, fit));
-    const xs = stations.map((_, i) => G.left + i * col);
+    const needs = columnNeeds(stations, group, workflows, opts.now, opts.clock ?? localClock);
+    const gaps = needs.slice(0, n - 1);
+    const sum = gaps.reduce((a, b) => a + b, 0);
+    const room = opts.width !== undefined ? opts.width - G.left - G.plaqueGap - G.plaqueMax : sum;
+    const widths = needs.map((w, i) =>
+      i < n - 1 && sum > room ? Math.max(Math.min(w, G.fitCol), Math.floor((w * room) / sum)) : w,
+    );
+    const xs = stations.map((_, i) => G.left + widths.slice(0, i).reduce((a, b) => a + b, 0));
     const plaqueX = xs[n - 1] + G.plaqueGap;
     const bandWidth = plaqueX + G.plaqueMax + 20;
     width = Math.max(width, bandWidth);
@@ -1342,11 +1412,28 @@ export function layout(
       landedY = by;
       by += G.sectionLabel;
       if (earlierLanes.length > 0) {
-        const newest = [...earlierLanes].reverse();
+        // a line that ran twice shows once, by its latest run
+        const seen = new Set<string>();
+        const newest = [...earlierLanes].reverse().filter(l => {
+          const id = laneTitle(l.s);
+          if (seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        });
+        const lead = "landed earlier:";
+        // as many chips as the band's width holds, the rest in `+N`
+        const limit = bandWidth - 20 - textWidth(`+${newest.length}`) - 8;
+        let at = 20 + textWidth(lead) + 10;
+        let shown = 0;
+        for (const l of newest.slice(0, G.earlierShown)) {
+          at += LEAD_W + textWidth(laneTitle(l.s), G.titleW) + 20 + 8;
+          if (at > limit && shown > 0) break;
+          shown++;
+        }
         earlier = {
           y: by,
-          lead: "landed earlier:",
-          items: newest.slice(0, G.earlierShown).map(l => ({
+          lead,
+          items: newest.slice(0, shown).map(l => ({
             key: l.s.id,
             id: laneTitle(l.s),
             c: l.s.outcome === "completed" ? "--ok" : "--bad",
@@ -1354,7 +1441,7 @@ export function layout(
             barC: difficultyToken(l.s.difficulty),
             kind: kindMark(taskLineOf(l.s.task, opts.kinds)),
           })),
-          more: Math.max(0, newest.length - G.earlierShown),
+          more: newest.length - shown,
         };
         by += G.strip;
       }
@@ -1385,7 +1472,7 @@ export function layout(
           body,
           stations,
           xs,
-          col,
+          widths[n - 1],
           bandWidth,
           opts.now,
         );
@@ -1427,7 +1514,7 @@ export function layout(
       height,
       width: bandWidth,
       stations: stations.map((st, i) => {
-        const cut = fitText(st.name, col - 8, G.charW);
+        const cut = fitText(st.name, widths[i] - 8, G.charW);
         return {
           ...st,
           x: xs[i],
@@ -1536,7 +1623,13 @@ function plaqueEls(key: string, p: MapPlaque): SceneEl[] {
       key: `${key}:box`,
       tag: "rect",
       cls: `m-plaque${cls ? " " + cls : ""}`,
-      attrs: { x, y: y - G.plaqueH / 2, width, height: G.plaqueH, rx: G.plaqueH / 2 },
+      attrs: {
+        x,
+        y: y - G.plaqueH / 2,
+        width,
+        height: G.plaqueH,
+        rx: G.plaqueH / 2,
+      },
       ...(c ? { c } : {}),
     },
     ...bar,
@@ -1584,7 +1677,13 @@ function chipEls(key: string, chip: MapChip, extra = ""): SceneEl[] {
 
 function stripEls(key: string, s: MapStrip, x: number): SceneEl[] {
   const els: SceneEl[] = [
-    { key: `${key}:lead`, tag: "text", cls: "m-lead", attrs: { x, y: s.y + 15 }, text: s.lead },
+    {
+      key: `${key}:lead`,
+      tag: "text",
+      cls: "m-lead",
+      attrs: { x, y: s.y + 15 },
+      text: s.lead,
+    },
   ];
   let at = x + textWidth(s.lead) + 10;
   for (const it of s.items) {
@@ -1653,7 +1752,13 @@ function nodeEl(
         key,
         tag: "rect",
         cls: cls + " m-script",
-        attrs: { x: x - size, y: y - size, width: 2 * size, height: 2 * size, rx: 2 },
+        attrs: {
+          x: x - size,
+          y: y - size,
+          width: 2 * size,
+          height: 2 * size,
+          rx: 2,
+        },
         c,
       }
     : { key, tag: "circle", cls, attrs: { cx: x, cy: y, r: size }, c };
@@ -1908,19 +2013,34 @@ function bandScene(band: MapBand): SceneGroup {
           key: `${k}:user`,
           tag: "rect",
           cls: "m-user",
-          attrs: { x: rail.user.x - 6, y: rail.y - 6, width: 12, height: 12, rx: 2 },
+          attrs: {
+            x: rail.user.x - 6,
+            y: rail.y - 6,
+            width: 12,
+            height: 12,
+            rx: 2,
+          },
         },
         {
           key: `${k}:user:label`,
           tag: "text",
           cls: "m-ask-label",
-          attrs: { x: rail.user.x + 12, y: rail.y - 7 - rail.user.row * G.textRow },
+          attrs: {
+            x: rail.user.x + 12,
+            y: rail.y - 7 - rail.user.row * G.textRow,
+          },
           text: rail.user.label,
           ...(rail.user.title !== undefined ? { title: rail.user.title } : {}),
         },
       );
   }
-  return { key: k, cls: "m-band", y: band.y, els, groups: band.lanes.map(laneScene) };
+  return {
+    key: k,
+    cls: "m-band",
+    y: band.y,
+    els,
+    groups: band.lanes.map(laneScene),
+  };
 }
 
 /** The keyed primitives of a layout: one group per band, one per lane inside it. */
@@ -1928,7 +2048,13 @@ export function scene(map: MapLayout): SceneGroup {
   const els: SceneEl[] = map.next.flatMap(n =>
     stripEls(n.queue ? `next:${n.queue}` : "next", n, 20),
   );
-  return { key: "map", cls: "m-root", y: 0, els, groups: map.bands.map(bandScene) };
+  return {
+    key: "map",
+    cls: "m-root",
+    y: 0,
+    els,
+    groups: map.bands.map(bandScene),
+  };
 }
 
 export type QueueNodeKind = "done" | "running" | "ready" | "waiting" | "failed";

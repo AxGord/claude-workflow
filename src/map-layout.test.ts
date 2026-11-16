@@ -147,7 +147,7 @@ const WORKFLOWS: Record<string, MapWorkflow> = {
 };
 
 // the fixture's columns are as wide as its content needs (`columnNeed`), not `G.col`
-const X = (i: number): number => G.left + i * colOf(M);
+const X = (i: number): number => M.bands[0].stations[i].x;
 const COL = { queue: 0, recon: 1, work: 2, gate: 3, review: 4, land: 5, done: 6 } as const;
 const x = (s: keyof typeof COL): number => X(COL[s]);
 
@@ -164,10 +164,6 @@ function map(events: readonly WfEvent[] = log, extra = {}): MapLayout {
 }
 
 const M = map();
-function colOf(m: MapLayout): number {
-  const xs = m.bands[0].stations.map(s => s.x);
-  return xs[1] - xs[0];
-}
 const band = M.bands[0];
 const lane = (id: string): MapLane => band.lanes.find(l => l.session === id)!;
 
@@ -379,16 +375,18 @@ describe("layout of the fixture event log", () => {
   it("columns shrink to the room, never below the minimum", () => {
     const narrow = map(log, { width: 900 });
     const xs = narrow.bands[0].stations.map(s => s.x);
-    expect(xs[1] - xs[0]).toBe(G.minCol);
-    const wide = map(log, { width: 1500 });
-    const ws = wide.bands[0].stations.map(s => s.x);
-    expect(ws[1] - ws[0]).toBe(Math.floor((1500 - G.left - G.plaqueGap - G.plaqueMax) / 6));
+    expect(xs[1] - xs[0]).toBeGreaterThanOrEqual(Math.min(G.fitCol, X(1) - X(0)));
+    expect(xs[6] - xs[0]).toBeLessThanOrEqual(M.bands[0].stations[6].x - X(0));
   });
 
-  it("a column is as wide as its content needs: narrower than the old fixed width, wide enough for every chip", () => {
-    const col = colOf(M);
-    expect(col).toBeLessThan(G.col);
-    expect(col).toBeGreaterThanOrEqual(G.minCol);
+  it("a column is as wide as its own content needs: none past the cap, none under the minimum, wide enough for every chip", () => {
+    const xs = band.stations.map(s => s.x);
+    const gaps = xs.slice(1).map((v, i) => v - xs[i]);
+    for (const g of gaps) {
+      expect(g).toBeLessThanOrEqual(G.col);
+      expect(g).toBeGreaterThanOrEqual(G.minCol);
+    }
+    expect(Math.min(...gaps)).toBeLessThan(Math.max(...gaps));
     expect(M.width).toBeLessThan(G.left + 6 * G.col + 80 + G.plaqueMax + 20);
     expect(M.width).toBe(band.plaqueX + G.plaqueMax + 20);
     // a branch chip is never cut, nor a station label
@@ -396,7 +394,7 @@ describe("layout of the fixture event log", () => {
     for (const st of band.stations) expect(st.title).toBeUndefined();
   });
 
-  it("a long station name widens every column of its band, up to the cap", () => {
+  it("a long station name widens its own column, up to the cap", () => {
     const flows = {
       ...WORKFLOWS,
       pipe: {
@@ -407,7 +405,10 @@ describe("layout of the fixture event log", () => {
       },
     };
     const m = layout(fold([...log]), flows, { now: NOW });
-    expect(colOf(m)).toBe(G.col);
+    const xs = m.bands[0].stations.map(s => s.x);
+    // the long name widens its own column to the cap and leaves the others at their own width
+    expect(xs[2] - xs[1]).toBe(G.col);
+    expect(xs[3] - xs[2]).toBe(X(3) - X(2));
   });
 
   it("a plaque never passes 340 px: a long id is cut with an ellipsis", () => {
@@ -621,7 +622,7 @@ describe("the scene", () => {
     expect(all.find(g => g.key === "lane:C")!.y).toBe(lane("C").y);
   });
 
-  it("two lanes of one task id (a failed run, then its retry) keep their keys apart", () => {
+  it("two lanes of one task id (a failed run, then its retry): the earlier strip shows the latest, keys stay apart", () => {
     const more = [...log];
     for (const [id, outcome] of [
       ["R-fail", "failed"],
@@ -647,10 +648,51 @@ describe("the scene", () => {
       );
     }
     const m = map(more);
-    expect(m.bands[0].earlier!.items.filter(i => i.id === "DUP-1")).toHaveLength(2);
+    // a line that ran twice shows once, by its latest run
+    const dup = m.bands[0].earlier!.items.filter(i => i.id === "DUP-1");
+    expect(dup.map(i => [i.key, i.c])).toEqual([["R-retry", "--ok"]]);
     const keyed = groups(scene(m));
     const keys = [...keyed.map(g => g.key), ...keyed.flatMap(g => g.els).map(e => e.key)];
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("the landed-earlier strip fits its band: the chips that do not fit fold into +N", () => {
+    const more = [...log];
+    for (let k = 0; k < 8; k++)
+      more.push(
+        {
+          seq: ++seq,
+          run: "r1",
+          ts: at("07:00"),
+          kind: "session_start",
+          session: `E${k}`,
+          data: { workflow: P, parent: "D", task: `A-LONG-TASK-NAME-${k}` },
+        },
+        {
+          seq: ++seq,
+          run: "r1",
+          ts: at("07:10"),
+          kind: "session_end",
+          session: `E${k}`,
+          data: { outcome: "completed" },
+        },
+      );
+    const b = map(more).bands[0];
+    const e = b.earlier!;
+    expect(e.items.length).toBeLessThan(8);
+    expect(e.items.length + e.more).toBeGreaterThanOrEqual(8);
+    const strip = groups(scene(map(more)))
+      .flatMap(g => g.els)
+      .filter(el => el.key.includes(":earlier:"));
+    for (const el of strip) expect(Number(el.attrs.x)).toBeLessThan(b.width - 20);
+  });
+
+  it("one wide branch widens only its own column", () => {
+    const xs = band.stations.map(s => s.x);
+    const gaps = xs.slice(1).map((v, i) => v - xs[i]);
+    const wide = gaps.filter(g => g > G.minCol);
+    expect(wide.length).toBeGreaterThan(0);
+    expect(gaps.some(g => g < Math.max(...gaps))).toBe(true);
   });
 
   it("colours only through tokens; a new segment of the main line draws itself", () => {
