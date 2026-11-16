@@ -9,6 +9,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
 
 const VUE = read("docs/.vitepress/theme/MapReplay.vue");
+const SCENE = read("docs/.vitepress/theme/Scene.vue");
+const STORE = read("docs/.vitepress/theme/replay-store.ts");
+const TRANSPORT = read("docs/.vitepress/theme/Transport.vue");
 const THEME = read("docs/.vitepress/theme/index.ts");
 const CONFIG = read("docs/.vitepress/config.mts");
 const MAP = read("dashboard/map.js");
@@ -18,8 +21,9 @@ describe("the landing's replay runs the dashboard map's own code", () => {
   it("lays out with the map's fold and layout from src/, no copy", () => {
     expect(VUE).toContain('from "../../../src/event-fold"');
     expect(VUE).toContain('from "../../../src/map-layout"');
-    expect(VUE).toContain("fold(events.slice(0, rowsUntil(file, at.value)))");
-    expect(VUE).toContain("layout(folded, file.workflows,");
+    expect(VUE).toContain(
+      "layout(fold(events.slice(0, rowsUntil(file, shared.at))), file.workflows, {",
+    );
     expect(VUE).toContain("scene(map)");
     expect(VUE).not.toMatch(/function (layout|fold|scene)\b/);
   });
@@ -48,32 +52,40 @@ describe("the landing's replay runs the dashboard map's own code", () => {
 });
 
 describe("the replay player", () => {
-  it("has play / pause, a speed per SPEEDS (1x to 60x) and a scrub range, on one clock", () => {
-    expect(VUE).toContain('@click="toggle"');
-    expect(VUE).toContain('v-for="s in speeds"');
-    expect(VUE).toContain("const speeds = SPEEDS");
-    expect(VUE).toContain('type="range"');
-    expect(VUE).toContain('@input="scrub"');
-    expect(VUE).toContain("advance(at.value,");
-    expect(VUE).toContain("requestAnimationFrame(frame)");
+  it("one transport bar under the stage: play / pause, a speed per SPEEDS (1x to 60x) and a scrub range, on one clock", () => {
+    expect(TRANSPORT).toContain('@click="toggle"');
+    expect(TRANSPORT).toContain('v-for="s in speeds"');
+    expect(TRANSPORT).toContain("const speeds = SPEEDS");
+    expect(TRANSPORT).toContain('type="range"');
+    expect(TRANSPORT).toContain('@input="scrub"');
+    expect(STORE).toContain("advance(shared.at,");
+    expect(STORE).toContain("requestAnimationFrame(frame)");
+    // the map pane has no controls of its own: it only reads the clock
+    expect(VUE).not.toContain('type="range"');
+    expect(VUE).not.toContain("requestAnimationFrame(frame)");
+    expect(SCENE).toContain("<Transport />");
   });
 
   it("loads one JSON file from the site itself: no server", () => {
-    expect(VUE).toContain('fetch(withBase("/replay/anyparse.json"))');
-    expect(VUE).not.toContain("EventSource");
-    expect(VUE).not.toContain("/api/");
+    expect(SCENE).toContain('fetch(withBase("/replay/anyparse.json"))');
+    for (const f of [VUE, SCENE, STORE]) {
+      expect(f).not.toContain("EventSource");
+      expect(f).not.toContain("/api/");
+    }
   });
 
-  it("follows the newest lane until the reader scrolls: no timed window that swallows their scroll", () => {
-    expect(VUE).toContain("follow = followsBottom(el.scrollHeight, el.scrollTop, el.clientHeight)");
-    expect(VUE).toContain("if (follow) wrap.value.scrollTop = wrap.value.scrollHeight");
-    expect(VUE).not.toContain("ownScroll");
-    expect(VUE).not.toContain('behavior: "smooth"');
+  it("the map never scrolls: scaled to its frame by the viewBox, a camera on the running lanes when it is taller", () => {
+    expect(VUE).toContain("fitView(map.width, map.height, width, height)");
+    expect(VUE).toContain("cameraTop(map, view.height)");
+    expect(VUE).toContain('svg.value.setAttribute("viewBox"');
+    expect(VUE).toContain("overflow: hidden");
+    expect(VUE).not.toContain("scrollTop");
+    expect(VUE).not.toContain("overflow: auto");
   });
 
   it("starts when it comes into view and not for a reader who asks for less motion", () => {
-    expect(VUE).toContain("IntersectionObserver");
-    expect(VUE).toContain("prefers-reduced-motion: reduce");
+    expect(SCENE).toContain("IntersectionObserver");
+    expect(SCENE).toContain("prefers-reduced-motion: reduce");
   });
 });
 
@@ -112,7 +124,8 @@ describe("docs:build compiles the landing with the replay", () => {
     );
     const page = fs.readFileSync(path.join(out, "index.html"), "utf8");
     expect(page).toContain("map-replay");
-    expect(page).toContain("mr-play");
+    expect(page).toContain("tr-play");
+    expect(page).toContain("stage-frame");
     expect(fs.readFileSync(path.join(out, "replay", "anyparse.json"), "utf8")).toBe(
       read("docs/public/replay/anyparse.json"),
     );

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Re-records the landing page's scene (the terminal plan pane beside the live map, both driven by the replay
+// Re-records the landing page's scene (the live map with the Claude Code window and its plan pane over it, driven by the replay
 // of docs/public/replay/anyparse.json) into docs/media/scene.mp4 (1920x1080, for the voiced video) and
 // docs/media/scene.gif (960 px wide, under 4 MB, for the README and social posts). One command:
 //

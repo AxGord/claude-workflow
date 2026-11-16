@@ -1,6 +1,7 @@
 // The landing page's scene as a headless page the recorders step by hand: builds the VitePress site, serves
 // the build, opens `/?record` in headless Chromium (the page then hands over a `seek(ms)` hook instead of
-// playing on its own clock) and restyles it so the scene fills a 1920x1080 frame. Shared by
+// playing on its own clock) and restyles it so the scene's stage — the SAME 16:9 stage the landing shows, the map
+// with the Claude Code window over it, drawn at 1920x1080 — fills the frame at scale 1. Shared by
 // scripts/record-scene.mjs (the GIF / mp4) and video/render.mjs (the voiced video): one owner of "draw the scene".
 //
 // Needs: the `playwright` devDependency and its Chromium (`npx playwright install chromium`; or point
@@ -58,18 +59,15 @@ export async function openScene() {
     const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, colorScheme: "dark" });
     await page.goto(url);
     await page.waitForFunction(() => window.__replay !== undefined, null, { timeout: 30000 });
-    // the page chrome goes; the scene fills the frame at 1.5x (a 1280x720 layout drawn at 1920x1080)
+    // the page chrome and the transport bar go; the stage is pinned to the frame at its own 1920x1080 (scale 1)
     await page.addStyleTag({
       content: `
-      .VPNav, .VPLocalNav, .VPHero, .VPFeatures, .VPFooter, .vp-doc, .mr-note, .mr-bar { display: none !important; }
-      .VPContent, .VPHome { padding: 0 !important; margin: 0 !important; }
+      .VPNav, .VPLocalNav, .VPHero, .VPFeatures, .VPFooter, .vp-doc, .transport, .scene-note { display: none !important; }
       html, body { overflow: hidden !important; }
-      .scene { zoom: 1.5; width: 1280px !important; max-width: none !important; height: 720px; margin: 0 !important; padding: 16px !important; box-sizing: border-box; }
-      .scene .mr-wrap { max-height: 688px !important; height: 688px; }
-      .scene { grid-template-columns: 400px 1fr !important; }
-      .scene .term-body { min-height: 650px; }
+      .stage-frame { position: fixed !important; left: 0 !important; top: 0 !important; width: 1920px !important; height: 1080px !important; border: 0 !important; border-radius: 0 !important; z-index: 1000; }
     `,
     });
+    await page.waitForFunction(() => document.querySelector(".stage")?.style.transform === "scale(1)", null, { timeout: 10000 });
     await page.evaluate(() => window.scrollTo(0, 0));
     const durationMs = await page.evaluate(() => window.__replay.durationMs);
     return { page, durationMs, browser, close };

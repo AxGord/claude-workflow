@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { AgentSeen, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
+import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOf, spawnLine, two } from './pane-view'
+import type { Move, PaneAction, PaneEl, PaneNode } from './pane-view'
 
 const PANE = 'workflow-plan'
 const PERIOD_MS = 15000
@@ -22,15 +24,9 @@ const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shap
 const poolCountsAtom = atom({ plugin: 'workflow', key: 'poolCounts' } as const, null, { shape: 'pool-counts-1' })
 /** The Plan tab sections whose fold the person flipped (running, next, lands, failed) and the `+N more` rows whose list the person opened (`next-more`, `waiting-more`, `sessions-more`): none by default, so all sections show but FOLDED_BY_DEFAULT ones, and every capped list stops at its cap. A Landed day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-2' })
-/** Sections that start folded: a click on one unfolds it. Each `+N more` fold row of the pane is one (`next-more`, `waiting-more`, `sessions-more`): closed, the list stops at its cap; open, it lists every row. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
-const FOLDED_BY_DEFAULT = new Set(['failed', 'failed-older', 'next-more', 'waiting-more', 'sessions-more'])
-/** How far back the Landed tree goes: the Cost tab's own range. */
-const LAND_DAYS = 14
 /** The session whose card is open in the Sessions tab ('' none). */
 const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { shape: 'expanded-1' })
 
-/** The engine's own dashboard: its API answers the workflow graphs, its page draws one session's graph. */
-const DASHBOARD = 'http://127.0.0.1:3100'
 const GRAPH_TTL_MS = 5 * 60 * 1000
 const RECENT = 6
 
@@ -122,9 +118,6 @@ function parseSession(text: string): Parsed | null {
     },
   }
 }
-
-/** The Failed section lists the lines that ended within this many days; the rest fold under `+N older`. */
-const FAILED_DAYS = 2
 
 /** One task of the engine's /api/queue answer (describeQueue). */
 type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; ended?: string }
@@ -345,14 +338,6 @@ export function failedSpend(lines: FailedLine[], totals: Map<string, TaskTotals>
   return { usd, parentUsd, missing }
 }
 
-/** `✗ Failed (28) · $41.20 (parent $6.10) · 3 not in the ledger`: the count, the lines' spend, the parent's spend when it has one, how many lines the ledger has no row of (they add 0; `no ledger rows` when none has). */
-export function failedHeading(count: number, spend: FailedSpend | undefined): string {
-  const head = `✗ Failed (${count})`
-  if (!spend || count === 0) return head
-  const measured = count - spend.missing
-  return `${head}${measured > 0 ? ' · ' + usdText(spend.usd) + (spend.parentUsd > 0 ? ` (parent ${usdText(spend.parentUsd)})` : '') : ''}${spend.missing === count ? ' · no ledger rows' : spend.missing > 0 ? ` · ${spend.missing} not in the ledger` : ''}`
-}
-
 type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[]; landed: Map<string, LedgerLand>; totals: Map<string, TaskTotals> }
 const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [], landed: new Map(), totals: new Map() }
 let ledgerRead: Ledger = NO_LEDGER
@@ -372,20 +357,12 @@ async function ledgerAt($: any, dir: string): Promise<Ledger> {
   return ledgerRead
 }
 
-const two = (n: number) => String(n).padStart(2, '0')
-
 /** `HH:MM` of a start, with its `DD.MM ` when it fell on another day than the land (a run across midnight). */
 export function startText(start: number, endAt: string): string {
   const d = new Date(start)
   const day = `${two(d.getDate())}.${two(d.getMonth() + 1)}`
   const hm = `${two(d.getHours())}:${two(d.getMinutes())}`
   return day === endAt.slice(0, 5) ? hm : `${day} ${hm}`
-}
-
-/** `DD.MM` of a moment, in local time: the key of a day of the Landed tree. */
-export function dayOf(ms: number): string {
-  const d = new Date(ms)
-  return `${two(d.getDate())}.${two(d.getMonth() + 1)}`
 }
 
 /** A land's `DD.MM HH:MM` as a moment: the latest year that does not put it past `now` by more than a day (the log is of the last 14 days, so the year only matters around New Year). */
@@ -395,24 +372,6 @@ export function landMs(at: string, now: number): number {
   const year = new Date(now).getFullYear()
   const t = new Date(year, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime()
   return t > now + 24 * 3600 * 1000 ? new Date(year - 1, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime() : t
-}
-
-/** The fold list after a click on `key`: the key leaves the list when it was there, joins it when not. */
-export function foldFlipped(foldedKeys: string[], key: string): string[] {
-  return foldedKeys.includes(key) ? foldedKeys.filter(k => k !== key) : [...foldedKeys, key]
-}
-
-/** A Landed day (`lands-DD.MM`) is open when the person opened it, folded when they folded it, else open only on today. The fold list holds an explicit `+key` / `-key` for a day, never a flip of the default: a default that changes at midnight must not flip a day the person chose. */
-export function landDayOpen(foldedKeys: string[], key: string, today: string): boolean {
-  if (foldedKeys.includes('-' + key)) return false
-  if (foldedKeys.includes('+' + key)) return true
-  return key === today
-}
-
-/** The fold list after a click on a Landed day: the opposite of what it showed, written explicitly. */
-export function landDayToggled(foldedKeys: string[], key: string, today: string): string[] {
-  const wasOpen = landDayOpen(foldedKeys, key, today)
-  return [...foldedKeys.filter(k => k !== '+' + key && k !== '-' + key), (wasOpen ? '-' : '+') + key]
 }
 
 /** The fold list without the signed keys (`+lands-DD.MM` / `-lands-DD.MM`) of days outside `liveDays`: a key kept past its day would, a year on, fold or open the same DD.MM. An empty `liveDays` (a failed git read) drops nothing. */
@@ -435,12 +394,6 @@ export function recentLand(lands: Land[], label: string, at: number, now: number
     if (l.slice === label) return l
   }
   return undefined
-}
-
-/** `$1.23`, `$12.34`, `$123`; `—` when the line has no measured cost (never `$0.00`). */
-export function usdText(usd: number | undefined): string {
-  if (usd === undefined) return '—'
-  return '$' + (usd < 100 ? usd.toFixed(2) : usd.toFixed(0))
 }
 
 /** Each day of the Landed tree: the sum of its landed lines' cost plus the failed and closed lines whose latest run ended that day (a line counts once), how many lines that is and how many were measured. */
@@ -474,12 +427,6 @@ export function daySpends(lands: Land[], spends: Map<string, TaskSpend>, now: nu
   return days
 }
 
-/** A day row's spend: the sum (`—` when no line is measured) and what it includes besides landed lines. */
-export function dayText(d: DaySpend): string {
-  const extra = [d.failed > 0 ? `${d.failed} failed` : '', d.closed > 0 ? `${d.closed} closed` : ''].filter(x => x !== '').join(', ')
-  return `${d.measured === 0 ? '—' : usdText(d.usd)}${extra !== '' ? ` incl. ${extra}` : ''}`
-}
-
 /** The $ sum of the landed lines of the Landed tree: each line once (a line that landed twice has one cost), a line with no spend row adds nothing; undefined when no line is measured. */
 export function landedUsd(lands: Land[]): number | undefined {
   const seen = new Set<string>()
@@ -500,12 +447,6 @@ export function parentUsd(parent: ParentSpend[], now: number, project: string): 
   const since = now - LAND_DAYS * 24 * 3600 * 1000
   const mine = parent.filter(p => p.to >= since && p.project === project)
   return mine.length > 0 ? mine.reduce((a, p) => a + p.usd, 0) : undefined
-}
-
-/** `✓ Landed · 14d (434) · $1234 · parent $310 (25%) · golf-int`: the count, the landed lines' spend (absent when none is measured), the parent's spend and its share of the landed sum (the share absent when there is no landed sum), the land branch when it is not `main`. */
-export function landedHeading(count: number, landed: number | undefined, parent: number | undefined, branch = 'main'): string {
-  const share = landed !== undefined && landed > 0 && parent !== undefined ? ` (${String(Math.round((parent / landed) * 100))}%)` : ''
-  return `✓ Landed · ${LAND_DAYS}d (${count})${landed !== undefined ? ' · ' + usdText(landed) : ''}${parent !== undefined ? ' · parent ' + usdText(parent) + share : ''}${branch !== 'main' ? ' · ' + branch : ''}`
 }
 
 /** The repo a queue file lives in (`<repo>/.claude/batch/<file>`); the file itself when it is not under one. */
@@ -716,14 +657,6 @@ async function build($: any): Promise<Snapshot> {
   }
 }
 
-/** The role an agent plays for the workflow its session runs. */
-function roleOf(workflow: string): string {
-  if (/review/.test(workflow)) return 'reviewer'
-  if (/worker/.test(workflow)) return 'worker'
-  if (/recon/.test(workflow)) return 'recon'
-  return 'driver'
-}
-
 async function refresh($: any): Promise<Snapshot> {
   const s = await build($)
   await update($, snap, () => s)
@@ -763,7 +696,7 @@ async function togglePane($: any): Promise<boolean> {
   await update($, paneOpen, () => true)
   try {
     await refresh($)
-    await $.ui.open({ id: PANE, title: 'Workflow plan', backgroundColor: 'transparent' })
+    await $.ui.open({ id: PANE, title: PANE_TITLE, backgroundColor: 'transparent' })
   } catch (err) {
     await update($, paneOpen, () => false)
     throw err
@@ -826,113 +759,10 @@ export function movedTo(o: unknown): string | undefined {
   return /^(?:SESSION: )?([A-Za-z0-9_.-]+) @ ([A-Za-z0-9_.-]+)/m.exec(t)?.[2]
 }
 
-function age(ms: number): string {
-  if (ms <= 0) return ''
-  const m = Math.floor(ms / 60000)
-  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`
-}
-
 /** Opens the Pool tab and reads the pool at once (the next refresh keeps it fresh while the tab stays open). */
 async function openPool($: any): Promise<void> {
   await update($, view, () => 'pool')
   await loadPool($)
-}
-
-/** Terminal cells a string takes: wide glyphs (CJK, emoji) two, combining marks none. */
-export function cells(text: string): number {
-  let n = 0
-  for (const ch of text) {
-    const c = ch.codePointAt(0) ?? 0
-    if (c >= 0x300 && c <= 0x36f) continue
-    const wide =
-      (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
-      (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
-      (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x20000 && c <= 0x3fffd)
-    n += wide ? 2 : 1
-  }
-  return n
-}
-
-/** A queue line's priority as one cell: urgent ⇈ red, high ↑ orange, low ↓ grey; normal (or none) has no glyph. */
-export const PRIO_GLYPHS: Record<string, { glyph: string; color: string }> = {
-  urgent: { glyph: '⇈', color: 'red' },
-  high: { glyph: '↑', color: '#ff8800' },
-  low: { glyph: '↓', color: 'gray' },
-}
-export function prioGlyph(priority: string | undefined): { glyph: string; color: string } | undefined {
-  return priority !== undefined && Object.hasOwn(PRIO_GLYPHS, priority) ? PRIO_GLYPHS[priority] : undefined
-}
-const prioCell = (Text: any, priority: string | undefined) => {
-  const g = prioGlyph(priority)
-  return g ? <Text color={g.color}>{g.glyph}</Text> : ' '
-}
-
-/** A text cut to `max` cells with a closing `…`; unchanged when it fits. */
-export function fitCells(text: string, max: number): string {
-  if (cells(text) <= max) return text
-  let out = ''
-  for (const ch of text) {
-    if (cells(out + ch) > max - 1) break
-    out += ch
-  }
-  return out + '…'
-}
-
-/** The bar `▰▰▱▱▱` and the kind glyph are five and one cells; a row's text is measured with them as blanks. */
-const BAR_W = ' '.repeat(5)
-/** The second line of a two-line row sits this far in from its first line's indent. */
-const TAB = '    '
-
-/** A section lays out as one: its rows are on one line each when every row fits `columns`, else on two lines each. */
-export function fitsOneLine(rows: string[], columns: number): boolean {
-  return rows.every(r => cells(r) <= columns)
-}
-
-/** A span of ms for a lease or a wait: `45s`, `3m09s`, `1h05m`. */
-export function spanText(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000))
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  return m < 60 ? `${m}m${two(s % 60)}s` : `${Math.floor(m / 60)}h${two(m % 60)}m`
-}
-
-/** The Pool tab, fitted to the pane: the pool's header, then per lease or waiter two lines (what and for how long with its flags; whose and for what, cut to the width). One dim line when there is no read. */
-function poolBody(st: PoolState | null, now: number, columns: number, ui: { Box: any; Text: any }) {
-  const { Box, Text } = ui
-  if (!st) return <Text dimColor>Reading the pool…</Text>
-  const p = st.pool
-  if (!p) return <Text dimColor>Pool: {st.error}.</Text>
-  const row = (l: PoolLine, mark: string) => {
-    const who = [l.project, l.session, l.step, l.label].filter(x => x !== '').join(' · ')
-    const flags = (l.overrun !== null ? ` OVERRUN ~${l.overrun}` : '') + (l.isStarved ? ' STARVED' : '')
-    // the flags keep their cells; what and for how long is cut to the rest of the line
-    const lead = fitCells(`  ${mark} ${l.request} prio ${l.priority} · ${spanText(l.ageMs)}`, Math.max(8, columns - cells(flags)))
-    return (
-      <Box flexDirection="column">
-        <Text>
-          {lead}
-          {l.overrun !== null ? <Text color="red" weight="bold"> OVERRUN ~{l.overrun}</Text> : null}
-          {l.isStarved ? <Text color="red" weight="bold"> STARVED</Text> : null}
-        </Text>
-        <Text dimColor>{fitCells('     ' + who, columns)}</Text>
-      </Box>
-    )
-  }
-  return (
-    <Box flexDirection="column">
-      <Text weight="bold">{fitCells(`budget ${p.budget} · held ${p.held} · load ${p.load.toFixed(2)}`, columns)}</Text>
-      <Text dimColor>{fitCells(`external ${p.external.toFixed(1)} · threshold ${p.threshold}`, columns)}</Text>
-      <Text dimColor>{fitCells(`locks: ${p.locks.length > 0 ? p.locks.join(', ') : 'none'}`, columns)}</Text>
-      {p.starvedNote !== '' && <Text color="red">{fitCells(p.starvedNote, columns)}</Text>}
-      <Text color="green" weight="bold">▶ Leases ({p.leases.length})</Text>
-      {p.leases.length === 0 && <Text dimColor>  none</Text>}
-      {p.leases.map(l => row(l, '■'))}
-      <Text color="blue" weight="bold">{fitCells(`◷ Waiting (${p.waiting.length}), in admission order`, columns)}</Text>
-      {p.waiting.length === 0 && <Text dimColor>  none</Text>}
-      {p.waiting.map((l, i) => row(l, `${i + 1}.`))}
-      <Text dimColor>read {spanText(now - st.at)} ago</Text>
-    </Box>
-  )
 }
 
 export const register: Register = on => {
@@ -1079,21 +909,14 @@ export const register: Register = on => {
     const seen = (await read($, agentsSeen))[task.id]
     if (!seen) return next(e)
     const s = await read($, snap)
-    const { Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
     const land = recentLand(s?.lands ?? [], seen.label, seen.at, await $.clock.now())
-    const dur = task.durationMs !== undefined ? ` · ${age(task.durationMs) || '<1m'}` : ''
-    const outcome =
-      task.status === 'killed' ? <Text color="red">✗ stopped by hand at {seen.state}</Text>
-      : task.status === 'failed' ? <Text color="red">✗ failed at {seen.state}</Text>
-      : land && seen.role === 'driver' ? <Text color="green">✓ landed {land.sha}</Text>
-      : <Text dimColor>ended at {seen.state}</Text>
-    return (
-      <Text>
-        <Text color="cyan">⚙ [{seen.label}] </Text>
-        <Text dimColor>{seen.role}{dur} · </Text>
-        {outcome}
-      </Text>
-    )
+    const dur = task.durationMs !== undefined ? age(task.durationMs) || '<1m' : ''
+    const end =
+      task.status === 'killed' || task.status === 'failed' ? { kind: task.status, state: seen.state } as const
+      : land && seen.role === 'driver' ? { kind: 'landed', sha: land.sha } as const
+      : { kind: 'ended', state: seen.state } as const
+    return draw(endLine(seen.label, seen.role, dur, end), ui, $)
   })
 
   // An Agent call of a workflow pipeline draws as ONE line in the style of the engine-call group's line (`⚙ [slice] …`),
@@ -1149,13 +972,7 @@ export const register: Register = on => {
       )
     }
     if (!spawn) return next(e)
-    return (
-      <Text>
-        <Text color="cyan">⚙ [{spawn.label}] </Text>
-        <Text dimColor>{spawn.role}</Text>
-        {modelText}
-      </Text>
-    )
+    return draw(spawnLine(spawn.label, spawn.role, model), $.ui.resolve(e), $)
   })
 
   // A driver's one-line hand-back (another session's message) drawn by its outcome. Only when ALL hold: the row is a
@@ -1178,15 +995,8 @@ export const register: Register = on => {
       (s?.lands.some(l => l.slice === id) ?? false) ||
       Object.values(seen).some(a => a.label === id)
     if (!known) return next(e)
-    const { Text } = $.ui.resolve(e)
-    const short = (r: string) => (r.length > 140 ? r.slice(0, 139) + '…' : r)
-    return (
-      <Text>
-        {landed ? <Text color="green">✓ [{id}] landed {landed[1]}</Text>
-          : needs ? <Text><Text color="yellow">⏸ [{id}] needs the parent: </Text>{short(needs[2] ?? '')}</Text>
-          : <Text dimColor>… [{id}] waiting</Text>}
-      </Text>
-    )
+    const back = landed ? { kind: 'landed', sha: landed[1] ?? '' } as const : needs ? { kind: 'needs', reason: needs[2] ?? '' } as const : { kind: 'waiting' } as const
+    return draw(handBackLine(id, back), $.ui.resolve(e), $)
   })
 
   // A collapsed group of tool calls that holds workflow-engine calls draws as the chain of moves they made
@@ -1196,13 +1006,12 @@ export const register: Register = on => {
     const calls = e.props.calls
     const wf = calls.filter(c => isEngineTool(c.tool))
     if (wf.length === 0) return next(e)
-    const { Text } = $.ui.resolve(e)
     const s = await read($, snap)
     const label = (sid: string) => {
       const r = s?.sessions.find(x => x.id === sid)
       return r ? (r.tag !== '' ? r.tag : r.workflow) : sid.slice(0, 8)
     }
-    const moves: any[] = []
+    const moves: Move[] = []
     let lastSid = ''
     // the other engine calls by what they did: plan changes (queue_*), context writes, and the rest (reads, links)
     const ICON: Record<string, string> = {
@@ -1216,14 +1025,8 @@ export const register: Register = on => {
       if (op === 'transition' || op === 'start') {
         const to = movedTo(c.output)
         const name = op === 'start' ? `start ${String(input.workflow ?? '')}` : String(input.transition ?? '?')
-        if (sid !== '' && sid !== lastSid) moves.push(<Text color="cyan">[{label(sid)}] </Text>)
+        moves.push({ ...(sid !== '' && sid !== lastSid ? { label: label(sid) } : {}), name, to: c.isRunning ? '…' : to ?? '?', isErrored: Boolean(c.isErrored) })
         lastSid = sid
-        moves.push(
-          <Text>
-            <Text dimColor>{name}→</Text>
-            <Text color={c.isErrored ? 'red' : 'cyanBright'} weight="bold">{c.isRunning ? '…' : to ?? '?'}</Text>{' '}
-          </Text>,
-        )
       } else {
         const icon = ICON[op] ?? '·'
         counted.set(icon, (counted.get(icon) ?? 0) + 1)
@@ -1240,345 +1043,64 @@ export const register: Register = on => {
       ...[...counted].map(([icon, n]) => `${icon}${n}`),
       ...[...otherTools].map(([k, n]) => `${k}${n}`),
     ].filter(x => x !== '')
-    return (
-      <Text>
-        <Text color="cyan">⚙ </Text>
-        {moves}
-        {tail.length > 0 ? <Text dimColor>{moves.length > 0 ? '· ' : ''}{tail.join(' ')}</Text> : null}
-      </Text>
-    )
+    return draw(movesLine(moves, tail), $.ui.resolve(e), $)
   })
 
+  // What the pane shows is hooks/pane-view.ts's `paneTree` (pure, shared with the documentation site's scene); this
+  // hook gathers its input from the atoms and draws the tree with this surface's elements.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Link } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
     const s = await read($, snap)
-    if (!s) return <Text dimColor>Reading the workflow engine…</Text>
-    // no work queue: one view, the session tree — no tabs to choose between
-    const tab: View = s.queue ? ((await read($, view)) ?? 'plan') : 'sessions'
-    const open: string = (await read($, expanded)) ?? ''
-    const foldedNow: string[] = (await read($, folded)) ?? []
-    const now = await $.clock.now()
-    const today = 'lands-' + dayOf(now)
-    const isOpen = (key: string) =>
-      key.startsWith('lands-') ? landDayOpen(foldedNow, key, today) : foldedNow.includes(key) === FOLDED_BY_DEFAULT.has(key)
-    // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones and the days before today)
-    const columns: number = e.props?.bodyColumns ?? 100
-    // a long title (the Landed heading with its sums) is cut with an ellipsis, never wrapped
-    const header = (key: string, color: string, title: string) => (
-      <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => foldFlipped(f, key))}>
-        <Text color={color} weight="bold">{fitCells(`${isOpen(key) ? '▾' : '▸'} ${title}`, columns)}</Text>
-      </Button>
-    )
-    // the `+N more` row that follows a capped list's first lines: a click lists the rest below it (▾) or caps the list again (▸), the fold kept across refreshes
-    const moreRow = (key: string, text: string, indent = '') => (
-      <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => foldFlipped(f, key))}>
-        <Text dimColor>{fitCells(`${indent}${isOpen(key) ? '▾' : '▸'} ${text}`, columns)}</Text>
-      </Button>
-    )
-    const room = Math.max(4, (e.viewport?.rows ?? 30) - 6)
-    const byId = new Map(s.sessions.map(r => [r.id, r]))
-    const childrenOf = (id: string): SessionRow[] => s.sessions.filter(r => r.parent === id)
-    const leafOf = (id: string): SessionRow | undefined => {
-      // the deepest child of a pipeline: where its work stands now
-      let cur = byId.get(id)
-      for (let i = 0; cur && i < 8; i++) {
-        const child = childrenOf(cur.id)[0]
-        if (!child) break
-        cur = child
-      }
-      return cur
-    }
-    const roots = s.sessions.filter(r => r.parent === '' || !byId.has(r.parent))
-    const q = s.queue
-    const poolCounts = (await read($, poolCountsAtom)) as PoolCounts | null
-    const tabs: { id: View; key: string; label: string }[] = [
-      { id: 'plan', key: '1', label: q ? `Plan ${q.running.length}/${q.window}` : 'Plan' },
-      { id: 'sessions', key: '2', label: `Sessions ${s.sessions.length}` },
-      { id: 'waiting', key: '3', label: `Waiting ${q?.waiting.length ?? 0}` },
-      // held/budget from the cheap counts read of every refresh; bare until one answered
-      { id: 'pool', key: '4', label: poolCounts ? `Pool ${poolCounts.held}/${poolCounts.budget}` : 'Pool' },
-    ]
-    // difficulty as a five-cell track (one cell per two points): its fill the level, its colour the model the
-    // table gives it — 1–3 sonnet (green), 4–6 sonnet/high (yellow), 7–10 opus (red)
-    const level = (d: string) => {
-      const n = Number(d)
-      if (!Number.isFinite(n) || n < 1) return <Text dimColor>?????</Text>
-      const full = Math.min(5, Math.max(1, Math.round(n / 2)))
-      return (
-        <Text>
-          <Text color={n <= 3 ? 'green' : n <= 6 ? 'yellow' : 'red'} weight={n >= 9 ? 'bold' : undefined}>{'▰'.repeat(full)}</Text>
-          <Text dimColor>{'▱'.repeat(5 - full)}</Text>
-        </Text>
-      )
-    }
-    // the kind glyph the engine's /api/queue gives each line (`kindMark`), right after the bar; a blank cell when the
-    // line is not in the queue
-    const markOf = (id: string) => (q && Object.hasOwn(q.marks, id) ? q.marks[id] : ' ')
-    const kindOf = (id: string) => <Text dimColor>{markOf(id)}</Text>
-    const tabRow = (
-      <Box flexDirection="row" gap={2}>
-        {tabs.map(t => (
-          <Button key={'tab-' + t.id} hotkey={t.key} plain onPress={() => void (t.id === 'pool' ? openPool($) : update($, view, () => t.id))}>
-            {t.id === tab ? <Text weight="bold" color="cyan">{t.label}</Text> : <Text dimColor>{t.label}</Text>}
-          </Button>
-        ))}
-      </Box>
-    )
-    const footer = (
-      <Text dimColor>
-        updated {age(now - s.at) || 'just now'}{s.error !== '' ? '' : ''}
-      </Text>
-    )
-
-    // as the engine statusline script draws them: a root with children ◆ bold; a working leaf (agent or exec, no
-    // child) bright ⚙; any other session plain ⚙
-    const sessionPlain = (r: SessionRow, depth: number) =>
-      `${'  '.repeat(depth)}⚙ ${r.workflow}${r.tag !== '' ? `[${r.tag}]` : ''} @ ${r.state} ${age(now - r.since)}${open === r.id ? ' ▾' : ''}`
-    const sessionLine = (r: SessionRow, depth: number, twoLines: boolean) => {
-      const hasChildren = childrenOf(r.id).length > 0
-      const isRoot = r.parent === '' || !byId.has(r.parent)
-      const mark = isRoot && hasChildren
-        ? <Text color="cyanBright" weight="bold">◆</Text>
-        : <Text color={r.isWorking && !hasChildren ? 'cyanBright' : 'cyan'}>⚙</Text>
-      const isOpen = open === r.id
-      const pad = '  '.repeat(depth)
-      const tailText = ` ${age(now - r.since)}${isOpen ? ' ▾' : ''}`
-      const stateText = twoLines ? fitCells(r.state, Math.max(1, columns - pad.length - TAB.length - 2 - cells(tailText))) : r.state
-      const state = <Text weight={isOpen ? 'bold' : undefined}>{stateText}</Text>
-      const tail = <Text dimColor>{tailText}</Text>
-      if (!twoLines) {
-        return (
-          <Button key={'s-' + r.id} plain onPress={() => void update($, expanded, cur => (cur === r.id ? '' : r.id))}>
-            {pad}{mark}{' '}
-            {r.workflow}{r.tag !== '' ? <Text color="cyan">[{r.tag}]</Text> : null} @ {state}
-            {tail}
-          </Button>
-        )
-      }
-      // two lines: the workflow and its task, then the state and its age indented under them
-      const room1 = Math.max(6, columns - pad.length - 2)
-      const wf = fitCells(r.workflow, room1)
-      const tag = r.tag !== '' ? fitCells(`[${r.tag}]`, Math.max(0, room1 - cells(wf))) : ''
-      return (
-        <Button key={'s-' + r.id} plain onPress={() => void update($, expanded, cur => (cur === r.id ? '' : r.id))}>
-          <Text>
-            {pad}{mark} {wf}<Text color="cyan">{tag}</Text>{'\n'}
-            {pad}{TAB}@ {state}{tail}
-          </Text>
-        </Button>
-      )
-    }
-    // The open session's card: where it came from, where it is, where it can go.
-    const card = (r: SessionRow, depth: number) => {
-      const pad = '  '.repeat(depth + 1)
-      const path = r.recent.map(m => m.to)
-      const from = r.recent.at(-1)
-      return (
-        <Box key={'c-' + r.id} flexDirection="column">
-          <Text dimColor>{pad}from  {path.length > 1 ? '… ' + path.slice(0, -1).join(' → ') : '(start)'}{from ? `  (${age(now - from.at)} ago)` : ''}</Text>
-          <Text>{pad}<Text dimColor>now   </Text><Text weight="bold">{r.state}</Text><Text dimColor>{r.visit > 1 ? `  visit ${r.visit}` : ''}{r.isWorking ? '  working' : '  waiting'}</Text></Text>
-          <Text>{pad}<Text dimColor>next  </Text>{r.next.length > 0 ? r.next.join('  ') : <Text dimColor>(the dashboard at {DASHBOARD} is not answering)</Text>}</Text>
-          <Text>{pad}<Link href={`${DASHBOARD}/session/${r.id}`} label="open the graph in the dashboard" /></Text>
-        </Box>
-      )
-    }
-    const tree = (r: SessionRow, depth: number, twoLines: boolean): any[] => [
-      sessionLine(r, depth, twoLines),
-      ...(open === r.id ? [card(r, depth)] : []),
-      ...childrenOf(r.id).flatMap(c => tree(c, depth + 1, twoLines)),
-    ]
-    const plainTree = (r: SessionRow, depth: number): string[] => [
-      sessionPlain(r, depth),
-      ...childrenOf(r.id).flatMap(c => plainTree(c, depth + 1)),
-    ]
-
-    let body: any
-    if (tab === 'sessions' || (tab === 'plan' && !q)) {
-      const sessTwo = !fitsOneLine(roots.flatMap(x => plainTree(x, 0)), columns)
-      const lines = roots.flatMap(r => tree(r, 0, sessTwo))
-      // the height cap counts lines: a two-line row takes two
-      const cap = sessTwo ? Math.max(1, Math.floor(room / 2)) : room
-      body = lines.length === 0
-        ? <Text dimColor>No active workflow in this session.</Text>
-        : <Box flexDirection="column">{lines.slice(0, cap)}{lines.length > cap ? moreRow('sessions-more', `+${lines.length - cap} more`, '  ') : null}{isOpen('sessions-more') ? lines.slice(cap) : null}</Box>
-    } else if (!q) {
-      body = <Text dimColor>No work queue in this session: the Sessions tab shows its workflow.</Text>
-    } else if (tab === 'pool') {
-      const st = (await read($, poolAtom)) as PoolState | null
-      body = poolBody(st, now, columns, { Box, Text })
-    } else if (tab === 'waiting') {
-      const waitTwo = !fitsOneLine(q.waiting.map(w => `${BAR_W} ${markOf(w.id)} ${w.id}${prioGlyph(w.priority) ? ' ⇈' : ''} ${w.why}`), columns)
-      // the height cap counts lines: a two-line row takes two
-      const waitCap = waitTwo ? Math.max(1, Math.floor(room / 2)) : room
-      body = (
-        <Box flexDirection="column">
-          {q.waiting.length === 0 && <Text dimColor>Nothing waits.</Text>}
-          {[...q.waiting.slice(0, waitCap), null, ...(isOpen('waiting-more') ? q.waiting.slice(waitCap) : [])].map(w =>
-            w === null ? (q.waiting.length > waitCap ? moreRow('waiting-more', `+${q.waiting.length - waitCap} more`) : null) :
-            waitTwo ? (
-              <Box flexDirection="column">
-                <Text>{level(w.difficulty)} {kindOf(w.id)} {fitCells(w.id, Math.max(1, columns - (prioGlyph(w.priority) ? 10 : 8)))}{prioGlyph(w.priority) ? ' ' : ''}{prioGlyph(w.priority) ? prioCell(Text, w.priority) : ''}</Text>
-                <Text dimColor>{TAB}{fitCells(w.why, Math.max(1, columns - TAB.length))}</Text>
-              </Box>
-            ) : (
-              <Text>{level(w.difficulty)} {kindOf(w.id)} {w.id}{prioGlyph(w.priority) ? ' ' : ''}{prioGlyph(w.priority) ? prioCell(Text, w.priority) : ''}<Text dimColor> {w.why}</Text></Text>
-            ),
-          )}
-        </Box>
-      )
-    } else {
-      // Next shows up to 10, fitted to the pane; Landed lists the whole day (the pane scrolls) and folds on a click
-      const pipelineOf = new Map(s.sessions.filter(r => r.tag !== '').map(r => [r.tag, r]))
-      const whereOf = (id: string) => {
-        const p = pipelineOf.get(id)
-        const leaf = p ? leafOf(p.id) : undefined
-        return !p ? 'no pipeline' : leaf && leaf.id !== p.id ? `${p.state} › ${leaf.state}` : p.state
-      }
-      const sinceOf = (id: string) => {
-        const p = pipelineOf.get(id)
-        return p ? age(now - (leafOf(p.id) ?? p).since) : ''
-      }
-      // a section lays out as one: when ANY of its rows does not fit the pane, EVERY row takes two lines
-      const runTwo = !fitsOneLine(q.running.map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id}  ${whereOf(l.id)} ${sinceOf(l.id)}`), columns)
-      const nextMore = isOpen('next-more')
-      // nothing admittable now: Next lists what the running lines unblock, in the picker's order
-      const nextRows = q.ready.length > 0 ? q.ready : q.unblocked
-      const nextTwo = !fitsOneLine((nextMore ? nextRows : nextRows.slice(0, 10)).map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id} ${prioGlyph(l.priority)?.glyph ?? ' '}`), columns)
-      // the rows left for Next count lines: a two-line Running or Next row takes two
-      const spare = (e.viewport?.rows ?? 30) - 9 - q.running.length * (runTwo ? 2 : 1)
-      const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
-      // a row's cost sits right after its kind, right-aligned to the section's widest figure: it is never cut, the id is
-      const costCol = (all: (number | undefined)[]) => {
-        const w = Math.max(1, ...all.map(u => cells(usdText(u))))
-        return { w, text: (u: number | undefined) => usdText(u).padStart(w) }
-      }
-      const recentFailed = q.failedLines.filter(l => l.recent)
-      const olderFailed = q.failedLines.filter(l => !l.recent)
-      // the rows drawn: the recent ones, and the older ones once `+N older` is open
-      const shownFailed = isOpen('failed-older') ? q.failedLines : recentFailed
-      // only the rows drawn size the section: a row of a folded day is not on screen and must not widen the cost column or flip the layout
-      const shownLands = isOpen('lands') ? s.lands.filter(l => isOpen('lands-' + l.at.slice(0, 5))) : []
-      const landCost = costCol(shownLands.map(l => l.usd))
-      const failCost = costCol(shownFailed.map(l => l.usd))
-      const costOf = (u: number | undefined, col: { text: (u: number | undefined) => string }) => <Text dimColor={u === undefined}>{col.text(u)}</Text>
-      const landTwo = !fitsOneLine(shownLands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l.usd)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
-      const stampOf = (date: string) => {
-        // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
-        const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(date)
-        return when ? `${when[2]}.${when[1]}` : 'date unknown'
-      }
-      const reasonOf = (l: FailedLine) => (l.reason === '' ? 'no note' : l.reason)
-      const failTwo = !fitsOneLine(shownFailed.map(l => `    ${BAR_W} ${markOf(l.id)} ${failCost.text(l.usd)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
-      body = (
-        <Box flexDirection="column">
-          <Text>
-            <Text weight="bold">{q.file.replace(/^.*\//, '')}</Text>
-            <Text dimColor>  pending {q.pending} · done {q.done}{q.failed > 0 ? ` · failed ${q.failed}` : ''}</Text>
-          </Text>
-          {header('running', 'green', `▶ Running ${q.running.length}/${q.window}`)}
-          {isOpen('running') && q.running.length === 0 && <Text dimColor>  nothing</Text>}
-          {isOpen('running') && q.running.map(l => {
-            const p = pipelineOf.get(l.id)
-            const since = sinceOf(l.id)
-            if (!runTwo) {
-              return (
-                <Text>
-                  {'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id}  <Text color={p ? 'cyan' : 'yellow'}>{whereOf(l.id)}</Text>
-                  <Text dimColor> {since}</Text>
-                </Text>
-              )
-            }
-            // two lines: bar, kind, id; the state, the next step and the age indented under them
-            const pad = '  ' + TAB
-            return (
-              <Box flexDirection="column">
-                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {fitCells(l.id, Math.max(1, columns - 10))}</Text>
-                <Text>
-                  {pad}<Text color={p ? 'cyan' : 'yellow'}>{fitCells(whereOf(l.id), Math.max(1, columns - pad.length - (since === '' ? 0 : cells(since) + 1)))}</Text>
-                  <Text dimColor> {since}</Text>
-                </Text>
-              </Box>
-            )
-          })}
-          {header('next', 'blue', `⏭ Next (${nextRows.length})`)}
-          {isOpen('next') && nextRows.length === 0 && <Text dimColor>  nothing ready</Text>}
-          {isOpen('next') &&
-            [...nextRows.slice(0, showReady), null, ...(nextMore ? nextRows.slice(showReady) : [])].map(l =>
-              l === null ? (nextRows.length > showReady ? moreRow('next-more', `+${nextRows.length - showReady} more ${q.ready.length > 0 ? 'can start (dependencies done)' : 'start once the running lines end'}, in the picker's order`, '  ') : null) :
-              nextTwo ? (
-                // two lines: bar, kind; the id indented under them, the priority glyph after it
-                <Box flexDirection="column">
-                  <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)}</Text>
-                  <Text>{'  '}{TAB}{fitCells(l.id, Math.max(1, columns - 4 - TAB.length))} {prioCell(Text, l.priority)}</Text>
-                </Box>
-              ) : (
-                <Text>{'  '}{level(l.difficulty)} {kindOf(l.id)} {l.id} {prioCell(Text, l.priority)}</Text>
-              ),
-            )}
-          {header('lands', 'green', landedHeading(s.lands.length, s.landedUsd, s.parentUsd, s.landBranch))}
-          {isOpen('lands') &&
-            [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
-              // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day with its spend, its lands one level deeper
-              const mine = s.lands.filter(l => l.at.slice(0, 5) === day)
-              const spend = s.days[day]
-              const key = 'lands-' + day
-              return [
-                <Button key={'fold-' + key} plain onPress={() => void update($, folded, f => landDayToggled(f, key, today))}>
-                  <Text dimColor>{fitCells(`  ${isOpen(key) ? '▾' : '▸'} ▦ ${day} (${mine.length})${spend ? ' ' + dayText(spend) : ''}`, columns)}</Text>
-                </Button>,
-                ...(isOpen(key)
-                  ? mine.map(l =>
-                      landTwo ? (
-                        // two lines: bar, kind, cost, times, sha; the id indented under them
-                        <Box flexDirection="column">
-                          <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} {costOf(l.usd, landCost)} <Text dimColor>{fitCells(`${l.start}-${l.at.slice(6)} ${l.sha}`, Math.max(1, columns - 13 - landCost.w))}</Text></Text>
-                          <Text>{'    '}{TAB}{fitCells(l.slice, Math.max(1, columns - 4 - TAB.length))}</Text>
-                        </Box>
-                      ) : (
-                        <Text>{'    '}{level(l.difficulty)} {kindOf(l.slice)} {costOf(l.usd, landCost)} <Text dimColor>{l.start}-{l.at.slice(6)} {l.sha}</Text> {l.slice}</Text>
-                      ),
-                    )
-                  : []),
-              ]
-            })}
-          {header('failed', 'red', failedHeading(recentFailed.length, q.failedSpend))}
-          {isOpen('failed') && q.failedLines.length === 0 && <Text dimColor>  nothing</Text>}
-          {isOpen('failed') && q.failedLines.length > 0 && recentFailed.length === 0 && <Text dimColor>  none in the last {FAILED_DAYS} days</Text>}
-          {isOpen('failed') &&
-            shownFailed.map(l => {
-              const stamp = stampOf(l.date)
-              if (!failTwo) {
-                return <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {costOf(l.usd, failCost)} {l.id} <Text dimColor>{stamp} {reasonOf(l)}</Text></Text>
-              }
-              // two lines: bar, kind, cost, id, date; the reason indented under them
-              const lead = 4 + 5 + 1 + 1 + 1 + failCost.w + 1
-              const idFit = fitCells(l.id, Math.max(1, columns - lead - cells(stamp) - 1))
-              const stampFit = fitCells(stamp, Math.max(1, columns - lead - cells(idFit) - 1))
-              return (
-                <Box flexDirection="column">
-                  <Text>{'    '}{level(l.difficulty)} {kindOf(l.id)} {costOf(l.usd, failCost)} {idFit} <Text dimColor>{stampFit}</Text></Text>
-                  <Text dimColor>{'    '}{TAB}{fitCells(reasonOf(l), Math.max(1, columns - 4 - TAB.length))}</Text>
-                </Box>
-              )
-            })}
-          {isOpen('failed') && olderFailed.length > 0 && (
-            <Button key="fold-failed-older" plain onPress={() => void update($, folded, f => foldFlipped(f, 'failed-older'))}>
-              <Text dimColor>{fitCells(`  ${isOpen('failed-older') ? '▾' : '▸'} +${olderFailed.length} older`, columns)}</Text>
-            </Button>
-          )}
-        </Box>
-      )
-    }
-    return (
-      <Box flexDirection="column">
-        <Box flexDirection="row" gap={2}>
-          {s.queue ? tabRow : null}
-          <Link href={`${DASHBOARD}/map`} label="map ↗" />
-        </Box>
-        {body}
-        {s.error !== '' && <Text color="red">{s.error}</Text>}
-        {footer}
-      </Box>
-    )
+    const tab: View = s?.queue ? ((await read($, view)) ?? 'plan') : 'sessions'
+    const tree = paneTree({
+      snapshot: s,
+      tab,
+      expanded: (await read($, expanded)) ?? '',
+      folded: (await read($, folded)) ?? [],
+      now: await $.clock.now(),
+      columns: e.props?.bodyColumns ?? 100,
+      rows: e.viewport?.rows ?? 30,
+      poolCounts: (await read($, poolCountsAtom)) as PoolCounts | null,
+      // the pool atom is read only on the Pool tab: a read subscribes the pane to it
+      pool: tab === 'pool' ? ((await read($, poolAtom)) as PoolState | null) : null,
+    })
+    return draw(tree, ui, $)
   })
+}
+
+/** What a press on the pane's button does: the fold, tab and card state lives in this mod's atoms. */
+function act($: any, a: PaneAction): Promise<unknown> {
+  switch (a.kind) {
+    case 'fold':
+      return update($, folded, f => foldFlipped(f, a.key))
+    case 'landDay':
+      return update($, folded, f => landDayToggled(f, a.key, a.today))
+    case 'tab':
+      return a.id === 'pool' ? openPool($) : update($, view, () => a.id)
+    case 'expand':
+      return update($, expanded, cur => (cur === a.id ? '' : a.id))
+  }
+}
+
+/** A tree of hooks/pane-view.ts drawn with the surface's own elements (`$.ui.resolve(e)`). */
+function draw(n: PaneNode, ui: { Box: any; Text: any; Button: any; Link: any }, $: any): any {
+  if (n === null) return null
+  if (typeof n === 'string') return n
+  if (Array.isArray(n)) return n.map(c => draw(c, ui, $))
+  const el = n as PaneEl
+  const { Box, Text, Button, Link } = ui
+  switch (el.el) {
+    case 'link':
+      return <Link href={el.href} label={el.label} />
+    case 'text':
+      return <Text {...el.props}>{el.children.map(c => draw(c, ui, $))}</Text>
+    case 'box':
+      return el.key !== undefined
+        ? <Box key={el.key} {...el.props}>{el.children.map(c => draw(c, ui, $))}</Box>
+        : <Box {...el.props}>{el.children.map(c => draw(c, ui, $))}</Box>
+    case 'button':
+      return el.hotkey !== undefined
+        ? <Button key={el.key} hotkey={el.hotkey} plain onPress={() => void act($, el.action)}>{el.children.map(c => draw(c, ui, $))}</Button>
+        : <Button key={el.key} plain onPress={() => void act($, el.action)}>{el.children.map(c => draw(c, ui, $))}</Button>
+  }
 }

@@ -1,11 +1,13 @@
 // The recorded replay of the live map: a window of REAL sessions of one open-source project, cut from the
 // event log (`buildReplay`, run by scripts/export-replay.mjs) and played back on the documentation site's
 // landing page (`expandReplay` + the clock helpers, used by docs/.vitepress/theme/MapReplay.vue). The page
-// feeds the expanded events to the same `fold` and `layout` the dashboard map uses. Pure and import-free
-// (types only), so it runs in the browser and under vitest alike.
+// feeds the expanded events to the same `fold` and `layout` the dashboard map uses, and the plan pane's
+// Snapshot built from them (`snapshotAt`) to the mod's own pane code. Pure (its one import, map-layout.ts, is
+// pure and import-free too), so it runs in the browser and under vitest alike.
 
+import type { Land, QueueLine, QueueView, SessionRow, Snapshot } from "../types/index.js";
 import type { EventKind, WfEvent } from "./event-fold.js";
-import type { MapWorkflow } from "./map-layout.js";
+import { kindMark, type MapLayout, type MapWorkflow } from "./map-layout.js";
 
 /** One event: ms after `ReplayFile.start`, its kind, the index of its session in `ReplayFile.sessions`, its data. */
 export type ReplayRow = readonly [number, EventKind, number, Readonly<Record<string, unknown>>?];
@@ -278,14 +280,39 @@ export function renderReplay(file: ReplayFile): string {
   return `{\n${fields.join(",\n")},\n "events": [\n${rows.join(",\n")}\n ]\n}\n`;
 }
 
-/** Whether a scroll position is at the bottom (within `slack` px): a reader who is not has left follow mode. */
-export function followsBottom(
-  scrollHeight: number,
-  scrollTop: number,
-  clientHeight: number,
-  slack = 8,
-): boolean {
-  return scrollHeight - scrollTop - clientHeight <= slack;
+/**
+ * The part of the map a frame of `frameW` x `frameH` shows, in map units: the map's whole width (never wider
+ * than drawn 1:1, so a narrow map is not blown up) and the height that keeps the frame's proportions. Drawn as
+ * the SVG's viewBox, the map is scaled down to the frame and never scrolls.
+ */
+export function fitView(
+  mapW: number,
+  mapH: number,
+  frameW: number,
+  frameH: number,
+): { width: number; height: number } {
+  const width = Math.max(mapW, frameW, 1);
+  return { width, height: (width * Math.max(frameH, 1)) / Math.max(frameW, 1) };
+}
+
+/**
+ * Where the camera's top sits when the map is taller than the view: on the running lanes (centred when they fit,
+ * their newest end when they do not), on the bottom when nothing runs; 0 when the map fits. Kept inside the map.
+ */
+export function cameraTop(map: MapLayout, viewH: number): number {
+  const room = map.height - viewH;
+  if (room <= 0) return 0;
+  let a = Infinity;
+  let b = -Infinity;
+  for (const band of map.bands)
+    for (const lane of band.lanes) {
+      if (lane.status !== "running") continue;
+      a = Math.min(a, band.y + lane.y);
+      b = Math.max(b, band.y + lane.y + lane.height);
+    }
+  if (a === Infinity) return room;
+  const want = b - a <= viewH ? (a + b) / 2 - viewH / 2 : b - viewH;
+  return Math.max(0, Math.min(room, want));
 }
 
 /** The events a file stands for, as the log would have them (the fold and the layout read these). */
@@ -335,123 +362,306 @@ export function elapsed(at: number): string {
   return `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
 }
 
-/** One task pipeline of the replay, as the plan pane's Running / Next / Landed rows show it. */
-export interface PlanRow {
+/** One session of the replay as the events up to a moment leave it. */
+interface Seen {
+  readonly index: number;
+  readonly id: string;
+  readonly parent: string;
   readonly task: string;
-  /** the line's difficulty as the queue wrote it ('' when unknown) */
-  readonly difficulty: string;
-  /** the state the pipeline is at (its last transition) */
-  readonly state: string;
-  /** the model of the pipeline's own agent ('' when unknown) */
-  readonly model: string;
-  /** review sessions started under it so far */
-  readonly rounds: number;
-  /** ms into the replay when it started */
-  readonly startedAt: number;
-  /** ms into the replay when it ended (undefined while running or not started) */
-  readonly endedAt: number | undefined;
+  workflow: string;
+  difficulty: string;
+  state: string;
+  since: number;
+  start: number;
+  end: number | undefined;
+  outcome: unknown;
+  landed: boolean;
+  agent: string;
+  model: string;
+  execs: number;
+  visits: Map<string, number>;
+  moves: { from: string; to: string; at: number }[];
 }
 
-export interface PlanView {
-  readonly running: readonly PlanRow[];
-  /** pipelines that start later in the replay: the queue's next lines */
-  readonly next: readonly PlanRow[];
-  /** ended by a land, newest first */
-  readonly landed: readonly PlanRow[];
-  /** ended without a land (closed, split), newest first */
-  readonly closed: readonly PlanRow[];
+/** Every session of the replay as of `at` ms (started or not), in file order; times are epoch ms. */
+function sessionsAt(file: ReplayFile, at: number): Seen[] {
+  const t0 = Date.parse(file.start);
+  const byIndex = new Map<number, Seen>();
+  const ids = new Set(file.sessions);
+  for (const [ts, kind, s, data] of file.events) {
+    if (kind !== "session_start") continue;
+    const workflow = typeof data?.workflow === "string" ? data.workflow : "";
+    const parent = typeof data?.parent === "string" && ids.has(data.parent) ? data.parent : "";
+    const first = file.workflows[workflow]?.stations?.[0]?.name ?? "";
+    byIndex.set(s, {
+      index: s,
+      id: file.sessions[s],
+      parent,
+      task: parent === "" && typeof data?.task === "string" ? data.task : "",
+      workflow,
+      difficulty: typeof data?.difficulty === "string" ? data.difficulty : "",
+      state: first,
+      since: t0 + ts,
+      start: ts,
+      end: undefined,
+      outcome: undefined,
+      landed: false,
+      agent: "",
+      model: "",
+      execs: 0,
+      visits: new Map(first === "" ? [] : [[first, 1]]),
+      moves: [],
+    });
+  }
+  for (const [ts, kind, s, data] of file.events) {
+    if (ts > at) break;
+    const r = byIndex.get(s);
+    if (r === undefined) continue;
+    if (kind === "transition" && typeof data?.to === "string") {
+      r.moves.push({
+        from: typeof data.from === "string" ? data.from : r.state,
+        to: data.to,
+        at: t0 + ts,
+      });
+      r.state = data.to;
+      r.since = t0 + ts;
+      r.visits.set(data.to, (r.visits.get(data.to) ?? 0) + 1);
+      if (typeof data.workflow === "string" && data.workflow !== "") r.workflow = data.workflow;
+      if (data.to === "land") r.landed = true;
+    } else if (kind === "agent_link" || kind === "agent_respawn") {
+      if (typeof data?.agent === "string") r.agent = data.agent;
+      if (typeof data?.model === "string") r.model = data.model;
+    } else if (kind === "agent_stop") r.agent = "";
+    else if (kind === "rescore" && (typeof data?.to === "string" || typeof data?.to === "number"))
+      r.difficulty = String(data.to);
+    else if (kind === "exec_start") r.execs++;
+    else if (kind === "exec_end") r.execs = Math.max(0, r.execs - 1);
+    else if (kind === "session_end") {
+      r.end = ts;
+      r.outcome = data?.outcome;
+    }
+  }
+  return [...byIndex.values()];
 }
 
-/** The cells of the difficulty bar the pane draws (of 5): n/2 rounded, at least one, none when unknown. */
-export function difficultyCells(difficulty: string): number {
-  const n = Number(difficulty);
-  return Number.isFinite(n) && n >= 1 ? Math.min(5, Math.max(1, Math.round(n / 2))) : 0;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+const dayMonth = (ms: number): string => {
+  const d = new Date(ms);
+  return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}`;
+};
+const hourMinute = (ms: number): string => {
+  const d = new Date(ms);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+};
+
+/** The most pipelines the replay runs at once: the queue's window as the pane's `Running n/window` shows it. */
+function windowOf(file: ReplayFile): number {
+  const all = sessionsAt(file, file.durationMs).filter(r => r.task !== "");
+  const edges = all.flatMap(r => [[r.start, 1] as const, [r.end ?? file.durationMs, -1] as const]);
+  edges.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let open = 0;
+  let peak = 0;
+  for (const [, d] of edges) {
+    open += d;
+    peak = Math.max(peak, open);
+  }
+  return Math.max(1, peak);
+}
+
+const windows = new WeakMap<ReplayFile, number>();
+
+/**
+ * The plan pane's Snapshot at `at` ms into the replay, as the mod builds it from the engine's state files and
+ * queue (hooks/plan-pane.tsx): the live sessions, the queue (a root session with a task is a queue line: Next
+ * before it starts, Running until it ends, then done — Landed when it moved through `land` — or failed when it
+ * did not complete) and the lands, newest first. The replay carries no cost and no commit, so no `usd` and no
+ * `sha`. Pure; the site's scene draws it with the mod's own pane code (hooks/pane-view.ts).
+ */
+export function snapshotAt(file: ReplayFile, at: number): Snapshot {
+  const t0 = Date.parse(file.start);
+  const now = t0 + at;
+  const all = sessionsAt(file, at);
+  const live = all.filter(r => r.start <= at && r.end === undefined);
+  const lines = all.filter(r => r.task !== "");
+  const line = (r: Seen, status: QueueLine["status"]): QueueLine => ({
+    id: r.task,
+    status,
+    difficulty: r.difficulty,
+    isParked: false,
+    isExclusive: false,
+    isParentRun: false,
+    after: [],
+  });
+  const running = lines
+    .filter(r => r.start <= at && r.end === undefined)
+    .sort((a, b) => a.start - b.start);
+  const ready = lines.filter(r => r.start > at).sort((a, b) => a.start - b.start);
+  const ended = lines.filter(r => r.end !== undefined).sort((a, b) => (b.end ?? 0) - (a.end ?? 0));
+  const failed = ended.filter(r => r.outcome !== "completed");
+  const landed = ended.filter(r => r.outcome === "completed" && r.landed);
+  const marks: Record<string, string> = {};
+  for (const r of lines)
+    marks[r.task] = kindMark(
+      Object.hasOwn(file.taskKinds, r.task) ? { kind: file.taskKinds[r.task] } : {},
+    );
+  let window = windows.get(file);
+  if (window === undefined) {
+    window = windowOf(file);
+    windows.set(file, window);
+  }
+  const lands: Land[] = landed.map(r => {
+    const end = t0 + (r.end as number);
+    const start = t0 + r.start;
+    return {
+      sha: "",
+      slice: r.task,
+      at: `${dayMonth(end)} ${hourMinute(end)}`,
+      start:
+        dayMonth(start) === dayMonth(end)
+          ? hourMinute(start)
+          : `${dayMonth(start)} ${hourMinute(start)}`,
+      difficulty: r.difficulty,
+    };
+  });
+  const sessions: SessionRow[] = live.map(r => ({
+    id: r.id,
+    parent: r.parent,
+    workflow: r.workflow,
+    state: r.state,
+    tag: r.task,
+    since: r.since,
+    isWorking: r.agent !== "" || r.execs > 0,
+    agent: r.agent,
+    visit: r.visits.get(r.state) ?? 0,
+    recent: r.moves.slice(-6),
+    next: [],
+  }));
+  const queue: QueueView = {
+    file: REPLAY_QUEUE,
+    window,
+    done: ended.length - failed.length,
+    failed: failed.length,
+    pending: ready.length,
+    running: running.map(r => line(r, "running")),
+    ready: ready.map(r => line(r, "pending")),
+    unblocked: [],
+    waiting: [],
+    failedLines: failed.map(r => {
+      const d = new Date(t0 + (r.end as number));
+      return {
+        id: r.task,
+        difficulty: r.difficulty,
+        date: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
+        reason: `ended at ${r.state}`,
+        recent: true,
+      };
+    }),
+    marks,
+  };
+  return {
+    at: now,
+    sessions,
+    queue,
+    lands,
+    recent: landed.filter(r => at - (r.end as number) <= 24 * 3600_000).length,
+    days: {},
+    error: "",
+  };
+}
+
+/** One line of the parent conversation, as the mod draws it (hooks/pane-view.ts's line builders). */
+export type ConversationLine =
+  | {
+      readonly at: number;
+      readonly kind: "spawn";
+      readonly label: string;
+      readonly role: string;
+      readonly model: string;
+    }
+  | {
+      readonly at: number;
+      readonly kind: "move";
+      readonly label: string;
+      readonly name: string;
+      readonly to: string;
+    }
+  | { readonly at: number; readonly kind: "needs"; readonly label: string; readonly reason: string }
+  | { readonly at: number; readonly kind: "landed"; readonly label: string }
+  | {
+      readonly at: number;
+      readonly kind: "ended";
+      readonly label: string;
+      readonly duration: number;
+      readonly state: string;
+      readonly failed: boolean;
+    };
+
+/**
+ * The parent conversation's lines up to `at` ms, oldest first: it starts each pipeline (a `start` move), sees its
+ * driver spawned (the model), gets a driver's question (an ask: needs the parent) and answers it (a move), and
+ * reads the hand-back of a land or the end of a pipeline that did not land. Only what the replay recorded: no
+ * user text, no other session's data. Pure.
+ */
+export function conversationAt(file: ReplayFile, at: number): ConversationLine[] {
+  const out: ConversationLine[] = [];
+  const roots = new Map<number, { task: string; start: number; state: string; landed: boolean }>();
+  const ids = new Set(file.sessions);
+  for (const [ts, kind, s, data] of file.events) {
+    if (ts > at) break;
+    if (kind === "session_start") {
+      const isRoot = !(typeof data?.parent === "string" && ids.has(data.parent));
+      if (!isRoot || typeof data?.task !== "string") continue;
+      const workflow = typeof data.workflow === "string" ? data.workflow : "";
+      const first = file.workflows[workflow]?.stations?.[0]?.name ?? "";
+      roots.set(s, { task: data.task, start: ts, state: first, landed: false });
+      out.push({
+        at: ts,
+        kind: "move",
+        label: data.task,
+        name: `start ${workflow}`,
+        to: first === "" ? "?" : first,
+      });
+      continue;
+    }
+    const r = roots.get(s);
+    if (r === undefined) continue;
+    if (kind === "transition" && typeof data?.to === "string") {
+      r.state = data.to;
+      if (data.to === "land") r.landed = true;
+    } else if (kind === "agent_link" && typeof data?.model === "string")
+      out.push({ at: ts, kind: "spawn", label: r.task, role: "driver", model: data.model });
+    else if (kind === "ask" && typeof data?.state === "string")
+      out.push({ at: ts, kind: "needs", label: r.task, reason: data.state });
+    else if (kind === "answer" && typeof data?.to === "string")
+      out.push({ at: ts, kind: "move", label: r.task, name: "answer", to: data.to });
+    else if (kind === "session_end")
+      out.push(
+        r.landed && data?.outcome === "completed"
+          ? { at: ts, kind: "landed", label: r.task }
+          : {
+              at: ts,
+              kind: "ended",
+              label: r.task,
+              duration: ts - r.start,
+              state: r.state,
+              failed: data?.outcome !== "completed",
+            },
+      );
+  }
+  return out;
 }
 
 /**
- * The plan pane's rows at `at` ms into the replay: a root session with a task is a pipeline; it is Next
- * before it starts, Running until it ends, then Landed (it moved through `land`) or Closed. Pure.
+ * The last `n` lines of `conversationAt(file, at)`, each keyed by its index in the whole conversation. The list
+ * only grows as `at` advances, so a line keeps its key while it scrolls; two events of one millisecond (a
+ * session's paired answers) still get two keys, which a key built from the line's own fields would not.
  */
-export function planAt(file: ReplayFile, at: number): PlanView {
-  interface Acc {
-    task: string;
-    difficulty: string;
-    state: string;
-    model: string;
-    rounds: number;
-    start: number;
-    end: number | undefined;
-    outcome: unknown;
-    landed: boolean;
-    root: boolean;
-  }
-  const acc = new Map<number, Acc>();
-  const rootOfSession = new Map<string, number>();
-  const sessionIndex = new Map(file.sessions.map((id, i) => [id, i]));
-  for (const [ts, kind, s, data] of file.events) {
-    if (kind !== "session_start") continue;
-    const parent = typeof data?.parent === "string" ? sessionIndex.get(data.parent) : undefined;
-    if (parent === undefined && typeof data?.task === "string") {
-      acc.set(s, {
-        task: data.task,
-        difficulty: typeof data.difficulty === "string" ? data.difficulty : "",
-        state: "",
-        model: "",
-        rounds: 0,
-        start: ts,
-        end: undefined,
-        outcome: undefined,
-        landed: false,
-        root: true,
-      });
-      rootOfSession.set(file.sessions[s], s);
-    } else if (parent !== undefined) {
-      const root = rootOfSession.get(file.sessions[parent]) ?? parent;
-      rootOfSession.set(file.sessions[s], root);
-    }
-  }
-  const rounds = new Map<number, number>();
-  for (const [ts, kind, s, data] of file.events) {
-    const a = acc.get(s);
-    if (kind === "session_start" && a === undefined) {
-      const root = rootOfSession.get(file.sessions[s]);
-      if (root !== undefined && ts <= at && data?.workflow === "slice-review")
-        rounds.set(root, (rounds.get(root) ?? 0) + 1);
-    }
-    if (a === undefined || ts > at) continue;
-    if (kind === "transition" && typeof data?.to === "string") {
-      a.state = data.to;
-      if (data.to === "land") a.landed = true;
-    } else if (kind === "agent_link" && typeof data?.model === "string") a.model = data.model;
-    else if (kind === "session_end") {
-      a.end = ts;
-      a.outcome = data?.outcome;
-    }
-  }
-  const row = (id: number, a: Acc): PlanRow => ({
-    task: a.task,
-    difficulty: a.difficulty,
-    state: a.state,
-    model: a.model,
-    rounds: rounds.get(id) ?? 0,
-    startedAt: a.start,
-    endedAt: a.end,
-  });
-  const running: PlanRow[] = [];
-  const next: PlanRow[] = [];
-  const landed: PlanRow[] = [];
-  const closed: PlanRow[] = [];
-  for (const [id, a] of acc) {
-    const r = row(id, a);
-    if (a.start > at) next.push(r);
-    else if (a.end === undefined) running.push(r);
-    else (a.landed && a.outcome === "completed" ? landed : closed).push(r);
-  }
-  const byEnd = (x: PlanRow, y: PlanRow): number => (y.endedAt ?? 0) - (x.endedAt ?? 0);
-  return {
-    running: running.sort((x, y) => x.startedAt - y.startedAt),
-    next: next.sort((x, y) => x.startedAt - y.startedAt),
-    landed: landed.sort(byEnd),
-    closed: closed.sort(byEnd),
-  };
+export function conversationTail(
+  file: ReplayFile,
+  at: number,
+  n: number,
+): { readonly key: number; readonly line: ConversationLine }[] {
+  const all = conversationAt(file, at);
+  const from = Math.max(0, all.length - n);
+  return all.slice(from).map((line, i) => ({ key: from + i, line }));
 }

@@ -1,4 +1,5 @@
-// Pins of ENG-PANE-COST-TAILS: the plan pane's Landed days (hooks/plan-pane.tsx), the parts that need no render.
+// Pins of ENG-PANE-COST-TAILS: the plan pane's Landed days (hooks/plan-pane.tsx, and hooks/pane-view.ts for what it
+// draws), the parts that need no render.
 import { describe, expect, it, vi } from "vitest";
 vi.mock("claude-code", () => ({ atom: () => ({}), read: () => ({}), update: () => ({}) }));
 
@@ -23,18 +24,22 @@ interface DaySpend {
 }
 interface PaneModule {
   daySpends: (lands: Land[], spends: Map<string, Spend>, now?: number) => Record<string, DaySpend>;
-  dayOf: (ms: number) => string;
-  landDayOpen: (folded: string[], key: string, today: string) => boolean;
-  landDayToggled: (folded: string[], key: string, today: string) => string[];
   recentLand: (lands: Land[], label: string, at: number, now: number) => Land | undefined;
   pruneLandFolds: (folded: string[], liveDays: Set<string>) => string[];
 }
+interface ViewModule {
+  dayOf: (ms: number) => string;
+  landDayOpen: (folded: string[], key: string, today: string) => boolean;
+  landDayToggled: (folded: string[], key: string, today: string) => string[];
+}
 const pane = async (): Promise<PaneModule> =>
   (await import("../hooks/plan-pane.tsx")) as PaneModule;
+const view = (): Promise<ViewModule> => import("../hooks/pane-view.ts");
 
 describe("ENG-PANE-COST-TAILS", () => {
   it("a failed row of the same DD.MM a year ago is not summed into today", async () => {
-    const { daySpends, dayOf } = await pane();
+    const { daySpends } = await pane();
+    const { dayOf } = await view();
     const now = new Date(2026, 10, 9, 12, 0).getTime();
     const yearAgo = new Date(2025, 10, 9, 12, 0).getTime();
     const lands: Land[] = [{ at: "09.11 12:00", slice: "A", usd: 1, sha: "x", start: "11:00" }];
@@ -58,7 +63,7 @@ describe("ENG-PANE-COST-TAILS", () => {
   });
 
   it("a day folded while it was today stays folded tomorrow; an opened old day stays open", async () => {
-    const { landDayOpen, landDayToggled } = await pane();
+    const { landDayOpen, landDayToggled } = await view();
     const folded = landDayToggled([], "lands-09.11", "lands-09.11");
     expect(landDayOpen(folded, "lands-09.11", "lands-09.11")).toBe(false);
     expect(landDayOpen(folded, "lands-09.11", "lands-10.11")).toBe(false);

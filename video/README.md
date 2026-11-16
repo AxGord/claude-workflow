@@ -2,7 +2,7 @@
 
 A 2-3 minute English video, generated and re-renderable: `npm run video` writes `video/out/intro.mp4`
 (1920x1080, narration, burned subtitles) and `video/out/intro.srt`. It plays the landing page's scene (the
-terminal plan pane beside the live map, driven by the recorded anyparse replay in `docs/public/replay/`, no
+live map with the Claude Code window and its plan pane over it, driven by the recorded anyparse replay in `docs/public/replay/`, no
 private project data) while a local voice reads `script.md`.
 
 | File | Role |

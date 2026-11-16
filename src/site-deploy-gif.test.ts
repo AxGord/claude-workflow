@@ -10,43 +10,69 @@ const PKG = JSON.parse(read("package.json")) as {
   scripts: Record<string, string>;
   devDependencies: Record<string, string>;
 };
-const PANE = read("docs/.vitepress/theme/TerminalPane.vue");
+const WINDOW = read("docs/.vitepress/theme/TerminalWindow.vue");
+const DRAWER = read("docs/.vitepress/theme/PaneView.vue");
+const MOD = read("hooks/plan-pane.tsx");
+const SHARED = read("hooks/pane-view.ts");
+const STORE = read("docs/.vitepress/theme/replay-store.ts");
 const MAP = read("docs/.vitepress/theme/MapReplay.vue");
 const SCENE = read("docs/.vitepress/theme/Scene.vue");
 const THEME = read("docs/.vitepress/theme/index.ts");
 const RECORD = read("scripts/record-scene.mjs") + read("scripts/scene-capture.mjs");
 const PAGES = read(".github/workflows/pages.yml");
 
-describe("the scene: the terminal pane and the map on one replay clock", () => {
-  it("the pane draws from planAt at the shared position, not from a clock of its own", () => {
-    expect(PANE).toContain("planAt(shared.file, shared.at)");
-    expect(PANE).not.toContain("requestAnimationFrame");
-    expect(read("docs/.vitepress/theme/replay-store.ts")).toContain("reactive<");
+describe("the scene: one stage, the map under the Claude Code window, one replay clock", () => {
+  it("the plan pane is the mod's own code: one pure module both draw, no second copy of its rows", () => {
+    // the mod draws the shared tree with Claude Code's elements
+    expect(MOD).toContain("from './pane-view'");
+    expect(MOD).toContain("paneTree({");
+    // the site draws the same tree in the DOM, from the Snapshot the replay's events build
+    expect(WINDOW).toContain('from "../../../hooks/pane-view"');
+    expect(WINDOW).toContain("snapshotAt(shared.file, shared.at)");
+    expect(WINDOW).toContain("paneTree({");
+    // the sections are written once, in the shared module
+    expect(SHARED).toContain("▶ Running");
+    expect(SHARED).toContain("⏭ Next");
+    for (const f of [MOD, WINDOW, DRAWER]) {
+      expect(f).not.toContain("▶ Running");
+      expect(f).not.toContain("⏭ Next");
+      expect(f).not.toContain("'▰'");
+    }
+    expect(SHARED).not.toContain("from 'claude-code'");
   });
 
-  it("the map player publishes the file and every position to the store", () => {
-    expect(MAP).toContain("shared.file = file");
-    expect(MAP).toContain("shared.at = v");
+  it("the window and the map read the one clock, neither keeps its own", () => {
+    expect(WINDOW).not.toContain("requestAnimationFrame");
+    expect(MAP).not.toContain("advance(");
+    expect(STORE).toContain("reactive<");
+    expect(STORE).toContain("shared.file = file");
   });
 
-  it("the landing mounts both side by side in the hero's after-slot", () => {
-    expect(SCENE).toContain("<TerminalPane />");
+  it("the landing mounts a 16:9 stage of 1920x1080 scaled to the page, the window over the map, the T toggle", () => {
     expect(SCENE).toContain("<MapReplay />");
+    expect(SCENE).toContain('<TerminalWindow v-show="shared.terminal" />');
+    expect(SCENE).toContain("const STAGE_W = 1920;");
+    expect(SCENE).toContain("const STAGE_H = 1080;");
+    expect(SCENE).toContain("aspect-ratio: 16 / 9");
+    expect(SCENE).toContain('e.key !== "t" && e.key !== "T"');
     expect(THEME).toContain('"home-hero-after": () => h(Scene)');
+    expect(WINDOW).toContain("backdrop-filter: blur(");
   });
 
-  it("the pane has Running, Next and Landed rows with difficulty bars", () => {
-    expect(PANE).toContain("▶ Running");
-    expect(PANE).toContain("⏭ Next");
-    expect(PANE).toContain("✓ Landed");
-    expect(PANE).toContain("difficultyCells(row.difficulty)");
+  it("keys the window's conversation lines by their index in the whole conversation, not by their own fields", () => {
+    expect(WINDOW).toContain("conversationTail(shared.file, shared.at, LINES_SHOWN)");
+    expect(WINDOW).toContain(':key="l.key"');
+    expect(WINDOW).not.toContain("${l.at}-${l.kind}");
   });
 });
 
 describe("the recorder", () => {
   it("steps the replay by frame through the page's seek hook (?record), so the output does not depend on render speed", () => {
-    expect(MAP).toContain('location.search.includes("record")');
-    expect(MAP).toContain("__replay");
+    expect(SCENE).toContain('location.search.includes("record")');
+    expect(SCENE).toContain("__replay");
+    // the recorders capture the landing's own stage at scale 1, not a restyled layout of their own
+    expect(RECORD).toContain(".stage-frame { position: fixed !important;");
+    expect(RECORD).toContain('style.transform === "scale(1)"');
     expect(RECORD).toContain("window.__replay.seek(ms)");
     expect(RECORD).toContain("/claude-workflow/?record");
   });

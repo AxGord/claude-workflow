@@ -8,7 +8,8 @@ description: The plan pane, the web dashboard with the live map, and the status 
 ## Plan pane
 
 `/wf-plan` toggles a pane beside the chat (a Claude Code hooks module, `hooks/plan-pane.tsx`, needs a Claude Code
-that loads plugin `modules`; older ones simply have no pane). It refreshes every 15 s from the engine's own state —
+that loads plugin `modules`; older ones simply have no pane; what it draws is `hooks/pane-view.ts`, a pure function of
+the engine's snapshot that the documentation site's landing draws too). It refreshes every 15 s from the engine's own state —
 no model call, no tokens:
 
 - **Plan** — for a session whose root workflow has a work queue (`context.queue_file`): `▶ Running n/window` (each
@@ -155,4 +156,4 @@ Then in `~/.claude/settings.json`:
 }
 ```
 
-The landing page shows the replay beside a terminal imitation of the plan pane (Running, Next and Landed, with difficulty bars and states), computed from the same events and clock. `npm run docs:record` re-records the scene into `docs/media/scene.mp4` and `scene.gif`; `npm run video` renders a voiced intro over it (`video/out/intro.mp4`, narration in `video/script.md`, one command, see `video/README.md`).
+The landing page shows the replay on one 16:9 stage the map fills (scaled to the frame, never scrolling; when the lanes are taller than the frame a camera follows the running ones), with the Claude Code window drawn over it, translucent: the parent conversation's lines (each pipeline started, its driver spawned, a question and its answer, a land) and the plan pane. The pane is not an imitation: `hooks/pane-view.ts` is what the pane draws, a pure function of a Snapshot that the mod draws with Claude Code's elements and the site draws in the browser, and `snapshotAt` (`src/replay.ts`) builds that Snapshot from the replay's events. One transport bar under the stage (play / pause, speed, scrub) drives the map and the window; its Terminal button and the `T` key hide or show the window. `npm run docs:record` re-records the scene into `docs/media/scene.mp4` and `scene.gif`; `npm run video` renders a voiced intro over it (`video/out/intro.mp4`, narration in `video/script.md`, one command, see `video/README.md`).

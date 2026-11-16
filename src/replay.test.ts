@@ -12,7 +12,10 @@ import {
   DEFAULT_SPEED,
   elapsed,
   expandReplay,
-  followsBottom,
+  cameraTop,
+  conversationAt,
+  conversationTail,
+  fitView,
   renderReplay,
   REPLAY_QUEUE,
   rowsUntil,
@@ -237,12 +240,27 @@ describe("buildReplay trims to a window of whole pipelines", () => {
   });
 });
 
-describe("follow mode", () => {
-  it("holds at the bottom and ends when the reader scrolls up", () => {
-    expect(followsBottom(1000, 400, 600)).toBe(true);
-    expect(followsBottom(1000, 396, 600)).toBe(true);
-    expect(followsBottom(1000, 300, 600)).toBe(false);
-    expect(followsBottom(500, 0, 600)).toBe(true);
+describe("the map fits its frame: no scroll", () => {
+  it("the view is the map's width (at least the frame's) at the frame's proportions", () => {
+    expect(fitView(1920, 3000, 1920, 1080)).toEqual({ width: 1920, height: 1080 });
+    expect(fitView(3840, 500, 1920, 1080)).toEqual({ width: 3840, height: 2160 });
+    expect(fitView(800, 500, 1920, 1080)).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it("the camera follows the running lanes when the map is taller than the view", () => {
+    const lane = (y: number, status: "running" | "landed") => ({ y, height: 40, status }) as never;
+    const map = (lanes: never[], height: number) =>
+      ({ width: 1920, height, next: [], bands: [{ y: 100, lanes }] }) as never;
+    // fits: no camera
+    expect(cameraTop(map([lane(0, "running")], 900), 1080)).toBe(0);
+    // the running lanes (y 1100..1340 absolute) centred in a 1080 view
+    expect(
+      cameraTop(map([lane(0, "landed"), lane(1000, "running"), lane(1200, "running")], 4000), 1080),
+    ).toBe(1220 - 540);
+    // nothing runs: the bottom
+    expect(cameraTop(map([lane(0, "landed")], 4000), 1080)).toBe(4000 - 1080);
+    // kept inside the map
+    expect(cameraTop(map([lane(0, "running")], 2000), 1080)).toBe(0);
   });
 });
 
@@ -297,6 +315,18 @@ describe("the committed replay (docs/public/replay/anyparse.json)", () => {
   const file = JSON.parse(raw) as ReplayFile;
   const events = expandReplay(file);
   const sessions = fold(events);
+
+  it("keys every line of its conversation uniquely, though two of its lines share a millisecond, kind and label", () => {
+    const all = conversationAt(file, file.durationMs);
+    const own = all.map(l => `${l.at}-${l.kind}-${l.label}`);
+    expect(new Set(own).size).toBeLessThan(own.length);
+    const keys = conversationTail(file, file.durationMs, all.length).map(t => t.key);
+    expect(new Set(keys).size).toBe(all.length);
+    // a line keeps its key as the window scrolls: the tail's keys are the whole conversation's indices
+    const tail = conversationTail(file, file.durationMs, 5);
+    expect(tail.map(t => t.key)).toEqual([0, 1, 2, 3, 4].map(i => all.length - 5 + i));
+    expect(tail.map(t => t.line)).toEqual(all.slice(-5));
+  });
 
   it("is under 300 KB", () => {
     expect(Buffer.byteLength(raw)).toBeLessThan(300_000);
