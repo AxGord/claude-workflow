@@ -761,7 +761,7 @@ function tlScrollToNow() {
 function renderPool(p) {
   const head = `<div class="pool-head"><span>budget <b>${p.budget}</b></span><span>held <b>${p.held}</b></span><span>load <b>${p.load.toFixed(2)}</b></span><span>external <b>${p.external.toFixed(1)}</b></span><span>threshold <b>${p.load_threshold}</b></span><span>locks <b>${p.locks.length ? escapeHtml(p.locks.join(', ')) : 'none'}</b></span></div>`
     + (p.starvedNote ? `<div class="pool-note">${ui.plaque('STARVED', 'st-stop')} ${escapeHtml(p.starvedNote)}</div>` : '');
-  const flags = r => (r.overrun ? ui.plaque('OVERRUN ~' + Math.round(r.runs), 'st-stop') : '') + (r.starved ? ui.plaque('STARVED', 'st-stop') : '');
+  const flags = r => (r.overrun ? ui.plaque('OVERRUN ~' + Math.round(r.runs), 'st-stop') : '') + (r.underuse ? ui.plaque('UNDERUSE ~' + Math.round(r.runs), 'st-wait') : '') + (r.starved ? ui.plaque('STARVED', 'st-stop') : '');
   const row = (r, pos) => {
     const e = r.entry;
     const session = e.session_id ? `<a href="${Routes.routePath({ view: 'session', id: e.session_id })}">${escapeHtml(e.session_id.slice(0, 8))}</a>` : '';

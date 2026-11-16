@@ -89,7 +89,8 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 | `src/tools.ts` | MCP tool registrations + response formatting |
 | `src/executor.ts` | Action state execution — shell commands (`exec`, a `resource:` exec under a pool lease) and HTTP requests (`fetch`) |
 | `src/pool.ts` | Machine-wide thread pool: config, admission pass, lease acquire/release under a file lock |
-| `src/wf-run.ts` | The `wf-run` CLI over the pool |
+| `src/wf-run.ts` | The `wf-run` CLI over the pool (`--status`, `--usage`) |
+| `src/pool-usage.ts` | What each lease held against what its tree ran: the meter, `usage.jsonl`, `wf-run --usage`'s per-label table |
 | `src/queue.ts` | Task queue files: parse, admission (`after:` / `touches:` / `owner:` / pause), `[.]` marks under the queue's lock |
 | `src/queue-cli.ts` | The `wf-queue` CLI over `queue.ts` (exec form of `queue_next` / `queue_mark`) |
 | `src/process.ts` | Process-group kill and pid liveness |

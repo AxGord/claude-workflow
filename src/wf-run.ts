@@ -2,6 +2,7 @@
 // wf-run: run a heavy command under a lease from the machine-wide thread pool.
 //   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--est-by-threads K:SEC,…] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]
 //   wf-run --status
+//   wf-run --usage [--since 90m|24h|2d]    per label over the leases that ended in the window: n, mean held, mean used, idle and overrun thread-minutes
 // The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
 // and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
 // (a session exec's), else the project's `.claude/workflows/settings.json` `priority` level, else 0;
@@ -21,6 +22,13 @@ import {
   resolvePoolDir,
 } from "./pool.js";
 import { curveOf } from "./estimate.js";
+import {
+  DEFAULT_USAGE_WINDOW_MS,
+  formatUsage,
+  parseSince,
+  readUsage,
+  summarizeUsage,
+} from "./pool-usage.js";
 import { killProcessGroup } from "./process.js";
 import { projectDefaultPriority } from "./project-settings.js";
 import {
@@ -33,7 +41,8 @@ import {
 
 const USAGE =
   "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--est-by-threads K:SEC,…] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]\n" +
-  "       wf-run --status";
+  "       wf-run --status\n" +
+  "       wf-run --usage [--since 90m|24h|2d]";
 const EX_USAGE = 64;
 const EX_NOEXEC = 126;
 const EX_NOTFOUND = 127;
@@ -44,6 +53,9 @@ type ThreadCount = number | typeof RESOURCE_THREADS_BUDGET;
 
 interface Options {
   readonly status: boolean;
+  /** `--usage`: print the per-label usage table over the last `sinceMs` and exit. */
+  readonly usage: boolean;
+  readonly sinceMs: number;
   /** The threads asked for; a `MIN-MAX` range: its max. */
   readonly threads: ThreadCount;
   readonly minThreads?: number;
@@ -65,6 +77,9 @@ interface Options {
 
 function parseArgs(argv: readonly string[]): Options {
   let status = false;
+  let usage = false;
+  let sinceMs = DEFAULT_USAGE_WINDOW_MS;
+  let sinceGiven = false;
   let efficiency = false;
   let failOpen = false;
   // Default: 1 thread, none beside a --lock (a lock-only lease).
@@ -111,6 +126,18 @@ function parseArgs(argv: readonly string[]): Options {
       case "--status":
         status = true;
         break;
+      case "--usage":
+        usage = true;
+        break;
+      case "--since": {
+        const v = value(flag, inline);
+        const ms = parseSince(v);
+        if (ms === undefined)
+          throw new Error(`${flag}: expected a window like 90m, 24h or 2d, got "${v}"`);
+        sinceMs = ms;
+        sinceGiven = true;
+        break;
+      }
       case "--efficiency":
         efficiency = true;
         break;
@@ -165,7 +192,8 @@ function parseArgs(argv: readonly string[]): Options {
     }
   }
   const command = argv.slice(i);
-  if (!status && command.length === 0) throw new Error("no command given");
+  if (sinceGiven && !usage) throw new Error("--since needs --usage");
+  if (!status && !usage && command.length === 0) throw new Error("no command given");
   if (waitFullSec !== undefined && minThreads === undefined)
     throw new Error("--wait-full needs --threads MIN-MAX");
   if (estByThreads !== undefined && minThreads === undefined)
@@ -176,6 +204,8 @@ function parseArgs(argv: readonly string[]): Options {
     priority === undefined ? (fromEnvironment() ?? fromProjectSettings(failOpen)) : undefined;
   return {
     status,
+    usage,
+    sinceMs,
     threads: threads ?? (locks.length > 0 ? 0 : 1),
     minThreads,
     waitFullSec,
@@ -280,6 +310,11 @@ async function main(argv: readonly string[]): Promise<number> {
   const pool = new Pool(resolvePoolDir());
   if (opts.status) {
     process.stdout.write(formatStatus(await pool.measuredStatus(), pool.dir) + "\n");
+    return 0;
+  }
+  if (opts.usage) {
+    const rows = summarizeUsage(readUsage(pool.dir), Date.now(), opts.sinceMs);
+    process.stdout.write(formatUsage(rows, opts.sinceMs, pool.dir) + "\n");
     return 0;
   }
   let [cmd, ...args] = opts.command;

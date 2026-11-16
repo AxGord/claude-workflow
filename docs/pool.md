@@ -54,6 +54,8 @@ The log samples a pool once a minute while it has a lease or a waiter, and not a
 
 **Overrun.** A lease counts threads, but a command can run more processes than that. The pool reads the process table and flags a lease whose tree runs well above its threads as OVERRUN (`OVERRUN ~12` in the tab), and counts what the tree runs as the lease's own load, never as foreign load.
 
+**Underuse.** The other way round is just as visible: a lease asks for threads the caller says it will use. A lease whose tree runs at least half its threads (and at least one cpu) below them for 30 seconds is logged as UNDERUSE in `pool.log` and marked `(UNDERUSE)` in `wf-run --status`, `pool_status` and the dashboard's Pool tab (an `UNDERUSE ~N` plaque). `wf-run --status` and `pool_status` also show what every measured lease runs against what it holds (`holds 4 threads, runs ~3`); the dashboard shows `runs` only in the OVERRUN and UNDERUSE plaques. The pool only reports it: the size of a lease is its caller's declaration, and the caller fixes it. `wf-run --usage` adds up the leases that ended, per label, so a project can right-size its own callers.
+
 ## Using it
 
 A workflow's `exec` state asks with `resource: { threads: 6, priority: 0, wait_timeout: 900 }` and the engine does the rest. Anywhere else, `wf-run` puts any command through the pool:
@@ -61,6 +63,7 @@ A workflow's `exec` state asks with `resource: { threads: 6, priority: 0, wait_t
 ```bash
 wf-run --threads 2-8 --wait-full 60 --lock land --label "build" -- make -j"$WF_THREADS"
 wf-run --status    # the pool: budget, load, every lease and waiter, in admission order
+wf-run --usage --since 24h    # per label: leases, threads held and used, idle and overrun thread-minutes
 ```
 
 Agents' own heavy Bash commands go through it too, without asking: the pool gate hook rewrites the commands a project marks heavy. See [Pool gate](/action-states#pool-gate-—-agents-heavy-bash-commands-through-the-pool).

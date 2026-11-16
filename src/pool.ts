@@ -12,6 +12,7 @@ import { parseYaml, warnLeftoverJson } from "./yaml-config.js";
 import lockfile from "proper-lockfile";
 import { LOCK_NAME_PATTERN, LOCK_STALE_MS, PRIORITY_LEVELS, type PriorityLevel } from "./types.js";
 import { p90 } from "./estimate.js";
+import { advanceMeter, appendUsage, usageRecord, type LeaseMeter } from "./pool-usage.js";
 import {
   bootTimeMs,
   isGroupAlive,
@@ -26,13 +27,17 @@ export const EX_TEMPFAIL = 75;
 
 const POOL_FILE = "pool.json";
 const CONFIG_FILE = "config.yaml";
-// One line per orphan reaped, over-running lease, starved waiter, backfill and load sample; rotated past LOG_MAX_BYTES.
+// One line per orphan reaped, over-running or under-using lease, starved waiter, backfill and load sample; rotated past LOG_MAX_BYTES.
 const LOG_FILE = "pool.log";
 const LOG_MAX_BYTES = 1 << 20;
 // While a lease or waiter exists, a pass at least this long after the last sample logs one `sample:` line.
 const SAMPLE_EVERY_MS = 60_000;
 // A sample names this many waiters; the rest are counted.
 const SAMPLE_WAITERS_SHOWN = 4;
+// A lease whose tree runs well below its threads this long is logged as UNDERUSE.
+export const UNDERUSE_GRACE_MS = 30_000;
+// A lease holder passes this often while its command runs, so the lease is sampled with nobody polling.
+const METER_PASS_MS = 5000;
 // A waiter queued this long (or a pool that granted nothing this long) is starved (config `starve_after`, seconds).
 const DEFAULT_STARVE_AFTER_SEC = 900;
 // An orphaned group that survives its SIGTERM this long gets SIGKILL.
@@ -217,6 +222,12 @@ export interface PoolEntry {
   readonly orphaned?: number;
   /** When the lease's process tree was first seen running well above its threads (logged once). */
   readonly overrun?: number;
+  /** Since when the lease's tree has run well below its threads (cleared when it does not); UNDERUSE once it lasts UNDERUSE_GRACE_MS. */
+  readonly underuse_since?: number;
+  /** When the UNDERUSE was logged (once per lease). */
+  readonly underuse?: number;
+  /** What the lease held against what its tree ran, over the time it was sampled: its `usage.jsonl` record. */
+  readonly meter?: LeaseMeter;
   /** When the waiter was first seen starved (logged once). */
   readonly starved?: number;
   /**
@@ -672,6 +683,26 @@ export function overruns(lease: PoolEntry, view: Pick<PoolView, "budget" | "runs
   return n > 0 && runs !== undefined && runs - n >= Math.max(2, n / 2);
 }
 
+/** A lease's tree runs well below its threads: at least max(1, threads/2) cpus under them. A lock-only lease never. */
+export function underuses(lease: PoolEntry, view: Pick<PoolView, "budget" | "runs">): boolean {
+  const n = effectiveThreads(lease, view.budget);
+  const runs = view.runs[lease.id];
+  return n > 0 && runs !== undefined && n - runs >= Math.max(1, n / 2);
+}
+
+/** `underuses` for longer than UNDERUSE_GRACE_MS: what `--status` flags. */
+export function underusing(
+  lease: PoolEntry,
+  view: Pick<PoolView, "budget" | "runs">,
+  now: number,
+): boolean {
+  return (
+    underuses(lease, view) &&
+    lease.underuse_since !== undefined &&
+    now - lease.underuse_since >= UNDERUSE_GRACE_MS
+  );
+}
+
 /** `45s`, `17m`, `2h10m`. */
 export function formatDuration(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -1005,6 +1036,7 @@ export class Pool {
 
   private _granted(self: PoolEntry, arrived: number, view: PoolView): AcquireResult {
     let released = false;
+    let pulse: NodeJS.Timeout | undefined;
     const entry = view.leases.find(e => e.id === self.id)!;
     const lease: Lease = {
       entry,
@@ -1021,10 +1053,14 @@ export class Pool {
           ...state,
           leases: state.leases.map(e => (e.id === self.id ? { ...e, ...group } : e)),
         }));
+        // a command running under a lease nobody polls is still sampled
+        pulse ??= setInterval(() => void this._pass().catch(() => undefined), METER_PASS_MS);
+        pulse.unref();
       },
       release: async (opts = {}) => {
         if (released) return;
         released = true;
+        clearInterval(pulse);
         await this._remove(self.id, opts.failed !== true);
       },
     };
@@ -1083,6 +1119,16 @@ export class Pool {
     return this._update(state => {
       const lease = state.leases.find(e => e.id === id);
       const ran = record && lease?.started !== undefined && lease.threads > 0;
+      if (lease?.started !== undefined) {
+        const used = usageRecord(
+          labelKey(lease.label) || lease.label,
+          effectiveThreads(lease, this.config().budget),
+          lease.started,
+          Date.now(),
+          lease.meter,
+        );
+        if (used) appendUsage(this.dir, used);
+      }
       return {
         ...state,
         leases: state.leases.filter(e => e.id !== id),
@@ -1199,22 +1245,39 @@ export class Pool {
     return treeLoads(leases, this._procs.list);
   }
 
-  /** Mark (and log once) the leases newly over-running and the waiters newly starved. */
+  /** Mark (and log once) the leases newly over-running or under-using and the waiters newly starved; advance each lease's meter. */
   private _mark(view: PoolView, now: number): PoolView {
-    const leases = view.leases.map(e => {
-      if (e.overrun !== undefined || !overruns(e, view)) return e;
-      this._log(
-        now,
-        `overrun: pid ${e.pid} holds ${effectiveThreads(e, view.budget)} threads, runs ~${Math.round(view.runs[e.id])} — ${e.label || "-"}`,
-      );
-      return { ...e, overrun: now };
-    });
+    const leases = view.leases.map(e => this._markLease(e, view, now));
     const waiting = view.waiting.map(e => {
       if (e.starved !== undefined || !isStarved(e, view, now)) return e;
       this._log(now, `starved: pid ${e.pid} ${starvationNotice(e, view, now)} — ${e.label || "-"}`);
       return { ...e, starved: now };
     });
     return { ...view, leases, waiting };
+  }
+
+  private _markLease(e: PoolEntry, view: PoolView, now: number): PoolEntry {
+    const n = effectiveThreads(e, view.budget);
+    const runs = view.runs[e.id];
+    const where = `pid ${e.pid} holds ${n} threads, runs ~${Math.round(runs ?? 0)} — ${e.label || "-"}`;
+    let next = e;
+    if (e.overrun === undefined && overruns(e, view)) {
+      this._log(now, `overrun: ${where}`);
+      next = { ...next, overrun: now };
+    }
+    if (underuses(e, view)) {
+      const since = e.underuse_since ?? now;
+      next = { ...next, underuse_since: since };
+      if (e.underuse === undefined && now - since >= UNDERUSE_GRACE_MS) {
+        this._log(now, `underuse: ${where}`);
+        next = { ...next, underuse: now };
+      }
+    } else if (runs !== undefined && e.underuse_since !== undefined) {
+      next = { ...next, underuse_since: undefined };
+    }
+    const meter =
+      e.started === undefined ? undefined : advanceMeter(e.meter, e.started, n, runs, now);
+    return meter ? { ...next, meter } : next;
   }
 
   /** Log the leases this pass backfilled ahead of a head, and a head newly closed to backfill. */
@@ -1353,8 +1416,10 @@ export function describeWait(self: PoolEntry, view: PoolView, now: number = Date
 
 /** What `formatEntry` flags: a lease's tree running well above its threads, a starved waiter. */
 export interface EntryMarks {
-  /** The busy cpus of an over-running lease's tree. */
+  /** The busy cpus of a measured lease's tree. */
   readonly runs?: number;
+  /** A measured lease running well above (`OVERRUN`) or below (`UNDERUSE`) its threads. */
+  readonly use?: "OVERRUN" | "UNDERUSE";
   readonly starved?: boolean;
 }
 
@@ -1386,7 +1451,8 @@ export function formatEntry(
     what = `wants ${describeRequest(e, budget)}`;
   } else {
     what = `holds ${describeHeld(e)}`;
-    if (marks.runs !== undefined) what += `, runs ~${Math.round(marks.runs)} (OVERRUN)`;
+    if (marks.runs !== undefined)
+      what += `, runs ~${Math.round(marks.runs)}${marks.use ? ` (${marks.use})` : ""}`;
   }
   const project = e.project ?? e.cwd;
   const shown =
@@ -1408,6 +1474,8 @@ export interface PoolRow {
   /** A measured lease: the busy cpus of its process tree. */
   readonly runs?: number;
   readonly overrun: boolean;
+  /** A lease whose tree has run well below its threads for UNDERUSE_GRACE_MS. */
+  readonly underuse: boolean;
   readonly starved: boolean;
 }
 
@@ -1435,6 +1503,7 @@ export function poolSnapshot(view: PoolView, now: number = Date.now()): PoolSnap
       ageMs: now - (e.started ?? e.arrived),
       ...(runs !== undefined ? { runs } : {}),
       overrun: e.started !== undefined && overruns(e, view),
+      underuse: e.started !== undefined && underusing(e, view, now),
       starved: isStarved(e, view, now),
     };
   };
@@ -1453,6 +1522,14 @@ export function poolSnapshot(view: PoolView, now: number = Date.now()): PoolSnap
   };
 }
 
+/** What `--status` shows of a lease's use: the busy cpus of its tree against its threads, flagged when far off. */
+function leaseMarks(e: PoolEntry, view: PoolView, now: number): EntryMarks {
+  const runs = view.runs[e.id];
+  if (runs === undefined || e.threads <= 0) return {};
+  const use = overruns(e, view) ? "OVERRUN" : underusing(e, view, now) ? "UNDERUSE" : undefined;
+  return { runs, ...(use ? { use } : {}) };
+}
+
 /** `wf-run --status` and the `pool_status` tool. */
 export function formatStatus(view: PoolView, dir: string, now: number = Date.now()): string {
   const starved = poolStarvation(view, now);
@@ -1463,9 +1540,7 @@ export function formatStatus(view: PoolView, dir: string, now: number = Date.now
     ...(starved ? [starved] : []),
     `locks held: ${view.leases.flatMap(e => e.locks ?? []).join(", ") || "none"}`,
     `leases (${view.leases.length}):`,
-    ...view.leases.map(e =>
-      formatEntry(e, view.budget, now, home, overruns(e, view) ? { runs: view.runs[e.id] } : {}),
-    ),
+    ...view.leases.map(e => formatEntry(e, view.budget, now, home, leaseMarks(e, view, now))),
     `waiting (${view.waiting.length}, in admission order):`,
     ...view.waiting.map(e =>
       formatEntry(e, view.budget, now, home, {

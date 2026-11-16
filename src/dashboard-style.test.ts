@@ -966,7 +966,10 @@ describe("the Pool tab", () => {
         starve_after: 900,
         locks: ["port:3000"],
         starvedNote: "STARVED: nothing granted for 20m",
-        leases: [row({ started: 1 }, { overrun: true, runs: 12.3 })],
+        leases: [
+          row({ started: 1 }, { overrun: true, runs: 12.3 }),
+          row({ started: 2 }, { underuse: true, runs: 0.4 }),
+        ],
         waiting: [row({ pid: 42 }, { starved: true, request: "7 threads" })],
       })})`,
     ) as string;
@@ -974,6 +977,7 @@ describe("the Pool tab", () => {
     expect(html).toContain("port:3000");
     expect(html).toContain("STARVED: nothing granted for 20m");
     expect(html).toContain("OVERRUN ~12");
+    expect(html).toContain("UNDERUSE ~0");
     expect(html).toContain('href="/session/abcdef123456"');
     expect(html).toContain("7 threads");
     expect(html).toContain("task/gate");
