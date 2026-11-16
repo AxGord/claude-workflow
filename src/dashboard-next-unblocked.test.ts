@@ -7,6 +7,7 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { describeQueue, parseQueue } from "./queue.js";
 import { markdownToYaml } from "./queue-convert.js";
+import { graphModuleExpression } from "./test-helpers.js";
 
 const PAGE = fs.readFileSync(
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dashboard", "index.html"),
@@ -56,6 +57,7 @@ function renderPlan(q: unknown): string {
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   vm.runInContext(`Layout = (() => { const exports = {}; ${layoutJs}\n return exports; })();`, ctx);
+  vm.runInContext(`Graph = ${graphModuleExpression()};`, ctx);
   return vm.runInContext(`renderPlan(${JSON.stringify(q)})`, ctx) as string;
 }
 

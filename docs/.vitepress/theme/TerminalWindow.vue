@@ -70,7 +70,7 @@ function act(a: PaneAction): void {
   if (a.kind === "fold") ui.folded = foldFlipped(ui.folded, a.key);
   else if (a.kind === "landDay") ui.folded = landDayToggled(ui.folded, a.key, a.today);
   else if (a.kind === "tab") ui.tab = a.id;
-  else ui.expanded = ui.expanded === a.id ? "" : a.id;
+  else if (a.kind === "expand") ui.expanded = ui.expanded === a.id ? "" : a.id;
 }
 </script>
 

@@ -20,11 +20,6 @@ features:
     details: A workflow is a YAML state machine. The engine tracks the state, enforces the guards and hands the agent one prompt at a time, so a long task survives context loss and a restart.
     link: /concepts
     linkText: Concepts
-    icon:
-      src: /screenshots/workflow-coding.png
-      alt: A coding workflow graph
-      width: 96
-      height: 96
   - title: One pool for heavy work
     details: Builds and test runs from every session share a machine-wide thread pool, so parallel agents queue instead of choking the machine.
     link: /action-states
@@ -37,11 +32,6 @@ features:
     details: A live map of lanes and branches in the web dashboard, a plan pane in the terminal, and a status line.
     link: /dashboard
     linkText: Dashboard and plan pane
-    icon:
-      src: /screenshots/workflow-master.png
-      alt: The live workflow map
-      width: 96
-      height: 96
 ---
 
 ## The problem
@@ -52,17 +42,14 @@ features:
 
 ## What you see
 
-![The live workflow map](/screenshots/workflow-master.png)
+### The workflows
 
-![A coding workflow](/screenshots/workflow-coding.png)
+Every bundled workflow, drawn by the dashboard's own renderer from its definition, as SVG. Click a state to read its prompt and where it goes; a sub-workflow state opens that workflow.
 
-![The status line](/screenshots/statusline.png)
+<WorkflowGraphs />
 
-## Install
+### The status line
 
-```bash
-/plugin marketplace add https://github.com/anthropics/claude-plugins-community
-/plugin install workflow
-```
+The band the mod draws above Claude Code's prompt while the plan pane is closed, drawn by the mod's own code from a recorded session. Drag the slider to another moment.
 
-Then start a session: the plugin provisions its skills on first run. [Get started](/getting-started) walks through the first workflow.
+<StatusLine />

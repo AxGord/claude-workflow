@@ -55,7 +55,7 @@ describe("the scene: one stage, the map under the Claude Code window, one replay
     expect(SCENE).toContain("const STAGE_H = 1080;");
     expect(SCENE).toContain("aspect-ratio: 16 / 9");
     expect(SCENE).toContain('e.key !== "t" && e.key !== "T"');
-    expect(THEME).toContain('"home-hero-after": () => h(Scene)');
+    expect(THEME).toContain('"home-hero-after": () => [h(Scene), h(Install)]');
     expect(WINDOW).toContain("backdrop-filter: blur(");
   });
 

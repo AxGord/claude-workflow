@@ -59,7 +59,9 @@ Agent                       Engine                          Storage
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 
-![Coding workflow graph](/screenshots/workflow-coding.png)
+The `coding` workflow, drawn by the dashboard's own renderer (click a state to read its prompt; the [landing page](/) draws every bundled workflow):
+
+<WorkflowGraphs workflow="coding" :picker="false" />
 
 ## Bundled Skills
 

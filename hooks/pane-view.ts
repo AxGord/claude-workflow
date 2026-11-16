@@ -23,6 +23,7 @@ export type PaneAction =
   | { readonly kind: 'landDay'; readonly key: string; readonly today: string }
   | { readonly kind: 'tab'; readonly id: View }
   | { readonly kind: 'expand'; readonly id: string }
+  | { readonly kind: 'pane' }
 
 /** A text's look: a terminal color name or `#rrggbb`, dim, bold. */
 export type TextProps = { readonly color?: string; readonly dimColor?: boolean; readonly weight?: 'bold' }
@@ -227,6 +228,32 @@ function poolBody(st: PoolState | null, now: number, columns: number): PaneNode 
     p.waiting.length === 0 ? text({ dimColor: true }, '  none') : null,
     p.waiting.map((l, i) => row(l, `${i + 1}.`)),
     text({ dimColor: true }, `read ${spanText(now - st.at)} ago`),
+  )
+}
+
+/**
+ * The status line's band above the prompt: the root session (◆ bold when it has children, else ⚙, bright while an
+ * agent or a script works in it) with its workflow and state and the count of the other sessions, the queue's
+ * running / ready / landed, and the button that toggles the pane. Nothing when the snapshot holds no session.
+ */
+export function statusBandTree(s: Snapshot): PaneEl | null {
+  if (s.sessions.length === 0) return null
+  const ids = new Set(s.sessions.map(r => r.id))
+  const roots = s.sessions.filter(r => r.parent === '' || !ids.has(r.parent))
+  const hasChildren = (r: SessionRow) => s.sessions.some(c => c.parent === r.id)
+  const main = roots.find(hasChildren) ?? roots[0] ?? s.sessions[0]!
+  const others = s.sessions.length - 1
+  const q = s.queue
+  return box(
+    { flexDirection: 'row', gap: 2 },
+    text(
+      {},
+      hasChildren(main) ? text({ color: 'cyanBright', weight: 'bold' }, '◆ ') : text({ color: main.isWorking ? 'cyanBright' : 'cyan' }, '⚙ '),
+      `${main.workflow}:${main.state}`,
+      others > 0 ? text({ color: 'cyan' }, ` (${others})`) : null,
+    ),
+    q ? text({ dimColor: true }, `▶ ${q.running.length}/${q.window} · ⏭ ${q.ready.length} · ✓ ${s.recent}`) : null,
+    button('band-plan', { kind: 'pane' }, [text({ color: 'cyan' }, '[plan]')], 'p'),
   )
 }
 

@@ -832,3 +832,35 @@ describe.skipIf(!HAVE_CHROME)("the Cost tab in a real browser", () => {
     expect(lum).toBeLessThan(100);
   }, 30_000);
 });
+
+describe.skipIf(!HAVE_CHROME)("the Workflows tab in a real browser", () => {
+  it("a node of the graph and a row of the list open the state's panel and close it again (dashboard/graph.js)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashgraph-"));
+    closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const storage = new Storage(path.join(dir, "state"), { eventLog: false });
+    const base = await serve(storage, routesModule(dir));
+    const page = await openPage(`${base}/workflow/w`);
+    await until(page, "document.querySelectorAll('[data-gnode]').length === 5", "the graph");
+    const view = `(() => ({
+      node: document.querySelectorAll('.g-node.sel').length,
+      row: document.querySelectorAll('.state-item.selected').length,
+      panel: document.querySelectorAll('.state-prompt-wrapper').length,
+      transitions: [...document.querySelectorAll('.state-prompt-wrapper .transition')].map(t => t.textContent),
+    }))()`;
+    const nodeB =
+      "[...document.querySelectorAll('[data-gnode]')].find(n => n.dataset.gnode === 'b')";
+    await page.eval(`${nodeB}.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+    expect(await page.eval(view)).toEqual({
+      node: 1,
+      row: 1,
+      panel: 1,
+      transitions: ["go → c", "back → a"],
+    });
+    // the same state again closes it; another row opens that one instead
+    await page.eval(`${nodeB}.dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+    expect(await page.eval(view)).toMatchObject({ node: 0, row: 0, panel: 0 });
+    await page.eval("document.querySelector('.state-item[data-state=\"c\"]').click()");
+    await page.eval("document.querySelector('.state-item[data-state=\"d\"]').click()");
+    expect(await page.eval(view)).toMatchObject({ node: 1, row: 1, panel: 1 });
+  }, 30_000);
+});

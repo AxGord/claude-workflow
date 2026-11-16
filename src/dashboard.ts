@@ -6,7 +6,7 @@ import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
 import type { WfEvent } from "./event-log.js";
-import { computeStations } from "./stations.js";
+import { describeWorkflows } from "./workflow-describe.js";
 import { Pool, poolSnapshot, projectNameOf, resolvePoolDir } from "./pool.js";
 import { ledgerEntry } from "./ledger.js";
 import { measureSpend, subtreeOf } from "./spend.js";
@@ -52,21 +52,7 @@ export function buildApp(
   });
 
   app.get("/api/workflows", (_req, res) => {
-    const workflows = loader.getAll();
-    const result: Record<string, unknown> = {};
-    for (const [name, wf] of workflows) {
-      result[name] = {
-        name: wf.name,
-        description: wf.description,
-        initial: wf.initial,
-        max_transitions: wf.max_transitions,
-        states: wf.states,
-        stations: computeStations(wf),
-        ...(wf.map === false ? { map: false } : {}),
-        ...(wf.driver ? { driver: { model: wf.driver.model, effort: wf.driver.effort } } : {}),
-      };
-    }
-    res.json(result);
+    res.json(describeWorkflows(loader.getAll()));
   });
 
   // The event log of the server process that holds the dashboard port. A reader resumes with

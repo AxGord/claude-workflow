@@ -14,6 +14,7 @@ const STORE = read("docs/.vitepress/theme/replay-store.ts");
 const TRANSPORT = read("docs/.vitepress/theme/Transport.vue");
 const THEME = read("docs/.vitepress/theme/index.ts");
 const CONFIG = read("docs/.vitepress/config.mts");
+const DASH_CSS = read("docs/.vitepress/theme/dashboard-css.ts");
 const MAP = read("dashboard/map.js");
 const SCENE_DOM = read("dashboard/scene-dom.js");
 
@@ -38,10 +39,12 @@ describe("the landing's replay runs the dashboard map's own code", () => {
   });
 
   it("wears the dashboard's own tokens and component rules, scoped to the block", () => {
-    expect(VUE).toContain('"../../../dashboard/tokens.css?raw"');
-    expect(VUE).toContain('"../../../dashboard/components.css?raw"');
-    expect(VUE).toContain("@scope (.map-replay)");
-    expect(VUE).toContain('.replace(/^:root\\s*\\{/m, ".map-replay {")');
+    expect(VUE).toContain("useDashboardCss()");
+    expect(VUE).toContain(':class="DASH"');
+    expect(DASH_CSS).toContain('"../../../dashboard/tokens.css?raw"');
+    expect(DASH_CSS).toContain('"../../../dashboard/components.css?raw"');
+    expect(DASH_CSS).toContain("@scope (.${DASH})");
+    expect(DASH_CSS).toContain(".replace(/^:root\\s*\\{/m, `.${DASH} {`)");
   });
 
   it("opens a folded group on a click, as /map does, and shows a tooltip on hover (a <title>)", () => {
@@ -91,7 +94,7 @@ describe("the replay player", () => {
 
 describe("the landing page shows it", () => {
   it("the theme puts the component in the home hero's after-slot, outside the v-pre markdown", () => {
-    expect(THEME).toContain('"home-hero-after": () => h(Scene)');
+    expect(THEME).toContain('"home-hero-after": () => [h(Scene), h(Install)]');
     expect(THEME).toContain("extends: DefaultTheme");
     expect(CONFIG).toContain('attrSet("v-pre"');
     expect(read("docs/index.md")).not.toContain("<MapReplay");
@@ -124,6 +127,12 @@ describe("docs:build compiles the landing with the replay", () => {
     );
     const page = fs.readFileSync(path.join(out, "index.html"), "utf8");
     expect(page).toContain("map-replay");
+    // the live graphs and the status line are in the landing, the workflow definitions ship beside it
+    expect(page).toContain('class="wfg dash"');
+    expect(page).toContain("sl-term");
+    expect(fs.readFileSync(path.join(out, "workflows.json"), "utf8")).toBe(
+      read("docs/public/workflows.json"),
+    );
     expect(page).toContain("tr-play");
     expect(page).toContain("stage-frame");
     expect(fs.readFileSync(path.join(out, "replay", "anyparse.json"), "utf8")).toBe(

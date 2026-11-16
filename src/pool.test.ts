@@ -1102,7 +1102,8 @@ describe("Pool: flexible leases and re-ranking", () => {
     }, 400);
     const late = await pool.acquire(
       { threads: 8, minThreads: 2, waitFullMs: 300, locks: ["L"] },
-      { pollMs: 5_000 },
+      // a short poll: the pool.json watch can lose an event under a loaded machine, and the wait must still end near the window
+      { pollMs: 500 },
     );
     expect(late.status === "granted" && late.lease.threads).toBe(4);
     // the lock was held 400 ms and the window outlasts it: min is not taken at the release

@@ -59,6 +59,7 @@ let allSessions = [];
 let liveMap = null; // /map.js (the live workflow map), imported when the Map tab first opens
 let Layout = null; // /map-layout.js (difficultyBar: the one difficulty plaque), imported before the first render
 let Stable = null; // /stable.js (in-place refresh, scroll memory), imported before the first render
+let Graph = null; // /graph.js (the workflow graph and its state panel), imported before the first render
 
 // Every refresh on a timer takes its markup into the live node in place: scroll, focus and selection stay.
 function put(id, html) {
@@ -76,9 +77,7 @@ async function fetchJSON(url) {
 }
 
 function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
+  return Graph.escapeHtml(str);
 }
 
 // The shared components (dashboard/components.css): every view builds its markup from these and
@@ -98,8 +97,8 @@ function actorClass(name) {
 }
 
 const ui = {
-  label: (html, gap) => `<h2 class="label${gap ? ' gap' : ''}">${html}</h2>`,
-  empty: (text, tight) => `<div class="empty${tight ? ' tight' : ''}">${text}</div>`,
+  label: (html, gap) => Graph.label(html, gap),
+  empty: (text, tight) => Graph.empty(text, tight),
   // A pill with a 2 px border in the state colour (cls: st-run / st-wait / st-stop / st-done / st-pool) or a token.
   plaque: (text, cls, color) => `<span class="plaque${cls ? ' ' + cls : ''}"${color ? ` style="--c:var(${color})"` : ''}>${text}</span>`,
   // The five-cell difficulty bar, first in every row that has a difficulty (`?????` when unknown, so columns align).
@@ -119,7 +118,7 @@ const ui = {
     return `<span class="chip ${modelClass(model)}">${escapeHtml(model)}${bars ? ' ' + bars : ''}${roleHtml ? ' ' + roleHtml : ''}</span>`;
   },
   dot: kind => `<span class="dot${kind ? ' ' + kind : ''}"></span>`,
-  square: () => '<span class="sq"></span>',
+  square: () => Graph.square(),
   // `next: … +N` / `landed earlier: … +N`
   strip(lead, plaquesHtml, hidden, cls) {
     if (!plaquesHtml.length) return '';
@@ -137,8 +136,8 @@ const ui = {
       + (href ? '</a>' : '</div>');
   },
   frame: (html, active, cls) => `<div class="frame${active ? ' active-frame' : ''}${cls ? ' ' + cls : ''}">${html}</div>`,
-  transition: (name, target) => `<div class="transition">${escapeHtml(name)} <span class="arrow">→</span> ${escapeHtml(target)}</div>`,
-  box: (text, label) => (label ? `<div class="box-label">${label}</div>` : '') + `<div class="box">${escapeHtml(text)}</div>`,
+  transition: (name, target) => Graph.transition(name, target),
+  box: (text, caption) => Graph.box(text, caption),
   kv: (key, valueHtml) => `<div class="kv"><span class="key">${escapeHtml(key)}</span>: <span class="val">${valueHtml}</span></div>`,
 };
 
@@ -457,7 +456,7 @@ function renderDetail(session) {
   if (isActive) {
     const frame = session.stack[session.active_frame];
     html += ui.label('Workflow Graph', true);
-    html += `<div class="graph">${renderGraph(frame.workflow, frame.current_state, session.stack, sessionState(session).live)}</div>`;
+    html += `<div class="graph">${Graph.renderGraph(dagre, frame.workflow, allWorkflows[frame.workflow], frame.current_state, session.stack, sessionState(session).live)}</div>`;
   }
 
   // History
@@ -475,346 +474,18 @@ function renderDetail(session) {
   put('detail-content', html);
 }
 
-function pointsToPath(points) {
-  if (points.length < 2) return '';
-  if (points.length === 2) {
-    return `M${points[0].x},${points[0].y}L${points[1].x},${points[1].y}`;
-  }
-  // Catmull-Rom to cubic bezier through dagre control points
-  let d = `M${points[0].x},${points[0].y}`;
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[Math.max(0, i - 1)];
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const p3 = points[Math.min(points.length - 1, i + 2)];
-    const t = 1 / 6;
-    const cp1x = p1.x + (p2.x - p0.x) * t;
-    const cp1y = p1.y + (p2.y - p0.y) * t;
-    const cp2x = p2.x - (p3.x - p1.x) * t;
-    const cp2y = p2.y - (p3.y - p1.y) * t;
-    d += `C${cp1x},${cp1y},${cp2x},${cp2y},${p2.x},${p2.y}`;
-  }
-  return d;
-}
-
-// A node's class: the same state colours as the lists (live = running, stacked = waiting on a child).
-function graphNodeKind(state, isCurrent, isInStack, liveKey) {
-  if (isCurrent) return 'live ' + liveKey;
-  if (isInStack) return 'stacked';
-  if (state.skills && state.skills.length > 0) return 'skill';
-  if (state.type === 'exec') return state.background ? 'bg' : 'script';
-  if (state.type === 'fetch') return 'fetch';
-  if (state.terminal) return 'terminal';
-  return '';
-}
-
-function renderGraph(workflowName, currentState, stack, liveKey = '') {
-  const wf = allWorkflows[workflowName];
-  if (!wf) return ui.empty('Workflow definition not available');
-
-  const states = Object.entries(wf.states);
-  const nodeW = 160;
-  const nodeH = 48;
-
-  // Auto-detect layout direction: wide fan-out → left-to-right
-  let maxFanOut = 0;
-  for (const [, state] of states)
-    if (state.transitions) maxFanOut = Math.max(maxFanOut, Object.keys(state.transitions).length);
-  const rankdir = maxFanOut > 4 ? 'LR' : 'TB';
-
-  // Build dagre graph
-  const g = new dagre.graphlib.Graph({ multigraph: true });
-  g.setGraph({ rankdir, nodesep: 60, ranksep: 80, marginx: 30, marginy: 30 });
-  g.setDefaultEdgeLabel(() => ({}));
-
-  for (const [name, state] of states) {
-    g.setNode(name, { width: nodeW, height: nodeH, state });
-  }
-
-  // Edges: transitions, on_complete, on_fail
-  for (const [name, state] of states) {
-    if (state.transitions) {
-      for (const [label, target] of Object.entries(state.transitions)) {
-        if (g.hasNode(target))
-          g.setEdge(name, target, { label, type: 'transition' }, `t:${name}:${label}`);
-      }
-    }
-    if (state.sub_workflow) {
-      if (state.on_complete && g.hasNode(state.on_complete))
-        g.setEdge(name, state.on_complete, { label: 'on_complete', type: 'on_complete' }, `oc:${name}`);
-      if (state.on_fail && g.hasNode(state.on_fail))
-        g.setEdge(name, state.on_fail, { label: 'on_fail', type: 'on_fail' }, `of:${name}`);
-    }
-    // Action state routing edges
-    if (state.type === 'exec' || state.type === 'fetch') {
-      if (state.cases) {
-        for (const [code, target] of Object.entries(state.cases)) {
-          if (g.hasNode(target))
-            g.setEdge(name, target, { label: code, type: 'on_complete' }, `case:${name}:${code}`);
-        }
-        if (state.default && g.hasNode(state.default))
-          g.setEdge(name, state.default, { label: 'default', type: 'on_fail' }, `def:${name}`);
-      } else {
-        if (state.on_success && g.hasNode(state.on_success))
-          g.setEdge(name, state.on_success, { label: 'success', type: 'on_complete' }, `os:${name}`);
-        if (state.on_error && g.hasNode(state.on_error))
-          g.setEdge(name, state.on_error, { label: 'error', type: 'on_fail' }, `oe:${name}`);
-      }
-    }
-  }
-
-  dagre.layout(g);
-
-  if (g.nodes().length === 0) return ui.empty('No states');
-
-  // Compute actual bounding box including edge control points
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const name of g.nodes()) {
-    const node = g.node(name);
-    minX = Math.min(minX, node.x - nodeW / 2);
-    minY = Math.min(minY, node.y - nodeH / 2);
-    maxX = Math.max(maxX, node.x + nodeW / 2);
-    maxY = Math.max(maxY, node.y + nodeH / 2);
-  }
-  for (const e of g.edges()) {
-    const edgeData = g.edge(e);
-    for (const p of (edgeData.points || [])) {
-      minX = Math.min(minX, p.x);
-      minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x);
-      maxY = Math.max(maxY, p.y);
-    }
-  }
-  const pad = 40;
-  minX = Math.floor(minX - pad); minY = Math.floor(minY - pad);
-  maxX = Math.ceil(maxX + pad); maxY = Math.ceil(maxY + pad);
-  const svgW = maxX - minX;
-  const svgH = maxY - minY;
-
-  // Collect active states from stack for highlighting
-  const activeStates = new Set();
-  for (const frame of stack) {
-    if (frame.workflow === workflowName) activeStates.add(frame.current_state);
-  }
-
-  // Unique ID suffix to avoid marker collisions when multiple graphs on page
-  const uid = workflowName.replace(/[^a-zA-Z0-9]/g, '');
-  const EDGE_KIND = { on_complete: 'complete', on_fail: 'fail' };
-
-  let svg = `<svg viewBox="${minX} ${minY} ${svgW} ${svgH}" width="${svgW}" style="max-width:${svgW}px" xmlns="http://www.w3.org/2000/svg">`;
-
-  // Defs: one arrow head per edge kind, coloured by class
-  svg += '<defs>';
-  for (const kind of ['', 'complete', 'fail'])
-    svg += `<marker id="arr-${uid}-${kind || 'plain'}" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto"><path class="g-arrow ${kind}" d="M0,0 L10,3 L0,6z"/></marker>`;
-  svg += '</defs>';
-
-  // Draw edges
-  for (const e of g.edges()) {
-    const edgeData = g.edge(e);
-    const points = edgeData.points || [];
-    if (points.length === 0) continue;
-
-    const isSelfLoop = e.v === e.w;
-    const kind = EDGE_KIND[edgeData.type] || '';
-    const from = g.node(e.v);
-    const to = g.node(e.w);
-    const isBack = !isSelfLoop && (rankdir === 'LR' ? to.x < from.x : to.y < from.y);
-    const cls = `g-edge ${kind}${isBack ? ' back' : ''}`;
-    const marker = `url(#arr-${uid}-${kind || 'plain'})`;
-
-    if (isSelfLoop) {
-      // Self-loop: arc above the node
-      const cx = from.x;
-      const cy = from.y - nodeH / 2;
-      const r = 22;
-      svg += `<path class="${cls}" d="M${cx - 12},${cy} A${r},${r} 0 1,1 ${cx + 12},${cy}" marker-end="${marker}"/>`;
-    } else {
-      svg += `<path class="${cls}" d="${pointsToPath(points)}" marker-end="${marker}"/>`;
-    }
-
-    // Edge label
-    if (edgeData.label && edgeData.x != null && !isSelfLoop) {
-      svg += `<text class="g-elabel ${kind}" x="${edgeData.x}" y="${edgeData.y - 5}" text-anchor="middle">${escapeHtml(edgeData.label)}</text>`;
-    }
-  }
-
-  // Draw nodes
-  for (const name of g.nodes()) {
-    const node = g.node(name);
-    const state = node.state || wf.states[name];
-    const x = node.x;
-    const y = node.y;
-    const w = nodeW;
-    const h = nodeH;
-    const isInitial = name === wf.initial;
-    const isTerminal = !!state.terminal;
-    const hasSubWorkflow = !!state.sub_workflow;
-    const isCurrent = name === currentState;
-    const isInStack = !isCurrent && activeStates.has(name);
-
-    const isExec = state.type === 'exec';
-    const isFetch = state.type === 'fetch';
-    const isAction = isExec || isFetch;
-    const isSkillGate = state.skills && state.skills.length > 0;
-    const kind = graphNodeKind(state, isCurrent, isInStack, liveKey);
-
-    // State nodes are plaques, exec states squares
-    const rx = isExec ? 4 : (isTerminal ? 24 : 18);
-
-    // Initial state: outer halo
-    if (isInitial && !isCurrent && !isInStack) {
-      svg += `<rect class="g-halo" x="${x - w / 2 - 4}" y="${y - h / 2 - 4}" width="${w + 8}" height="${h + 8}" rx="${rx + 2}"/>`;
-    }
-
-    // Wrap node elements in <g> so <title> tooltip works correctly
-    svg += `<g>`;
-
-    // Tooltip for action states
-    if (isAction) {
-      const tip = isExec ? (state.command || '') : (state.url || '');
-      svg += `<title>${escapeHtml(tip)}</title>`;
-    }
-
-    svg += `<rect id="gnode-${escapeHtml(name)}" class="g-node ${kind}" x="${x - w / 2}" y="${y - h / 2}" width="${w}" height="${h}" rx="${rx}" onclick="selectGraphNode('${escapeHtml(name)}')"/>`;
-
-    // Sub-workflow: inner nested rect
-    if (hasSubWorkflow) {
-      svg += `<rect class="g-inner" x="${x - w / 2 + 5}" y="${y - h / 2 + 5}" width="${w - 10}" height="${h - 10}" rx="${Math.max(2, rx - 5)}"/>`;
-    }
-
-    // Node label
-    svg += `<text class="g-name ${name.length > 16 ? 'small' : ''} ${kind}" x="${x}" y="${y + 1}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(name)}</text>`;
-
-    // Sub-workflow name, action type or skill-gate tag below the label
-    if (hasSubWorkflow) {
-      svg += `<text class="g-tag sub" x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(state.sub_workflow)}</text>`;
-    }
-    if (isAction && !isCurrent && !isInStack) {
-      const label = isExec ? (state.background ? 'exec (bg)' : 'exec') : 'fetch';
-      svg += `<text class="g-tag ${kind}" x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle">${label}</text>`;
-    }
-    if (isSkillGate && !isCurrent && !isInStack) {
-      svg += `<text class="g-tag skill" x="${x}" y="${y + 14}" text-anchor="middle" dominant-baseline="middle">skills</text>`;
-    }
-
-    svg += `</g>`;
-  }
-
-  svg += '</svg>';
-  return svg;
-}
-
-let selectedWorkflowState = null;
-
+// A workflow's graph and its states (/graph.js, shared with the documentation site's landing page): a node of the
+// graph or a row of the list opens that state's prompt and transitions, a sub-workflow node opens that workflow.
 function showWorkflowGraph(name) {
   selectedSessionId = null;
   shownWorkflow = name;
-  selectedWorkflowState = null;
-  const container = document.getElementById('detail-content');
-  container.innerHTML = ui.label('Workflow: ' + escapeHtml(name)) + `<div class="graph">${renderGraph(name, null, [])}</div>`;
-
-  const wf = allWorkflows[name];
-  if (wf) {
-    let stateList = ui.label('States', true);
-    stateList += '<div id="workflow-states-list">';
-    for (const [sn, state] of Object.entries(wf.states)) {
-      const flags = [];
-      if (sn === wf.initial) flags.push('initial');
-      if (state.terminal) flags.push('terminal');
-      if (state.sub_workflow) flags.push('sub: ' + state.sub_workflow);
-      if (state.type === 'exec') flags.push(state.background ? 'exec (bg)' : 'exec');
-      if (state.type === 'fetch') flags.push('fetch');
-      if (state.skills && state.skills.length > 0) flags.push('skills: ' + state.skills.join(', '));
-      const flagStr = flags.length > 0 ? ` <span class="muted">[${escapeHtml(flags.join(', '))}]</span>` : '';
-      const mark = state.type === 'exec' ? ui.square() : '';
-      stateList += `<div class="frame state-item" data-state="${escapeHtml(sn)}" data-workflow="${escapeHtml(name)}" onclick="toggleStatePrompt(this, '${escapeHtml(name)}', '${escapeHtml(sn)}')">${mark}<span class="state-name">${escapeHtml(sn)}</span>${flagStr}</div>`;
-    }
-    stateList += '</div>';
-    container.innerHTML += stateList;
-  }
+  document.getElementById('detail-content').innerHTML = Graph.workflowViewHtml(dagre, name, allWorkflows[name]);
 }
 
-function highlightGraphNode(stateName) {
-  document.querySelectorAll('svg .g-node.sel').forEach(rect => rect.classList.remove('sel'));
-  if (!stateName) return;
-  const rect = document.getElementById('gnode-' + stateName);
-  if (rect) rect.classList.add('sel');
-}
+document.addEventListener('click', e => {
+  if (Graph) Graph.workflowClick(e, allWorkflows, sub => navigate(Routes.routePath({ view: 'workflow', name: sub })));
+});
 
-function selectGraphNode(stateName) {
-  const list = document.getElementById('workflow-states-list');
-  if (!list) return;
-  const item = list.querySelector(`.state-item[data-state="${stateName}"]`);
-  if (!item) return;
-
-  // If it's a sub_workflow state, open that workflow instead
-  const wfName = item.dataset.workflow;
-  const wf = allWorkflows[wfName];
-  if (wf) {
-    const state = wf.states[stateName];
-    if (state && state.sub_workflow && allWorkflows[state.sub_workflow]) {
-      navigate(Routes.routePath({ view: 'workflow', name: state.sub_workflow }));
-      return;
-    }
-  }
-
-  toggleStatePrompt(item, wfName, stateName);
-  item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-}
-
-function toggleStatePrompt(el, workflowName, stateName) {
-  const wf = allWorkflows[workflowName];
-  if (!wf) return;
-  const state = wf.states[stateName];
-  if (!state) return;
-
-  // Deselect if clicking same state
-  if (selectedWorkflowState === stateName) {
-    selectedWorkflowState = null;
-    el.classList.remove('selected');
-    highlightGraphNode(null);
-    const existing = el.nextElementSibling;
-    if (existing && existing.classList.contains('state-prompt-wrapper'))
-      existing.remove();
-    return;
-  }
-
-  // Clear previous selection
-  const list = document.getElementById('workflow-states-list');
-  if (list) {
-    list.querySelectorAll('.state-item.selected').forEach(item => item.classList.remove('selected'));
-    list.querySelectorAll('.state-prompt-wrapper').forEach(item => item.remove());
-  }
-
-  selectedWorkflowState = stateName;
-  el.classList.add('selected');
-  highlightGraphNode(stateName);
-
-  const wrapper = document.createElement('div');
-  wrapper.className = 'state-prompt-wrapper';
-
-  let html = '';
-  if (state.skills && state.skills.length > 0) {
-    html += ui.box(state.skills.join('\n'), 'Required Skills');
-  } else if (state.type === 'exec' || state.type === 'fetch') {
-    const label = state.type === 'exec' ? 'Command' : 'URL';
-    const value = state.type === 'exec' ? (state.command || '?') : (state.url || '?');
-    html += ui.box(value, label);
-    if (state.success_prompt) html += ui.box(state.success_prompt, 'Success Prompt');
-    if (state.error_prompt) html += ui.box(state.error_prompt, 'Error Prompt');
-  } else {
-    html += ui.box(state.prompt || '(no prompt)', 'Prompt');
-  }
-
-  // Show transitions if any
-  const transitions = state.transitions ? Object.entries(state.transitions) : [];
-  if (transitions.length > 0)
-    html += `<div class="transitions">${transitions.map(([tName, target]) => ui.transition(tName, target)).join('')}</div>`;
-
-  wrapper.innerHTML = html;
-  el.after(wrapper);
-}
 
 // Plan tab: queue lines grouped by what they are now; reasons come from the picker via /api/queue.
 function timeIn(iso) {
@@ -864,7 +535,7 @@ function planGraphSvg(lines, id) {
   const size = g.graph();
   let svg = `<svg viewBox="0 0 ${size.width} ${size.height}" width="${size.width}" xmlns="http://www.w3.org/2000/svg">`
     + '<defs><marker id="qarr" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto"><path class="g-arrow" d="M0,0 L10,3 L0,6z"/></marker></defs>';
-  for (const e of g.edges()) svg += `<path class="g-edge" d="${pointsToPath(g.edge(e).points)}" marker-end="url(#qarr)"/>`;
+  for (const e of g.edges()) svg += `<path class="g-edge" d="${Graph.pointsToPath(g.edge(e).points)}" marker-end="url(#qarr)"/>`;
   for (const n of q.nodes) {
     const p = g.node(n.id);
     svg += `<g class="qnode ${n.kind}${n.self ? ' sel' : ''}" data-plan-id="${escapeHtml(n.id)}"><title>${escapeHtml(n.id + ' — ' + n.kind)}</title>`
@@ -1134,10 +805,11 @@ async function refreshCost() {
 }
 
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
-Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js')]).then(([m, s, l]) => {
+Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js'), import('/graph.js')]).then(([m, s, l, g]) => {
   Routes = m;
   Layout = l;
   Stable = s;
+  Graph = g;
   Stable.rememberScroll();
   window.addEventListener('popstate', applyRoute);
   // the content is built after load, so the browser has nothing to restore: put the page back where F5 left it

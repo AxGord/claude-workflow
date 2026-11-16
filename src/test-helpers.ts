@@ -9,6 +9,7 @@ import { Executor } from "./executor.js";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 export class InMemoryStorage implements Storage {
@@ -140,3 +141,20 @@ export const MULTI_STATE_WORKFLOW = {
     },
   },
 } as const;
+
+/**
+ * The dashboard's /graph.js (the workflow graph and its panel, shared with the documentation site) as an
+ * expression for a `vm` context that runs the page's script: the module's `export`s are dropped and its
+ * names become the value, which the test assigns to the page's `Graph`.
+ */
+export function graphModuleExpression(): string {
+  const file = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "dashboard",
+    "graph.js",
+  );
+  const source = fs.readFileSync(file, "utf8");
+  const names = [...source.matchAll(/^export (?:function|const) (\w+)/gm)].map(m => m[1]);
+  return `(() => { ${source.replace(/^export /gm, "")}\n return { ${names.join(", ")} }; })()`;
+}

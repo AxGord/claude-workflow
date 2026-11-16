@@ -101,6 +101,8 @@ The picture is a pure function `layout(fold(events))` (`src/event-fold.ts`, `src
 
 The documentation site's landing page replays this map without a server. `scripts/export-replay.mjs` (`npm run build && npm run docs:replay -- --project-dir <checkout>`) cuts a window of whole pipelines (a few hours: a land, a split, review rounds, several lanes at once; under 300 KB) of one project from the recorded event log into `docs/public/replay/anyparse.json`; a session of any other project, its path and its id are never read into the file, an ask's text is left out and the queue path is written without a home directory (`src/replay.ts`). The page's `MapReplay.vue` feeds those events, on a clock (play / pause, 1x to 60x, scrub), to the same `fold` and `layout` and the same `dashboard/scene-dom.js` renderer, with the dashboard's tokens and component rules scoped to the block: lanes advance, branches open, landed lanes fold, a hover shows the tooltip and a click opens a folded group, as on `/map`.
 
+The workflow graphs are one module too: `dashboard/graph.js` (pure, served as `/graph.js`) lays a definition out with dagre and draws it as SVG (`renderGraph`), builds the Workflows tab's view, the graph and a row per state (`workflowViewHtml`), and answers its clicks (`workflowClick`: a node or a row opens that state's prompt, or an action's command, and its transitions; a node of a sub-workflow state opens that workflow). The dashboard's page and the documentation site's landing page, which draws every bundled workflow from `docs/public/workflows.json` (`scripts/export-workflows.mjs`, `npm run build && npm run docs:workflows`) with the same module, no server, show the same graph and the same panel.
+
 ### Look
 
 One style for every view (sessions, session detail, workflow graphs, plan): `dashboard/tokens.css` holds the design tokens (surfaces, text, state colours, model colours, the difficulty scale 1 -> 10, fonts) and is the only file with a colour literal (its `:root` also declares `color-scheme: dark`, and the page's head carries `<meta name="color-scheme" content="dark">`, so every native control, the date inputs of the Cost tab and their calendar popup, selects and scrollbars, is drawn dark; the Timeline tab's day navigation is links, not native controls); `dashboard/components.css` holds each component once (plaque, difficulty bar `▰▰▰▱▱` (five cells, `?????` when unknown, first in every row or card that shows a difficulty: Plan tab, map lane plaques and `next:` / `landed earlier:` rows; one `difficultyBar` in `src/map-layout.ts`; the kind glyph `※` bug / `⚑` research / `◆` feature (absent `kind` = feature) follows it in the same places, one `kindMark` beside it, a blank cell when there is no queue line), agent chip `model ▮▮▮▯ effort · role`, step dot, script square, section label, band panel, the `next:` / `landed earlier:` rows) and reads colours only through `var(--…)`. A state reads the same everywhere: running = the model's colour with a glow, waiting on the pool = pink, waiting on a parent (the active step is a state tagged `ask: parent`) = yellow, in the session list, the detail and the plan, stopped or failed = red, landed = green and dimmed. The dagre graphs use the same palette (state nodes are plaques, exec states squares, the current state glows, backward edges dashed). Inter is used when installed, else the system font; nothing is downloaded, so the page works offline. A refresh on a timer takes its markup into the live nodes in place (`dashboard/stable.js` `patchHtml`: rows matched by their link, id or `data-key`, the rest by place; only differing attributes and text are written), so scroll, focus, the text you selected and running animations survive the 2 s refresh of the lists, a session's detail and the plan. A reload (F5) returns to the same scroll position, on every view including the map and `/map/<id>` (`pagehide` saves it per path in `sessionStorage`; the page builds its content after load, where the browser's own restoration finds nothing). The map saves the lane at the top of the view and its offset (`noteScroll` in `dashboard/stable.js`) and puts the lane back, not the pixel offset: the first scene is drawn from the session files and grows when the event log arrives (landed lanes of pruned sessions come on top), so a pixel offset is clamped by the shorter page and lands on another lane. The position is held until the full scene stands, or until you wheel, touch, press a key or click. The page's script builds its markup from the `ui` helpers in `index.html`; `src/dashboard-style.test.ts` renders every view and fails on a colour literal outside the tokens file.
@@ -120,40 +122,17 @@ One style for every view (sessions, session detail, workflow graphs, plan): `das
 
 ## Status Line
 
-Show this Claude Code instance's workflow sessions in the status bar:
+With the plan pane closed, the Claude Code mod draws a band above the prompt (`hooks/plan-pane.tsx`; it hides while the pane is open and comes back when it closes):
 
-![Status line showing coding:think](/screenshots/statusline.png)
+<StatusLine />
 
-Source `scripts/statusline-workflows.sh` from your statusline script — it sets two variables and prints
-nothing:
+The picture is the band drawn from a recorded session by the code the mod uses, `statusBandTree` of `hooks/pane-view.ts`; drag the slider to another moment.
 
-```sh
-# in ~/.claude/statusline-command.sh
-. /path/to/mcp-workflow-engine/scripts/statusline-workflows.sh
-printf "%b\n" "<your line 1> ${wf_info}"          # the root session, inline
-[ -n "$wf_lines" ] && printf "%b\n" "$wf_lines"    # the others, on their own lines
-```
+- The root session of this Claude Code instance, as `workflow:state`: `◆` in bold once it has children, else `⚙` (bright while an agent or an engine step works in it, plain while it waits), and the other sessions' count in parentheses: `◆ slice-dispatch:collect (5)`.
+- The queue, when there is one: `▶` running / window, `⏭` ready, `✓` landed in the last 24 hours.
+- `[plan]` (key `p`) opens the pane.
+- With an agent's transcript in view, the band shows that agent's workflow session and the deepest state under it instead.
 
-- Only the sessions of THIS instance (`context.claude_code_pid` = the statusline's parent pid), read with one
-  `jq` pass over `~/.claude/workflow-state`.
-- `wf_info` — the root session. Alone it is drawn like any session; once it has children it is marked `◆` in
-  bold and the other sessions add their count: `◆ slice-dispatch:collect (5)`.
-- `wf_lines` — empty by default. With `WF_STATUS_LIST=1` the other sessions are listed there instead of
-  counted, oldest first, three per line, at most nine (eight and `+N workflows` past nine); each as
-  `workflow[slice or task]:state`.
-- Bright cyan `⚙` — a leaf session an agent or an engine step is working in; plain cyan `⚙` — waiting (on a
-  child, or idle).
-- `STATUSLINE_PID` / `WF_STATE_DIR` override the parent pid and the state directory (for testing).
-
-Then in `~/.claude/settings.json`:
-
-```json
-{
-  "statusLine": {
-    "type": "command",
-    "command": "bash ~/.claude/statusline-command.sh"
-  }
-}
-```
+`scripts/statusline-workflows.sh` still exists for setups without the mod: source it from your own statusline script and it sets `wf_info` (the root session) and `wf_lines`; see the comments at its top.
 
 The landing page shows the replay on one 16:9 stage the map fills (scaled to the frame, never scrolling; when the lanes are taller than the frame a camera follows the running ones), with the Claude Code window drawn over it, translucent: the parent conversation's lines (each pipeline started, its driver spawned, a question and its answer, a land) and the plan pane. The pane is not an imitation: `hooks/pane-view.ts` is what the pane draws, a pure function of a Snapshot that the mod draws with Claude Code's elements and the site draws in the browser, and `snapshotAt` (`src/replay.ts`) builds that Snapshot from the replay's events. One transport bar under the stage (play / pause, speed, scrub) drives the map and the window; its Terminal button and the `T` key hide or show the window. `npm run docs:record` re-records the scene into `docs/media/scene.mp4` and `scene.gif`; `npm run video` renders a voiced intro over it (`video/out/intro.mp4`, narration in `video/script.md`, one command, see `video/README.md`).

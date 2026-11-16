@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { AgentSeen, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
-import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOf, spawnLine, two } from './pane-view'
+import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOf, spawnLine, statusBandTree, two } from './pane-view'
 import type { Move, PaneAction, PaneEl, PaneNode } from './pane-view'
 
 const PANE = 'workflow-plan'
@@ -797,7 +797,7 @@ export const register: Register = on => {
     if (e.props.hasSurvey) return next(e)
     const s = await read($, snap)
     if (!s || s.sessions.length === 0) return next(e)
-    const { Box, Text, Button } = $.ui.resolve(e)
+    const { Text } = $.ui.resolve(e)
     // an agent's transcript in view: the band shows that agent's workflow session (linked by link_agent)
     const viewed = e.props.view?.agentId
     if (viewed) {
@@ -820,29 +820,7 @@ export const register: Register = on => {
       )
     }
     if (await read($, paneOpen)) return next(e)
-    const ids = new Set(s.sessions.map(r => r.id))
-    const roots = s.sessions.filter(r => r.parent === '' || !ids.has(r.parent))
-    const hasChildren = (r: SessionRow) => s.sessions.some(c => c.parent === r.id)
-    const main = roots.find(hasChildren) ?? roots[0] ?? s.sessions[0]!
-    const others = s.sessions.length - 1
-    const q = s.queue
-    return (
-      <Box flexDirection="row" gap={2}>
-        <Text>
-          {hasChildren(main) ? <Text color="cyanBright" weight="bold">◆ </Text> : <Text color={main.isWorking ? 'cyanBright' : 'cyan'}>⚙ </Text>}
-          {main.workflow}:{main.state}
-          {others > 0 ? <Text color="cyan"> ({others})</Text> : null}
-        </Text>
-        {q ? (
-          <Text dimColor>
-            ▶ {q.running.length}/{q.window} · ⏭ {q.ready.length} · ✓ {s.recent}
-          </Text>
-        ) : null}
-        <Button key="band-plan" hotkey="p" plain onPress={() => void togglePane($)}>
-          <Text color="cyan">[plan]</Text>
-        </Button>
-      </Box>
-    )
+    return draw(statusBandTree(s), $.ui.resolve(e), $)
   })
 
   // The turn's closing "Waiting for N background agents to finish" names what it waits on: each agent linked to a
@@ -1079,6 +1057,8 @@ function act($: any, a: PaneAction): Promise<unknown> {
       return a.id === 'pool' ? openPool($) : update($, view, () => a.id)
     case 'expand':
       return update($, expanded, cur => (cur === a.id ? '' : a.id))
+    case 'pane':
+      return togglePane($)
   }
 }
 

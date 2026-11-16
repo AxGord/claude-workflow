@@ -7,17 +7,12 @@
 // taller than the frame a camera follows the running lanes, easing from one frame to the next.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { reconcile } from "../../../dashboard/scene-dom.js";
-import tokens from "../../../dashboard/tokens.css?raw";
-import components from "../../../dashboard/components.css?raw";
+import { DASH, useDashboardCss } from "./dashboard-css";
 import { shared } from "./replay-store";
 import { fold } from "../../../src/event-fold";
 import { layout, scene } from "../../../src/map-layout";
 import { cameraTop, expandReplay, fitView, rowsUntil } from "../../../src/replay";
 
-// The dashboard's own stylesheets, scoped to this block: the tokens on its root, the rules inside an
-// `@scope`, so nothing of the dashboard's page-wide rules (body, a, *) reaches the site around it.
-const STYLE_ID = "map-replay-css";
-const css = `${tokens.replace(/^:root\s*\{/m, ".map-replay {")}\n@scope (.map-replay) {\n${components}\n}`;
 const RENDER_EVERY_MS = 90;
 /** A step of the clock shorter than this eases the camera; a longer one (a scrub, the first frame) jumps it. */
 const EASE_WITHIN_MS = 60_000;
@@ -93,12 +88,7 @@ function onClick(e: MouseEvent): void {
 }
 
 onMounted(() => {
-  if (!document.getElementById(STYLE_ID)) {
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = css;
-    document.head.appendChild(style);
-  }
+  useDashboardCss();
   if (shared.file) {
     events = expandReplay(shared.file);
     t0 = Date.parse(shared.file.start);
@@ -110,7 +100,7 @@ onBeforeUnmount(() => cancelAnimationFrame(settle));
 </script>
 
 <template>
-  <section class="map-replay" aria-label="Replay of the live workflow map">
+  <section class="map-replay" :class="DASH" aria-label="Replay of the live workflow map">
     <div ref="wrap" class="map-wrap mr-wrap" @click="onClick">
       <div v-if="status" class="map-status">{{ status }}</div>
       <svg ref="svg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMinYMin meet"></svg>

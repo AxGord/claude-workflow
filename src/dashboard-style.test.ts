@@ -10,6 +10,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "./dashboard.js";
 import { Storage } from "./storage.js";
+import { graphModuleExpression } from "./test-helpers.js";
 import type { Loader } from "./loader.js";
 
 const DASH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dashboard");
@@ -339,6 +340,7 @@ function loadPage(): Page {
     `Layout = (() => { const exports = {}; ${layoutJs}\n return exports; })();`,
     context,
   );
+  vm.runInContext(`Graph = ${graphModuleExpression()};`, context);
   return { els, run: code => vm.runInContext(code, context) as unknown };
 }
 
