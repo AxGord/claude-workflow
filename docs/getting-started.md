@@ -130,6 +130,10 @@ Auto-allow the workflow tools so the agent is not interrupted with a permission 
 
 `abort` is deliberately **not** allowlisted: sub-agents inherit permissions, and an auto-allowed `abort` would let a sub-agent silently kill its parent's session. Keep it behind a manual prompt. The engine adds its own guard: an `abort` of a root, or of a session with active descendants, is refused unless the call names `caller_session_id` (its own session, an ancestor of the target) or passes `force: true` with a `reason`.
 
+## Heavy commands share one thread pool
+
+Builds and test suites from every session on the machine go through one thread pool, so several agents working at once queue for threads instead of choking the machine: `wf-run -- <command>` takes a lease first, an `exec` state asks with `resource:`, and a project can mark commands for the pool gate so an agent's own heavy Bash call goes through it too. Nothing to set up; the budget defaults to the performance cores minus two. [Thread pool](/pool) shows a real recorded window of it, live, and explains leases, priority, locks and backfill in plain language.
+
 ## Configuration
 
 | Variable | Default | Purpose |

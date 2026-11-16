@@ -204,8 +204,10 @@ function poolBody(st: PoolState | null, now: number, columns: number): PaneNode 
   const row = (l: PoolLine, mark: string) => {
     const who = [l.project, l.session, l.step, l.label].filter(x => x !== '').join(' · ')
     const flags = (l.overrun !== null ? ` OVERRUN ~${l.overrun}` : '') + (l.isStarved ? ' STARVED' : '')
+    // a read that knows no priority ('') or no age (negative: the site's replay, cut from a log that carries neither) leaves it out
+    const held = (l.priority === '' ? '' : ` prio ${l.priority}`) + (l.ageMs < 0 ? '' : ` · ${spanText(l.ageMs)}`)
     // the flags keep their cells; what and for how long is cut to the rest of the line
-    const lead = fitCells(`  ${mark} ${l.request} prio ${l.priority} · ${spanText(l.ageMs)}`, Math.max(8, columns - cells(flags)))
+    const lead = fitCells(`  ${mark} ${l.request}${held}`, Math.max(8, columns - cells(flags)))
     return col(
       text(
         {},
@@ -213,7 +215,7 @@ function poolBody(st: PoolState | null, now: number, columns: number): PaneNode 
         l.overrun !== null ? text({ color: 'red', weight: 'bold' }, ` OVERRUN ~${l.overrun}`) : null,
         l.isStarved ? text({ color: 'red', weight: 'bold' }, ' STARVED') : null,
       ),
-      text({ dimColor: true }, fitCells('     ' + who, columns)),
+      who === '' ? null : text({ dimColor: true }, fitCells('     ' + who, columns)),
     )
   }
   return col(

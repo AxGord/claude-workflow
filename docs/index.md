@@ -22,8 +22,8 @@ features:
     linkText: Concepts
   - title: One pool for heavy work
     details: Builds and test runs from every session share a machine-wide thread pool, so parallel agents queue instead of choking the machine.
-    link: /action-states
-    linkText: Action states and the pool
+    link: /pool
+    linkText: How the thread pool works
   - title: A task queue that dispatches itself
     details: A queue file, a picker that admits lines by priority, overlap and dependencies, and a driver per task, with the model and effort chosen by difficulty.
     link: /queue

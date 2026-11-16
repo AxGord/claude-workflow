@@ -3,7 +3,8 @@
 // the left and the workflow plan pane docked on the right, both at the scene's clock (replay-store.ts). The pane
 // IS the mod's: `snapshotAt` (src/replay.ts) turns the replay's events into the Snapshot the mod builds from the
 // engine, and `paneTree` (hooks/pane-view.ts, the code the mod draws with) turns it into the pane; the
-// conversation lines are the mod's own line builders over `conversationTail`. Folds, tabs and cards work as in the mod.
+// conversation lines are the mod's own line builders over `conversationTail`. Folds, tabs and cards work as in the mod;
+// the Pool tab reads the pool the replay recorded (`poolStateAt`, drawn by the mod's own `poolBody`).
 import { computed, reactive } from "vue";
 import {
   age,
@@ -19,7 +20,7 @@ import {
   type PaneEl,
 } from "../../../hooks/pane-view";
 import type { View } from "../../../types";
-import { conversationTail, snapshotAt, type ConversationLine } from "../../../src/replay";
+import { conversationTail, poolCountsAt, poolStateAt, snapshotAt, type ConversationLine } from "../../../src/replay";
 import PaneView from "./PaneView.vue";
 import { shared } from "./replay-store";
 
@@ -42,8 +43,8 @@ const pane = computed(() => {
     now,
     columns: COLUMNS,
     rows: ROWS,
-    poolCounts: null,
-    pool: { at: now, pool: null, error: "the replay records no pool" },
+    poolCounts: poolCountsAt(shared.file, shared.at),
+    pool: poolStateAt(shared.file, shared.at),
   });
 });
 
@@ -96,7 +97,7 @@ function act(a: PaneAction): void {
 .cc-window {
   position: absolute;
   right: 40px;
-  bottom: 40px;
+  bottom: 136px;
   width: 1340px;
   height: 700px;
   display: flex;

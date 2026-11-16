@@ -43,7 +43,7 @@ const PROCESS_SAMPLE_MS = 1000;
 const PROCESS_BACKOFF_MS = 30_000;
 // Cores left to light work (shells, editors, the agents themselves); light
 // load up to the same amount is noise, not external heavy work.
-const RESERVED_CORES = 2;
+export const RESERVED_CORES = 2;
 const DEFAULT_POLL_MS = 1000;
 // The run times kept per label key, and how many keys: the pool file stays small.
 export const HISTORY_SAMPLES = 10;

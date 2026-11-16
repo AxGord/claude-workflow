@@ -74,9 +74,9 @@ export type PoolLine = {
   pid: number
   /** what it holds (a lease) or wants (a waiter), as `pool_status` prints it */
   request: string
-  /** ms held (a lease) or queued (a waiter), as of the read */
+  /** ms held (a lease) or queued (a waiter), as of the read; negative: not known */
   ageMs: number
-  /** `3` or `3 normal` */
+  /** `3` or `3 normal`; '' not known */
   priority: string
   /** the project directory's last name, '' none */
   project: string

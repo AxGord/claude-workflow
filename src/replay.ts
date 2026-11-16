@@ -5,7 +5,15 @@
 // Snapshot built from them (`snapshotAt`) to the mod's own pane code. Pure (its one import, map-layout.ts, is
 // pure and import-free too), so it runs in the browser and under vitest alike.
 
-import type { Land, QueueLine, QueueView, SessionRow, Snapshot } from "../types/index.js";
+import type {
+  Land,
+  PoolLine,
+  PoolState,
+  QueueLine,
+  QueueView,
+  SessionRow,
+  Snapshot,
+} from "../types/index.js";
 import type { EventKind, WfEvent } from "./event-fold.js";
 import { kindMark, type MapLayout, type MapWorkflow } from "./map-layout.js";
 
@@ -25,12 +33,46 @@ export interface ReplayFile {
   readonly workflows: Readonly<Record<string, MapWorkflow>>;
   /** queue line kind by task id, for the lanes' marks */
   readonly taskKinds: Readonly<Record<string, string>>;
+  /** the machine's thread pool over the same window, as `pool.log` sampled it; absent when no log covered the window */
+  readonly pool?: ReplayPool;
   readonly events: readonly ReplayRow[];
+}
+
+/** What a pool-log line names: a lease that was backfilled ahead of the head, one that over-runs its threads, a waiter that starved. */
+export type PoolMarkKind = "backfill" | "overrun" | "starved";
+
+/** A lease or waiter the log named by its label (kept only when the label names a session or slice of the replay): kind, threads, label, and the busy cpus an over-running lease's tree ran (0 otherwise). */
+export type PoolMark = readonly [kind: PoolMarkKind, threads: number, label: string, runs: number];
+
+/**
+ * One load sample of the pool: ms after `ReplayFile.start`, threads held, the budget, the machine load, the load
+ * not taken through the pool, how many leases and waiters there were, the waiters' asks (`4-8`, `2 + lock x`,
+ * `+3` for the ones the sample did not list: thread counts only, no label), and the marks logged since the sample before.
+ */
+export type PoolFrame = readonly [
+  at: number,
+  held: number,
+  budget: number,
+  load: number,
+  external: number,
+  leases: number,
+  waiting: number,
+  asks: readonly string[],
+  seen: readonly PoolMark[],
+];
+
+export interface ReplayPool {
+  /** the load above which the pool counts other work as external (`threshold` of the Pool tab) */
+  readonly threshold: number;
+  readonly frames: readonly PoolFrame[];
 }
 
 /** The speeds the player offers, in times real time. */
 export const SPEEDS: readonly number[] = [1, 2, 5, 10, 30, 60];
 export const DEFAULT_SPEED = 30;
+
+/** An exec's wait for a pool lease shorter than this is not drawn: a lane that waits is a lane that stands still. */
+export const POOL_MIN_WAIT_MS = 3000;
 
 /** The queue every exported session names: the real path (a home directory) never leaves the log. */
 export const REPLAY_QUEUE = "/anyparse/.claude/batch/queue.yaml";
@@ -40,7 +82,7 @@ const KEEP: Readonly<Record<EventKind, readonly string[]>> = {
   session_end: ["outcome"],
   transition: ["from", "to", "name", "workflow"],
   exec_start: ["state"],
-  exec_end: ["state", "exit_code", "duration_ms"],
+  exec_end: ["state", "exit_code", "duration_ms", "wait_ms"],
   agent_link: ["agent", "role", "model", "effort", "step"],
   agent_respawn: ["agent", "role", "model", "effort", "step"],
   agent_stop: [],
@@ -68,7 +110,8 @@ function scrubData(e: WfEvent, keptSessions: ReadonlySet<string>): Record<string
   const out: Record<string, unknown> = {};
   for (const k of KEEP[e.kind]) {
     let v = e.data[k];
-    if (k === "step") v = scrubStep(v);
+    if (k === "wait_ms") v = typeof v === "number" && v >= POOL_MIN_WAIT_MS ? v : undefined;
+    else if (k === "step") v = scrubStep(v);
     else if (k === "queue" || (e.kind === "queue" && k === "to"))
       v = typeof v === "string" && v.endsWith(REPLAY_QUEUE) ? REPLAY_QUEUE : undefined;
     else if (k === "parent") v = typeof v === "string" && keptSessions.has(v) ? v : undefined;
@@ -101,6 +144,11 @@ export interface BuildOptions {
   readonly hours?: number;
   /** the size limit, in bytes, of the text `renderReplay` writes (default 300000) */
   readonly maxBytes?: number;
+  /**
+   * the pool's log (`pool.log`, older file first) and its load threshold: the replay then carries the pool over its
+   * window (`buildPool`) and only a window the log covers is chosen
+   */
+  readonly pool?: { readonly lines: readonly string[]; readonly threshold: number };
 }
 
 const ms = (ts: string): number => Date.parse(ts);
@@ -195,6 +243,8 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
     for (let p = byId.get(c.parent ?? ""); p !== undefined; p = byId.get(c.parent ?? "")) c = p;
     return c;
   };
+  const poolSpan = opts.pool === undefined ? undefined : poolLogSpan(opts.pool.lines);
+  const busy = opts.pool === undefined ? [] : poolWaitingSamples(opts.pool.lines);
   const roots = all.filter(t => t.parent === null && t.end !== undefined);
   // a root that has children is a pipeline; a conversation of the project with none is left off
   const pipelines = roots.filter(r => (kids.get(r.id) ?? []).length > 0);
@@ -206,6 +256,7 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
     const rows = sorted.filter(e => keep.has(e.session));
     const first = ms(rows[0].ts);
     const last = ms((rows.at(-1) as WfEvent).ts);
+    if (poolSpan !== undefined && (first < poolSpan.from || last > poolSpan.to)) return null;
     const ids = [...keep];
     const index = new Map(ids.map((id, i) => [id, i]));
     const tasks = new Set<string>();
@@ -228,6 +279,17 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
       const w = opts.workflows[n];
       if (w !== undefined) workflows[n] = w;
     }
+    const pool =
+      opts.pool === undefined
+        ? undefined
+        : buildPool(opts.pool.lines, {
+            project: opts.project,
+            from: first,
+            to: last,
+            tasks,
+            sessions: new Set(ids),
+            threshold: opts.pool.threshold,
+          });
     return {
       version: 1,
       project: opts.project,
@@ -236,6 +298,7 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
       sessions: ids,
       workflows,
       taskKinds,
+      ...(pool === undefined ? {} : { pool }),
       events: rows.map(e => {
         const data = scrubData(e, keep);
         const base = [ms(e.ts) - first, e.kind, index.get(e.session) as number] as const;
@@ -248,7 +311,12 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
   if (opts.from !== undefined) {
     const from = Date.parse(opts.from);
     const file = build(from, from + hours * 3600_000);
-    if (file === null) throw new Error(`no finished session of ${opts.project} in the window`);
+    if (file === null)
+      throw new Error(
+        poolSpan === undefined
+          ? `no finished session of ${opts.project} in the window`
+          : `no finished session of ${opts.project} in the window, or the pool log does not cover it`,
+      );
     if (size(file) > maxBytes)
       throw new Error(`the window of ${hours} h is ${size(file)} bytes, over ${maxBytes}`);
     return file;
@@ -258,7 +326,7 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
       const from = r.start;
       const to = from + hours * 3600_000;
       const inside = pipelines.filter(p => p.start >= from && (p.end as number) <= to);
-      return { from, to, n: score(showing(inside, kids)) };
+      return { from, to, n: score(showing(inside, kids)) + poolBusy(busy, from, to) };
     })
     .sort((a, b) => b.n - a.n || a.from - b.from);
   for (const w of windows) {
@@ -266,7 +334,7 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
     if (file !== null && size(file) <= maxBytes) return file;
   }
   throw new Error(
-    `no window of ${hours} h with a session of ${opts.project} fits ${maxBytes} bytes`,
+    `no window of ${hours} h with a session of ${opts.project} fits ${maxBytes} bytes${poolSpan === undefined ? "" : " and lies inside the pool log"}`,
   );
 }
 
@@ -664,4 +732,456 @@ export function conversationTail(
   const all = conversationAt(file, at);
   const from = Math.max(0, all.length - n);
   return all.slice(from).map((line, i) => ({ key: from + i, line }));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The pool: the machine's thread pool over the replay's window, cut from `pool.log` (`buildPool`), checked before
+// anything is written (`assertReplayClean`) and read back at a moment (`poolStateAt`, `poolWaiting`, `poolStrip`).
+// The log is shared by every project on the machine, so the cut is an ALLOWLIST: a lease or waiter keeps its label
+// only when the label names a session or a slice of the replay; everything else is a thread count and nothing more.
+// ---------------------------------------------------------------------------------------------------------------
+
+/** The pool logs a sample this often while it holds a lease or has a waiter, and not at all while it is empty. */
+export const POOL_SAMPLE_MS = 60_000;
+/** A sample older than this means the pool was empty since (a sample every minute, and some slack). */
+const POOL_IDLE_AFTER_MS = 2.5 * POOL_SAMPLE_MS;
+/**
+ * What the leases the log does not name are called: one row, no label, no project. A sample lists no holders; the
+ * log names a lease only on an `overrun:` or `backfill:` line, so the rest may be this project's or another's.
+ */
+export const POOL_UNNAMED = "leases the log does not name (this project or another)";
+
+const LOG_LINE = /^(\d{4}-\d\d-\d\dT[\d:.]+Z) (.*)$/;
+const SAMPLE_LINE =
+  /^sample: load ([\d.]+) external ([\d.]+) held (\d+)\/(\d+) runs \S+ leases (\d+) waiting (\d+)(?: \[(.*)\])?$/;
+const BACKFILL_LINE =
+  /^backfill: pid \d+ takes (\d+) threads ahead of \S+(?: \(est [^)]*\))? — (.*)$/;
+const OVERRUN_LINE = /^overrun: pid \d+ holds (\d+) threads, runs ~(\d+) — (.*)$/;
+const STARVED_LINE = /^starved: pid \d+ queued \S+ for (\d+)(?:-\d+)? threads.* — (.*)$/;
+/** A word of a label the replay may carry: letters, digits and a few separators, no path, no shell. */
+const SAFE_WORD = /^[A-Za-z0-9][A-Za-z0-9_.,=-]*$/;
+const ASK_PART = /^(?:\d+(?:-\d+)?|lock(?: \S+)?|\+\d+)$/;
+const MAX_LABEL = 120;
+
+/** The first and last moment (ms since the epoch) a pool log covers; undefined for a log with no line. */
+export function poolLogSpan(
+  lines: readonly string[],
+): { readonly from: number; readonly to: number } | undefined {
+  let from = Infinity;
+  let to = -Infinity;
+  for (const line of lines) {
+    const m = LOG_LINE.exec(line);
+    if (m === null) continue;
+    const t = Date.parse(m[1]);
+    from = Math.min(from, t);
+    to = Math.max(to, t);
+  }
+  return from === Infinity ? undefined : { from, to };
+}
+
+/** The moments (ms since the epoch) the log sampled the pool with a waiter in it, in time order. */
+export function poolWaitingSamples(lines: readonly string[]): number[] {
+  const out: number[] = [];
+  for (const line of lines) {
+    const m = LOG_LINE.exec(line);
+    const s = m === null ? null : SAMPLE_LINE.exec(m[2]);
+    if (m !== null && s !== null && Number(s[6]) > 0) out.push(Date.parse(m[1]));
+  }
+  return out.sort((a, b) => a - b);
+}
+
+/** What a window shows of the pool: the more samples with a waiter in it, the more there is to see (at most 100). */
+function poolBusy(sampled: readonly number[], from: number, to: number): number {
+  return Math.min(100, sampled.filter(t => t >= from && t <= to).length);
+}
+
+/** Whether a label names something of the replay: every word is plain, and one is a slice or a session of it. */
+export function poolLabelAllowed(label: string, names: ReadonlySet<string>): boolean {
+  if (label.length === 0 || label.length > MAX_LABEL) return false;
+  const words = label.split(" ");
+  return words.every(w => SAFE_WORD.test(w)) && words.some(w => names.has(w));
+}
+
+/** A waiter's ask with every lock but the project's own land lock made anonymous: `4-8 + lock a` is `4-8 + lock`. */
+function poolAsk(raw: string, own: string): string {
+  return raw
+    .split(" + ")
+    .map(p => {
+      const m = /^lock (\S+)$/.exec(p);
+      if (m !== null) return m[1] === own ? p : "lock";
+      return /^(?:\d+(?:-\d+)?|\+\d+)$/.test(p) ? p : "?";
+    })
+    .join(" + ");
+}
+
+interface LogSample {
+  readonly ts: number;
+  readonly held: number;
+  readonly budget: number;
+  readonly load: number;
+  readonly external: number;
+  readonly leases: number;
+  readonly waiting: number;
+  readonly asks: readonly string[];
+}
+
+interface LogMark {
+  readonly ts: number;
+  readonly mark: PoolMark;
+}
+
+/**
+ * The pool's frames over `[from, to]` (ms since the epoch) from a log's lines. A sample is a frame; a lease or
+ * waiter the log named is a mark on the first sample after it, and only when its label is on the allowlist
+ * (`poolLabelAllowed` over `tasks` and `sessions`). The log's pids, paths and every other label stay in the log.
+ */
+export function buildPool(
+  lines: readonly string[],
+  opts: {
+    readonly project: string;
+    readonly from: number;
+    readonly to: number;
+    readonly tasks: ReadonlySet<string>;
+    readonly sessions: ReadonlySet<string>;
+    readonly threshold: number;
+  },
+): ReplayPool {
+  const names = new Set([...opts.tasks, ...opts.sessions]);
+  const own = `${opts.project}-land`;
+  const samples: LogSample[] = [];
+  const marks: LogMark[] = [];
+  for (const line of lines) {
+    const head = LOG_LINE.exec(line);
+    if (head === null) continue;
+    const ts = Date.parse(head[1]);
+    const text = head[2];
+    const sample = SAMPLE_LINE.exec(text);
+    if (sample !== null) {
+      samples.push({
+        ts,
+        load: Number(sample[1]),
+        external: Number(sample[2]),
+        held: Number(sample[3]),
+        budget: Number(sample[4]),
+        leases: Number(sample[5]),
+        waiting: Number(sample[6]),
+        asks: sample[7] === undefined ? [] : sample[7].split(", ").map(a => poolAsk(a, own)),
+      });
+      continue;
+    }
+    const back = BACKFILL_LINE.exec(text);
+    const over = OVERRUN_LINE.exec(text);
+    const starved = STARVED_LINE.exec(text);
+    const mark: PoolMark | undefined =
+      back !== null
+        ? ["backfill", Number(back[1]), back[2], 0]
+        : over !== null
+          ? ["overrun", Number(over[1]), over[3], Number(over[2])]
+          : starved !== null
+            ? ["starved", Number(starved[1]), starved[2], 0]
+            : undefined;
+    if (mark !== undefined && poolLabelAllowed(mark[2], names)) marks.push({ ts, mark });
+  }
+  samples.sort((a, b) => a.ts - b.ts);
+  const frames: PoolFrame[] = [];
+  samples.forEach((s, i) => {
+    if (s.ts < opts.from || s.ts > opts.to) return;
+    // the marks logged since the sample before (at most two sample periods back: a pool that sat empty has none)
+    const lo = Math.max(i > 0 ? samples[i - 1].ts : -Infinity, s.ts - 2 * POOL_SAMPLE_MS);
+    const seen = new Map<string, PoolMark>();
+    for (const m of marks)
+      if (m.ts > lo && m.ts <= s.ts) seen.set(`${m.mark[0]} ${m.mark[2]}`, m.mark);
+    frames.push([
+      s.ts - opts.from,
+      s.held,
+      s.budget,
+      s.load,
+      s.external,
+      s.leases,
+      s.waiting,
+      s.asks,
+      [...seen.values()],
+    ]);
+  });
+  return { threshold: opts.threshold, frames };
+}
+
+const namesOf = new WeakMap<ReplayFile, Map<string, string>>();
+
+/** What a replay may name: its slices and its sessions, each with the session it stands for. */
+function replayNames(file: ReplayFile): Map<string, string> {
+  let names = namesOf.get(file);
+  if (names === undefined) {
+    names = new Map<string, string>(file.sessions.map(id => [id, id]));
+    for (const [, kind, s, data] of file.events)
+      if (kind === "session_start" && typeof data?.task === "string")
+        names.set(data.task, file.sessions[s]);
+    namesOf.set(file, names);
+  }
+  return names;
+}
+
+const ownLock = (file: ReplayFile): string => `${file.project}-land`;
+
+/** Every way the file could leak what the replay must not carry; throws naming each one. */
+export function assertReplayClean(file: ReplayFile, forbid: readonly string[] = []): void {
+  const bad: string[] = [];
+  const raw = JSON.stringify(file);
+  for (const word of ["/Users/", "/home/", "/private/", ...forbid.filter(f => f !== "")])
+    if (raw.includes(word)) bad.push(`the file holds ${JSON.stringify(word)}`);
+  if (/"pid"\s*:/.test(raw)) bad.push("the file has a pid field");
+  const pool = file.pool;
+  if (pool !== undefined) {
+    const names = new Set(replayNames(file).keys());
+    const own = ownLock(file);
+    for (const f of pool.frames) {
+      for (const m of f[8])
+        if (!poolLabelAllowed(m[2], names))
+          bad.push(`a lease label is not on the allowlist: ${JSON.stringify(m[2])}`);
+      for (const ask of f[7])
+        for (const part of ask.split(" + ")) {
+          const lock = /^lock (\S+)$/.exec(part);
+          if (!ASK_PART.test(part) || (lock !== null && lock[1] !== own))
+            bad.push(`an ask is not a thread count: ${JSON.stringify(ask)}`);
+        }
+    }
+  }
+  if (bad.length > 0)
+    throw new Error(`the replay is not clean:\n  ${[...new Set(bad)].join("\n  ")}`);
+}
+
+/** The pool's frame at `at` ms, or undefined when the pool was empty (no sample yet, or none for a while). */
+function frameAt(pool: ReplayPool, at: number): PoolFrame | undefined {
+  let lo = 0;
+  let hi = pool.frames.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (pool.frames[mid][0] <= at) lo = mid + 1;
+    else hi = mid;
+  }
+  const f = pool.frames[lo - 1];
+  return f !== undefined && at - f[0] < POOL_IDLE_AFTER_MS ? f : undefined;
+}
+
+/** The pool's threads held of its budget at `at` ms (what the tab's label shows) and how many commands waited. */
+export function poolCountsAt(
+  file: ReplayFile,
+  at: number,
+): { held: number; budget: number; waiting: number } | null {
+  const pool = file.pool;
+  if (pool === undefined || pool.frames.length === 0) return null;
+  const f = frameAt(pool, at);
+  return { held: f?.[1] ?? 0, budget: (f ?? pool.frames[0])[2], waiting: f?.[6] ?? 0 };
+}
+
+const askRequest = (ask: string): string =>
+  ask
+    .split(" + ")
+    .map(p => (/^[\d-]+$/.test(p) ? `${p} threads` : p))
+    .join(" + ");
+
+/**
+ * The Pool tab's read at `at` ms, as the mod's tab reads `/api/pool`: the latest sample's budget, threads held and
+ * load, the leases the log named (a backfilled or over-running one) and one row for the rest, the waiters' asks in
+ * admission order, the project's land lock when a waiter wants it. The log carries no priority or age, so a row has
+ * none. A moment the pool was empty reads as such.
+ */
+export function poolStateAt(file: ReplayFile, at: number): PoolState {
+  const now = Date.parse(file.start) + at;
+  const pool = file.pool;
+  if (pool === undefined) return { at: now, pool: null, error: "the replay carries no pool log" };
+  const f = frameAt(pool, at);
+  if (f === undefined)
+    return {
+      at: now,
+      pool: null,
+      error: "idle: no lease and no waiter (the pool logs a sample only while it has one)",
+    };
+  const [, held, budget, load, external, leaseCount, waitingCount, asks, seen] = f;
+  const names = replayNames(file);
+  const row = (request: string, label: string, session: string, project = ""): PoolLine => ({
+    pid: 0,
+    request,
+    ageMs: -1,
+    priority: "",
+    project,
+    session: session.slice(0, 8),
+    step: "",
+    label,
+    overrun: null,
+    isStarved: false,
+  });
+  const named = seen.filter(m => m[0] !== "starved");
+  const leases = named.map(m => ({
+    ...row(
+      `${m[1]} threads`,
+      m[2],
+      names.get(m[2].split(" ").find(w => names.has(w)) ?? "") ?? "",
+      file.project,
+    ),
+    overrun: m[0] === "overrun" ? m[3] : null,
+  }));
+  const rest = leaseCount - named.length;
+  if (rest > 0)
+    leases.push(
+      row(
+        `${Math.max(0, held - named.reduce((n, m) => n + m[1], 0))} threads`,
+        `${POOL_UNNAMED}: ${rest}`,
+        "",
+      ),
+    );
+  const listed = asks.filter(a => !a.startsWith("+"));
+  const waiting = listed.map(a => row(askRequest(a), "", ""));
+  // the sample lists four waiters; the rest are one row that says how many (the log has no ask for them)
+  if (waitingCount > listed.length)
+    waiting.push(row(`+${waitingCount - listed.length} more waiting`, "", ""));
+  const starved = seen.filter(m => m[0] === "starved").map(m => m[2]);
+  return {
+    at: now,
+    error: "",
+    pool: {
+      budget,
+      held,
+      load,
+      external,
+      threshold: pool.threshold,
+      starvedNote: starved.length > 0 ? `STARVED: ${starved.join(" · ")}` : "",
+      locks: [
+        ...new Set(asks.flatMap(a => a.split(" + ")).filter(p => p === `lock ${ownLock(file)}`)),
+      ].map(p => p.slice(5)),
+      leases,
+      waiting,
+    },
+  };
+}
+
+interface Wait {
+  readonly session: string;
+  readonly from: number;
+  readonly to: number;
+}
+
+const waitsOf = new WeakMap<ReplayFile, readonly Wait[]>();
+
+/** The stretches an exec of the replay waited for a pool lease: from its start for `wait_ms`, one per exec that waited. */
+function waits(file: ReplayFile): readonly Wait[] {
+  let out = waitsOf.get(file);
+  if (out !== undefined) return out;
+  const started = new Map<number, number>();
+  const list: Wait[] = [];
+  for (const [ts, kind, s, data] of file.events) {
+    if (kind === "exec_start") started.set(s, ts);
+    else if (kind === "exec_end") {
+      const from = started.get(s);
+      started.delete(s);
+      const wait = data?.wait_ms;
+      if (from !== undefined && typeof wait === "number" && wait >= POOL_MIN_WAIT_MS)
+        list.push({ session: file.sessions[s], from, to: Math.min(ts, from + wait) });
+    }
+  }
+  out = list;
+  waitsOf.set(file, out);
+  return out;
+}
+
+const parentsOf = new WeakMap<ReplayFile, ReadonlyMap<string, string>>();
+
+/** The session each session of the file was started under (a root has none). */
+function parents(file: ReplayFile): ReadonlyMap<string, string> {
+  let out = parentsOf.get(file);
+  if (out === undefined) {
+    const m = new Map<string, string>();
+    for (const [, kind, s, data] of file.events)
+      if (kind === "session_start" && typeof data?.parent === "string")
+        m.set(file.sessions[s], data.parent);
+    out = m;
+    parentsOf.set(file, out);
+  }
+  return out;
+}
+
+/**
+ * The sessions that wait for a pool lease at `at` ms, each with the sessions it runs under: a worker's exec that
+ * waits holds up the pipeline's lane the worker hangs from, so that lane carries the "waiting for the pool" mark
+ * the map draws for `MapOptions.pool`.
+ */
+export function poolWaiting(file: ReplayFile, at: number): string[] {
+  const up = parents(file);
+  const out = new Set<string>();
+  for (const w of waits(file))
+    if (w.from <= at && at < w.to)
+      for (
+        let id: string | undefined = w.session;
+        id !== undefined && !out.has(id);
+        id = up.get(id)
+      )
+        out.add(id);
+  return [...out];
+}
+
+export interface PoolStrip {
+  /** the budget's height in the strip */
+  readonly budgetY: number;
+  /** threads held by leases the log does not name (`POOL_UNNAMED`) and by the ones it names, stacked; closed paths */
+  readonly other: string;
+  readonly named: string;
+  /** how many waiters there were, as a band along the top */
+  readonly waiting: string;
+}
+
+/**
+ * The pool's occupancy over the whole replay as paths in a `width` x `height` box: threads held (the work the
+ * replay does not name under the work it names) against the budget, and the waiters as a band along the top. A
+ * sample holds until the next one; a pool that logged nothing for a while was empty.
+ */
+export function poolStrip(file: ReplayFile, width: number, height: number): PoolStrip | null {
+  const pool = file.pool;
+  if (pool === undefined || pool.frames.length === 0) return null;
+  const top = Math.max(...pool.frames.map(f => Math.max(f[1], f[2])));
+  const x = (t: number): number => +((t / Math.max(1, file.durationMs)) * width).toFixed(1);
+  const y = (n: number): number => +(height - (n / top) * height).toFixed(1);
+  const band = 0.22 * height;
+  const wy = (n: number): number => +(band - (Math.min(n, 6) / 6) * band).toFixed(1);
+  const steps: { x0: number; x1: number; other: number; named: number; waiting: number }[] = [];
+  pool.frames.forEach((f, i) => {
+    const next = pool.frames[i + 1]?.[0] ?? file.durationMs;
+    const end = Math.min(next, f[0] + POOL_IDLE_AFTER_MS);
+    const named = Math.min(
+      f[1],
+      f[8].filter(m => m[0] !== "starved").reduce((n, m) => n + m[1], 0),
+    );
+    steps.push({ x0: x(f[0]), x1: x(end), other: f[1] - named, named, waiting: f[6] });
+  });
+  const area = (
+    low: (s: (typeof steps)[number]) => number,
+    high: (s: (typeof steps)[number]) => number,
+    base: (n: number) => number,
+  ): string => {
+    const parts: string[] = [];
+    for (const s of steps) {
+      const hi = high(s);
+      const lo = low(s);
+      if (hi <= lo) continue;
+      parts.push(`M${s.x0},${base(hi)}H${s.x1}V${base(lo)}H${s.x0}Z`);
+    }
+    return parts.join("");
+  };
+  return {
+    budgetY: y(Math.max(...pool.frames.map(f => f[2]))),
+    other: area(
+      () => 0,
+      s => s.other,
+      y,
+    ),
+    named: area(
+      s => s.other,
+      s => s.other + s.named,
+      y,
+    ),
+    waiting: area(
+      () => 0,
+      s => s.waiting,
+      wy,
+    ),
+  };
 }

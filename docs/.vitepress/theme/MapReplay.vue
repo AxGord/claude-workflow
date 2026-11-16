@@ -3,7 +3,7 @@
 // scripts/export-replay.mjs) is fed, on the scene's clock (replay-store.ts), to the SAME code the dashboard map
 // runs: `fold` and `layout` of src/ lay the picture out and dashboard/scene-dom.js draws it, so lanes advance,
 // branches open, lands fold, hover (a tooltip) and click (a folded group opens) work as on /map.
-// The map fills the stage and never scrolls: it is scaled to the frame's width (`fitView`), and when its lanes are
+// The map fills the room the stage leaves it and never scrolls: it is scaled to the frame's width (`fitView`), and when its lanes are
 // taller than the frame a camera follows the running lanes, easing from one frame to the next.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { reconcile } from "../../../dashboard/scene-dom.js";
@@ -11,7 +11,7 @@ import { DASH, useDashboardCss } from "./dashboard-css";
 import { shared } from "./replay-store";
 import { fold } from "../../../src/event-fold";
 import { layout, scene } from "../../../src/map-layout";
-import { cameraTop, expandReplay, fitView, rowsUntil } from "../../../src/replay";
+import { cameraTop, expandReplay, fitView, poolWaiting, rowsUntil } from "../../../src/replay";
 
 const RENDER_EVERY_MS = 90;
 /** A step of the clock shorter than this eases the camera; a longer one (a scrub, the first frame) jumps it. */
@@ -39,6 +39,8 @@ function render(): void {
     now: t0 + shared.at,
     width,
     kinds: file.taskKinds,
+    // a lane whose exec waits for a pool lease carries the "waiting for the pool" mark, as on /map
+    pool: poolWaiting(file, shared.at),
     open: [...open],
   });
   const view = fitView(map.width, map.height, width, height);

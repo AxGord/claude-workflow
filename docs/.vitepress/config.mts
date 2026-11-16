@@ -45,6 +45,7 @@ export default defineConfig({
         items: [
           { text: "Workflow YAML", link: "/workflow-yaml" },
           { text: "Action states", link: "/action-states" },
+          { text: "Thread pool", link: "/pool" },
           { text: "Task queue and dispatch", link: "/queue" },
           { text: "Dashboard and plan pane", link: "/dashboard" },
         ],
