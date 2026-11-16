@@ -1,8 +1,13 @@
 #!/usr/bin/env node
-// Exports the replay the documentation site's landing page plays: a window of REAL sessions of one
-// open-source project, from the recorded event log (<state dir>/events/run-*.jsonl), into
-// docs/public/replay/anyparse.json. Only sessions of --project (and their children) are read into the file;
-// every other project's session, path and id stays in the log. The cut is `buildReplay` (src/replay.ts).
+// Exports the replay the documentation site's landing page plays: a window of REAL sessions of the open-source
+// projects (anyparse, and the engine's own, mcp-workflow-engine, whose tasks the same dispatcher drives), from the
+// recorded event log (<state dir>/events/run-*.jsonl), into docs/public/replay/anyparse.json. Only sessions of
+// --project and --also (and their children) are read into the file; every other project's session, path and id
+// stays in the log. The cut is `buildReplay` (src/replay.ts).
+//
+// The tasks of those sessions get their real spend from the ledger (<state dir>/ledger.jsonl, `spend.usd` summed over
+// every run of the line, as the plan pane reads it): the same allowlist, a row whose task is not a task of the replay
+// is never read into the file, and a task with no measured spend carries none (the pane draws `—`).
 //
 // The machine's thread pool over the same window comes from the pool's log (<pool dir>/pool.log.1 and pool.log): a
 // lease or waiter keeps its label only when it names a session or slice of the replay (an ALLOWLIST: the pool is
@@ -11,11 +16,13 @@
 // `assertReplayClean` checks the result (every label on the allowlist, no absolute path, no pid) and a violation
 // refuses the write. Only a window the pool log covers is chosen.
 //
-//   npm run build && node scripts/export-replay.mjs [--project anyparse] [--project-dir DIR]
-//        [--events DIR] [--pool DIR|none] [--queue FILE] [--from ISO] [--hours 4] [--max-kb 300] [--out FILE]
+//   npm run build && node scripts/export-replay.mjs [--project anyparse] [--also mcp-workflow-engine] [--project-dir DIR]
+//        [--events DIR] [--ledger FILE|none] [--pool DIR|none] [--queue FILE] [--from ISO] [--hours 4] [--max-kb 300] [--out FILE]
 //
 // --project-dir  the project's checkout: its .claude/workflows give the stations of the workflows the sessions
 //                ran, its .claude/batch/queue.yaml (or --queue) the kind of each task (default: the cwd)
+// --also         more projects kept the same way, comma separated (default mcp-workflow-engine; `none` keeps --project alone)
+// --ledger       the ledger file (default: <state dir>/ledger.jsonl); `none` writes no spend
 // --events       the event log directory (default: $STATE_DIR or ~/.claude/workflow-state, then /events)
 // --pool         the pool directory (default: $WF_POOL_DIR or ~/.claude/workflow-pool); `none` writes no pool
 // --from/--hours the window; without --from the best window of that length is chosen (a land, a split,
@@ -94,8 +101,12 @@ async function readKinds(file) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const project = args.project ?? "anyparse";
+  const also = (args.also ?? "mcp-workflow-engine").split(",").filter(p => p !== "" && p !== "none");
+  const stateDir = process.env.STATE_DIR ?? path.join(os.homedir(), ".claude", "workflow-state");
+  const ledgerFile = args.ledger === undefined ? path.join(stateDir, "ledger.jsonl") : args.ledger === "none" ? undefined : path.resolve(args.ledger);
+  const ledger = ledgerFile !== undefined && fs.existsSync(ledgerFile) ? fs.readFileSync(ledgerFile, "utf8") : undefined;
   const projectDir = path.resolve(args["project-dir"] ?? process.cwd());
-  const eventsDir = args.events ?? path.join(process.env.STATE_DIR ?? path.join(os.homedir(), ".claude", "workflow-state"), "events");
+  const eventsDir = args.events ?? path.join(stateDir, "events");
   const out = path.resolve(args.out ?? path.join(root, "docs", "public", "replay", `${project}.json`));
   const { assertReplayClean, buildReplay, renderReplay } = await load("replay.js");
   const { workflowDirs } = await load("workflow-dirs.js");
@@ -117,7 +128,9 @@ async function main() {
   const poolLines = poolDir === undefined ? [] : readPoolLog(poolDir);
   const file = buildReplay(readEvents(eventsDir), {
     project,
+    also,
     workflows,
+    ...(ledger === undefined ? {} : { ledger }),
     taskKinds: await readKinds(args.queue ?? path.join(projectDir, ".claude", "batch", "queue.yaml")),
     ...(args.from === undefined ? {} : { from: args.from }),
     ...(args.hours === undefined ? {} : { hours: Number(args.hours) }),
@@ -131,7 +144,7 @@ async function main() {
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, text);
   console.log(
-    `${path.relative(process.cwd(), out)}: ${(Buffer.byteLength(text) / 1000).toFixed(1)} KB, ${file.sessions.length} sessions, ${file.events.length} events, ${file.pool?.frames.length ?? 0} pool samples, ${(file.durationMs / 3600_000).toFixed(2)} h from ${file.start}`,
+    `${path.relative(process.cwd(), out)}: ${(Buffer.byteLength(text) / 1000).toFixed(1)} KB, ${file.sessions.length} sessions, ${file.events.length} events, ${Object.keys(file.spend ?? {}).length} tasks with spend, ${file.pool?.frames.length ?? 0} pool samples, ${(file.durationMs / 3600_000).toFixed(2)} h from ${file.start}`,
   );
   // the loader watches its directories: the process ends by itself only without them
   process.exit(0);

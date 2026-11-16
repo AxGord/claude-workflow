@@ -51,12 +51,19 @@ function pipeline(
   id: string,
   a: number,
   b: number,
-  o: { project?: string; reviews?: number; moves?: string[]; task?: string; queue?: string } = {},
+  o: {
+    project?: string;
+    reviews?: number;
+    moves?: string[];
+    task?: string;
+    queue?: string;
+    alone?: boolean;
+  } = {},
 ): WfEvent[] {
   const project = o.project ?? "anyparse";
   const out: WfEvent[] = [
     ev(a, "session_start", id, {
-      workflow: "slice-pipeline",
+      workflow: o.alone === true ? "engine-task" : "slice-pipeline",
       // the conversation that started it: not a session of the log
       parent: "dispatch0",
       task: o.task ?? `TASK-${id}`,
@@ -77,7 +84,7 @@ function pipeline(
     out.push(
       ev(a + 1 + i, "transition", id, { from: "x", to, name: "go", workflow: "slice-pipeline" }),
     );
-  for (let r = 0; r < (o.reviews ?? 0) + 1; r++) {
+  for (let r = 0; r < (o.alone === true ? 0 : (o.reviews ?? 0) + 1); r++) {
     const kid = `${id}-k${r}`;
     out.push(
       ev(a + 1, "session_start", kid, {
@@ -332,21 +339,13 @@ describe("the committed replay (docs/public/replay/anyparse.json)", () => {
     expect(Buffer.byteLength(raw)).toBeLessThan(300_000);
   });
 
-  it("is the open-source project's sessions only: no other project, home path or private name", () => {
+  it("is the open-source projects' sessions only: no other project, home path or private name", () => {
     expect(file.project).toBe("anyparse");
-    for (const bad of [
-      "/Users/",
-      "/home/",
-      "golf",
-      "playtechstudios",
-      "TM-Haxe4",
-      "mcp-workflow-engine",
-      "ask_parent",
-    ])
+    for (const bad of ["/Users/", "/home/", "golf", "playtechstudios", "TM-Haxe4", "ask_parent"])
       expect(raw).not.toContain(bad);
     const roots = [...sessions.values()].filter(s => s.parent === null);
     expect(roots.length).toBeGreaterThan(0);
-    for (const r of roots) expect(r.project).toBe("anyparse");
+    for (const r of roots) expect(file.projects ?? [file.project]).toContain(r.project);
     // an ask carries no text
     expect(events.filter(e => e.kind === "ask").every(e => e.data.text === undefined)).toBe(true);
   });
@@ -418,8 +417,22 @@ describe("scripts/export-replay.mjs", () => {
       path.join(dir, "project", ".claude", "batch", "queue.yaml"),
       "tasks:\n  - id: TASK-aaaa1111\n    kind: bug\n  - id: GOLF-PRIVATE-TASK\n    kind: feature\n",
     );
-    const lines = [...pipeline("aaaa1111", 0, 30, { reviews: 1 }), ...OTHER].map(e =>
-      JSON.stringify(e),
+    const lines = [
+      ...pipeline("aaaa1111", 0, 30, { reviews: 1 }),
+      ...pipeline("eeee5555", 5, 35, {
+        project: "mcp-workflow-engine",
+        task: "ENG-X",
+        alone: true,
+      }),
+      ...OTHER,
+    ].map(e => JSON.stringify(e));
+    const row = (task: string, usd: number): string =>
+      JSON.stringify({ task, workflow: "slice-pipeline", ended_at: at(30), spend: { usd } });
+    fs.writeFileSync(
+      path.join(dir, "ledger.jsonl"),
+      [row("TASK-aaaa1111", 1.25), row("ENG-X", 0.5), row("GOLF-PRIVATE-TASK", 99), "{torn"].join(
+        "\n",
+      ),
     );
     fs.writeFileSync(path.join(dir, "events", "run-a.jsonl"), `${lines.join("\n")}\n{"torn`);
     const out = path.join(dir, "out", "replay.json");
@@ -431,6 +444,8 @@ describe("scripts/export-replay.mjs", () => {
         path.join(dir, "events"),
         "--project-dir",
         path.join(dir, "project"),
+        "--ledger",
+        path.join(dir, "ledger.jsonl"),
         "--from",
         at(-1),
         "--out",
@@ -438,12 +453,15 @@ describe("scripts/export-replay.mjs", () => {
       ],
       {
         cwd: ROOT,
-        env: { ...process.env, WORKFLOW_DIR: path.join(dir, "global") },
+        // the default ledger and event log are the state directory's: never the real one
+        env: { ...process.env, WORKFLOW_DIR: path.join(dir, "global"), STATE_DIR: dir },
       },
     );
     const text = fs.readFileSync(out, "utf8");
     const file = JSON.parse(text) as ReplayFile;
-    expect(file.sessions).toEqual(["aaaa1111", "aaaa1111-k0", "aaaa1111-k1"]);
+    expect(file.sessions).toEqual(["aaaa1111", "aaaa1111-k0", "aaaa1111-k1", "eeee5555"]);
+    expect(file.projects).toEqual(["anyparse", "mcp-workflow-engine"]);
+    expect(file.spend).toEqual({ "ENG-X": 0.5, "TASK-aaaa1111": 1.25 });
     expect(file.taskKinds).toEqual({ "TASK-aaaa1111": "bug" });
     expect(Object.keys(file.workflows)).toContain("slice-pipeline");
     for (const secret of ["golf", "GOLF", "someone", "/Users/"]) expect(text).not.toContain(secret);

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Re-records the landing page's scene (the live map with the Claude Code window and its plan pane over it, driven by the replay
-// of docs/public/replay/anyparse.json) into docs/media/scene.mp4 (1920x1080, for the voiced video) and
-// docs/media/scene.gif (960 px wide, under 4 MB, for the README and social posts). One command:
+// of docs/public/replay/anyparse.json) into docs/media/scene.gif (960 px wide, under 4 MB, for the README and social
+// posts). One command:
 //
-//   npm run docs:record [-- --from <replay s> --seconds 15 --speed 120 --fps 30]
+//   npm run docs:record [-- --from <replay s> --seconds 15 --speed 120 --fps 30 --mp4]
+//
+// `--mp4` also encodes the 1920x1080 clip, into video/out/scene.mp4 (git-ignored: nothing in the repository reads it).
 //
 // It builds the site, serves the build, opens `/?record` in headless Chromium (the page then hands over a
 // `seek(ms)` hook instead of playing on its own clock), steps the replay one frame at a time, so the result
@@ -26,6 +28,7 @@ const from = option("from", 5400) * 1000; // ms into the replay
 const seconds = option("seconds", 15);
 const speed = option("speed", 120); // times real time
 const fps = option("fps", 30);
+const withMp4 = process.argv.includes("--mp4");
 
 requireFfmpeg();
 const frames = fs.mkdtempSync(path.join(os.tmpdir(), "scene-frames-"));
@@ -46,7 +49,11 @@ try {
   const out = path.join(ROOT, "docs/media");
   fs.mkdirSync(out, { recursive: true });
   const input = ["-y", "-loglevel", "error", "-framerate", String(fps), "-i", path.join(frames, "f%05d.png")];
-  run(ffmpeg, [...input, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-movflags", "+faststart", path.join(out, "scene.mp4")], "mp4 encode");
+  const mp4 = path.join(ROOT, "video/out/scene.mp4");
+  if (withMp4) {
+    fs.mkdirSync(path.dirname(mp4), { recursive: true });
+    run(ffmpeg, [...input, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", "-movflags", "+faststart", mp4], "mp4 encode");
+  }
   // the GIF: 10 fps at 960 px, a palette of fewer colors until it fits under the limit
   let size = 0;
   for (const colors of [128, 64, 32, 16]) {
@@ -56,7 +63,7 @@ try {
     if (size < GIF_LIMIT) break;
   }
   const kb = f => `${Math.round(fs.statSync(path.join(out, f)).size / 1024)} KB`;
-  console.log(`scene.mp4 ${kb("scene.mp4")} (${seconds} s, 1920x1080, ${fps} fps)  scene.gif ${kb("scene.gif")} (960 px)`);
+  console.log(`scene.gif ${kb("scene.gif")} (960 px, ${seconds} s)${withMp4 ? `  ${path.relative(ROOT, mp4)} ${Math.round(fs.statSync(mp4).size / 1024)} KB (1920x1080, ${fps} fps)` : ""}`);
   if (size >= GIF_LIMIT) {
     console.error("the GIF is over 4 MB at 16 colors: shorten --seconds");
     process.exitCode = 1;

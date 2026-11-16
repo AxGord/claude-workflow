@@ -6,6 +6,7 @@
 // pure and import-free too), so it runs in the browser and under vitest alike.
 
 import type {
+  DaySpend,
   Land,
   PoolLine,
   PoolState,
@@ -22,8 +23,10 @@ export type ReplayRow = readonly [number, EventKind, number, Readonly<Record<str
 
 export interface ReplayFile {
   readonly version: 1;
-  /** the one project the replay draws; no other project's session, path or id is in the file */
+  /** the project the replay is of (it names the file and its land lock); no session, path or id of a project outside `projects` is in the file */
   readonly project: string;
+  /** every open-source project the replay draws, `project` first (absent: `project` alone, a file from before the engine's own sessions were kept) */
+  readonly projects?: readonly string[];
   /** ISO time of offset 0 */
   readonly start: string;
   readonly durationMs: number;
@@ -33,6 +36,11 @@ export interface ReplayFile {
   readonly workflows: Readonly<Record<string, MapWorkflow>>;
   /** queue line kind by task id, for the lanes' marks */
   readonly taskKinds: Readonly<Record<string, string>>;
+  /**
+   * the ledger's real `spend.usd` per task id, summed over every run of the line, for the tasks of the replay only; a
+   * task with no measured spend (a run that recorded none, or no ledger row) is absent and the pane draws `—`
+   */
+  readonly spend?: Readonly<Record<string, number>>;
   /** the machine's thread pool over the same window, as `pool.log` sampled it; absent when no log covered the window */
   readonly pool?: ReplayPool;
   readonly events: readonly ReplayRow[];
@@ -133,8 +141,12 @@ interface Tree {
 }
 
 export interface BuildOptions {
-  /** the project whose sessions (and their children) are kept */
+  /** the project whose sessions (and their children) are kept; it names the file and its land lock */
   readonly project: string;
+  /** more open-source projects whose sessions are kept the same way (the engine's own: its tasks run under the same dispatcher) */
+  readonly also?: readonly string[];
+  /** the ledger's text (`ledger.jsonl`): the tasks of the replay get their `spend.usd` (`ledgerSpend`); absent: no spend */
+  readonly ledger?: string;
   readonly workflows: Readonly<Record<string, MapWorkflow>>;
   /** queue line kind by task id; only the tasks of the kept sessions are written */
   readonly taskKinds?: Readonly<Record<string, string>>;
@@ -202,11 +214,13 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
   const maxBytes = opts.maxBytes ?? 300_000;
   const sorted = [...events].sort((a, b) => ms(a.ts) - ms(b.ts));
   const trees = new Map<string, Tree>();
+  const projects = [opts.project, ...(opts.also ?? []).filter(p => p !== opts.project)];
+  const kept = new Set(projects);
   for (const e of sorted) {
     if (e.kind !== "session_start") continue;
     const parent = typeof e.data.parent === "string" ? e.data.parent : null;
     const parentTree = parent === null ? undefined : trees.get(parent);
-    const mine = e.data.project === opts.project;
+    const mine = typeof e.data.project === "string" && kept.has(e.data.project);
     if (!mine && parentTree === undefined) continue;
     trees.set(e.session, {
       id: e.session,
@@ -246,8 +260,13 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
   const poolSpan = opts.pool === undefined ? undefined : poolLogSpan(opts.pool.lines);
   const busy = opts.pool === undefined ? [] : poolWaitingSamples(opts.pool.lines);
   const roots = all.filter(t => t.parent === null && t.end !== undefined);
-  // a root that has children is a pipeline; a conversation of the project with none is left off
-  const pipelines = roots.filter(r => (kids.get(r.id) ?? []).length > 0);
+  // a root that has children is a pipeline, and so is a finished task run that spawned none (an engine-task works alone);
+  // a conversation of the project with neither is left off
+  const pipelines = roots.filter(
+    r =>
+      (kids.get(r.id) ?? []).length > 0 ||
+      (typeof r.task === "string" && r.workflow !== undefined && TASK_WORKFLOWS.has(r.workflow)),
+  );
 
   const build = (from: number, to: number): ReplayFile | null => {
     const inside = pipelines.filter(r => r.start >= from && (r.end as number) <= to);
@@ -284,20 +303,24 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
         ? undefined
         : buildPool(opts.pool.lines, {
             project: opts.project,
+            ...(projects.length > 1 ? { also: projects.slice(1) } : {}),
             from: first,
             to: last,
             tasks,
             sessions: new Set(ids),
             threshold: opts.pool.threshold,
           });
+    const spend = opts.ledger === undefined ? {} : ledgerSpend(opts.ledger, tasks);
     return {
       version: 1,
       project: opts.project,
+      ...(projects.length > 1 ? { projects } : {}),
       start: new Date(first).toISOString(),
       durationMs: last - first,
       sessions: ids,
       workflows,
       taskKinds,
+      ...(Object.keys(spend).length === 0 ? {} : { spend }),
       ...(pool === undefined ? {} : { pool }),
       events: rows.map(e => {
         const data = scrubData(e, keep);
@@ -336,6 +359,47 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
   throw new Error(
     `no window of ${hours} h with a session of ${opts.project} fits ${maxBytes} bytes${poolSpan === undefined ? "" : " and lies inside the pool log"}`,
   );
+}
+
+/** The workflows whose ledger rows are a task's own run: the plan pane's `TASK_WORKFLOWS` (a review or recon child with the same `task` adds nothing). */
+const TASK_WORKFLOWS: ReadonlySet<string> = new Set(["slice-pipeline", "engine-task"]);
+
+/**
+ * The real spend of `tasks` from the ledger's text, as the plan pane reads it (`ledgerSpendOf` of hooks/plan-pane.tsx): a
+ * row of a task workflow with an end counts, `spend.usd` is summed over every run of the line, and a line any of whose
+ * runs recorded none is left out whole (never `$0`). An ALLOWLIST: a row whose `task` is not one of `tasks` is never
+ * read into the result, so no other project's task id, name or sum can reach the file. Keys in order, sums to 1e-4 $.
+ */
+export function ledgerSpend(text: string, tasks: ReadonlySet<string>): Record<string, number> {
+  const acc = new Map<string, { usd: number; measured: boolean }>();
+  for (const line of text.split("\n")) {
+    if (!line.includes('"task"')) continue;
+    try {
+      const j = JSON.parse(line) as Record<string, unknown>;
+      if (
+        typeof j.task !== "string" ||
+        !tasks.has(j.task) ||
+        typeof j.workflow !== "string" ||
+        !TASK_WORKFLOWS.has(j.workflow) ||
+        typeof j.ended_at !== "string" ||
+        !Number.isFinite(Date.parse(j.ended_at))
+      )
+        continue;
+      const usd = (j.spend as { usd?: unknown } | undefined)?.usd;
+      const cur = acc.get(j.task) ?? { usd: 0, measured: true };
+      if (typeof usd === "number" && Number.isFinite(usd)) cur.usd += usd;
+      else cur.measured = false;
+      acc.set(j.task, cur);
+    } catch {
+      // a torn or foreign line is not a run
+    }
+  }
+  const out: Record<string, number> = {};
+  for (const task of [...acc.keys()].sort()) {
+    const a = acc.get(task);
+    if (a?.measured) out[task] = Math.round(a.usd * 1e4) / 1e4;
+  }
+  return out;
 }
 
 /** The file as written: one header field per line, then one event row per line (a diff of two exports reads). */
@@ -542,8 +606,9 @@ const windows = new WeakMap<ReplayFile, number>();
  * The plan pane's Snapshot at `at` ms into the replay, as the mod builds it from the engine's state files and
  * queue (hooks/plan-pane.tsx): the live sessions, the queue (a root session with a task is a queue line: Next
  * before it starts, Running until it ends, then done — Landed when it moved through `land` — or failed when it
- * did not complete) and the lands, newest first. The replay carries no cost and no commit, so no `usd` and no
- * `sha`. Pure; the site's scene draws it with the mod's own pane code (hooks/pane-view.ts).
+ * did not complete) and the lands, newest first. A task the ledger measured (`ReplayFile.spend`) carries its `usd` on
+ * its Landed and Failed row and in the day sums (`days`, `landedUsd`) as the live pane's do; one with none stays
+ * unmeasured (the pane draws `—`). The replay carries no commit, so no `sha`. Pure; the site's scene draws it with the mod's own pane code (hooks/pane-view.ts).
  */
 export function snapshotAt(file: ReplayFile, at: number): Snapshot {
   const t0 = Date.parse(file.start);
@@ -577,10 +642,15 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
     window = windowOf(file);
     windows.set(file, window);
   }
+  const usdOf = (task: string): { usd: number } | Record<string, never> => {
+    const usd = Object.hasOwn(file.spend ?? {}, task) ? file.spend?.[task] : undefined;
+    return typeof usd === "number" ? { usd } : {};
+  };
   const lands: Land[] = landed.map(r => {
     const end = t0 + (r.end as number);
     const start = t0 + r.start;
     return {
+      ...usdOf(r.task),
       sha: "",
       slice: r.task,
       at: `${dayMonth(end)} ${hourMinute(end)}`,
@@ -619,6 +689,7 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
       return {
         id: r.task,
         difficulty: r.difficulty,
+        ...usdOf(r.task),
         date: `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`,
         reason: `ended at ${r.state}`,
         recent: true,
@@ -632,9 +703,64 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
     queue,
     lands,
     recent: landed.filter(r => at - (r.end as number) <= 24 * 3600_000).length,
-    days: {},
+    days: daySpends(lands, ended, usdOf, t0),
+    ...landedSum(lands),
     error: "",
   };
+}
+
+/** The $ sum of the landed lines, each line once, a line with no spend adding nothing; absent when none is measured (the pane's `landedUsd`). */
+function landedSum(lands: readonly Land[]): { landedUsd?: number } {
+  const seen = new Set<string>();
+  let sum = 0;
+  let measured = false;
+  for (const l of lands) {
+    if (seen.has(l.slice)) continue;
+    seen.add(l.slice);
+    if (l.usd === undefined) continue;
+    sum += l.usd;
+    measured = true;
+  }
+  return measured ? { landedUsd: sum } : {};
+}
+
+/**
+ * Each day of the Landed tree as the pane's `daySpends` sums it: the landed lines plus the failed and closed lines
+ * whose run ended that day and that the ledger measured (a line once), only on a day that has a landed line. The
+ * replay spans hours, so a `DD.MM` is one date and needs no year check.
+ */
+function daySpends(
+  lands: readonly Land[],
+  ended: readonly Seen[],
+  usdOf: (task: string) => { usd?: number },
+  t0: number,
+): Record<string, DaySpend> {
+  const days: Record<string, DaySpend> = {};
+  const counted = new Set<string>();
+  const add = (day: string, task: string, usd: number | undefined, kind?: "failed" | "closed") => {
+    const d = (days[day] ??= { usd: 0, lines: 0, measured: 0, failed: 0, closed: 0 });
+    counted.add(task);
+    d.lines++;
+    if (usd !== undefined) {
+      d.measured++;
+      d.usd += usd;
+    }
+    if (kind !== undefined) d[kind]++;
+  };
+  for (const l of lands) if (!counted.has(l.slice)) add(l.at.slice(0, 5), l.slice, l.usd);
+  for (const r of ended) {
+    const usd = usdOf(r.task).usd;
+    const day = dayMonth(t0 + (r.end as number));
+    if (
+      counted.has(r.task) ||
+      usd === undefined ||
+      days[day] === undefined ||
+      (r.outcome === "completed" && r.landed)
+    )
+      continue;
+    add(day, r.task, usd, r.outcome === "completed" ? "closed" : "failed");
+  }
+  return days;
 }
 
 /** One line of the parent conversation, as the mod draws it (hooks/pane-view.ts's line builders). */
@@ -802,13 +928,13 @@ export function poolLabelAllowed(label: string, names: ReadonlySet<string>): boo
   return words.every(w => SAFE_WORD.test(w)) && words.some(w => names.has(w));
 }
 
-/** A waiter's ask with every lock but the project's own land lock made anonymous: `4-8 + lock a` is `4-8 + lock`. */
-function poolAsk(raw: string, own: string): string {
+/** A waiter's ask with every lock but a replay project's own land lock made anonymous: `4-8 + lock a` is `4-8 + lock`. */
+function poolAsk(raw: string, own: ReadonlySet<string>): string {
   return raw
     .split(" + ")
     .map(p => {
       const m = /^lock (\S+)$/.exec(p);
-      if (m !== null) return m[1] === own ? p : "lock";
+      if (m !== null) return own.has(m[1]) ? p : "lock";
       return /^(?:\d+(?:-\d+)?|\+\d+)$/.test(p) ? p : "?";
     })
     .join(" + ");
@@ -839,6 +965,8 @@ export function buildPool(
   lines: readonly string[],
   opts: {
     readonly project: string;
+    /** the replay's other projects: their land locks keep their names too */
+    readonly also?: readonly string[];
     readonly from: number;
     readonly to: number;
     readonly tasks: ReadonlySet<string>;
@@ -847,7 +975,7 @@ export function buildPool(
   },
 ): ReplayPool {
   const names = new Set([...opts.tasks, ...opts.sessions]);
-  const own = `${opts.project}-land`;
+  const own = new Set([opts.project, ...(opts.also ?? [])].map(p => `${p}-land`));
   const samples: LogSample[] = [];
   const marks: LogMark[] = [];
   for (const line of lines) {
@@ -921,7 +1049,8 @@ function replayNames(file: ReplayFile): Map<string, string> {
   return names;
 }
 
-const ownLock = (file: ReplayFile): string => `${file.project}-land`;
+const ownLocks = (file: ReplayFile): ReadonlySet<string> =>
+  new Set((file.projects ?? [file.project]).map(p => `${p}-land`));
 
 /** Every way the file could leak what the replay must not carry; throws naming each one. */
 export function assertReplayClean(file: ReplayFile, forbid: readonly string[] = []): void {
@@ -933,7 +1062,7 @@ export function assertReplayClean(file: ReplayFile, forbid: readonly string[] = 
   const pool = file.pool;
   if (pool !== undefined) {
     const names = new Set(replayNames(file).keys());
-    const own = ownLock(file);
+    const own = ownLocks(file);
     for (const f of pool.frames) {
       for (const m of f[8])
         if (!poolLabelAllowed(m[2], names))
@@ -941,11 +1070,17 @@ export function assertReplayClean(file: ReplayFile, forbid: readonly string[] = 
       for (const ask of f[7])
         for (const part of ask.split(" + ")) {
           const lock = /^lock (\S+)$/.exec(part);
-          if (!ASK_PART.test(part) || (lock !== null && lock[1] !== own))
+          if (!ASK_PART.test(part) || (lock !== null && !own.has(lock[1])))
             bad.push(`an ask is not a thread count: ${JSON.stringify(ask)}`);
         }
     }
   }
+  const tasks = new Set<string>();
+  for (const [, kind, , data] of file.events)
+    if (kind === "session_start" && typeof data?.task === "string") tasks.add(data.task);
+  for (const [task, usd] of Object.entries(file.spend ?? {}))
+    if (!tasks.has(task) || typeof usd !== "number" || !Number.isFinite(usd) || usd < 0)
+      bad.push(`a spend is not a task of the replay: ${JSON.stringify(task)}`);
   if (bad.length > 0)
     throw new Error(`the replay is not clean:\n  ${[...new Set(bad)].join("\n  ")}`);
 }
@@ -1047,7 +1182,11 @@ export function poolStateAt(file: ReplayFile, at: number): PoolState {
       threshold: pool.threshold,
       starvedNote: starved.length > 0 ? `STARVED: ${starved.join(" · ")}` : "",
       locks: [
-        ...new Set(asks.flatMap(a => a.split(" + ")).filter(p => p === `lock ${ownLock(file)}`)),
+        ...new Set(
+          asks
+            .flatMap(a => a.split(" + "))
+            .filter(p => p.startsWith("lock ") && ownLocks(file).has(p.slice(5))),
+        ),
       ].map(p => p.slice(5)),
       leases,
       waiting,

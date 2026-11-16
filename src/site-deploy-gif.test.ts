@@ -77,12 +77,14 @@ describe("the recorder", () => {
     expect(RECORD).toContain("/claude-workflow/?record");
   });
 
-  it("writes a 1920x1080 mp4 and a 960 px GIF under 4 MB with ffmpeg, into docs/media", () => {
+  it("writes a 960 px GIF under 4 MB with ffmpeg into docs/media, and an mp4 only with --mp4, into a git-ignored directory", () => {
     expect(RECORD).toContain("width: 1920, height: 1080");
     expect(RECORD).toContain("scale=960:-1");
     expect(RECORD).toContain("const GIF_LIMIT = 4 * 1024 * 1024");
-    expect(RECORD).toContain('"scene.mp4"');
     expect(RECORD).toContain('"scene.gif"');
+    expect(RECORD).toContain('process.argv.includes("--mp4")');
+    expect(RECORD).toContain('path.join(ROOT, "video/out/scene.mp4")');
+    expect(fs.readFileSync(path.join(ROOT, ".gitignore"), "utf8")).toContain("video/out/");
     expect(RECORD).toContain("/opt/homebrew/bin/ffmpeg");
   });
 
@@ -91,9 +93,9 @@ describe("the recorder", () => {
     expect(PKG.devDependencies.playwright).toBeDefined();
   });
 
-  it("the committed media exist, the GIF under the limit", () => {
+  it("the committed GIF is under the limit and no mp4 is committed beside it", () => {
     expect(fs.statSync(path.join(ROOT, "docs/media/scene.gif")).size).toBeLessThan(4 * 1024 * 1024);
-    expect(fs.statSync(path.join(ROOT, "docs/media/scene.mp4")).size).toBeGreaterThan(1000);
+    expect(fs.existsSync(path.join(ROOT, "docs/media/scene.mp4"))).toBe(false);
   });
 });
 
