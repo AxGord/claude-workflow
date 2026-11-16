@@ -124,7 +124,8 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   [--set key=value]… [--append-note T] [--from W]` (`key=` removes), `--batch-size <N> --reason T`, `--header-set archive_after_days=N|exclusive_hold=yes|no [--reason T]` (`archive_after_days=` / `exclusive_hold=` removes the key; another key is refused; the reason is echoed, not written), `--archive --older-than <days> [--include-unended] [--dry-run]`, `--restore <ID>` (an archived line back into the queue).
 - Converting the old Markdown queue (`- [m] ID | key: value | … |` lines under `## Tasks`), once:
   `wf-queue --convert <old.md>` prints the YAML; `--into <new.yaml>` writes it; `--into <existing.yaml>
-  [--status backlog]` APPENDS the old file's open (not done) lines with that status. Marks map to
+  [--status backlog]` APPENDS the old file's open (not done) lines with that status (`--status pending` is
+  refused, exit 2 and the file unchanged, when an appended line has no `difficulty:`, as `queue_add` refuses it). Marks map to
   statuses (`[-]`/`[~]` → done with a note), `⏸` → `parked`, fields before the first metadata field
   and later `(<who> <date>…)` fields → `notes`, the rest → `text`; a twice-used id gets a `-2` suffix.
   `wf-queue --convert <config.json> [--into <config.yaml>]` turns a JSON config (pool `config.json`,

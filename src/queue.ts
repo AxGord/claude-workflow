@@ -355,7 +355,7 @@ function difficultyOf(line: QueueLine): number | undefined | null {
  * `?????` and the model table has no row for it. Backlog, parked, finished and parent-run (`model: —`)
  * lines need none. A write that makes a line read so is refused; lines already in the file are never.
  */
-function difficultyRequired(line: QueueLine): string | null {
+export function difficultyRequired(line: QueueLine): string | null {
   if (line.status !== "pending" || line.paused) return null;
   if ((line.meta.model ?? "").trim().startsWith("—")) return null;
   if (difficultyOf(line) !== undefined) return null;

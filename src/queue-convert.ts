@@ -3,7 +3,15 @@
 // (pool `config.json`, `pool-gate.json`, `read-only-commands.json`) into the same document as YAML.
 // The Markdown line parser lives only here: nothing else reads the old format.
 import YAML, { Scalar, type YAMLMap, type YAMLSeq } from "yaml";
-import { QueueError, STATUSES, type Status, TASK_KEYS, parseQueue, splitList } from "./queue.js";
+import {
+  QueueError,
+  STATUSES,
+  type Status,
+  TASK_KEYS,
+  difficultyRequired,
+  parseQueue,
+  splitList,
+} from "./queue.js";
 
 // `- [m] [⏸ ]ID | fields…`, or `- [m] ID free text` (no `|`: everything after the id is the text).
 const LINE_RE = /^- \[(.)\] (⏸\s*)?([A-Za-z0-9._-]+)(?: \|(.*)|\s+(.*))?$/;
@@ -240,7 +248,8 @@ export function markdownToYaml(
 
 /**
  * `into` (a YAML queue's text) with the open (not done) tasks of the Markdown queue `text`
- * appended under `status`; an id already in `into` is refused. Comments and order of `into` stay.
+ * appended under `status`; an id already in `into` is refused, and so is a pending line with no
+ * `difficulty:` (as `queue_add` does). Comments and order of `into` stay.
  */
 export function appendMarkdown(
   into: string,
@@ -269,7 +278,13 @@ export function appendMarkdown(
   tasks.flow = false;
   for (const t of add) tasks.items.push(taskNode(doc, t));
   const out = doc.toString({ lineWidth: 0 });
-  parseQueue(out, file ?? "<converted>");
+  const parsed = parseQueue(out, file ?? "<converted>");
+  // the same refusal as queue_add: a converted pending line with no difficulty is never written
+  const added = new Set(add.map(t => t.id));
+  for (const line of parsed.lines) {
+    const why = added.has(line.id) ? difficultyRequired(line) : null;
+    if (why !== null) throw new QueueError(why);
+  }
   return { text: out, added: add.length };
 }
 

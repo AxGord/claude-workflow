@@ -9,7 +9,7 @@
 //   wf-queue <q> --running <ID> --retry [--note TEXT]   a failed task again: failed → running, its difficulty +1 (≤10)
 //   wf-queue <q> --running <ID> --force REASON    mark a line the picker would not admit; the reason goes to its notes
 //   wf-queue <q> --header <key>                   the header's value of <key> (empty when absent)
-//   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, touches: [a], text: …}`)
+//   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, difficulty: 3, touches: [a], text: …}`)
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
 //   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header (the window)
 //   wf-queue <q> --header-set archive_after_days=N | exclusive_hold=yes|no [--reason TEXT]   queue_header (a header key: N ≥ 1 / yes|no, `key=` removes; any other key refused; --reason is echoed, not written)
@@ -17,7 +17,8 @@
 //   wf-queue <q> --restore <ID>   one archived line back into the queue (CLI only, no MCP tool)
 //   wf-queue --convert <old.md|config.json> [--into <file.yaml>] [--status S] [--dry-run]
 //       an old Markdown queue (or a JSON config) as YAML: printed without --into; --into a new file
-//       writes it; --into an existing queue appends the old queue's open tasks with --status (default backlog)
+//       writes it; --into an existing queue appends the old queue's open tasks with --status (default backlog;
+//       --status pending refuses, exit 2 and the file unchanged, a task with no difficulty:)
 // Exit: 0 admitted ≥1 · 10 nothing admitted, running tasks still run · 11 nothing admitted and nothing
 // runs (done; what stays pending is blocked) · 12 nothing runs and batch_size is 0 (paused) · 2 error.
 import fs from "node:fs";
@@ -179,7 +180,9 @@ async function main(args: string[]): Promise<number> {
       throw new QueueError(`--add: not YAML: ${(err as Error).message}`);
     }
     if (typeof task !== "object" || task === null || Array.isArray(task))
-      throw new QueueError("--add takes a YAML mapping: {id: X, touches: [a], text: …}");
+      throw new QueueError(
+        "--add takes a YAML mapping: {id: X, difficulty: 3, touches: [a], text: …}",
+      );
     const r = await addQueueLine(
       file,
       task as Record<string, unknown>,
