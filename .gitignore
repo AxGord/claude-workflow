@@ -8,3 +8,7 @@ build/
 !.mcp.json
 docs/.vitepress/cache/
 docs/.vitepress/dist/
+video/.venv/
+video/cache/
+video/out/
+video/voice-sample.*

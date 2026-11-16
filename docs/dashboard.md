@@ -155,4 +155,4 @@ Then in `~/.claude/settings.json`:
 }
 ```
 
-The landing page shows the replay beside a terminal imitation of the plan pane (Running, Next and Landed, with difficulty bars and states), computed from the same events and clock. `npm run docs:record` re-records the scene into `docs/media/scene.mp4` and `scene.gif`.
+The landing page shows the replay beside a terminal imitation of the plan pane (Running, Next and Landed, with difficulty bars and states), computed from the same events and clock. `npm run docs:record` re-records the scene into `docs/media/scene.mp4` and `scene.gif`; `npm run video` renders a voiced intro over it (`video/out/intro.mp4`, narration in `video/script.md`, one command, see `video/README.md`).

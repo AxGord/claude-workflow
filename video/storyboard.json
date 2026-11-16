@@ -1,0 +1,53 @@
+{
+  "fps": 20,
+  "gap": 0.4,
+  "segments": [
+    {
+      "id": "title",
+      "card": { "title": "Claude Workflow", "subtitle": "A state machine for your coding agents" },
+      "phrases": [{ "id": "p01" }]
+    },
+    {
+      "id": "problem",
+      "card": {
+        "title": "The problem",
+        "lines": ["Bigger work, several tasks at once", "Sub-agents, reviews, lost track", "Prompts drift, steps get skipped"]
+      },
+      "phrases": [{ "id": "p02" }, { "id": "p03" }, { "id": "p04" }]
+    },
+    {
+      "id": "how",
+      "card": {
+        "title": "The process is a state machine",
+        "lines": ["Plain YAML: states, transitions, guards", "The engine tracks the state and runs the commands", "Workflows nest: pipeline, recon, worker, review"]
+      },
+      "phrases": [{ "id": "p05" }, { "id": "p06" }, { "id": "p07" }, { "id": "p08" }]
+    },
+    {
+      "id": "scene",
+      "phrases": [
+        { "id": "p09", "from": 0, "speed": 3 },
+        { "id": "p10", "from": 5, "speed": 10 },
+        { "id": "p11", "from": 70, "speed": 8 },
+        { "id": "p12", "from": 140, "speed": 6 },
+        { "id": "p13", "from": 200, "speed": 25 },
+        { "id": "p14", "from": 1060, "speed": 8 },
+        { "id": "p15", "from": 1795, "speed": 8 },
+        { "id": "p16", "from": 3300, "to": 4900 }
+      ]
+    },
+    {
+      "id": "start",
+      "card": {
+        "title": "Get started",
+        "lines": ["/plugin install workflow", "Bundled templates: coding, debugging, review, research, batch", "Open source, MIT license"]
+      },
+      "phrases": [{ "id": "p17" }, { "id": "p18" }, { "id": "p19" }]
+    },
+    {
+      "id": "end",
+      "card": { "title": "Claude Workflow", "subtitle": "github.com/AxGord/claude-workflow" },
+      "seconds": 4
+    }
+  ]
+}

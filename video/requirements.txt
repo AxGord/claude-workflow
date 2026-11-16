@@ -1,0 +1,6 @@
+# Kokoro (Apache-2.0, 82M parameters): the default narrator. Python 3.10-3.12 (the kokoro wheel does not
+# support 3.13+); `python3.12 -m venv video/.venv && video/.venv/bin/pip install -r video/requirements.txt`.
+kokoro>=0.9.4
+soundfile>=0.12
+# Chatterbox (MIT) voice cloning from your own sample is optional and pins its own torch, so install it
+# on top only when you want it:  video/.venv/bin/pip install chatterbox-tts

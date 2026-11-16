@@ -14,7 +14,7 @@ const PANE = read("docs/.vitepress/theme/TerminalPane.vue");
 const MAP = read("docs/.vitepress/theme/MapReplay.vue");
 const SCENE = read("docs/.vitepress/theme/Scene.vue");
 const THEME = read("docs/.vitepress/theme/index.ts");
-const RECORD = read("scripts/record-scene.mjs");
+const RECORD = read("scripts/record-scene.mjs") + read("scripts/scene-capture.mjs");
 const PAGES = read(".github/workflows/pages.yml");
 
 describe("the scene: the terminal pane and the map on one replay clock", () => {

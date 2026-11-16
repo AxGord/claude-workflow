@@ -32,7 +32,8 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "docs:replay": "node scripts/export-replay.mjs",
-    "docs:record": "node scripts/record-scene.mjs"
+    "docs:record": "node scripts/record-scene.mjs",
+    "video": "node video/render.mjs"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
