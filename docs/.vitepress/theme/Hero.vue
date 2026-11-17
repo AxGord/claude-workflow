@@ -476,7 +476,7 @@ onBeforeUnmount(() => {
    hero and transparent at the top, its title (logo and name) is the hero's brand at several times its size, and the scroll
    shrinks it into the bar's left while the bar's own background comes in. The bar's geometry is the hero's (same width, same
    gutters), so the brand's only travel is vertical and the sizes are CSS numbers: nothing is measured. Below 960px the hero
-   stacks and the bar is VitePress's own, opaque and fixed at the top (no enlarged title). The hero's content never fades: it scrolls under the
+   stacks and the bar is VitePress's own, opaque and fixed at the top, hiding on a scroll down and showing on a scroll up (`Layout.vue`; no enlarged title). The hero's content never fades: it scrolls under the
    opaque bar as plain content, with no soft edge.
    The grid both share from 960px: a left column of `--hero-text-min` at least (the text; in the bar, the title) and a
    right column of `--hero-dg-max` at most (the diagram; in the bar, the search's left edge while the page is at its top). */
@@ -531,7 +531,7 @@ onBeforeUnmount(() => {
   background-clip: text;
 }
 
-/* Below 960px the bar is VitePress's own opaque one, but pinned: fixed at the top at every width, the content under it
+/* Below 960px the bar is VitePress's own opaque one, but pinned (it auto-hides on a scroll down, Layout.vue): fixed at the top at every width, the content under it
    (`.VPContent` gets the bar's height as top padding, which VitePress itself gives only from 960px, so the first screen
    starts below it). From 960px the hero pads under the bar itself. */
 .Layout.has-hero .VPNav {

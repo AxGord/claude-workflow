@@ -7,7 +7,8 @@ import {
   type BuiltSite,
 } from "./site-browser-helpers.js";
 
-// On the landing the bar stays pinned at the top below 960 px: after a scroll the nav's top is 0 and its bottom equals --vp-nav-height.
+// On the landing the bar is fixed at the top below 960 px (it hides on a scroll down, site-mobile-nav-autohide.test.ts): after a scroll
+// down and a scroll up of more than 10 px, once its transition is over, the nav's top is 0 and its bottom equals --vp-nav-height.
 
 const HAVE_BROWSER = browserInstalled();
 const WIDTHS = [390, 800];
@@ -65,7 +66,7 @@ describe.skipIf(!HAVE_BROWSER)("the landing's bar stays pinned below 960 px", ()
   );
 
   it.each(WIDTHS)(
-    "at %i px after a scroll the nav's top is 0 and its bottom is --vp-nav-height",
+    "at %i px after a scroll down and back up the nav's top is 0 and its bottom is --vp-nav-height",
     async width => {
       const page = await browser.newPage({ viewport: { width, height: 844 } });
       try {
@@ -80,10 +81,14 @@ describe.skipIf(!HAVE_BROWSER)("the landing's bar stays pinned below 960 px", ()
         expect(heroTop, `${width}: the page's content starts below the bar`).toBeGreaterThanOrEqual(
           navH,
         );
-        await page.evaluate(() => window.scrollTo(0, 600));
-        await page.evaluate(
-          () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))),
-        );
+        // down (the bar hides), then up by more than the auto-hide threshold (it shows), and the transition ends
+        for (const y of [600, 540]) {
+          await page.evaluate(top => window.scrollTo(0, top), y);
+          await page.evaluate(
+            () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))),
+          );
+          await page.waitForTimeout(450);
+        }
         const m = await page.evaluate(() => {
           const nav = document.querySelector(".VPNav")?.getBoundingClientRect();
           const h = parseFloat(
