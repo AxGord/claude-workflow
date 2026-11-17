@@ -190,3 +190,11 @@ function act(a: PaneAction): void {
   overflow: hidden;
 }
 </style>
+
+<style>
+/* the window is dark in both site themes; its see-through glass over a light map would turn it grey and its text
+   hard to read, so in the light theme the glass is nearly opaque */
+html:not(.dark) .cc-window {
+  background: rgba(13, 17, 23, 0.94);
+}
+</style>

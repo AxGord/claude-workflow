@@ -809,7 +809,7 @@ describe.skipIf(!HAVE_CHROME)("the Timeline tab reads as a list of tasks in a re
 });
 
 describe.skipIf(!HAVE_CHROME)("the Cost tab in a real browser", () => {
-  it("the date inputs and every native control take the page's dark scheme", async () => {
+  it("the date inputs and every native control take the page's scheme: the switch's choice, else the system's", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-dashcost-"));
     closers.push(() => fs.rmSync(dir, { recursive: true, force: true }));
     const storage = new Storage(path.join(dir, "state"), { eventLog: false });
@@ -821,15 +821,32 @@ describe.skipIf(!HAVE_CHROME)("the Cost tab in a real browser", () => {
       "date inputs",
     );
     // a native control draws its field and its calendar popup by the computed colour-scheme
-    const schemes = await page.eval(
-      `JSON.stringify(['html', '#cost-from', '#cost-to'].map(q => getComputedStyle(document.querySelector(q)).colorScheme))`,
-    );
-    expect(JSON.parse(String(schemes))).toEqual(["dark", "dark", "dark"]);
-    // and the field itself is drawn dark, not the white of a light control
-    const lum = (await page.eval(
-      `(() => { const m = getComputedStyle(document.querySelector('#cost-from')).backgroundColor.match(/[\\d.]+/g).map(Number); return (m[0] + m[1] + m[2]) / 3; })()`,
-    )) as number;
-    expect(lum).toBeLessThan(100);
+    const schemes = async (): Promise<string[]> =>
+      JSON.parse(
+        String(
+          await page.eval(
+            `JSON.stringify(['html', '#cost-from', '#cost-to'].map(q => getComputedStyle(document.querySelector(q)).colorScheme))`,
+          ),
+        ),
+      ) as string[];
+    const lum = async (): Promise<number> =>
+      (await page.eval(
+        `(() => { const m = getComputedStyle(document.querySelector('#cost-from')).backgroundColor.match(/[\\d.]+/g).map(Number); return (m[0] + m[1] + m[2]) / 3; })()`,
+      )) as number;
+    const choose = (c: string): Promise<unknown> =>
+      page.eval(`document.querySelector('[data-theme-choice="${c}"]').click()`);
+    await choose("dark");
+    expect(await schemes()).toEqual(["dark", "dark", "dark"]);
+    // the field itself is drawn dark, not the white of a light control
+    expect(await lum()).toBeLessThan(100);
+    await choose("light");
+    expect(await schemes()).toEqual(["light", "light", "light"]);
+    expect(await lum()).toBeGreaterThan(155);
+    // the choice is kept in localStorage, system forgets it
+    expect(await page.eval("localStorage.getItem('wf-theme')")).toBe("light");
+    await choose("system");
+    expect(await page.eval("localStorage.getItem('wf-theme')")).toBeNull();
+    expect(await page.eval("document.documentElement.dataset.theme === undefined")).toBe(true);
   }, 30_000);
 });
 

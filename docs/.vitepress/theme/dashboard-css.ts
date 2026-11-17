@@ -5,9 +5,15 @@ import components from "../../../dashboard/components.css?raw";
 export const DASH = "dash";
 
 // The dashboard's own stylesheets, scoped: the tokens on the root, the rules inside an `@scope`, so nothing of
-// the dashboard's page-wide rules (body, a, *) reaches the site around it.
+// the dashboard's page-wide rules (body, a, *) reach the site around it. The page's own theme switch and the
+// system's colour preference have no say here: the demos follow VitePress's `html.dark` (its theme switch), so
+// the light set sits on `.dash` and the dark set on `html.dark .dash`.
 const STYLE_ID = "dashboard-css";
-const css = `${tokens.replace(/^:root\s*\{/m, `.${DASH} {`)}\n@scope (.${DASH}) {\n${components}\n}`;
+const css = `${tokens
+  .replace(/@media \(prefers-color-scheme: dark\) \{[\s\S]*?\n\}\n/, "")
+  .replace(':root, :root[data-theme="light"]', `.${DASH}`)
+  .replace(':root[data-theme="dark"]', `html.dark .${DASH}`)
+  .replace(/^:root\s*\{/m, `.${DASH} {`)}\n@scope (.${DASH}) {\n${components}\n}`;
 
 /** Puts the scoped stylesheet in the page's head, once. */
 export function useDashboardCss(): void {

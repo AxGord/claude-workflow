@@ -42,57 +42,86 @@ const reading = computed(() => {
 </template>
 
 <style scoped>
+/* The strip is drawn from --ps-* colours. By default they are the dark ones of a terminal panel (the Pool page puts
+   it in one, dark in both site themes); inside `.dash` (the landing's stage) they are the dashboard's tokens, so the
+   strip follows the site's theme with the map above it. */
 .pool-strip {
+  --ps-bg: #0f1117;
+  --ps-title: #e6e6e6;
+  --ps-read: #9aa4ae;
+  --ps-legend: #7d8590;
+  --ps-other: #5b6b86;
+  --ps-named: #4fc1d9;
+  --ps-wait: #e5c07b;
+  --ps-bed: rgba(255, 255, 255, 0.04);
+  --ps-budget: #8b949e;
+  --ps-cursor: #e6e6e6;
   display: block;
   width: 100%;
   height: 100%;
-  background: #0f1117;
+  background: var(--ps-bg);
   font: 600 18px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
+/* the dashboard's `svg text` rule sets its own font under .dash; the strip's labels keep the monospace face */
+.pool-strip text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.dash .pool-strip {
+  --ps-bg: var(--panel);
+  --ps-title: var(--text);
+  --ps-read: var(--text-3);
+  --ps-legend: var(--text-4);
+  --ps-other: var(--text-4);
+  --ps-named: var(--model-sonnet);
+  --ps-wait: var(--warn);
+  --ps-bed: var(--grid);
+  --ps-budget: var(--text-4);
+  --ps-cursor: var(--text);
+}
 .ps-title {
-  fill: #e6e6e6;
+  fill: var(--ps-title);
   font-size: 22px;
 }
 .ps-read {
-  fill: #9aa4ae;
+  fill: var(--ps-read);
   font-size: 18px;
   font-weight: 400;
 }
 .ps-legend {
-  fill: #7d8590;
+  fill: var(--ps-legend);
   font-size: 14px;
   font-weight: 400;
   white-space: pre;
 }
 .ps-other {
-  fill: #5b6b86;
+  fill: var(--ps-other);
 }
 .ps-named {
-  fill: #4fc1d9;
+  fill: var(--ps-named);
 }
 .ps-wait {
-  fill: #e5c07b;
+  fill: var(--ps-wait);
 }
 .ps-bed {
-  fill: rgba(255, 255, 255, 0.04);
+  fill: var(--ps-bed);
 }
 .ps-other-fill {
-  fill: #5b6b86;
+  fill: var(--ps-other);
 }
 .ps-named-fill {
-  fill: #4fc1d9;
+  fill: var(--ps-named);
 }
 .ps-wait-fill {
-  fill: #e5c07b;
+  fill: var(--ps-wait);
   opacity: 0.85;
 }
 .ps-budget {
-  stroke: #8b949e;
+  stroke: var(--ps-budget);
   stroke-width: 1.5;
   stroke-dasharray: 6 5;
 }
 .ps-cursor {
-  stroke: #e6e6e6;
+  stroke: var(--ps-cursor);
   stroke-width: 2;
 }
 </style>

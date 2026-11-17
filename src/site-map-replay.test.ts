@@ -15,6 +15,9 @@ const TRANSPORT = read("docs/.vitepress/theme/Transport.vue");
 const THEME = read("docs/.vitepress/theme/index.ts");
 const CONFIG = read("docs/.vitepress/config.mts");
 const DASH_CSS = read("docs/.vitepress/theme/dashboard-css.ts");
+const POOL_STRIP = read("docs/.vitepress/theme/PoolStrip.vue");
+const POOL_DEMO = read("docs/.vitepress/theme/PoolDemo.vue");
+const TOKENS = read("dashboard/tokens.css");
 const MAP = read("dashboard/map.js");
 const SCENE_DOM = read("dashboard/scene-dom.js");
 
@@ -45,6 +48,48 @@ describe("the landing's replay runs the dashboard map's own code", () => {
     expect(DASH_CSS).toContain('"../../../dashboard/components.css?raw"');
     expect(DASH_CSS).toContain("@scope (.${DASH})");
     expect(DASH_CSS).toContain(".replace(/^:root\\s*\\{/m, `.${DASH} {`)");
+  });
+
+  it("the landing's stage follows the site's theme: map and pool strip wear the tokens, the terminal stays dark", () => {
+    const literal = /#[0-9a-fA-F]{3,8}\b|\brgba?\(/;
+    // the strip is a `.dash` element, so it takes the light or the dark set with `html.dark`, as the map above it
+    expect(SCENE).toContain('class="stage-strip" :class="DASH"');
+    expect(SCENE).toContain("onMounted(async () => {\n  useDashboardCss();");
+    // the frame and the strip's border read a token or VitePress's own variable, never a colour of their own
+    const style = SCENE.slice(SCENE.indexOf("<style>"));
+    expect(style).not.toMatch(literal);
+    expect(style).toContain("border-top: 1px solid var(--panel-border);");
+    // the dashboard's `*` reset must not reach the terminal: `.dash` is on the strip, not on the frame or the stage
+    expect(SCENE).not.toMatch(/class="stage(?:-frame)?"[^>]*:class="DASH"/);
+    const terminal = read("docs/.vitepress/theme/TerminalWindow.vue");
+    expect(terminal).not.toContain("DASH");
+    // dark glass over a light map would read grey: the light theme makes it nearly opaque
+    expect(terminal).toContain(
+      "<style>\n/* the window is dark in both site themes; its see-through glass over a light map would turn it grey and its text\n   hard to read, so in the light theme the glass is nearly opaque */\nhtml:not(.dark) .cc-window {\n  background: rgba(13, 17, 23, 0.94);",
+    );
+    // the strip: every colour it draws is a --ps-* variable; dark by default, the dashboard's tokens under `.dash`
+    const body = (sel: string): string =>
+      new RegExp(`${sel.replaceAll(".", "\\.")} \\{([^}]*)\\}`).exec(POOL_STRIP)?.[1] ?? "";
+    const defaults = [...body(".pool-strip").matchAll(/(--ps-[\w-]+):\s*([^;]+);/g)];
+    const mapped = new Map(
+      [...body(".dash .pool-strip").matchAll(/(--ps-[\w-]+):\s*var\((--[\w-]+)\);/g)].map(m => [
+        m[1],
+        m[2],
+      ]),
+    );
+    expect(defaults.length).toBeGreaterThanOrEqual(10);
+    expect([...mapped.keys()]).toEqual(defaults.map(m => m[1]));
+    for (const token of mapped.values()) expect(TOKENS).toContain(`${token}:`);
+    const rules = POOL_STRIP.slice(POOL_STRIP.indexOf(".ps-title"));
+    expect(rules).not.toMatch(literal);
+    expect(rules.match(/var\(--ps-/g)?.length).toBeGreaterThanOrEqual(10);
+    // `.dash` on the strip pulls it under the dashboard's `svg text { font-family }`; the labels name the monospace face themselves
+    expect(POOL_STRIP).toContain(
+      ".pool-strip text {\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}",
+    );
+    // the Pool page keeps the strip in its own terminal panel, dark in both themes: no `.dash` there
+    expect(POOL_DEMO).not.toContain("DASH");
+    expect(POOL_DEMO).toContain("background: #0d1117;");
   });
 
   it("opens a folded group on a click, as /map does, and shows a tooltip on hover (a <title>)", () => {

@@ -20,10 +20,17 @@ h1 { color: var(--text); margin-bottom: 16px; font-size: 24px; font-weight: 700;
 .stack-col { display: flex; flex-direction: column; gap: 20px; }
 
 /* tabs */
-.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
 .tabs a { color: var(--text-3); padding: 5px 14px; border-radius: 10px; border: 1px solid var(--panel-border); font-size: 12px; font-weight: 600; }
 .tabs a:hover { color: var(--text); border-color: var(--text-4); }
 .tabs a.tab-active { color: var(--text); background: var(--raised); border-color: var(--text-4); }
+
+/* theme switch: system / light / dark, at the right end of the tabs row */
+.theme-switch { display: flex; margin-left: auto; border: 1px solid var(--panel-border); border-radius: 10px; overflow: hidden; }
+.theme-switch button { font: inherit; font-size: 12px; font-weight: 600; padding: 5px 12px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; }
+.theme-switch button + button { border-left: 1px solid var(--panel-border); }
+.theme-switch button:hover { color: var(--text); }
+.theme-switch button[aria-pressed="true"] { color: var(--text); background: var(--raised); }
 
 /* plaque: a pill with a 2 px border in the difficulty or state colour */
 .plaque { --c: var(--text-4); display: inline-block; padding: 2px 9px; border-radius: 10px; border: 2px solid var(--c); font-size: 11px; font-weight: 600; color: var(--text); background: var(--panel); white-space: nowrap; }

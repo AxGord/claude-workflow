@@ -3,8 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light dark">
 <title>MCP Workflow Engine</title>
+<!-- the saved theme (the header's switch) is on <html> before the first paint; none = follow the system -->
+<script id="theme-boot">try { const t = localStorage.getItem('wf-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/components.css">
 </head>
@@ -19,6 +21,11 @@
     <a href="/pool" id="tab-pool">Pool</a>
     <a href="/cost" id="tab-cost">Cost</a>
     <a href="/map" id="tab-map">Map</a>
+    <div class="theme-switch" id="theme-switch" role="group" aria-label="Theme">
+      <button type="button" data-theme-choice="system" title="Follow the system's colour scheme">System</button>
+      <button type="button" data-theme-choice="light">Light</button>
+      <button type="button" data-theme-choice="dark">Dark</button>
+    </div>
   </div>
   <div id="map-view" style="display:none"></div>
   <div id="cost-view" style="display:none"><div class="panel"><h2 class="label">Cost</h2><div id="cost-content"><div class="empty">No cost</div></div></div></div>
@@ -804,6 +811,19 @@ async function refreshCost() {
   if (c) put('cost-content', renderCost(c));
 }
 
+// Theme: the choice is data-theme on <html> (none = the system's), remembered in localStorage under THEME_KEY;
+// the head's #theme-boot script reads it back before the first paint. Storage may be missing or throw: the
+// choice still applies for this page.
+const THEME_KEY = 'wf-theme';
+function applyTheme(choice, root, win) {
+  if (choice === 'light' || choice === 'dark') root.dataset.theme = choice;
+  else delete root.dataset.theme;
+  try {
+    if (root.dataset.theme) win.localStorage.setItem(THEME_KEY, root.dataset.theme);
+    else win.localStorage.removeItem(THEME_KEY);
+  } catch (e) {}
+}
+
 // The page opens on the view its path names (the status-line pane links to /session/<id>).
 Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js'), import('/graph.js')]).then(([m, s, l, g]) => {
   Routes = m;
@@ -820,6 +840,19 @@ Promise.all([import('/routes.js'), import('/stable.js'), import('/map-layout.js'
   });
   setInterval(() => { refresh(); if (route.view === 'plan') refreshPlan(); if (route.view === 'timeline') refreshTimeline(); if (route.view === 'pool') refreshPool(); if (route.view === 'cost') refreshCost(); }, 2000);
 });
+
+const themeSwitch = document.getElementById('theme-switch');
+function markTheme() {
+  const current = document.documentElement.dataset.theme || 'system';
+  for (const b of themeSwitch.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.themeChoice === current));
+}
+themeSwitch.addEventListener('click', e => {
+  const b = e.target.closest('button[data-theme-choice]');
+  if (!b) return;
+  applyTheme(b.dataset.themeChoice, document.documentElement, window);
+  markTheme();
+});
+markTheme();
 </script>
 </body>
 </html>

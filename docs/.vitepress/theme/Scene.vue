@@ -6,6 +6,7 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { withBase } from "vitepress";
 import type { ReplayFile } from "../../../src/replay";
+import { DASH, useDashboardCss } from "./dashboard-css";
 import MapReplay from "./MapReplay.vue";
 import PoolStrip from "./PoolStrip.vue";
 import TerminalWindow from "./TerminalWindow.vue";
@@ -16,6 +17,11 @@ const STAGE_W = 1920;
 const STAGE_H = 1080;
 /** The pool strip's height at the stage's foot: the map fills what is above it. */
 const STRIP_H = 96;
+
+// The map and the pool strip wear the dashboard's tokens (light or dark with the site, `html.dark`); the Claude Code
+// window over them is a terminal and stays dark in both themes. The tokens are not put on the whole frame: the
+// dashboard's `@scope (.dash)` rules reset every element's margin and padding, and the terminal must not get them.
+// (The stylesheet goes into the head on mount: the build renders this component with no document.)
 
 const frame = ref<HTMLElement | null>(null);
 const scale = ref(1);
@@ -44,6 +50,7 @@ function onKey(e: KeyboardEvent): void {
 }
 
 onMounted(async () => {
+  useDashboardCss();
   if (frame.value) {
     resize = new ResizeObserver(() => {
       if (frame.value) scale.value = frame.value.clientWidth / STAGE_W;
@@ -86,7 +93,7 @@ onBeforeUnmount(() => {
     <div ref="frame" class="stage-frame">
       <div class="stage" :style="{ width: `${STAGE_W}px`, height: `${STAGE_H}px`, transform: `scale(${scale})` }">
         <div class="stage-map" :style="{ bottom: `${STRIP_H}px` }"><MapReplay /></div>
-        <div v-if="shared.file && shared.file.pool" class="stage-strip" :style="{ height: `${STRIP_H}px` }">
+        <div v-if="shared.file && shared.file.pool" class="stage-strip" :class="DASH" :style="{ height: `${STRIP_H}px` }">
           <PoolStrip :file="shared.file" :at="shared.at" />
         </div>
         <TerminalWindow v-show="shared.terminal" />
@@ -115,7 +122,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   border: 1px solid var(--vp-c-divider);
   border-radius: 12px;
-  background: #0f1117;
+  background: var(--vp-c-bg);
 }
 .stage {
   position: absolute;
@@ -135,14 +142,14 @@ onBeforeUnmount(() => {
   left: 0;
   right: 0;
   bottom: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid var(--panel-border);
 }
 .stage-status {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  color: #8b949e;
+  color: var(--vp-c-text-2);
   font-size: 28px;
 }
 .scene-note {

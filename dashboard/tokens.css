@@ -1,14 +1,183 @@
 /* The dashboard's design tokens: the ONLY file that holds a colour literal (src/dashboard-style.test.ts
-   enforces it). Every other stylesheet and the page's script reach a colour through var(--…). */
+   enforces it). Every other stylesheet and the page's script reach a colour through var(--…).
+
+   Two colour sets, same names. The page follows the system (prefers-color-scheme); `data-theme="light"` or
+   `"dark"` on <html> (the header's switch) overrides it. The docs site scopes the same file to `.dash` and
+   follows VitePress's own `html.dark` instead (docs/.vitepress/theme/dashboard-css.ts): keep each set one
+   rule, the media block last, so that rewrite stays a text substitution. */
 :root {
-  /* the page is dark: native controls (date field and its calendar popup, select, scrollbars) follow this */
+  --panel-radius: 16px;
+
+  /* Inter when it is installed, else the system face; numbers and ids in a mono stack. No web font is
+     downloaded: the dashboard is local and works offline. */
+  --font: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* light: the default, and the system's when it prefers light */
+:root, :root[data-theme="light"] {
+  /* native controls (date field and its calendar popup, select, scrollbars) follow this */
+  color-scheme: light;
+
+  /* surfaces */
+  --page: #f4f6fa;
+  --panel: #ffffff;
+  --panel-border: #d5dce8;
+  --raised: #e3e9f2;
+  --grid: #e8ecf2;
+  --rail: #dfe5ee;
+  --inset: #eef1f6;
+
+  /* text */
+  --text: #0f172a;
+  --text-2: #334155;
+  --text-3: #475569;
+  --text-4: #526176;
+  --link: #0369a1;
+  --link-hover: #075985;
+
+  /* states: running = a model colour + glow (--model-*), landed = --ok dimmed */
+  --ok: #15803d;
+  --ok-text: #166534;
+  --ok-bg: #dcfce7;
+  --warn: #a16207;
+  --warn-text: #854d0e;
+  --warn-bg: #fef9c3;
+  --prio-urgent: #b91c1c;
+  --prio-high: #c2410c;
+  --prio-low: #526176;
+  --bad: #b91c1c;
+  --bad-text: #991b1b;
+  --bad-bg: #fee2e2;
+  --slow: #be185d;
+  --next-bg: #dbeafe;
+  --skill: #0f766e;
+  --sub: #7e22ce;
+
+  /* the Timeline tab's stage groups */
+  --stage-recon: #0369a1;
+  --stage-plan: #0f766e;
+  --stage-work: #1d4ed8;
+  --stage-gate: #b45309;
+  --stage-review: #7e22ce;
+  --stage-land: #15803d;
+  --stage-wait: #a16207;
+
+  /* models */
+  --model-haiku: #64748b;
+  --model-sonnet: #0369a1;
+  --model-opus: #7e22ce;
+  --model-script: #475569;
+
+  /* difficulty 1 -> 10 */
+  --diff-1: #15803d;
+  --diff-2: #15803d;
+  --diff-3: #4d7c0f;
+  --diff-4: #4d7c0f;
+  --diff-5: #a16207;
+  --diff-6: #b45309;
+  --diff-7: #c2410c;
+  --diff-8: #c2410c;
+  --diff-9: #b91c1c;
+  --diff-10: #b91c1c;
+
+  /* the colour a history actor's name hashes to */
+  --actor-0: #0369a1;
+  --actor-1: #15803d;
+  --actor-2: #7e22ce;
+  --actor-3: #b45309;
+  --actor-4: #b91c1c;
+  --actor-5: #0e7490;
+  --actor-6: #4d7c0f;
+  --actor-7: #a16207;
+}
+
+/* dark: the system's when it prefers dark, unless the switch chose light */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+
+    /* surfaces */
+    --page: #0f1117;
+    --panel: #11141c;
+    --panel-border: #222838;
+    --raised: #1e293b;
+    --grid: #1a1f2b;
+    --rail: #1c2230;
+    --inset: #0b0e14;
+
+    /* text */
+    --text: #e5e7eb;
+    --text-2: #cbd5e1;
+    --text-3: #94a3b8;
+    --text-4: #64748b;
+    --link: #7dd3fc;
+    --link-hover: #bae6fd;
+
+    /* states: running = a model colour + glow (--model-*), landed = --ok dimmed */
+    --ok: #22c55e;
+    --ok-text: #86efac;
+    --ok-bg: #0f1f17;
+    --warn: #eab308;
+    --warn-text: #fde68a;
+    --warn-bg: #26200c;
+    --prio-urgent: #ef4444;
+    --prio-high: #f97316;
+    --prio-low: #64748b;
+    --bad: #ef4444;
+    --bad-text: #fca5a5;
+    --bad-bg: #2a1214;
+    --slow: #f472b6;
+    --next-bg: #172554;
+    --skill: #2dd4bf;
+    --sub: #c084fc;
+
+    /* the Timeline tab's stage groups */
+    --stage-recon: #7dd3fc;
+    --stage-plan: #2dd4bf;
+    --stage-work: #38bdf8;
+    --stage-gate: #f59e0b;
+    --stage-review: #c084fc;
+    --stage-land: #22c55e;
+    --stage-wait: #eab308;
+
+    /* models */
+    --model-haiku: #94a3b8;
+    --model-sonnet: #38bdf8;
+    --model-opus: #c084fc;
+    --model-script: #64748b;
+
+    /* difficulty 1 -> 10 */
+    --diff-1: #22c55e;
+    --diff-2: #22c55e;
+    --diff-3: #84cc16;
+    --diff-4: #84cc16;
+    --diff-5: #eab308;
+    --diff-6: #f59e0b;
+    --diff-7: #f97316;
+    --diff-8: #f97316;
+    --diff-9: #ef4444;
+    --diff-10: #ef4444;
+
+    /* the colour a history actor's name hashes to */
+    --actor-0: #38bdf8;
+    --actor-1: #22c55e;
+    --actor-2: #c084fc;
+    --actor-3: #f59e0b;
+    --actor-4: #ef4444;
+    --actor-5: #7dd3fc;
+    --actor-6: #86efac;
+    --actor-7: #eab308;
+  }
+}
+
+:root[data-theme="dark"] {
   color-scheme: dark;
 
   /* surfaces */
   --page: #0f1117;
   --panel: #11141c;
   --panel-border: #222838;
-  --panel-radius: 16px;
   --raised: #1e293b;
   --grid: #1a1f2b;
   --rail: #1c2230;
@@ -76,9 +245,4 @@
   --actor-5: #7dd3fc;
   --actor-6: #86efac;
   --actor-7: #eab308;
-
-  /* Inter when it is installed, else the system face; numbers and ids in a mono stack. No web font is
-     downloaded: the dashboard is local and works offline. */
-  --font: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
 }

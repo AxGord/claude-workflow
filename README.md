@@ -34,7 +34,7 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 - **Subagent types** — a driver, plus read-only recon and reviewer agents behind a Bash gate ([Agent types][agents])
 - **21 bundled workflows** and **29 bundled skills** — the agent lifecycle, ready on first run ([Concepts][concepts])
 - **Survives a restart** — sessions are suspended, not lost; `claude --resume` continues them ([Restart][restart])
-- **Live dashboard** — a map of every session, a plan pane (queue or one task), a status line ([Dashboard][dashboard])
+- **Live dashboard** — session map, light or dark, plan pane (queue or one task), status line ([Dashboard][dashboard])
 
 ## Install
 

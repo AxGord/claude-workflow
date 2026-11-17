@@ -18,6 +18,8 @@ import {
 // process, and reads back what the child did.
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = "src/test-git-no-sign.test.ts";
+/** how long two workers may overlap while one replaces the other */
+const HANDOVER_MS = 2000;
 
 let outerReport: {
   testResults: {
@@ -79,9 +81,11 @@ describe("a test that spawns a child vitest", () => {
         to: Math.max(...recs.filter(e => e.pid === r.pid).map(e => e.at)),
       }));
     expect(spans.length).toBeGreaterThan(0);
-    const live = Math.max(
-      ...spans.map(s => spans.filter(o => o.from < s.to && s.from < o.to).length),
-    );
+    // vitest replaces a worker per file: the old one lingers for a moment while its successor starts, longer
+    // under load. That is not a second worker running; parallelism is two workers overlapping for seconds.
+    const overlap = (a: { from: number; to: number }, b: { from: number; to: number }): number =>
+      Math.min(a.to, b.to) - Math.max(a.from, b.from);
+    const live = Math.max(...spans.map(s => spans.filter(o => overlap(s, o) > HANDOVER_MS).length));
     expect(live).toBeLessThanOrEqual(1);
   });
 });

@@ -21,6 +21,10 @@ const COMPONENTS = read("components.css");
 const PAGE = read("index.html");
 const MAP = read("map.js");
 const SCENE_DOM = read("scene-dom.js");
+const DASH_CSS_TS = fs.readFileSync(
+  path.join(DASH, "..", "docs", ".vitepress", "theme", "dashboard-css.ts"),
+  "utf8",
+);
 const SCRIPT = PAGE.split("<script>")[1]?.split("</script>")[0] ?? "";
 
 /** A colour written out: a hex literal, or an rgb()/hsl()/hwb()/lab()/lch()/oklch() function. */
@@ -29,6 +33,39 @@ const COLOUR_LITERAL =
 
 function literals(text: string): string[] {
   return text.match(COLOUR_LITERAL) ?? [];
+}
+
+// tokens.css holds three colour rules: the light set (the default), the dark set the system's preference
+// turns on (a media block) and the dark set the switch pins.
+const LIGHT_RULE = /^:root, :root\[data-theme="light"\] \{([^}]*)\}/m;
+const SYSTEM_DARK_RULE =
+  /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{([^}]*)\}/;
+const DARK_RULE = /^:root\[data-theme="dark"\] \{([^}]*)\}/m;
+
+/** The `--name: value` pairs a rule body declares. */
+function declared(body: string | undefined): Map<string, string> {
+  return new Map(
+    [...(body ?? "").matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(m => [
+      m[1] ?? "",
+      (m[2] ?? "").trim(),
+    ]),
+  );
+}
+const LIGHT = declared(LIGHT_RULE.exec(TOKENS)?.[1]);
+const DARK = declared(DARK_RULE.exec(TOKENS)?.[1]);
+const SYSTEM_DARK = declared(SYSTEM_DARK_RULE.exec(TOKENS)?.[1]);
+
+function luminance(hex: string): number {
+  const [r = 0, g = 0, b = 0] = [1, 3, 5]
+    .map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG contrast ratio of two `#rrggbb` colours. */
+function contrast(a: string, b: string): number {
+  const [hi = 0, lo = 0] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
 }
 
 const servers: Server[] = [];
@@ -63,35 +100,34 @@ describe("the dashboard has one style", () => {
     expect(literals("&#8212; var(--text) href=/session/ab#c")).toEqual([]);
   });
 
-  it("the whole page declares its dark theme to the browser, so native controls are dark", () => {
-    // `:root { color-scheme: dark }` darkens the date field and its calendar popup, selects and scrollbars
-    const root = /:root\s*\{([^}]*)\}/.exec(TOKENS)?.[1] ?? "";
-    expect(root).toMatch(/(?:^|[;\s])color-scheme:\s*dark\s*;/);
+  it("the page declares both schemes to the browser, and each set sets its own native controls", () => {
+    // `color-scheme` on the root decides how the date field and its calendar popup, selects and scrollbars are drawn
+    expect(LIGHT_RULE.exec(TOKENS)?.[1]).toMatch(/(?:^|[;\s])color-scheme:\s*light\s*;/);
+    for (const rule of [SYSTEM_DARK_RULE, DARK_RULE])
+      expect(rule.exec(TOKENS)?.[1]).toMatch(/(?:^|[;\s])color-scheme:\s*dark\s*;/);
     // before the stylesheet loads, and for a viewer that reads only the head, the page says so too
-    expect(PAGE).toContain('<meta name="color-scheme" content="dark">');
-    // no stylesheet or element turns a light scheme back on
+    expect(PAGE).toContain('<meta name="color-scheme" content="light dark">');
+    // no other stylesheet or element pins a scheme: components follow the root's
     for (const [file, text] of [
-      ["tokens.css", TOKENS],
       ["components.css", COMPONENTS],
       ["index.html", PAGE],
     ] as const) {
-      const bad = [...text.matchAll(/color-scheme[^;}>]*/g)]
+      const pinned = [...text.matchAll(/color-scheme[^;}>]*/g)]
         .map(m => m[0])
-        .filter(m => /\blight\b/.test(m) || !/\bdark\b/.test(m));
-      expect(bad, file).toEqual([]);
+        .filter(m => !/^color-scheme"\s+content="light dark"$/.test(m));
+      expect(pinned, file).toEqual([]);
     }
     // the Cost tab's date inputs are native controls inside that root
     expect(SCRIPT).toContain('<input type="date" id="cost-from"');
     expect(SCRIPT).toContain('<input type="date" id="cost-to"');
   });
 
-  it("tokens.css carries the map's palette", () => {
-    const token = (name: string): string | undefined =>
-      new RegExp(`--${name}:\\s*([^;]+);`).exec(TOKENS)?.[1]?.trim();
+  it("tokens.css carries the map's palette (dark set)", () => {
+    const token = (name: string): string | undefined => DARK.get(`--${name}`);
     expect(token("page")).toBe("#0f1117");
     expect(token("panel")).toBe("#11141c");
     expect(token("panel-border")).toBe("#222838");
-    expect(token("panel-radius")).toBe("16px");
+    expect(/^:root \{[^}]*--panel-radius: 16px;/m.test(TOKENS)).toBe(true);
     expect(token("raised")).toBe("#1e293b");
     expect(token("grid")).toBe("#1a1f2b");
     expect(
@@ -110,8 +146,164 @@ describe("the dashboard has one style", () => {
     expect(Array.from({ length: 10 }, (_, i) => token(`diff-${i + 1}`))).toEqual(
       "#22c55e #22c55e #84cc16 #84cc16 #eab308 #f59e0b #f97316 #f97316 #ef4444 #ef4444".split(" "),
     );
-    expect(token("font")).toMatch(/^Inter, system-ui/);
-    expect(token("mono")).toMatch(/monospace$/);
+    expect(/--font: Inter, system-ui/.test(TOKENS)).toBe(true);
+    expect(/--mono: [^;]*monospace;/.test(TOKENS)).toBe(true);
+  });
+
+  it("the light set names every token of the dark set, and the system's dark set is the pinned one", () => {
+    expect(LIGHT.size).toBeGreaterThan(50);
+    expect([...LIGHT.keys()]).toEqual([...DARK.keys()]);
+    expect(SYSTEM_DARK).toEqual(DARK);
+    // a colour differs between the sets: the light one is not a copy of the dark one
+    expect(LIGHT.get("--panel")).toBe("#ffffff");
+    expect(LIGHT.get("--text")).not.toBe(DARK.get("--text"));
+    // the shared rule holds what a theme does not change; no set repeats it
+    expect(/^:root \{[^}]*--font:/m.test(TOKENS)).toBe(true);
+    for (const set of [LIGHT, DARK]) {
+      expect(set.has("--font")).toBe(false);
+      expect(set.has("--panel-radius")).toBe(false);
+    }
+  });
+
+  it("light set contrast: text on the panel reads at 4.5:1, and every state, model, stage and actor colour with it", () => {
+    const light = (name: string): string => LIGHT.get(`--${name}`) ?? "#000000";
+    const panel = light("panel");
+    const accent = [
+      "link",
+      "link-hover",
+      "ok",
+      "ok-text",
+      "warn",
+      "warn-text",
+      "bad",
+      "bad-text",
+      "slow",
+      "skill",
+      "sub",
+      "prio-urgent",
+      "prio-high",
+      "prio-low",
+      ...["recon", "plan", "work", "gate", "review", "land", "wait"].map(n => `stage-${n}`),
+      ...["haiku", "sonnet", "opus", "script"].map(n => `model-${n}`),
+      ...Array.from({ length: 10 }, (_, i) => `diff-${i + 1}`),
+      ...Array.from({ length: 8 }, (_, i) => `actor-${i}`),
+    ];
+    const low: string[] = [];
+    for (const name of ["text", "text-2", "text-3", "text-4", ...accent])
+      if (contrast(light(name), panel) < 4.5) low.push(`${name} ${light(name)}`);
+    expect(low).toEqual([]);
+    // body text sits on the page, the plaque's state text on its state background, a chip on the raised surface
+    expect(contrast(light("text-2"), light("page"))).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(light("text-3"), light("raised"))).toBeGreaterThanOrEqual(4.5);
+    for (const state of ["ok", "warn", "bad"])
+      expect(contrast(light(`${state}-text`), light(`${state}-bg`))).toBeGreaterThanOrEqual(4.5);
+    // the panel stands out of the page, and a border out of the panel, as in the dark set
+    expect(light("panel")).not.toBe(light("page"));
+    expect(light("panel-border")).not.toBe(light("panel"));
+    // the check itself: white on white fails, black on white passes
+    expect(contrast("#ffffff", "#ffffff")).toBe(1);
+    expect(contrast("#000000", "#ffffff")).toBeCloseTo(21, 5);
+  });
+
+  it("the page follows the system until the switch chooses, and remembers the choice (#theme-boot, applyTheme)", () => {
+    // header: a switch of three, system first
+    const switchHtml =
+      /<div class="theme-switch" id="theme-switch"[^>]*>([\s\S]*?)<\/div>/.exec(PAGE)?.[1] ?? "";
+    expect([...switchHtml.matchAll(/data-theme-choice="(\w+)"/g)].map(m => m[1])).toEqual([
+      "system",
+      "light",
+      "dark",
+    ]);
+    // before the first paint the saved choice is on <html>; a missing or throwing storage and a stray value leave the system's
+    const boot = /<script id="theme-boot">([\s\S]*?)<\/script>/.exec(PAGE)?.[1] ?? "";
+    expect(boot).toContain("try");
+    const booted = (storage: unknown): string | undefined => {
+      const root: { dataset: { theme?: string } } = { dataset: {} };
+      vm.runInNewContext(boot, { localStorage: storage, document: { documentElement: root } });
+      return root.dataset.theme;
+    };
+    const saved = (v: string | null) => ({
+      getItem: (k: string) => (k === "wf-theme" ? v : "light"),
+    });
+    expect(booted(saved("dark"))).toBe("dark");
+    expect(booted(saved("light"))).toBe("light");
+    expect(booted(saved("system"))).toBeUndefined();
+    expect(booted(saved(null))).toBeUndefined();
+    expect(
+      booted({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toBeUndefined();
+    expect(booted(undefined)).toBeUndefined();
+    // the switch: a choice sets data-theme and the key; system clears both; a storage that throws does not stop it
+    const page = loadPage();
+    const choose = (choices: string[], blocked = false): string =>
+      page.run(`(() => {
+        const store = {};
+        const root = { dataset: {} };
+        const win = { get localStorage() {
+          if (${blocked}) throw new Error('blocked');
+          return { setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } };
+        } };
+        const seen = [];
+        for (const c of ${JSON.stringify(choices)}) { applyTheme(c, root, win); seen.push([root.dataset.theme ?? null, store[THEME_KEY] ?? null]); }
+        return JSON.stringify(seen);
+      })()`) as string;
+    expect(JSON.parse(choose(["dark", "light", "system"]))).toEqual([
+      ["dark", "dark"],
+      ["light", "light"],
+      [null, null],
+    ]);
+    expect(JSON.parse(choose(["dark", "system"], true))).toEqual([
+      ["dark", null],
+      [null, null],
+    ]);
+    expect(page.run("THEME_KEY")).toBe("wf-theme");
+  });
+
+  it("the docs site scopes the light set to .dash and the dark set to VitePress's html.dark, with no system query", () => {
+    expect(DASH_CSS_TS).toContain("html.dark");
+    // the module itself, run with the two stylesheets as its inputs and a head to put its style in
+    const code = ts.transpileModule(DASH_CSS_TS, {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const exports: { useDashboardCss?: () => void } = {};
+    let styled = "";
+    vm.runInNewContext(code, {
+      exports,
+      require: (id: string) => ({ default: id.endsWith("tokens.css?raw") ? TOKENS : COMPONENTS }),
+      document: {
+        getElementById: () => null,
+        createElement: () => ({
+          set textContent(t: string) {
+            styled = t;
+          },
+        }),
+        head: { appendChild() {} },
+      },
+    });
+    exports.useDashboardCss?.();
+    expect(styled).toContain("@scope (.dash)");
+    expect(styled.replace(/\/\*[\s\S]*?\*\//g, "")).not.toMatch(
+      /prefers-color-scheme|:root|data-theme/,
+    );
+    // `.dash` is two rules (the shared one, the light set): every declaration of the selector, merged
+    const rule = (sel: string): Map<string, string> =>
+      new Map(
+        [
+          ...styled.matchAll(
+            new RegExp(`(?:^|\\n)${sel.replaceAll(".", "\\.")} \\{([^}]*)\\}`, "g"),
+          ),
+        ].flatMap(m => [...declared(m[1])]),
+      );
+    expect(rule(".dash").get("--panel")).toBe(LIGHT.get("--panel"));
+    expect(rule(".dash").get("--font")).toMatch(/^Inter/);
+    expect(rule("html.dark .dash")).toEqual(DARK);
+    expect(rule(".dash").get("--text")).toBe(LIGHT.get("--text"));
+    expect(styled).toMatch(/\.dash \{[^}]*color-scheme: light;/);
+    expect(styled).toMatch(/html\.dark \.dash \{[^}]*color-scheme: dark;/);
   });
 
   it("works offline: no web font, no remote stylesheet or script", () => {
