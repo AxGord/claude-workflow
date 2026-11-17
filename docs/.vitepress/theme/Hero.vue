@@ -494,7 +494,7 @@ onBeforeUnmount(() => {
   --hero-brand-s: 3;
   --hero-text-min: 520px;
   --hero-dg-max: 594px;
-  /* the landing's content width, the bar's and the hero's alike: VitePress's home container (the feature grid's 1152px) inside the layout's
+  /* the landing's content width, the bar's and the hero's alike: VitePress's home container (1152px, the feature grid's own cap) inside the layout's
      width, so on a wide screen the logo, the hero's text and diagram and the feature cards share their left and right edges */
   --hero-content-w: min(1152px, calc(var(--vp-layout-max-width) - 64px));
   --hero-fade: 48px;
@@ -535,6 +535,20 @@ onBeforeUnmount(() => {
 }
 .Layout.has-hero .VPContent {
   padding-top: 0;
+}
+/* VitePress's feature grid (the cards under the install block) takes the hero's content width and gutters (24px, 32px from 768px, the
+   same as `.hero`'s) instead of its own 24/48/64px steps and 1152px cap, so its cards' edges are the hero's at every width; the
+   selectors are the page class plus VitePress's own, which outweigh its scoped rules. */
+.Layout.has-hero .VPFeatures {
+  padding: 0 24px;
+}
+@media (min-width: 768px) {
+  .Layout.has-hero .VPFeatures {
+    padding: 0 32px;
+  }
+}
+.Layout.has-hero .VPFeatures .container {
+  max-width: var(--hero-content-w);
 }
 /* the default text hero stays in the markup (its data feeds this one) and is not shown */
 .Layout.has-hero .VPHomeHero {

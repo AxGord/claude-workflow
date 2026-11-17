@@ -18,7 +18,7 @@ import { withBase } from "vitepress";
 
 <style scoped>
 .install {
-  /* the hero's content width plus its gutters (24px, 32px from 768px, as Hero.vue's), so the block's edges are the hero's, the bar's and the feature grid's */
+  /* the hero's content width plus its gutters (24px, 32px from 768px, as Hero.vue's), so the block's edges are the hero's and the bar's (Hero.vue sets the feature grid to the same width and gutters) */
   max-width: calc(var(--hero-content-w) + 48px);
   margin: 0 auto 40px;
   padding: 0 24px;
