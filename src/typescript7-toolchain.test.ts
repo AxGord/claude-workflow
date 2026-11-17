@@ -17,7 +17,8 @@ test("build, dev and check compile with the TypeScript 7 compiler", () => {
   expect(pkg.devDependencies.typescript7).toMatch(/^npm:typescript@\^7\./);
   expect(pkg.scripts.build).toBe(tsc7);
   expect(pkg.scripts.dev).toBe(`${tsc7} --watch`);
-  expect(pkg.scripts.check.startsWith(`${tsc7} --noEmit`)).toBe(true);
+  expect(pkg.scripts["check:static"].startsWith(`${tsc7} --noEmit`)).toBe(true);
+  expect(pkg.scripts.check).toBe("npm run check:static && npm run check:tests");
   const out = execFileSync(
     "node",
     [resolve(root, "node_modules/typescript7/bin/tsc"), "--version"],

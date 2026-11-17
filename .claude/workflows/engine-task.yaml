@@ -153,7 +153,8 @@ states:
         You are the worker of engine slice {{context.task}}. Your brief is its line in {{context.queue_file}} (read
         it there; it is self-contained). Work ONLY inside {{context.wt}} (branch {{context.branch}}): ONE commit on
         that branch (the author from the git global config, never another identity), `npm run check` green before
-        it (it includes `check:ci`, the suite in a clean CI-like environment), a clean worktree at the end; send DONE only in a response AFTER the commit's output is in front of you,
+        it (it includes `check:ci`, the suite in a clean CI-like environment; run it as
+        `{{context.cwd}}/scripts/check-leased.sh` from the worktree, never bare: its eslint, tsc and vitest take every core they find outside a lease), a clean worktree at the end; send DONE only in a response AFTER the commit's output is in front of you,
         never alongside the commands it reports. Do NOT
         call any workflow tool (mcp__plugin_workflow_wf__*): this is the engine itself. Never touch the main
         checkout {{context.cwd}}, ~/.claude/workflow-state, the live pool, the installed hooks, nor any project's
@@ -230,18 +231,22 @@ states:
   project_gate:
     type: exec
     # The slice's gate in its worktree: exactly one commit over master, a clean tree, `npm run check` green.
+    # No `resource:` on this state: `scripts/check-leased.sh` takes two leases itself, one after the other (check:static,
+    # 2 threads; check:tests, 4-6), because one lease over the serial pipeline cannot match held to used (the static half
+    # uses ~2 cores, the wide one ~4.5-5; a single 8 held 8 and used ~4.6). A lease on this state would also be held
+    # while the script waits for its own, so it would wait on itself. Resize from a held-against-used reading (ps, LC_ALL=C).
     cwd: "{{context.wt}}"
     command: |-
       n=$(git rev-list --count master..HEAD) || exit 2
       [ "$n" = 1 ] || { echo "refused: $n commits over master, expected one"; exit 3; }
       dirty=$(git status --porcelain)
       [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
-      log=$(mktemp); npm run check >"$log" 2>&1; rc=$?
+      log=$(mktemp); "$CHECK" >"$log" 2>&1; rc=$?
       if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
       grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
       echo "gate green: $(git log --oneline -1)"
     timeout: 1800000
-    resource: { threads: { min: 4, max: budget } }
+    env: { CHECK: "{{context.cwd}}/scripts/check-leased.sh" }
     max_output: 16384
     on_timeout: gate_failed
     cases:
@@ -316,12 +321,12 @@ states:
       [ "$n" = 1 ] || { echo "refused: $n commits over master, expected one"; exit 3; }
       dirty=$(git status --porcelain)
       [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
-      log=$(mktemp); npm run check >"$log" 2>&1; rc=$?
+      log=$(mktemp); "$CHECK" >"$log" 2>&1; rc=$?
       if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
       grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
       echo "gate green: $(git log --oneline -1)"
     timeout: 1800000
-    resource: { threads: { min: 4, max: budget } }
+    env: { CHECK: "{{context.cwd}}/scripts/check-leased.sh" }
     max_output: 16384
     on_timeout: gate_failed
     cases:
@@ -561,7 +566,8 @@ states:
 
         Master moved under your reviewed branch {{context.branch}} and `git rebase master` conflicts. In
         {{context.wt}}: rebase onto master and resolve every conflict KEEPING BOTH SIDES (master's change and
-        yours; never drop either to make it apply), keep ONE commit, `npm run check` green, clean worktree.
+        yours; never drop either to make it apply), keep ONE commit, `npm run check` green (run as
+        `{{context.cwd}}/scripts/check-leased.sh` from the worktree, never bare), clean worktree.
         Report each conflicted file and how you resolved it.
 
       Then END your turn. On its notification verify ON-TREE: `git -C {{context.cwd}} log --oneline master..{{context.branch}}` shows one

@@ -13,6 +13,9 @@ npm run dev      # tsc 7 --watch
 npm start        # node build/index.js
 npm test         # vitest run (src/test-git-env.ts, the setup file, points git at no global config so a fixture commit never signs)
 npm run check    # tsc 7 --noEmit + format:check + lint + scan + vitest + check:ci (the pre-commit gate)
+npm run check:static   # the first half of check: tsc 7 --noEmit + format:check + lint + scan (serial, ~2 cores)
+npm run check:tests    # the second half: vitest + the pane tests + check:ci (vitest takes WF_THREADS workers when it is set)
+npm run check:leased   # check under pool leases sized to each half (scripts/check-leased.sh): 2 threads, then 4-6; what the engine-task gates and a worker run
 npm run check:ci # the suite as CI runs it (scripts/check-ci.sh): env -i, an empty HOME, no system git
                  # config, TMPDIR inside it, git user.useConfigOnly (no guessed identity), TZ America/St_Johns (CHECK_CI_TZ),
                  # LANG=C — plus CI's package.json / plugin.json version check

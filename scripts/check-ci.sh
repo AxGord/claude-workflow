@@ -10,6 +10,9 @@
 # over is VITEST_MAX_WORKERS (the pool gate's lease share; empty = vitest's own default): it sizes the
 # run, it cannot change a test's result.
 #
+# The pool grant (WF_THREADS) is the one variable carried over: vitest.config.ts caps its workers at it, and
+# `env -i` would drop it, so a leased run would take every core for this step.
+#
 # Usage: scripts/check-ci.sh [vitest args…]   (npm run check:ci)
 root=$(cd "$(dirname "$0")/.." && pwd) || exit 2
 cd "$root" || exit 2
@@ -34,6 +37,7 @@ env -i \
   TZ="${CHECK_CI_TZ:-America/St_Johns}" \
   LANG=C LC_ALL=C \
   CI=true \
+  ${WF_THREADS:+WF_THREADS="$WF_THREADS"} \
   GIT_CONFIG_NOSYSTEM=1 \
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.useConfigOnly GIT_CONFIG_VALUE_0=true \
   VITEST_MAX_WORKERS="${VITEST_MAX_WORKERS:-}" \
