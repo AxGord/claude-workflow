@@ -18,9 +18,16 @@ import { withBase } from "vitepress";
 
 <style scoped>
 .install {
-  max-width: 1280px;
+  /* the hero's content width plus its gutters (24px, 32px from 768px, as Hero.vue's), so the block's edges are the hero's, the bar's and the feature grid's */
+  max-width: calc(var(--hero-content-w) + 48px);
   margin: 0 auto 40px;
   padding: 0 24px;
+}
+@media (min-width: 768px) {
+  .install {
+    max-width: calc(var(--hero-content-w) + 64px);
+    padding: 0 32px;
+  }
 }
 .install h2 {
   margin: 0 0 12px;
@@ -43,10 +50,5 @@ import { withBase } from "vitepress";
 .install a {
   color: var(--vp-c-brand-1);
   font-weight: 500;
-}
-@media (max-width: 640px) {
-  .install {
-    padding: 0 16px;
-  }
 }
 </style>

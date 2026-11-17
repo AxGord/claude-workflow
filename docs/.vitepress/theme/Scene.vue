@@ -113,9 +113,16 @@ onBeforeUnmount(() => {
 
 <style>
 .scene {
-  max-width: 1280px;
+  /* the hero's content width plus its gutters (24px, 32px from 768px, as Hero.vue's), so the block's edges are the hero's, the bar's and the feature grid's */
+  max-width: calc(var(--hero-content-w) + 48px);
   margin: 0 auto 56px;
   padding: 0 24px;
+}
+@media (min-width: 768px) {
+  .scene {
+    max-width: calc(var(--hero-content-w) + 64px);
+    padding: 0 32px;
+  }
 }
 .stage-frame {
   position: relative;
@@ -159,10 +166,5 @@ onBeforeUnmount(() => {
   color: var(--vp-c-text-2);
   font-size: 13px;
   text-align: center;
-}
-@media (max-width: 640px) {
-  .scene {
-    padding: 0 16px;
-  }
 }
 </style>
