@@ -92,7 +92,7 @@ describe("Executor fanout:", () => {
     // the later shards waited for threads to free up
     expect(r.shards!.filter(s => s.wait_ms >= 200).length).toBeGreaterThanOrEqual(2);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 20_000);
+  });
 
   it("max_parallel caps the shards in flight below what the budget allows", async () => {
     const { executor } = executorWith(10);
@@ -109,7 +109,7 @@ describe("Executor fanout:", () => {
     expect(r.exit_code).toBe(0);
     expect(logLines(work).map(l => l[1])).toEqual(["1/4", "2/4", "3/4", "4/4"]);
     expect(Math.max(...logLines(work).map(l => Number(l[0])))).toBe(1);
-  }, 20_000);
+  });
 
   it("without max_parallel only as many shards as the budget runs side by side queue in the pool", async () => {
     const dir = tmp("wf-fanout-pool-");
@@ -160,7 +160,7 @@ describe("Executor fanout:", () => {
       ).exit_code,
     ).toBe(0);
     expect(peak).toBe(1);
-  }, 20_000);
+  });
 
   it("items_command: CRLF lines lose their \\r", async () => {
     const { executor } = executorWith(10);
@@ -176,7 +176,7 @@ describe("Executor fanout:", () => {
       ["a", 0],
       ["b", 0],
     ]);
-  }, 20_000);
+  });
 
   it("items_command: one shard per non-empty line with WF_ITEM; a failure is summarised with its output tail", async () => {
     const { executor } = executorWith(10);
@@ -200,7 +200,7 @@ describe("Executor fanout:", () => {
     expect(r.stdout).toBe(
       "fanout: 2/3 ok, 1 failed (exit 3)\n--- shard b c: exit 3 ---\nitem b c\nbroken b c\n",
     );
-  }, 20_000);
+  });
 
   it("a failing items_command fails the step without running a shard; no items is a pass", async () => {
     const { executor } = executorWith(10);
@@ -234,7 +234,7 @@ describe("Executor fanout:", () => {
     );
     expect(none.exit_code).toBe(0);
     expect(none.stdout).toBe("fanout: 0/0 ok");
-  }, 20_000);
+  });
 
   it("exit code: every failing shard timed out → 124; differing failures → 1", async () => {
     const { executor } = executorWith(10);
@@ -261,7 +261,7 @@ describe("Executor fanout:", () => {
     );
     expect(mixed.shards!.map(s => s.exit_code)).toEqual([0, 2, 124]);
     expect(mixed.exit_code).toBe(1);
-  }, 20_000);
+  });
 
   it("abort kills the running shards, withdraws the waiting ones and starts no more", async () => {
     const { executor, dir } = executorWith(2);
@@ -291,7 +291,7 @@ describe("Executor fanout:", () => {
     await new Promise(r => setTimeout(r, 300));
     expect(fs.readdirSync(work)).toEqual([]);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 20_000);
+  });
 });
 
 describe("Engine: fanout history and on_timeout", () => {
@@ -332,7 +332,7 @@ describe("Engine: fanout history and on_timeout", () => {
     ]);
     const line = storage.ledger[0] as { execs: Array<{ shards?: unknown }> };
     expect(line.execs[0].shards).toEqual(action.shards);
-  }, 20_000);
+  });
 
   it("the first granted shard lease records run_at on pending_action: a running fanout's stall clock", async () => {
     const { engine, storage } = engineWith({
@@ -366,7 +366,7 @@ describe("Engine: fanout history and on_timeout", () => {
     );
     await started;
     expect(storage.readAll()[0].pending_action).toBeUndefined();
-  }, 20_000);
+  });
 
   it("a step run again drops the old run_at: its own first lease stamps a new one", async () => {
     const { engine, storage } = engineWith({
@@ -404,7 +404,7 @@ describe("Engine: fanout history and on_timeout", () => {
     expect(Date.parse(runAt!)).toBeGreaterThan(Date.parse(old));
     await rerun;
     expect(storage.read(sessionId)!.pending_action).toBeUndefined();
-  }, 20_000);
+  });
 
   it("on_timeout routes an exec killed by its timeout apart from an ordinary failure", async () => {
     const flow = (command: string) => ({
@@ -438,7 +438,7 @@ describe("Engine: fanout history and on_timeout", () => {
     expect(storage.read(bad.sessionId)!.history.find(h => h.event === "action")!.to).toBe("fix");
     const ok = await engine.start("okGate");
     expect(storage.read(ok.sessionId)!.history.find(h => h.event === "action")!.to).toBe("ok");
-  }, 20_000);
+  });
 
   it("on_timeout wins over cases; a timeout without on_timeout still goes through cases/on_error", async () => {
     const { engine, storage } = engineWith({
@@ -471,5 +471,5 @@ describe("Engine: fanout history and on_timeout", () => {
     expect(storage.read(a.sessionId)!.history.find(h => h.event === "action")!.to).toBe("slow");
     const b = await engine.start("plain");
     expect(storage.read(b.sessionId)!.history.find(h => h.event === "action")!.to).toBe("fix");
-  }, 20_000);
+  });
 });

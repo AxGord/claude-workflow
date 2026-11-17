@@ -594,7 +594,7 @@ describe("Pool", () => {
     expect(got.status).toBe("granted");
     expect(Date.now() - released).toBeLessThan(1000);
     if (got.status === "granted") await got.lease.release();
-  }, 10_000);
+  });
 
   it("a lease reports its threads clamped to the budget; a lock-only request needs locks, a lock name one word", async () => {
     const pool = new Pool(poolDir(), fakeProbes());
@@ -760,7 +760,7 @@ describe("Executor resource:", () => {
     const during = JSON.parse(fs.readFileSync(leasedDuringRun, "utf8")) as PoolState;
     expect(during.leases.map(l => [l.threads, l.session_id])).toEqual([[6, "s1"]]);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 10_000);
+  });
 
   it("no lease within wait_timeout exits 75 (busy) without running; abort withdraws a wait", async () => {
     const dir = poolDir();
@@ -789,7 +789,7 @@ describe("Executor resource:", () => {
     expect(fs.existsSync(marker)).toBe(false);
     expect(readPool(dir).waiting).toEqual([]);
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 
   it("an exec whose lease wait passes starve_after reports it once to its session", async () => {
     const dir = poolDir({ budget: 10, load_threshold: 0, starve_after: 0.2 });
@@ -810,7 +810,7 @@ describe("Executor resource:", () => {
       /^queued \d+s for 2 threads \(starve_after 0s\): held 10\/10, external 0\.0/,
     );
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 
   it("fanout shards share the session's starved mark: it clears only when no shard waits starved", async () => {
     const dir = poolDir({ budget: 2, load_threshold: 0, starve_after: 0.2 });
@@ -844,7 +844,7 @@ describe("Executor resource:", () => {
     expect(events.map(e => e[0] === undefined)).toEqual([false, false, true]);
     // the first grant (a released at 1.5 s) did not clear it: the second shard still waited
     expect(events[2][1]).toBeGreaterThanOrEqual(2450);
-  }, 15_000);
+  });
 
   it("a lock name renders session values: the rendered name is the lock held", async () => {
     const dir = poolDir();
@@ -867,7 +867,7 @@ describe("Executor resource:", () => {
     expect(blocked.stderr).toContain("lock /r/a_b-land");
     expect((await run("/r/other")).exit_code).toBe(0);
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 
   it("a lock name that renders empty keeps its template text", async () => {
     const dir = poolDir();
@@ -886,7 +886,7 @@ describe("Executor resource:", () => {
     );
     expect(r.exit_code).toBe(75);
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 
   it("an abort that lands as the lease is granted gives the lease back without running", async () => {
     const dir = poolDir();
@@ -962,7 +962,7 @@ describe("Executor resource:", () => {
     expect(fs.existsSync(marker)).toBe(false);
     expect(readPool(dir).waiting).toEqual([]);
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 
   it('threads: "budget" leases the configured budget', async () => {
     const dir = poolDir({ budget: 7, load_threshold: 0 });
@@ -1021,7 +1021,7 @@ describe("Executor resource:", () => {
     const waited = storage.read(sessionId)!.history.find(h => h.from === "run")!.wait_ms!;
     expect(waited).toBeGreaterThanOrEqual(100);
     expect(prompt.trim()).toBe(String(waited));
-  }, 10_000);
+  });
 
   it("the engine routes 75 through cases and records wait_ms in history and the ledger", async () => {
     const dir = poolDir();
@@ -1057,7 +1057,7 @@ describe("Executor resource:", () => {
     expect(line.execs[0].wait_ms).toBe(action.wait_ms);
     expect(line.wait_ms_total).toBe(action.wait_ms);
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 });
 
 describe("Pool: flexible leases and re-ranking", () => {
@@ -1091,7 +1091,7 @@ describe("Pool: flexible leases and re-ranking", () => {
       /min threads must be an integer in 1\.\.2/,
     );
     await expect(pool.acquire({ threads: 2, waitFullMs: 10 })).rejects.toThrow(/needs a min/);
-  }, 10_000);
+  });
 
   it("a flexible waiter that queued behind a lock waits its wait_full window from the lock's release", async () => {
     const pool = new Pool(poolDir(), fakeProbes());
@@ -1111,7 +1111,7 @@ describe("Pool: flexible leases and re-ranking", () => {
     expect(late.waitMs).toBeLessThan(3_000);
     if (late.status === "granted") await late.lease.release();
     if (busy.status === "granted") await busy.lease.release();
-  }, 10_000);
+  });
 
   it("reprioritize moves only the waiters of the sessions that carry a level; leases keep theirs", async () => {
     const dir = poolDir();
@@ -1221,7 +1221,7 @@ describe("session priority levels", () => {
         else process.env[k] = v;
       }
     }
-  }, 10_000);
+  });
 
   it("a project's settings level is the default of a root session; an explicit level and a parent beat it", async () => {
     const { loader, dir: wfDir } = createTestLoader({
@@ -1277,7 +1277,7 @@ describe("session priority levels", () => {
       expect(levelOf(ok.sessionId)).toBe("low");
       await engine.abort(ok.sessionId);
     }
-  }, 10_000);
+  });
 
   it("set_priority re-ranks a session's waiting exec at once, survives the exec, reaches descendants; a running lease keeps its priority", async () => {
     const dir = poolDir();
@@ -1347,7 +1347,7 @@ describe("session priority levels", () => {
     if (got.status === "granted") await got.lease.release();
     await engine.abort(rootId);
     await expect(engine.setPriority(rootId, "high")).rejects.toThrow(/has ended/);
-  }, 15_000);
+  });
 
   it("a flexible resource: WF_THREADS = the threads granted; history and ledger record threads_granted, wait_ms, duration_ms, step_key", async () => {
     const dir = poolDir();
@@ -1396,7 +1396,7 @@ describe("session priority levels", () => {
     expect(typeof line.execs[0].wait_ms).toBe("number");
     expect(typeof line.execs[0].duration_ms).toBe("number");
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 
   it("set_priority racing a child's last transition on the real Storage never resurrects the ended child", async () => {
     const pool = new Pool(poolDir(), fakeProbes());
@@ -1427,7 +1427,7 @@ describe("session priority levels", () => {
     }
     expect({ resurrected: resurrected.length, failed }).toEqual({ resurrected: 0, failed: [] });
     expect(storage.read(rootId)!.priority).toBe("high");
-  }, 30_000);
+  });
 
   it("the set_priority and pool_status tools", async () => {
     const dir = poolDir();
@@ -1477,7 +1477,7 @@ describe("session priority levels", () => {
       ),
     );
     if (holder.status === "granted") await holder.lease.release();
-  }, 10_000);
+  });
 });
 
 describe("wf-run CLI (real processes)", () => {
@@ -1574,7 +1574,7 @@ describe("wf-run CLI (real processes)", () => {
     expect(events).toHaveLength(6);
     expect(peak).toBeLessThanOrEqual(10);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 30_000);
+  });
 
   it("busy past --wait-timeout exits 75; --status lists the lease", async () => {
     const dir = poolDir(quiet);
@@ -1589,7 +1589,7 @@ describe("wf-run CLI (real processes)", () => {
     expect(r.stderr).toMatch(/busy/);
     expect(readPool(dir).waiting).toEqual([]);
     if (holder.status === "granted") await holder.lease.release();
-  }, 15_000);
+  });
 
   it("two processes behind one --lock never overlap; a lock-only run takes no threads", async () => {
     const dir = poolDir(quiet);
@@ -1622,7 +1622,7 @@ describe("wf-run CLI (real processes)", () => {
     const [first, second] = at("start", "a") < at("start", "b") ? ["a", "b"] : ["b", "a"];
     expect(at("start", second)).toBeGreaterThanOrEqual(at("end", first));
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 30_000);
+  });
 
   it("--lock: --status shows it, a busy lock exits 75, a dead holder is reaped; the child gets WF_THREADS", async () => {
     const dir = poolDir({ budget: 5, load_threshold: 1000 });
@@ -1657,7 +1657,7 @@ describe("wf-run CLI (real processes)", () => {
     expect(r.stdout).toBe("5");
     expect((await wfRun(dir, ["--lock", "a b", "--", "true"]).done).code).toBe(64);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 20_000);
+  });
 
   it("--threads budget leases the configured budget", async () => {
     const dir = poolDir({ budget: 5, load_threshold: 1000 });
@@ -1675,7 +1675,7 @@ describe("wf-run CLI (real processes)", () => {
       (JSON.parse(fs.readFileSync(seen, "utf8")) as PoolState).leases.map(l => l.threads),
     ).toEqual([5]);
     expect((await wfRun(dir, ["--threads", "all", "--", "true"]).done).code).toBe(64);
-  }, 15_000);
+  });
 
   it("forwards SIGTERM to the child's group, exits with the child's code and releases the lease", async () => {
     const dir = poolDir(quiet);
@@ -1698,7 +1698,7 @@ describe("wf-run CLI (real processes)", () => {
     expect(r.code).toBe(7);
     expect(fs.existsSync(got)).toBe(true);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 15_000);
+  });
 
   it("a SIGKILLed wf-run leaves no live child and no lease: the next pass kills its detached group, SIGKILL after the grace", async () => {
     const dir = poolDir(quiet);
@@ -1750,7 +1750,7 @@ describe("wf-run CLI (real processes)", () => {
     expect(fs.readFileSync(path.join(dir, "pool.log"), "utf8")).toMatch(
       new RegExp(`orphan: pid ${child.pid} is dead, SIGTERM its group ${grandchild} — `),
     );
-  }, 15_000);
+  });
 
   it("an orphaned wf-run lease whose group is not the recorded one — another boot, another leader — is dropped and nothing is signalled", async () => {
     const dir = poolDir(quiet);
@@ -1792,7 +1792,7 @@ describe("wf-run CLI (real processes)", () => {
     for (let i = 0; i < 100 && isGroupAlive(unrelated.pid!); i++)
       await new Promise(r => setTimeout(r, 20));
     expect(isGroupAlive(unrelated.pid!)).toBe(false);
-  }, 15_000);
+  });
 
   it("an exec lease (not owning its group) keeps the lease while the group runs after its server died", async () => {
     const dir = poolDir(quiet);
@@ -1807,7 +1807,7 @@ describe("wf-run CLI (real processes)", () => {
     await new Promise(r => setTimeout(r, 100));
     expect(isGroupAlive(runner.pid!)).toBe(true);
     expect(readPool(dir).leases[0].orphaned).toBeUndefined();
-  }, 15_000);
+  });
 
   it("--threads MIN-MAX takes the free threads at once; --wait-full waits for the max until its window ends", async () => {
     const dir = poolDir(quiet);
@@ -1837,7 +1837,7 @@ describe("wf-run CLI (real processes)", () => {
     ])
       expect((await wfRun(dir, [...bad, "--", "true"]).done).code).toBe(64);
     expect(readPool(dir)).toEqual({ leases: [], waiting: [] });
-  }, 20_000);
+  });
 
   it("--est-by-threads: waits for the max when its ETA ends the run earlier, takes the free threads when it does not", async () => {
     const dir = poolDir(quiet);
@@ -1874,7 +1874,7 @@ describe("wf-run CLI (real processes)", () => {
     ])
       expect((await wfRun(dir, [...bad, "--", "true"]).done).code).toBe(64);
     if (late.status === "granted") await late.lease.release();
-  }, 20_000);
+  });
 
   it("without --priority a run takes WF_PRIORITY and its level from the environment; --status shows level, project, session and step", async () => {
     const dir = poolDir(quiet);
@@ -1914,7 +1914,7 @@ describe("wf-run CLI (real processes)", () => {
     }).done;
     expect(explicit.stdout).toBe("5 unset");
     expect((await wfRun(dir, show).done).stdout).toBe("0 unset");
-  }, 20_000);
+  });
 
   it("outside a session a run takes the project's settings level; the environment and --priority win; a bad file is refused, or ignored under --fail-open", async () => {
     const dir = poolDir(quiet);
@@ -1933,7 +1933,7 @@ describe("wf-run CLI (real processes)", () => {
     const open = await wfRun(dir, ["--fail-open", ...show], {}, bad).done;
     expect([open.code, open.stdout]).toEqual([0, "0 unset"]);
     expect(open.stderr).toContain("project settings ignored");
-  }, 20_000);
+  });
 
   it.runIf(process.platform === "darwin")(
     "--efficiency runs under taskpolicy outside the budget",
@@ -1945,6 +1945,5 @@ describe("wf-run CLI (real processes)", () => {
       expect(r.code).toBe(3);
       if (holder.status === "granted") await holder.lease.release();
     },
-    15_000,
   );
 });

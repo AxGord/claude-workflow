@@ -510,7 +510,7 @@ describe("pool-gate hook (real processes)", () => {
     expect(direct).toMatchObject({ code: 3, stdout: `it's "q"\nn=-\n` });
     expect(gated.code).toBe(direct.code);
     expect(gated.stdout).toBe(direct.stdout);
-  }, 20_000);
+  });
 
   it("under wf-run: the command gets its share through `pass`", () => {
     const dir = project(realCfg("env:N"));
@@ -519,7 +519,7 @@ describe("pool-gate hook (real processes)", () => {
       JSON.parse(r.stdout) as { hookSpecificOutput: { updatedInput: { command: string } } }
     ).hookSpecificOutput.updatedInput.command;
     expect(runAs(rewritten, dir, pool())).toMatchObject({ code: 3, stdout: "n=2\n" });
-  }, 20_000);
+  });
   /** A bin dir with `node` and a stub `name` running `script`. */
   function stubBin(name: string, script: string): string {
     const dir = tmp("wf-gate-stub-");

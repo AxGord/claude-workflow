@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Executor } from "./executor.js";
 import { Loader } from "./loader.js";
 import { writeToolReason } from "./read-only-gate.js";
+import { assertUnderTmp } from "./test-helpers.js";
 import type { StateDefinition } from "./types.js";
 
 // The bundled batch-task's default extension points, run as shell against a real repo. The pool is
@@ -84,7 +85,7 @@ describe("batch-task default extension points", () => {
     const ex = new Executor();
     const prep = await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo });
     expect(prep.exit_code).toBe(0);
-    const wt = path.join(path.dirname(repo), ".wt", "proj", "T1");
+    const wt = assertUnderTmp(path.join(path.dirname(repo), ".wt", "proj", "T1"));
     expect(prep.stdout).toBe(wt);
     fs.writeFileSync(path.join(wt, "b.txt"), "b\n");
     git(wt, "add", ".");
@@ -102,7 +103,9 @@ describe("batch-task default extension points", () => {
   it("a failed land_test takes the merge back; a dirty repo is refused before any merge", async () => {
     const { repo, plugin, vars } = setup();
     const ex = new Executor();
-    const wt = (await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo })).stdout;
+    const wt = assertUnderTmp(
+      (await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo })).stdout,
+    );
     fs.writeFileSync(path.join(wt, "b.txt"), "b\n");
     git(wt, "add", ".");
     git(wt, "commit", "-qm", "work");
@@ -123,7 +126,9 @@ describe("batch-task default extension points", () => {
     const { repo, plugin, vars } = setup();
     const real = path.resolve(TEMPLATES, "..");
     const ex = new Executor();
-    const wt = (await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo })).stdout;
+    const wt = assertUnderTmp(
+      (await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo })).stdout,
+    );
     const scope = () => ex.execute(state("review_scope", "", real), vars, { cwd: repo });
     const empty = await scope();
     expect([empty.exit_code, empty.stdout.trim()]).toEqual([0, "code"]);
@@ -187,7 +192,9 @@ describe("batch-task default extension points", () => {
     const ex = new Executor();
     const land = (cmd: string) =>
       ex.execute(state("project_land", cmd, plugin), vars, { cwd: repo });
-    const wt = (await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo })).stdout;
+    const wt = assertUnderTmp(
+      (await ex.execute(state("project_prepare", "", plugin), vars, { cwd: repo })).stdout,
+    );
     fs.writeFileSync(path.join(wt, "b.txt"), "b\n");
     git(wt, "add", ".");
     git(wt, "commit", "-qm", "work");

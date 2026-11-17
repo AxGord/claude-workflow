@@ -158,3 +158,16 @@ export function graphModuleExpression(): string {
   const names = [...source.matchAll(/^export (?:function|const) (\w+)/gm)].map(m => m[1]);
   return `(() => { ${source.replace(/^export /gm, "")}\n return { ${names.join(", ")} }; })()`;
 }
+
+/**
+ * A test that writes into a worktree the engine under test prepared must write into its own temp
+ * dir: when the setup failed (timed out under load) the path is empty and a write lands in the
+ * repo cwd. Returns the path, or throws.
+ */
+export function assertUnderTmp(dir: string): string {
+  const tmp = fs.realpathSync(os.tmpdir());
+  const resolved = dir === "" ? "" : path.resolve(dir);
+  if (resolved === "" || !resolved.startsWith(tmp + path.sep))
+    throw new Error(`not under the temp dir ${tmp}: ${JSON.stringify(dir)}`);
+  return dir;
+}

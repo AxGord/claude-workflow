@@ -1002,9 +1002,17 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
       return false;
     }
   }
+  // The deadline is a hang guard far above any loaded host's delay: the wait ends on the event.
+  async function waitUntil(done: () => boolean, deadlineMs = 30_000): Promise<boolean> {
+    for (const end = Date.now() + deadlineMs; !done() && Date.now() < end; )
+      await new Promise(r => setTimeout(r, 20));
+    return done();
+  }
+  async function waitPidFile(file: string): Promise<boolean> {
+    return waitUntil(() => fs.existsSync(file) && fs.readFileSync(file, "utf8").endsWith("\n"));
+  }
   async function waitDead(pid: number): Promise<boolean> {
-    for (let i = 0; i < 50 && pidAlive(pid); i++) await new Promise(r => setTimeout(r, 20));
-    return !pidAlive(pid);
+    return waitUntil(() => !pidAlive(pid));
   }
 
   it("abort kills a background exec's whole process group, not just its sh", async () => {
@@ -1027,8 +1035,7 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
       },
     });
     const { sessionId } = await engine.start("bg");
-    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++)
-      await new Promise(r => setTimeout(r, 20));
+    expect(await waitPidFile(pidFile)).toBe(true);
     const grandchild = Number(fs.readFileSync(pidFile, "utf8").trim());
     expect(pidAlive(grandchild)).toBe(true);
     await engine.abort(sessionId);
@@ -1058,15 +1065,14 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
     const parent = await engine.start("simple");
     const child = await engine.start("fg", undefined, parent.sessionId);
     const running = engine.transition(child.sessionId, "next").catch(e => e as Error);
-    for (let i = 0; i < 50 && !fs.existsSync(pidFile); i++)
-      await new Promise(r => setTimeout(r, 20));
+    expect(await waitPidFile(pidFile)).toBe(true);
     const grandchild = Number(fs.readFileSync(pidFile, "utf8").trim());
     await engine.abort(parent.sessionId);
     expect(await waitDead(grandchild)).toBe(true);
     const outcome = await running;
     expect(outcome).toBeInstanceOf(Error);
     expect((outcome as Error).message).toContain("ended while its action state ran");
-  }, 10_000);
+  });
 });
 
 describe("Engine — ENG-1a review fixes", () => {

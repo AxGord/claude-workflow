@@ -649,7 +649,7 @@ describe("abort tool kills before queueing", () => {
       }
       cleanupDir(work);
     }
-  }, 5000);
+  });
 });
 
 describe("per-session serialization queue", () => {

@@ -77,7 +77,7 @@ describe("exec timeout and the pool wait of its command", () => {
     // the pool wait is recorded beside the run, not in it
     expect(result.wait_ms).toBeGreaterThanOrEqual(1500);
     expect(result.duration_ms).toBeLessThan(result.wait_ms! + 1000);
-  }, 15000);
+  });
 
   it("a wait that never ends is cut at the ceiling, 4x the timeout", async () => {
     const holder = await pool.acquire({
@@ -105,7 +105,7 @@ describe("exec timeout and the pool wait of its command", () => {
     await holder.lease.release();
     const got = await waiter;
     if (got.status === "granted") await got.lease.release();
-  }, 15000);
+  });
 
   it("a waiter of another session does not stretch the timeout", async () => {
     const holder = await pool.acquire({
@@ -125,7 +125,7 @@ describe("exec timeout and the pool wait of its command", () => {
     await holder.lease.release();
     const got = await waiter;
     if (got.status === "granted") await got.lease.release();
-  }, 15000);
+  });
 
   it("a command that runs 2 s of work under a 1 s timeout still times out", async () => {
     const result = await executor.execute(
@@ -135,7 +135,7 @@ describe("exec timeout and the pool wait of its command", () => {
     );
     expect(result.success).toBe(false);
     expect(result.error).toContain("timed out");
-  }, 15000);
+  });
   it("a fanout shard whose sibling waits for its own lease still times out on its own work", async () => {
     const result = await executor.execute(
       {
@@ -154,7 +154,7 @@ describe("exec timeout and the pool wait of its command", () => {
     expect(first.exit_code).toBe(124);
     expect(second.exit_code).toBe(124);
     expect(Math.min(first.wait_ms, second.wait_ms)).toBeLessThan(200);
-  }, 15000);
+  });
 
   it("an adopted run starts from the pool wait its first server counted", async () => {
     let run: DetachedRun | undefined;
@@ -177,5 +177,5 @@ describe("exec timeout and the pool wait of its command", () => {
     expect(adopted).toMatchObject({ exit_code: 0, success: true });
     expect(adopted!.wait_ms).toBeGreaterThanOrEqual(5000);
     await pending;
-  }, 15000);
+  });
 });

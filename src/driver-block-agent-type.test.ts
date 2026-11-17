@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_DRIVER_AGENT_TYPE, renderDriverCall } from "./driver.js";
 import { Executor } from "./executor.js";
 import { Loader } from "./loader.js";
-import { cleanupDir, createFixtureDir, createTestEngine } from "./test-helpers.js";
+import { assertUnderTmp, cleanupDir, createFixtureDir, createTestEngine } from "./test-helpers.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -125,7 +125,7 @@ describe("batch-task under the shell-less workflow:driver", () => {
     fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
     git(repo, "add", ".");
     git(repo, "commit", "-qm", "init");
-    const wt = path.join(root, "wt");
+    const wt = assertUnderTmp(path.join(root, "wt"));
     git(repo, "worktree", "add", "-q", wt, "-b", "batch/T1");
     const vars = { context: { task: "T1", cwd: repo, wt } };
     const bt = batchTask();

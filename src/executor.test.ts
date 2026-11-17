@@ -62,7 +62,7 @@ describe("Executor", () => {
       const state: StateDefinition = { type: "exec", command: "sleep 60", timeout: 100 };
       const result = await executor.execute(state, {});
       expect(result.success).toBe(false);
-    }, 5000);
+    });
 
     it("truncates output > 10KB", async () => {
       // Generate ~15KB of output
@@ -239,10 +239,16 @@ describe("Executor — ENG-1a", () => {
       {},
     );
     expect(r.exit_code).toBe(124);
+    for (
+      let i = 0;
+      i < 1500 && !(fs.existsSync(pidFile) && fs.readFileSync(pidFile, "utf8").endsWith("\n"));
+      i++
+    )
+      await new Promise(res => setTimeout(res, 20));
     const pid = Number(fs.readFileSync(pidFile, "utf8"));
-    for (let i = 0; i < 50 && alive(pid); i++) await new Promise(res => setTimeout(res, 20));
+    for (let i = 0; i < 1500 && alive(pid); i++) await new Promise(res => setTimeout(res, 20));
     expect(alive(pid)).toBe(false);
-  }, 5000);
+  });
 });
 
 describe("killProcessGroup", () => {
@@ -284,7 +290,7 @@ describe("exec: a rejection on the way to the result", () => {
     expect(r).not.toBe("hung");
     expect((r as { exit_code: number }).exit_code).toBe(124);
     expect((r as { error: string }).error).toContain("reap boom");
-  }, 5000);
+  });
 
   it("a failed detached-run record does not hold back the result", async () => {
     const r = await settled(
@@ -303,7 +309,7 @@ describe("exec: a rejection on the way to the result", () => {
     expect(unhandled).toEqual([]);
     expect(r).not.toBe("hung");
     expect((r as { stdout: string }).stdout.trim()).toBe("ok");
-  }, 5000);
+  });
 
   it("a throwing result reader ends the step with exit 1 and its message", async () => {
     const ex = Executor as unknown as { _runResult: () => never };
@@ -317,7 +323,7 @@ describe("exec: a rejection on the way to the result", () => {
     expect((r as { exit_code: number }).exit_code).toBe(1);
     expect((r as { success: boolean }).success).toBe(false);
     expect((r as { error: string }).error).toContain("read boom");
-  }, 5000);
+  });
 
   it("a throwing result reader after a timeout still settles", async () => {
     const ex = Executor as unknown as { _runResult: () => never };
@@ -332,5 +338,5 @@ describe("exec: a rejection on the way to the result", () => {
     expect(unhandled).toEqual([]);
     expect(r).not.toBe("hung");
     expect((r as { error: string }).error).toContain("read boom");
-  }, 6000);
+  });
 });

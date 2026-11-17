@@ -45,5 +45,5 @@ describe("wf-run --status with a malformed project settings file", () => {
     });
     expect(res.stderr).not.toContain("settings.json");
     expect(res.status).toBe(0);
-  }, 20_000);
+  });
 });

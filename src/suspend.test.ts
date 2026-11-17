@@ -910,7 +910,7 @@ describe("Executor detached runs", () => {
     const alive = isGroupAlive(run!.pgid);
     if (alive) process.kill(-run!.pgid, "SIGKILL");
     expect(alive).toBe(false);
-  }, 15_000);
+  });
 
   it("a run that fails to spawn leaves no files, even with a caller that would own them", async () => {
     const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "wf-runs-"));

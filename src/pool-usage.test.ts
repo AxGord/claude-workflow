@@ -195,11 +195,15 @@ describe("the meter", () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"], now: Date.now() });
     await holder.lease.attach(PGID);
     await vi.advanceTimersByTimeAsync(16_000);
-    // the ticks' passes do real file I/O
-    await new Promise(res => setTimeout(res, 300));
-    const metered = JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8")) as {
-      leases: { meter?: { ms: number } }[];
-    };
+    // the ticks' passes do real file I/O: wait for the event (the meter written), not a fixed delay
+    const readMeter = (): { leases: { meter?: { ms: number } }[] } =>
+      JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8")) as {
+        leases: { meter?: { ms: number } }[];
+      };
+    // Date is faked here, so the hang guard counts polls
+    for (let i = 0; i < 1500 && !((readMeter().leases[0].meter?.ms ?? 0) > 0); i++)
+      await new Promise(res => setTimeout(res, 20));
+    const metered = readMeter();
     expect(metered.leases[0].meter?.ms).toBeGreaterThan(0);
     await holder.lease.release();
     expect(vi.getTimerCount()).toBe(0);
@@ -290,5 +294,5 @@ describe("the per-label usage", () => {
     expect(ok.stdout).toMatch(/idle thr-min/);
     expect(run(["--since", "2h", "--", "true"]).status).toBe(64);
     expect(run(["--usage", "--since", "yesterday"]).status).toBe(64);
-  }, 30_000);
+  });
 });
