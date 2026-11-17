@@ -1,6 +1,6 @@
 name: engine-task
 extends: batch-task
-description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree /tmp/wf-<ID>, branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → cleanup → done (says whether Claude needs a restart)."
+description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree /tmp/wf-<ID>, branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review_route [exec: a round with no code change since the reviewed commit skips `review`: MERGE → land, FIXES or a code-changing rebase_fix → review_verify] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → cleanup → done (says whether Claude needs a restart)."
 
 # The session's cwd is the engine's main checkout (the dispatcher starts it there). The live server and the
 # installed hooks run from that checkout's build/: the worker never touches it, only project_land does.
@@ -245,8 +245,67 @@ states:
     max_output: 16384
     on_timeout: gate_failed
     cases:
-      "0": review
+      "0": review_route
     default: gate_failed
+
+  review_route:
+    station: false
+    type: exec
+    # After a green gate: does the tree still need a review visit? The reviewed commit (`reviewed_sha`) and HEAD are
+    # compared as the patches they carry over their own parents, with the prose paths (CHANGELOG.md, README.md, docs/**/*.md;
+    # the site's own code under docs/ is code, as in scripts/review-class.sh) left out and only the +/- lines read (hunk
+    # headers and context lines move with a rebase). Equal code patches mean the round changed no code: a rebase_fix that
+    # kept only the conflicted prose hunks, or a fix round that answered a verify-only FIXES item with a record. MERGE was
+    # already given at that code → the land (a `breaking: true` line still waits for the parent); FIXES → `review_verify`
+    # (exit 20), a verify-only review that spends no `review` visit. A rebase_fix after MERGE whose code patch changed (HEAD's
+    # parent is not the reviewed commit's) → `review_verify` too (exit 25), naming the range-diff of the two patches.
+    # Anything else, or no review yet → `review`.
+    cwd: "{{context.wt}}"
+    command: |-
+      [ -n "$TEXT" ] && [ -n "$REVIEWED" ] || exit 0
+      git cat-file -e "$REVIEWED^{commit}" 2>/dev/null && git cat-file -e "$REVIEWED^" 2>/dev/null && git rev-parse -q --verify HEAD^ >/dev/null || exit 0
+      [ "$(git rev-parse HEAD)" != "$(git rev-parse "$REVIEWED")" ] || exit 0
+      code() { git diff -U0 --no-color --no-ext-diff "$1^" "$1" -- . ':!CHANGELOG.md' ':!README.md' ':(exclude,glob)docs/**/*.md' | grep -Ev '^(index |@@ )'; }
+      v=$(printf '%s\n' "$TEXT" | grep -E '^(VERDICT +)?(MERGE|FIXES)' | tail -1 | sed -E 's/^VERDICT +//')
+      [ -n "$v" ] || { printf '%s\n' "$TEXT" | sed '/^[[:space:]]*$/d' | tail -1 | grep -Eq '(^|[^A-Za-z])MERGE[.[:space:]]*$' && v=MERGE; }
+      short=$(git rev-parse --short "$REVIEWED")
+      a=$(code "$REVIEWED") || a=; b=$(code HEAD) || b=
+      if [ "$a" != "$b" ]; then
+        case "$v" in
+          MERGE*) if [ "$(git rev-parse HEAD^)" != "$(git rev-parse "$REVIEWED^")" ]; then
+                    echo "kind: rebase. MERGE was given at $short; the land's rebase moved the base and the resolution changed code. The resolution is what differs: git range-diff $short^..$short HEAD^..HEAD; files changed since $short:"; git diff --name-only "$REVIEWED" HEAD | head -10; exit 25
+                  fi;;
+        esac
+        exit 0
+      fi
+      case "$v" in
+        MERGE*) if awk -v id="$TASK" '$0=="  - id: "id{f=1;next} f&&/^  - id:/{exit} f&&/^    breaking: true$/{b=1} END{exit !b}' "$QUEUE"; then exit 30; fi
+                echo "no code change since the reviewed commit $short, MERGE already given: to the land"; exit 10;;
+        *) echo "kind: fixes. No code change since the reviewed commit $short; files changed:"; git diff --name-only "$REVIEWED" HEAD | head -10; exit 20;;
+      esac
+    env: { TEXT: "{{context.review_text}}", REVIEWED: "{{context.reviewed_sha}}", QUEUE: "{{context.queue_file}}", TASK: "{{context.task}}" }
+    timeout: 20000
+    cases: { "0": review, "10": project_land, "20": review_verify, "25": review_verify, "30": breaking_ready }
+    default: review
+
+  review_verify:
+    max_visits: 2
+    on_exhausted: blocked
+    prompt: |-
+      A round of {{context.task}} on top of the reviewed commit {{context.reviewed_sha}} needs no full review:
+      {{stdout}}
+      `kind: fixes` — its FIXES list was answered by a record (a check done, a CHANGELOG or doc line); `kind: rebase` — MERGE was
+      given and the land's rebase conflicted. Either way this is not a review visit: it does not count against `review`.
+      SendMessage `{{context.reviewer_agent}}` (gone → `blocked`: the parent reads the diff): "Verify-only round for
+      {{context.task}}. kind fixes: the worker amended and no code changed (`git -C {{context.wt}} diff {{context.reviewed_sha}}
+      HEAD` lists only the files above); check that the amendment answers YOUR FIXES list, no more. kind rebase: master moved,
+      the rebase conflicted and the worker resolved it; check ONLY the resolution with the range-diff named above (both sides
+      kept, nothing of your reviewed change lost). Run every command in the foreground. Last line MERGE or FIXES: and a
+      numbered list." Then context_set `reviewed_sha` = HEAD of {{context.wt}}, `review_text` = its final message verbatim, and
+      `filed` (as `review` does).
+    transitions:
+      filed: review_filed
+      blocked: blocked
 
   project_gate_rebased:
     type: exec
