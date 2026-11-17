@@ -173,20 +173,22 @@ export function drivenByRootAgent(
  * The abort call a note offers for `s`: it names its parent as the caller, so the abort guard
  * passes even when `s` has active descendants (the one reading the note is the parent's agent).
  */
-function abortHint(s: SessionState, parent: SessionState | undefined): string {
-  return `abort({ session_id: '${s.session_id}', caller_session_id: '${parent?.session_id ?? s.parent_session_id}' })`;
+function abortHint(s: SessionState, parent: SessionState): string {
+  return `abort({ session_id: '${s.session_id}', caller_session_id: '${parent.session_id}' })`;
 }
 
 /**
  * The agent of `s` was linked at an earlier visit of the state its parent stands at now (a fix
- * round re-entered it): the note that says so, else undefined. Such an agent is not this visit's.
+ * round re-entered it): the note that says so, else undefined (also when the parent's state is
+ * not at hand: the note compares against it and names it as the abort's caller). Such an agent is not this visit's.
  */
 export function earlierVisitNote(
   s: SessionState,
   parent: SessionState | undefined,
   isRoute: IsRoute = () => false,
 ): string | undefined {
-  const now = parent && parent.stack.length > 0 ? currentStep(parent) : undefined;
+  if (!parent || parent.stack.length === 0) return undefined;
+  const now = currentStep(parent);
   const standing = now && listedStanding(s, now, parent, isRoute);
   if (!now || !s.agent_id || !s.agent_step) return undefined;
   if (!standing) {
