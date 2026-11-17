@@ -149,3 +149,40 @@ describe("docs:build compiles the landing with the replay", () => {
     ).toBe(true);
   }, 120_000);
 });
+
+describe("the site's preview and the file map", () => {
+  it("docs:preview rebuilds before it serves the git-ignored, long-lived dist", () => {
+    const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
+    const script = pkg.scripts["docs:preview"] ?? "";
+    // a preview of docs/.vitepress/dist alone shows the build of an older source
+    expect(script).toMatch(/^vitepress build docs && vitepress preview docs$/);
+    expect(read(".gitignore")).toContain("docs/.vitepress/dist/");
+    expect(read("docs/development.md")).toContain("`npm run docs:preview`");
+  });
+
+  it("CLAUDE.md maps src/replay.ts, scripts/export-replay.mjs and dashboard/scene-dom.js", () => {
+    const rows = read("CLAUDE.md").split("\n");
+    for (const file of ["replay.ts", "scripts/export-replay.mjs", "dashboard/scene-dom.js"]) {
+      expect(rows.some(r => r.startsWith(`| \`${file}\` |`))).toBe(true);
+    }
+  });
+});
+
+describe("the recorder's ?record hook on the production site", () => {
+  it("is one assignment, only on a `?record` URL, handing over nothing but seek and the duration", () => {
+    const assigns = SCENE.match(/\.__replay = /g) ?? [];
+    expect(assigns).toHaveLength(1);
+    expect(SCENE).toContain('if (location.search.includes("record")) {');
+    expect(SCENE).toContain("__replay = { seek, durationMs: shared.duration };");
+    // the claim in the changelog and beside the hook: it is left in on purpose, not gated by a build flag
+    expect(SCENE).toContain("left in the production");
+    expect(read("CHANGELOG.md")).toContain("stays in the production build on purpose");
+  });
+});
+
+describe("the plan pane's Landed day row", () => {
+  it("says `landed` beside its count when its sum includes failed or closed lines that are not rows", () => {
+    const pane = read("hooks/pane-view.ts");
+    expect(pane).toContain("spend.failed + spend.closed > 0 ? ' landed' : ''");
+  });
+});

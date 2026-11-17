@@ -62,7 +62,7 @@ npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.y
 
 ## The site
 
-The documentation is the site **https://axgord.github.io/claude-workflow/** (sources in `docs/`, built with VitePress: `npm run docs:dev`, `npm run docs:build`).
+The documentation is the site **https://axgord.github.io/claude-workflow/** (sources in `docs/`, built with VitePress: `npm run docs:dev`, `npm run docs:build`, `npm run docs:preview`). `docs:preview` serves `docs/.vitepress/dist`, which is git-ignored and survives between runs, so it builds first: a preview always shows the current sources.
 
 ### The replay
 

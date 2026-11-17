@@ -30,7 +30,7 @@
     "check": "node node_modules/typescript7/bin/tsc --noEmit && npm run format:check && npm run lint && npm run scan && vitest run && npm run test:pane && npm run check:ci",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs",
+    "docs:preview": "vitepress build docs && vitepress preview docs",
     "docs:replay": "node scripts/export-replay.mjs",
     "docs:workflows": "node scripts/export-workflows.mjs",
     "docs:record": "node scripts/record-scene.mjs",

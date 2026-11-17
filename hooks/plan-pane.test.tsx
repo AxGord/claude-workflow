@@ -769,7 +769,7 @@ test('a day header sums its landed lines and the failed and closed lines that en
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 200 }, surface: 'terminal' })
   // 1.5 + 2.25 landed, 3 + 7.5 failed, 0.5 closed; L-THREE has no spend: 5 of 6 lines measured
-  expect((await ui.find({ type: 'Text', text: /▦ 07\.11/ }))?.text).toBe('  ▾ ▦ 07.11 (3) $14.75 incl. 2 failed, 1 closed')
+  expect((await ui.find({ type: 'Text', text: /▦ 07\.11/ }))?.text).toBe('  ▾ ▦ 07.11 (3 landed) $14.75 incl. 2 failed, 1 closed')
   // each landed row its own line cost; the unmeasured one `—`
   expect(await ui.find({ type: 'Text', text: /\$1\.50 \d\d:\d\d-13:49 aaa111 L-ONE|\$1\.50 \?    -13:49 aaa111 L-ONE/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: / {4}— .*ccc333 L-THREE/ })).toBeDefined()

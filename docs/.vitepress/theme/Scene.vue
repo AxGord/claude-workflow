@@ -24,7 +24,11 @@ let resize: ResizeObserver | null = null;
 let seen: IntersectionObserver | null = null;
 let started = false;
 
-/** The recorder's hook (`?record`): jump to a position and draw it before the promise settles. */
+/**
+ * The recorder's hook (`?record`): jump to a position and draw it before the promise settles. It is left in the production
+ * build on purpose: it exists only in a tab whose own URL says `?record`, hands over nothing but the position of a static,
+ * public recording (`seek`, `durationMs`), and reaches no server and no other visitor.
+ */
 async function seek(ms: number): Promise<void> {
   pause();
   seekTo(ms);

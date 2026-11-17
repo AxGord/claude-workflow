@@ -499,7 +499,7 @@ export function paneTree(input: PaneInput): PaneNode {
             const spend = s.days[day]
             const key = 'lands-' + day
             return [
-              button('fold-' + key, { kind: 'landDay', key, today }, [text({ dimColor: true }, fitCells(`  ${isOpen(key) ? '▾' : '▸'} ▦ ${day} (${mine.length})${spend ? ' ' + dayText(spend) : ''}`, columns))]),
+              button('fold-' + key, { kind: 'landDay', key, today }, [text({ dimColor: true }, fitCells(`  ${isOpen(key) ? '▾' : '▸'} ▦ ${day} (${mine.length}${spend && spend.failed + spend.closed > 0 ? ' landed' : ''})${spend ? ' ' + dayText(spend) : ''}`, columns))]),
               ...(isOpen(key)
                 ? mine.map(l =>
                     landTwo
