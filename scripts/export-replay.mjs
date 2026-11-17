@@ -19,7 +19,7 @@
 // The machine's thread pool over the same window comes from the pool's log (<pool dir>/pool.log.1 and pool.log): a
 // lease or waiter keeps its label only when it names a session or slice of the replay (an ALLOWLIST: the pool is
 // shared by every project on the machine), every other one is a thread count in a row of leases the log does not name (this
-// project's or another's: a sample lists no holders, only an overrun or backfill line names one). Before anything is written
+// project's or another's: a sample lists no holders, only an overrun, underuse or backfill line names one). Before anything is written
 // `assertReplayClean` checks the result (every label on the allowlist, no absolute path, no pid) and a violation
 // refuses the write. Only a window the pool log covers is chosen.
 //

@@ -53,6 +53,8 @@ describe("buildPool cuts the machine's pool log down to what the replay may name
     `${iso(50)} overrun: pid 4242 holds 3 threads, runs ~7 — slice-gate SLICE-A infra4`,
     `${iso(51)} overrun: pid 4243 holds 2 threads, runs ~5 — slice-gate ELSEWHERE-TASK unit`,
     `${iso(52)} starved: pid 4244 queued 15m for 2-3 threads (starve_after 15m): held 14/14 — slice-gate SLICE-A suite,corpus`,
+    `${iso(54)} underuse: pid 4246 holds 4 threads, runs ~0 — slice-gate SLICE-A unit`,
+    `${iso(55)} underuse: pid 4247 holds 4 threads, runs ~1 — slice-gate ELSEWHERE-TASK unit`,
     `${iso(53)} backfill: pid 4245 takes 1 threads ahead of 99-aa (est 14s) — cd /Users/someone/dev/elsewhere && make SLICE-A`,
     sample(90, 14, 4, ["6", "+3"], 5),
     sample(1000, 2, 1, []),
@@ -76,6 +78,7 @@ describe("buildPool cuts the machine's pool log down to what the replay may name
     expect(seen).toEqual([
       ["overrun", 3, "slice-gate SLICE-A infra4", 7],
       ["starved", 2, "slice-gate SLICE-A suite,corpus", 0],
+      ["underuse", 4, "slice-gate SLICE-A unit", 0],
     ]);
     const all = JSON.stringify(pool);
     for (const gone of ["ELSEWHERE", "someone", "4242", "pid", "/Users"])
@@ -140,11 +143,12 @@ describe("poolStateAt: the Pool tab's read at a moment of the replay", () => {
     frame(
       60_000,
       14,
-      3,
+      4,
       ["4-8 + lock anyparse-land", "2", "+2"],
       [
         ["overrun", 3, "slice-gate SLICE-A infra4", 7],
         ["backfill", 1, "slice-gate aaaa1111 lint", 0],
+        ["underuse", 4, "slice-gate SLICE-A unit", 0],
         ["starved", 2, "slice-gate SLICE-A suite", 0],
       ],
       4,
@@ -158,12 +162,13 @@ describe("poolStateAt: the Pool tab's read at a moment of the replay", () => {
   });
 
   it("the leases the log named, with their session, and one row for the rest of the threads", () => {
-    expect(at?.leases.map(l => [l.request, l.label, l.session, l.overrun])).toEqual([
-      ["3 threads", "slice-gate SLICE-A infra4", "aaaa1111", 7],
-      ["1 threads", "slice-gate aaaa1111 lint", "aaaa1111", null],
-      ["10 threads", `${POOL_UNNAMED}: 1`, "", null],
+    expect(at?.leases.map(l => [l.request, l.label, l.session, l.overrun, l.underuse])).toEqual([
+      ["3 threads", "slice-gate SLICE-A infra4", "aaaa1111", 7, null],
+      ["1 threads", "slice-gate aaaa1111 lint", "aaaa1111", null, null],
+      ["4 threads", "slice-gate SLICE-A unit", "aaaa1111", null, 0],
+      ["6 threads", `${POOL_UNNAMED}: 1`, "", null, null],
     ]);
-    expect(at?.leases[2]).toMatchObject({ project: "", session: "", step: "" });
+    expect(at?.leases[3]).toMatchObject({ project: "", session: "", step: "" });
   });
 
   it("the waiters in the log's order with their asks, the unlisted ones as one row that counts them, the land lock", () => {
@@ -202,6 +207,7 @@ describe("poolStateAt: the Pool tab's read at a moment of the replay", () => {
     expect(lines.some(l => /Pool 14\/14/.test(l))).toBe(true);
     expect(lines).toContain("  1. 4-8 threads + lock anyparse-land");
     expect(lines.some(l => /OVERRUN ~7/.test(l))).toBe(true);
+    expect(lines.some(l => /UNDERUSE ~0/.test(l))).toBe(true);
     expect(lines.some(l => /prio|·\s*\d+s/.test(l) && /threads/.test(l))).toBe(false);
     expect(lines.some(l => l.includes("STARVED: slice-gate SLICE-A suite"))).toBe(true);
   });

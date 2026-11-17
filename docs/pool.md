@@ -15,7 +15,7 @@ Below is the pool of a real window of hours, recorded by the pool's own log whil
 
 <PoolDemo />
 
-The log samples a pool once a minute while it has a lease or a waiter, and not at all while it is empty, so a flat stretch with nothing in it is an idle pool. A sample lists no holders: the log names a lease only on an `overrun:` or `backfill:` line, and a name appears on the sample after that line, only when it is a slice or session of the replayed project. Every other lease is one row, "leases the log does not name (this project or another)", because a sample cannot say whose threads they are. The log keeps no priority and no age for a lease, so the rows here show none; the live tab shows both.
+The log samples a pool once a minute while it has a lease or a waiter, and not at all while it is empty, so a flat stretch with nothing in it is an idle pool. A sample lists no holders: the log names a lease only on an `overrun:`, `underuse:` or `backfill:` line, and a name appears on the sample after that line, only when it is a slice or session of the replayed project. Every other lease is one row, "leases the log does not name (this project or another)", because a sample cannot say whose threads they are. The log keeps no priority and no age for a lease, so the rows here show none; the live tab shows both.
 
 ## How it works
 

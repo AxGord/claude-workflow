@@ -89,10 +89,10 @@ export interface ReplayQueue {
   readonly lines: readonly ReplayQueueLine[];
 }
 
-/** What a pool-log line names: a lease that was backfilled ahead of the head, one that over-runs its threads, a waiter that starved. */
-export type PoolMarkKind = "backfill" | "overrun" | "starved";
+/** What a pool-log line names: a lease that was backfilled ahead of the head, one that over-runs its threads, one that runs far below them (underuse), a waiter that starved. */
+export type PoolMarkKind = "backfill" | "overrun" | "underuse" | "starved";
 
-/** A lease or waiter the log named by its label (kept only when the label names a session or slice of the replay): kind, threads, label, and the busy cpus an over-running lease's tree ran (0 otherwise). */
+/** A lease or waiter the log named by its label (kept only when the label names a session or slice of the replay): kind, threads, label, and the busy cpus an over-running or under-using lease's tree ran (0 otherwise). */
 export type PoolMark = readonly [kind: PoolMarkKind, threads: number, label: string, runs: number];
 
 /**
@@ -1039,7 +1039,7 @@ export const POOL_SAMPLE_MS = 60_000;
 const POOL_IDLE_AFTER_MS = 2.5 * POOL_SAMPLE_MS;
 /**
  * What the leases the log does not name are called: one row, no label, no project. A sample lists no holders; the
- * log names a lease only on an `overrun:` or `backfill:` line, so the rest may be this project's or another's.
+ * log names a lease only on an `overrun:`, `underuse:` or `backfill:` line, so the rest may be this project's or another's.
  */
 export const POOL_UNNAMED = "leases the log does not name (this project or another)";
 
@@ -1049,6 +1049,7 @@ const SAMPLE_LINE =
 const BACKFILL_LINE =
   /^backfill: pid \d+ takes (\d+) threads ahead of \S+(?: \(est [^)]*\))? — (.*)$/;
 const OVERRUN_LINE = /^overrun: pid \d+ holds (\d+) threads, runs ~(\d+) — (.*)$/;
+const UNDERUSE_LINE = /^underuse: pid \d+ holds (\d+) threads, runs ~(\d+) — (.*)$/;
 const STARVED_LINE = /^starved: pid \d+ queued \S+ for (\d+)(?:-\d+)? threads.* — (.*)$/;
 /** A word of a label the replay may carry: letters, digits and a few separators, no path, no shell. */
 const SAFE_WORD = /^[A-Za-z0-9][A-Za-z0-9_.,=-]*$/;
@@ -1165,15 +1166,18 @@ export function buildPool(
     }
     const back = BACKFILL_LINE.exec(text);
     const over = OVERRUN_LINE.exec(text);
+    const under = UNDERUSE_LINE.exec(text);
     const starved = STARVED_LINE.exec(text);
     const mark: PoolMark | undefined =
       back !== null
         ? ["backfill", Number(back[1]), back[2], 0]
         : over !== null
           ? ["overrun", Number(over[1]), over[3], Number(over[2])]
-          : starved !== null
-            ? ["starved", Number(starved[1]), starved[2], 0]
-            : undefined;
+          : under !== null
+            ? ["underuse", Number(under[1]), under[3], Number(under[2])]
+            : starved !== null
+              ? ["starved", Number(starved[1]), starved[2], 0]
+              : undefined;
     if (mark !== undefined && poolLabelAllowed(mark[2], names)) marks.push({ ts, mark });
   }
   samples.sort((a, b) => a.ts - b.ts);
@@ -1340,7 +1344,7 @@ const askRequest = (ask: string): string =>
 
 /**
  * The Pool tab's read at `at` ms, as the mod's tab reads `/api/pool`: the latest sample's budget, threads held and
- * load, the leases the log named (a backfilled or over-running one) and one row for the rest, the waiters' asks in
+ * load, the leases the log named (a backfilled, over-running or under-using one) and one row for the rest, the waiters' asks in
  * admission order, the project's land lock when a waiter wants it. The log carries no priority or age, so a row has
  * none. A moment the pool was empty reads as such.
  */
@@ -1379,6 +1383,7 @@ export function poolStateAt(file: ReplayFile, at: number): PoolState {
       file.project,
     ),
     overrun: m[0] === "overrun" ? m[3] : null,
+    underuse: m[0] === "underuse" ? m[3] : null,
   }));
   const rest = leaseCount - named.length;
   if (rest > 0)
