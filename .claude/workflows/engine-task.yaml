@@ -176,12 +176,14 @@ states:
   work_check:
     station: false
     type: exec
-    # A round's tree before the gate leases threads: one commit over master, nothing uncommitted.
+    # A round's tree before the gate leases threads: one commit over master, nothing uncommitted. The CHANGELOG entry is looked
+    # for against the branch's own base (merge-base with master), never the moving master: a CHANGELOG change another line landed is not this branch's entry.
     cwd: "{{context.wt}}"
     command: |-
       n=$(git rev-list --count master..HEAD) || exit 2
       dirty=$(git status --porcelain)
-      if git diff --name-only master..HEAD | grep -qx CHANGELOG.md; then nolog=; else nolog=1; fi
+      base=$(git merge-base master HEAD) || exit 2
+      if git diff --name-only "$base" HEAD | grep -qx CHANGELOG.md; then nolog=; else nolog=1; fi
       [ "$n" = 1 ] && [ -z "$dirty" ] && [ -z "$nolog" ] && { git log --oneline -1; exit 0; }
       [ "$n" = 1 ] || echo "not ready: $n commit(s) over master, expected one"
       [ -z "$nolog" ] || echo "not ready: no CHANGELOG.md entry for this change (add one under ## Unreleased)"
