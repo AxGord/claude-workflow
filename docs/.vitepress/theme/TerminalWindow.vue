@@ -190,29 +190,3 @@ function act(a: PaneAction): void {
   overflow: hidden;
 }
 </style>
-
-<style>
-/* the window follows the site's theme: dark glass by default, a white terminal under `html:not(.dark)`; the pane and
-   the conversation lines inside it read the same switch (PaneView.vue's `--tc-*`). The glass is see-through in the dark
-   theme and nearly opaque in the light one, where a translucent window over the map would turn grey. */
-.cc-window {
-  --cc-bg: rgba(13, 17, 23, 0.72);
-  --cc-text: #d6dde6;
-  --cc-muted: #9aa4ae;
-  --cc-dim: #7d8590;
-  --cc-border: rgba(255, 255, 255, 0.14);
-  --cc-rule: rgba(255, 255, 255, 0.1);
-  --cc-input: rgba(255, 255, 255, 0.18);
-  --cc-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-}
-html:not(.dark) .cc-window {
-  --cc-bg: rgba(255, 255, 255, 0.94);
-  --cc-text: #1f2328;
-  --cc-muted: #57606a;
-  --cc-dim: #6e7781;
-  --cc-border: rgba(31, 35, 40, 0.18);
-  --cc-rule: rgba(31, 35, 40, 0.12);
-  --cc-input: rgba(31, 35, 40, 0.22);
-  --cc-shadow: 0 24px 60px rgba(31, 35, 40, 0.22);
-}
-</style>

@@ -29,6 +29,10 @@ const PANE_VIEW = read("hooks/pane-view.ts");
 const PLAN_PANE = read("hooks/plan-pane.tsx");
 const PANE_VUE = read("docs/.vitepress/theme/PaneView.vue");
 const WINDOW_VUE = read("docs/.vitepress/theme/TerminalWindow.vue");
+const PALETTE = read("docs/.vitepress/theme/terminal-palette.css");
+const STATUS_VUE = read("docs/.vitepress/theme/StatusLine.vue");
+const DEMO_VUE = read("docs/.vitepress/theme/PoolDemo.vue");
+const STRIP_VUE = read("docs/.vitepress/theme/PoolStrip.vue");
 const KEYS = [...new Set(Object.values(TONE))];
 
 /** The custom properties a rule's body declares, by name. */
@@ -148,24 +152,56 @@ describe("the site's terminal has a dark and a light palette with every name the
     }
   });
 
-  it("TerminalWindow follows html.dark: dark chrome by default, white under html:not(.dark), the same variables in both", () => {
-    expect(WINDOW_VUE).toContain('<section class="cc-window term-follows-site"');
-    const global = WINDOW_VUE.slice(WINDOW_VUE.indexOf("<style>\n"));
-    const dark = declared(global, ".cc-window", "cc-").sort();
-    const light = declared(global, "html:not(.dark) .cc-window", "cc-").sort();
-    expect(dark.length).toBeGreaterThanOrEqual(8);
+  it("the chrome palette is one file: the window, the status line and the Pool demo read the same --cc-* sets", () => {
+    expect(read("docs/.vitepress/theme/index.ts")).toContain('import "./terminal-palette.css"');
+    const dark = declared(PALETTE, ".cc-window,\n.term-surface", "cc-").sort();
+    const light = declared(
+      PALETTE,
+      "html:not(.dark) .cc-window,\nhtml:not(.dark) .term-surface",
+      "cc-",
+    ).sort();
+    expect(dark.length).toBeGreaterThanOrEqual(9);
+    expect(dark).toContain("--cc-panel");
     expect(light).toEqual(dark);
-    // the scoped rules read the variables; the only literals left are the three traffic-light dots
-    const scoped = WINDOW_VUE.slice(
-      WINDOW_VUE.indexOf("<style scoped>"),
-      WINDOW_VUE.indexOf("<style>\n"),
-    );
+    // no third copy: no component redefines the set
+    for (const src of [WINDOW_VUE, STATUS_VUE, DEMO_VUE, STRIP_VUE])
+      expect(src).not.toMatch(/--cc-[\w-]+\s*:/);
+  });
+
+  it("TerminalWindow follows html.dark through the palette: its scoped rules draw only with --cc-* (bar the three dots)", () => {
+    expect(WINDOW_VUE).toContain('<section class="cc-window term-follows-site"');
+    const scoped = WINDOW_VUE.slice(WINDOW_VUE.indexOf("<style scoped>"));
     expect(scoped.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g)).toEqual(["#ff5f56", "#ffbd2e", "#27c93f"]);
     expect(scoped.match(/var\(--cc-/g)?.length).toBeGreaterThanOrEqual(8);
   });
 
-  it("only the landing's window follows the site: the status line and the Pool page keep their dark panel", () => {
-    expect(read("docs/.vitepress/theme/StatusLine.vue")).not.toContain("term-follows-site");
-    expect(read("docs/.vitepress/theme/PoolDemo.vue")).not.toContain("term-follows-site");
+  it("the status line and the Pool demo are terminal surfaces that follow the site, with no colour literal of their own", () => {
+    for (const src of [STATUS_VUE, DEMO_VUE]) {
+      expect(src).toContain("term-surface term-follows-site");
+      const scoped = src.slice(src.indexOf("<style scoped>"));
+      expect(scoped.match(/#[0-9a-fA-F]{3,8}\b|rgba?\(/g)).toBeNull();
+      expect(scoped.match(/var\(--cc-/g)?.length).toBeGreaterThanOrEqual(4);
+    }
+    // the demo's two boxes (the live one and the status one) are both surfaces
+    expect(DEMO_VUE.match(/class="pd-box[^"]*term-surface term-follows-site"/g)).toHaveLength(2);
+  });
+
+  it("PoolStrip keeps its dark defaults and the dashboard's tokens, and a light set under the following terminal, in the same variables", () => {
+    const dark = declared(STRIP_VUE, ".pool-strip", "ps-").sort();
+    const light = declared(
+      STRIP_VUE,
+      "html:not(.dark) .term-follows-site .pool-strip",
+      "ps-",
+    ).sort();
+    expect(dark.length).toBeGreaterThanOrEqual(9);
+    expect(light).toEqual(dark);
+    expect(declared(STRIP_VUE, ".dash .pool-strip", "ps-").sort()).toEqual(dark);
+    // the light set draws the title, the reading and the legend from the shared chrome palette
+    const at = STRIP_VUE.indexOf("html:not(.dark) .term-follows-site .pool-strip {");
+    const body = STRIP_VUE.slice(at, STRIP_VUE.indexOf("}", at));
+    for (const v of ["--cc-panel", "--cc-text", "--cc-muted", "--cc-dim"])
+      expect(body).toContain(`var(${v})`);
+    // monospace strip font stays
+    expect(STRIP_VUE).toContain("font-family: ui-monospace");
   });
 });

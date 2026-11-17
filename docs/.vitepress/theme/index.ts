@@ -1,5 +1,6 @@
 import DefaultTheme from "vitepress/theme";
 import { h } from "vue";
+import "./terminal-palette.css";
 import Hero from "./Hero.vue";
 import Install from "./Install.vue";
 import PoolDemo from "./PoolDemo.vue";

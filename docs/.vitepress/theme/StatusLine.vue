@@ -46,7 +46,7 @@ onMounted(async () => {
 
 <template>
   <section class="sl" aria-label="The status line, drawn by the Claude Code mod's own code">
-    <div class="sl-term">
+    <div class="sl-term term-surface term-follows-site">
       <PaneView v-if="band" class="sl-band" :node="band" />
       <div v-else class="sl-status">{{ failed ? "The replay could not be loaded." : "Loading the replay…" }}</div>
       <div class="sl-prompt"><span class="sl-caret">&gt;</span></div>
@@ -72,10 +72,10 @@ onMounted(async () => {
 }
 .sl-term {
   padding: 12px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--cc-border);
   border-radius: 12px;
-  background: #0d1117;
-  color: #d6dde6;
+  background: var(--cc-panel);
+  color: var(--cc-text);
   font: 15px/22px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow-x: auto;
 }
@@ -85,14 +85,14 @@ onMounted(async () => {
 }
 .sl-prompt {
   padding: 6px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--cc-input);
   border-radius: 8px;
 }
 .sl-caret {
-  color: #9aa4ae;
+  color: var(--cc-muted);
 }
 .sl-status {
-  color: #7d8590;
+  color: var(--cc-dim);
 }
 .sl-scrub {
   display: flex;

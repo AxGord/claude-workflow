@@ -95,11 +95,11 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
 
 <template>
   <section class="pd" aria-label="The thread pool of a recorded window, live">
-    <div v-if="file && file.pool" class="pd-box">
+    <div v-if="file && file.pool" class="pd-box term-surface term-follows-site">
       <div class="pd-strip"><PoolStrip :file="file" :at="at" narrow /></div>
       <PaneView class="pd-pane" :node="pane" @act="act" />
     </div>
-    <div v-else class="pd-box pd-status">{{ failed ? "The replay could not be loaded." : file ? "This replay carries no pool." : "Loading the replay…" }}</div>
+    <div v-else class="pd-box pd-status term-surface term-follows-site">{{ failed ? "The replay could not be loaded." : file ? "This replay carries no pool." : "Loading the replay…" }}</div>
     <div v-if="file && file.pool" class="pd-controls">
       <button type="button" class="pd-play" :aria-label="playing ? 'Pause' : 'Play'" @click="toggle">{{ playing ? "❚❚" : "▶" }}</button>
       <input
@@ -121,16 +121,16 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
   margin: 24px 0;
 }
 .pd-box {
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--cc-border);
   border-radius: 12px;
-  background: #0d1117;
-  color: #d6dde6;
+  background: var(--cc-panel);
+  color: var(--cc-text);
   font: 15px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow: hidden;
 }
 .pd-strip {
   aspect-ratio: 960 / 150;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid var(--cc-rule);
 }
 .pd-pane {
   padding: 12px 16px;
@@ -138,7 +138,7 @@ onBeforeUnmount(() => cancelAnimationFrame(raf));
 }
 .pd-status {
   padding: 16px;
-  color: #7d8590;
+  color: var(--cc-dim);
 }
 .pd-controls {
   display: flex;

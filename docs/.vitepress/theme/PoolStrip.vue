@@ -43,7 +43,7 @@ const reading = computed(() => {
 
 <style scoped>
 /* The strip is drawn from --ps-* colours. By default they are the dark ones of a terminal panel (the Pool page puts
-   it in one, dark in both site themes); inside `.dash` (the landing's stage) they are the dashboard's tokens, so the
+   it in one) and, inside a `.term-follows-site` terminal, the light ones from terminal-palette.css under the light site theme; inside `.dash` (the landing's stage) they are the dashboard's tokens, so the
    strip follows the site's theme with the map above it. */
 .pool-strip {
   --ps-bg: #0f1117;
@@ -65,6 +65,18 @@ const reading = computed(() => {
 /* the dashboard's `svg text` rule sets its own font under .dash; the strip's labels keep the monospace face */
 .pool-strip text {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+html:not(.dark) .term-follows-site .pool-strip {
+  --ps-bg: var(--cc-panel);
+  --ps-title: var(--cc-text);
+  --ps-read: var(--cc-muted);
+  --ps-legend: var(--cc-dim);
+  --ps-other: #8c959f;
+  --ps-named: #0a7ea4;
+  --ps-wait: #966c1e;
+  --ps-bed: rgba(31, 35, 40, 0.06);
+  --ps-budget: var(--cc-dim);
+  --ps-cursor: var(--cc-text);
 }
 .dash .pool-strip {
   --ps-bg: var(--panel);

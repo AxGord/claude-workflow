@@ -64,8 +64,8 @@ describe("the landing's replay runs the dashboard map's own code", () => {
     const terminal = read("docs/.vitepress/theme/TerminalWindow.vue");
     expect(terminal).not.toContain("DASH");
     // the window itself follows the site's theme (src/site-terminal-light.test.ts pins its palettes)
-    expect(terminal).toContain(
-      "html:not(.dark) .cc-window {\n  --cc-bg: rgba(255, 255, 255, 0.94);",
+    expect(read("docs/.vitepress/theme/terminal-palette.css")).toContain(
+      "html:not(.dark) .term-surface {\n  --cc-bg: rgba(255, 255, 255, 0.94);",
     );
     // the strip: every colour it draws is a --ps-* variable; dark by default, the dashboard's tokens under `.dash`
     const body = (sel: string): string =>
@@ -87,9 +87,9 @@ describe("the landing's replay runs the dashboard map's own code", () => {
     expect(POOL_STRIP).toContain(
       ".pool-strip text {\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n}",
     );
-    // the Pool page keeps the strip in its own terminal panel, dark in both themes: no `.dash` there
+    // the Pool page keeps the strip in its own terminal panel (src/site-terminal-light.test.ts pins its themes): no `.dash` there
     expect(POOL_DEMO).not.toContain("DASH");
-    expect(POOL_DEMO).toContain("background: #0d1117;");
+    expect(POOL_DEMO).toContain("background: var(--cc-panel);");
   });
 
   it("opens a folded group on a click, as /map does, and shows a tooltip on hover (a <title>)", () => {
