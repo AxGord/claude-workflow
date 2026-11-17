@@ -1108,7 +1108,8 @@ function columnNeeds(
   clock: (ms: number) => string,
 ): number[] {
   const names = stations.map(st => textWidth(st.name, G.charW) + 8);
-  const need = [...names];
+  // a station label is centred on its station, so the gap to the next station also holds half of the next label
+  const need = names.map((w, i) => Math.max(w, names[i + 1] ?? 0));
   const index = new Map(stations.map((st, i) => [st.name, i]));
   for (const { s, children } of lanes) {
     const { visits } = walk(s, index);
@@ -1514,7 +1515,9 @@ export function layout(
       height,
       width: bandWidth,
       stations: stations.map((st, i) => {
-        const cut = fitText(st.name, widths[i] - 8, G.charW);
+        // centred on the station: its half reaches no further than half of each gap beside it, so neighbours never touch
+        const room = Math.min(widths[i], widths[Math.max(0, i - 1)]);
+        const cut = fitText(st.name, room - 8, G.charW);
         return {
           ...st,
           x: xs[i],
