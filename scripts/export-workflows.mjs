@@ -1,16 +1,17 @@
 #!/usr/bin/env node
-// Exports the workflow definitions the documentation site's landing page draws: every bundled template
+// Writes the workflow definitions the documentation site's landing page draws: every bundled template
 // (templates/*.yaml, through the engine's own Loader) as `/api/workflows` describes it, into
 // docs/public/workflows.json. The page lays them out with dashboard/graph.js, the code the dashboard draws with,
-// so a click on a state shows what the dashboard shows. Run it after a template changes:
+// so a click on a state shows what the dashboard shows. The file is a build product: git-ignored, written by
+// `npm run docs:build` / `docs:dev` / `docs:preview` (through `docs:prepare`) and by every test run
+// (src/site-workflows-setup.ts), so it never goes stale. By hand:
 //
 //   npm run build && npm run docs:workflows
 //
-// src/site-live-graphs.test.ts fails while the file is not what this script writes.
-import fs from "node:fs";
-import os from "node:os";
+// The writer is `writeSiteWorkflows` (src/site-workflows.ts), the one the test run uses too.
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import fs from "node:fs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -21,19 +22,9 @@ async function load(name) {
 }
 
 async function main() {
-  const { describeWorkflows, renderWorkflows } = await load("workflow-describe.js");
-  const { Loader } = await load("loader.js");
-  // only the bundled tier: an empty global directory stands in for the machine's own
-  const empty = fs.mkdtempSync(path.join(os.tmpdir(), "wf-site-workflows-"));
-  const out = path.join(root, "docs", "public", "workflows.json");
-  try {
-    const loader = new Loader(path.join(root, "templates"), empty, null);
-    const text = renderWorkflows(describeWorkflows(loader.getAll()));
-    fs.writeFileSync(out, text);
-    console.log(`${path.relative(process.cwd(), out)}: ${(Buffer.byteLength(text) / 1000).toFixed(1)} KB, ${loader.getAll().size} workflows`);
-  } finally {
-    fs.rmSync(empty, { recursive: true, force: true });
-  }
+  const { writeSiteWorkflows } = await load("site-workflows.js");
+  const { file, text, count } = writeSiteWorkflows(root);
+  console.log(`${path.relative(process.cwd(), file)}: ${(Buffer.byteLength(text) / 1000).toFixed(1)} KB, ${count} workflows`);
 }
 
 main().catch(err => {

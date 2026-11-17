@@ -6,8 +6,9 @@
 
 const ESCAPES = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
 
+// null and undefined print as nothing (what the dashboard's textContent printed), never as "null".
 export function escapeHtml(str) {
-  return String(str).replace(/[&<>"]/g, ch => ESCAPES[ch]);
+  return (str == null ? '' : String(str)).replace(/[&<>"]/g, ch => ESCAPES[ch]);
 }
 
 // The shared components of dashboard/components.css that a graph and its panels are built from.

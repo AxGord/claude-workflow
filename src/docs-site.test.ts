@@ -107,7 +107,7 @@ describe("docs site: the VitePress setup", () => {
       scripts: Record<string, string>;
       devDependencies: Record<string, string>;
     };
-    expect(pkg.scripts["docs:build"]).toBe("vitepress build docs");
+    expect(pkg.scripts["docs:build"]).toBe("npm run docs:prepare && vitepress build docs");
     expect(pkg.devDependencies.vitepress).toBeDefined();
   });
   it("has the landing page and the sidebar names every page", () => {

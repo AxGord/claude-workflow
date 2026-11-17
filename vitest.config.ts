@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
 // The setup file keeps the user's global git config (which signs commits) out of every test.
 export default defineConfig({
   test: {
+    globalSetup: ["src/site-workflows-setup.ts"],
     include: ["src/**/*.test.ts"],
     setupFiles: ["src/test-git-env.ts"],
     testTimeout: 60_000,

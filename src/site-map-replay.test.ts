@@ -155,7 +155,7 @@ describe("the site's preview and the file map", () => {
     const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
     const script = pkg.scripts["docs:preview"] ?? "";
     // a preview of docs/.vitepress/dist alone shows the build of an older source
-    expect(script).toMatch(/^vitepress build docs && vitepress preview docs$/);
+    expect(script).toMatch(/^npm run docs:build && vitepress preview docs$/);
     expect(read(".gitignore")).toContain("docs/.vitepress/dist/");
     expect(read("docs/development.md")).toContain("`npm run docs:preview`");
   });

@@ -156,7 +156,7 @@ describe("the graph markup", () => {
 });
 
 describe("the workflows the site draws (docs/public/workflows.json)", () => {
-  it("is what the engine's loader makes of the bundled templates: the file is current", () => {
+  it("is what the engine's loader makes of the bundled templates: the test run writes it fresh", () => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "wf-site-workflows-"));
     dirs.push(empty);
     const loader = new Loader(path.join(ROOT, "templates"), empty, null);
@@ -179,7 +179,7 @@ describe("the workflows the site draws (docs/public/workflows.json)", () => {
 
   it("the REST endpoint and the export share one description", () => {
     expect(read("src/dashboard.ts")).toContain("res.json(describeWorkflows(loader.getAll()))");
-    expect(read("scripts/export-workflows.mjs")).toContain("describeWorkflows(loader.getAll())");
+    expect(read("src/site-workflows.ts")).toContain("describeWorkflows(loader.getAll())");
     expect(read("package.json")).toContain('"docs:workflows": "node scripts/export-workflows.mjs"');
   });
 });
