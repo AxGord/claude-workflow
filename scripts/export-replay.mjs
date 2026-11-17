@@ -13,8 +13,8 @@
 // own pick (`planPick`, `describeQueue`, the code `wf-queue` and `queue_next` run) over the file rolled back to the window's
 // start (the lines that ran at or after the window start set back to pending), written as ids, difficulty, priority, kind and one of a fixed
 // set of reasons (after X, overlaps X, parked, parent-run) for the lines of --project and --also only, never a line's text or
-// notes; the replay moves them Waiting -> Next -> Running as the sessions start and end. A line added to the queue after the
-// window cannot be rebuilt (the file's `queue.note` says so). `--queue none` writes no queue section.
+// notes; the replay moves them Waiting -> Next -> Running as the sessions start and end. A line carries the time it was added
+// (its `added:`) and the replay shows it from then on; one with no record shows from the start (the file's `queue.note` says so). `--queue none` writes no queue section.
 //
 // The machine's thread pool over the same window comes from the pool's log (<pool dir>/pool.log.1 and pool.log): a
 // lease or waiter keeps its label only when it names a session or slice of the replay (an ALLOWLIST: the pool is

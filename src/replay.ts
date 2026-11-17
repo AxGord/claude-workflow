@@ -69,6 +69,8 @@ export interface ReplayQueueLine {
   /** `urgent`, `high`, `low`; `""` normal */
   readonly priority: string;
   readonly kind: string;
+  /** ISO time the line was added to the queue (its `added:`): before it the replay shows no such line; absent on a line from before the record */
+  readonly added?: string;
   /** one of `QUEUE_HOLDS`: the pick never admits it, whatever ends */
   readonly hold?: string;
   /** the queue lines whose end (landed) its `after:` waits for */
@@ -825,6 +827,7 @@ function queueAt(file: ReplayFile, lines: readonly Seen[], at: number): PendingV
   let pending = unlisted.length;
   for (const q of file.queue?.lines ?? []) {
     if (started(q.id)) continue;
+    if (q.added !== undefined && Date.parse(q.added) > Date.parse(file.start) + at) continue;
     pending++;
     const row: QueueLine = {
       id: q.id,
@@ -1225,16 +1228,18 @@ const ownLocks = (file: ReplayFile): ReadonlySet<string> =>
 const QUEUE_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
 const QUEUE_FIXED =
   /^(?:manual condition|[A-Za-z0-9][A-Za-z0-9_.-]{0,79} \((?:pending|running|failed|backlog|done)(?:, archived)?\))$/;
+const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/;
 const QUEUE_KINDS: readonly string[] = ["bug", "feature", "research"];
 const QUEUE_PRIORITIES: readonly string[] = ["", "urgent", "high", "low"];
 /** The note a replay's queue carries: what the engine's pick saw cannot be rebuilt for a line added after the window. */
 export const REPLAY_QUEUE_NOTE =
-  "the queue is the one at export, rolled back to the window's start by the lines that ran in it; a line added to it after the window cannot be rebuilt";
+  "the queue is the one at export, rolled back to the window's start by the lines that ran in it; a line is shown from the time it was added, and one with no recorded add time is shown from the start";
 const QUEUE_KEYS: readonly string[] = [
   "id",
   "difficulty",
   "priority",
   "kind",
+  "added",
   "hold",
   "after",
   "fixed",
@@ -1257,6 +1262,8 @@ function queueLeaks(queue: ReplayQueue): string[] {
       bad.push(`a queue line's difficulty is not a number: ${JSON.stringify(l.difficulty)}`);
     if (!QUEUE_PRIORITIES.includes(l.priority))
       bad.push(`a queue line's priority is not one of the pick's: ${JSON.stringify(l.priority)}`);
+    if (l.added !== undefined && !(ISO_TIME.test(l.added) && Number.isFinite(Date.parse(l.added))))
+      bad.push(`a queue line's added is not a time: ${JSON.stringify(l.added)}`);
     if (!QUEUE_KINDS.includes(l.kind))
       bad.push(`a queue line's kind is not one of the pick's: ${JSON.stringify(l.kind)}`);
     if (l.hold !== undefined && !QUEUE_HOLDS.includes(l.hold))

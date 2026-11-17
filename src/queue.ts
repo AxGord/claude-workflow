@@ -3,7 +3,7 @@
 // `archive_after_days: N` (a pick first archives the done / failed lines that ended over N days ago)
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
 // `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
-// breaking, parked, ended, restored, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// breaking, parked, ended, restored, added, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
 //
@@ -74,13 +74,20 @@ export const TASK_KEYS = [
   "parked",
   "ended",
   "restored",
+  "added",
   "base",
   "text_hash",
   "text",
   "notes",
 ] as const;
-/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `base` / `text_hash` by add and edit): never set by a caller. */
-const STATE_KEYS: ReadonlySet<string> = new Set(["ended", "restored", "base", "text_hash"]);
+/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `added` by add, `base` / `text_hash` by add and edit): never set by a caller. */
+const STATE_KEYS: ReadonlySet<string> = new Set([
+  "ended",
+  "restored",
+  "added",
+  "base",
+  "text_hash",
+]);
 /** The keys `queue_edit` sets (status is the mark's, state keys are the engine's, notes are appended, id is fixed). */
 export const EDIT_KEYS: ReadonlySet<string> = new Set(
   TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes" && !STATE_KEYS.has(k)),
@@ -254,6 +261,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "touches",
     "ended",
     "restored",
+    "added",
     "base",
     "text_hash",
   ]) {
@@ -852,6 +860,8 @@ export interface QueueLineView {
   readonly ended?: string;
   /** The day (`YYYY-MM-DD`) `wf-queue --restore` brought the line back from the archive; the auto-archive counts its age from the later of this and `ended`. */
   readonly restored?: string;
+  /** The ISO time `queue_add` / `wf-queue --add` wrote the line; absent on a line from before the record. */
+  readonly added?: string;
   /** HEAD of the line's repo when its text, touches, owner or repo was last written (`queue_add` / `queue_edit`); absent on an older line or outside git. */
   readonly base?: string;
   /** The short hash of that text, touches and owner (`lineTextHash`); absent on an older line. */
@@ -946,6 +956,7 @@ export function describeQueue(queue: Queue): {
       ...lastNoteOf(l),
       ...(l.meta.ended !== undefined ? { ended: l.meta.ended } : {}),
       ...(l.meta.restored !== undefined ? { restored: l.meta.restored } : {}),
+      ...(l.meta.added !== undefined ? { added: l.meta.added } : {}),
       ...(l.meta.base !== undefined ? { base: l.meta.base } : {}),
       ...(l.meta.text_hash !== undefined ? { textHash: l.meta.text_hash } : {}),
       text: l.text,
@@ -1811,7 +1822,7 @@ export async function addQueueLine(
     throw new QueueError(
       `${id}: restored is written by the archive restore, not set on a new line`,
     );
-  for (const k of ["base", "text_hash"])
+  for (const k of ["added", "base", "text_hash"])
     if (task[k] !== undefined)
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
   const status = task.status ?? "pending";
@@ -1842,6 +1853,7 @@ export async function addQueueLine(
       }
     }
     if (task.status === undefined) node.items.splice(1, 0, e.doc.createPair("status", status));
+    setOrdered(e, node, "added", new Date().toISOString());
     stampBase(e, node);
     e.tasks.items.splice(at, 0, node);
     return at;
@@ -1912,7 +1924,7 @@ export async function editQueueLine(
     if (k === "ended") throw new QueueError(`${id}: ended is written by queue_mark, not set`);
     else if (k === "restored")
       throw new QueueError(`${id}: restored is written by the archive restore, not set`);
-    else if (k === "base" || k === "text_hash")
+    else if (k === "added" || k === "base" || k === "text_hash")
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
     else if (!EDIT_KEYS.has(k))
       throw new QueueError(`unknown field "${k}" (keys: ${[...EDIT_KEYS].join(", ")})`);

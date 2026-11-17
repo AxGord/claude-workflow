@@ -23,7 +23,7 @@ import { REPLAY_QUEUE_NOTE, type ReplayQueue, type ReplayQueueLine } from "./rep
  * window size lifted (the replay's own pipelines bound what runs at once); a line of a project outside `projects` (the
  * basename of its resolved repo) is left out, and a wait on one is the fixed text "manual condition" or "overlaps a line
  * outside the replay". Only ids, difficulty, priority, kind and one of a fixed set of reasons are written: never a line's
- * text, a note or a path. A line added after the window cannot be rebuilt (`REPLAY_QUEUE_NOTE`).
+ * text, a note or a path. A line carries its `added` time, so the replay hides it before then (`REPLAY_QUEUE_NOTE`).
  */
 export function captureReplayQueue(
   queue: Queue,
@@ -92,6 +92,9 @@ export function captureReplayQueue(
         difficulty,
         priority: v?.priority ?? "",
         kind: v?.kind ?? "feature",
+        ...(v?.added !== undefined && /^\d{4}-\d\d-\d\dT[\d:.]+Z$/.test(v.added)
+          ? { added: v.added }
+          : {}),
         ...(hold !== undefined || outside
           ? { hold: hold ?? "overlaps a line outside the replay" }
           : {}),

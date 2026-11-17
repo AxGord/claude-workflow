@@ -80,7 +80,7 @@ const taskRows = (file: string) =>
   (YAML.parse(fs.readFileSync(file, "utf8")) as { tasks: Record<string, unknown>[] }).tasks.map(
     t => {
       const parts = Object.entries(t)
-        .filter(([k]) => !["id", "status", "ended", "base", "text_hash"].includes(k))
+        .filter(([k]) => !["id", "status", "ended", "added", "base", "text_hash"].includes(k))
         .flatMap(([k, v]) =>
           k === "notes"
             ? (v as { from: string; text: string }[]).map(n => `note(${n.from}): ${n.text}`)
@@ -1280,7 +1280,7 @@ describe("wf-queue CLI", () => {
     vi.spyOn(process, "cwd").mockReturnValue(root);
     expect(
       (await cli("--queue", "wave", "--add", "{id: C, difficulty: 3, touches: [c]}")).out,
-    ).toBe("C: added at line 8\n");
+    ).toBe("C: added at line 9\n");
     vi.spyOn(process, "cwd").mockReturnValue(root);
     expect((await cli("--queue", "wave", "--add", "C | touches: c")).code).toBe(2);
     vi.spyOn(process, "cwd").mockReturnValue(root);
@@ -1350,7 +1350,7 @@ describe("wf-queue CLI", () => {
     expect(
       (await cli(file, "--edit", "B", "--set", "model=sonnet", "--set", "after=")).out,
     ).toMatch(
-      /^id: B\nstatus: pending\ndifficulty: 3\nmodel: sonnet\ntouches: \[ b \]\ntext_hash: [0-9a-f]{12}\ntext: \|-\n {2}x\n$/,
+      /^id: B\nstatus: pending\ndifficulty: 3\nmodel: sonnet\ntouches: \[ b \]\nadded: \S+\ntext_hash: [0-9a-f]{12}\ntext: \|-\n {2}x\n$/,
     );
     expect((await cli(file, "--edit", "B", "--set", "nokey")).code).toBe(2);
     expect((await cli(file, "--batch-size", "0", "--reason", "pause for review")).out).toBe(
