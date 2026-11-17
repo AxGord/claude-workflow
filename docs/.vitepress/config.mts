@@ -9,9 +9,19 @@ const bundledWorkflows = fs
   .filter(f => f.endsWith(".yaml")).length;
 
 // A GitHub project page: https://axgord.github.io/claude-workflow/
+const SITE = "https://axgord.github.io/claude-workflow/";
+const DESCRIPTION = "Workflows for Claude Code agents: states, gates, a machine-wide thread pool, a live map";
+/** The card image: docs/public/og.png, the 1280x640 social preview written by scripts/render-banner.mjs (a link in a post needs an absolute URL). */
+const OG_IMAGE = { url: `${SITE}og.png`, width: "1280", height: "640", alt: `${NAME}: a task's life from the queue to land, over the live map` };
+
+const meta = (key: "property" | "name", name: string, content: string): [string, Record<string, string>] => [
+  "meta",
+  { [key]: name, content },
+];
+
 export default defineConfig({
   title: NAME,
-  description: "Workflows for Claude Code agents: states, gates, a machine-wide thread pool, a live map",
+  description: DESCRIPTION,
   base: "/claude-workflow/",
   cleanUrls: true,
   lastUpdated: false,
@@ -19,7 +29,35 @@ export default defineConfig({
   // not pages, and are written as code, not as links.
   ignoreDeadLinks: false,
   // The brand's logo 2 as the tab icon (docs/public/favicon.svg, written by scripts/render-banner.mjs); `head` hrefs take the base by hand.
-  head: [["link", { rel: "icon", type: "image/svg+xml", href: "/claude-workflow/favicon.svg" }]],
+  head: [
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/claude-workflow/favicon.svg" }],
+    // What a link to the site shows in a post: Open Graph (most networks and messengers) and the Twitter card; each page adds its own title, description and url in transformHead.
+    meta("property", "og:type", "website"),
+    meta("property", "og:site_name", NAME),
+    meta("property", "og:image", OG_IMAGE.url),
+    meta("property", "og:image:width", OG_IMAGE.width),
+    meta("property", "og:image:height", OG_IMAGE.height),
+    meta("property", "og:image:alt", OG_IMAGE.alt),
+    meta("name", "twitter:card", "summary_large_image"),
+    meta("name", "twitter:image", OG_IMAGE.url),
+    meta("name", "twitter:image:alt", OG_IMAGE.alt),
+  ],
+  transformHead({ pageData }) {
+    const fm = pageData.frontmatter as { description?: string; hero?: { text?: string; tagline?: string } };
+    const title = pageData.title === NAME || pageData.title === "" ? NAME : `${pageData.title} | ${NAME}`;
+    // a page's own description; the landing's is its hero; anything else the site's
+    const description =
+      fm.description ?? (fm.hero?.text ? `${fm.hero.text}. ${fm.hero.tagline ?? ""}`.trim() : DESCRIPTION);
+    const route = pageData.relativePath.replace(/\.md$/, "").replace(/(^|\/)index$/, "$1");
+    const url = `${SITE}${route}`;
+    return [
+      meta("property", "og:title", title),
+      meta("property", "og:description", description),
+      meta("property", "og:url", url),
+      meta("name", "twitter:title", title),
+      meta("name", "twitter:description", description),
+    ];
+  },
   srcExclude: ["**/*.test.*"],
   markdown: {
     // The text is full of `{{mustache}}` examples; Vue must not read them as interpolations.

@@ -2,7 +2,8 @@
 // Re-renders what the repository shows about itself, from the site's own data instead of by hand: the brand
 // (logo 2, the live map: a dispatcher fanning out into three lanes) as docs/public/logo.svg, logo-light.svg and
 // favicon.svg, and the two images docs/banner.png (1200x400, the README's width) and docs/social-preview.png
-// (1280x640, the size GitHub asks of a repository's social preview). One command:
+// (1280x640, the size GitHub asks of a repository's social preview; the same bytes are also written to
+// docs/public/og.png, the image the site's Open Graph and Twitter cards name). One command:
 //
 //   npm run docs:banner [-- --at <replay s>]   (default: the first moment with three priced Landed rows)
 //
@@ -76,6 +77,8 @@ export const VARIANTS = [
   },
   {
     file: "docs/social-preview.png",
+    // the same bytes, served by the site as its Open Graph / Twitter card image (docs/.vitepress/config.mts names it)
+    also: ["docs/public/og.png"],
     width: 1280,
     height: 640,
     bg: { left: -40, top: 150, width: 1360, blur: 1.5, opacity: 0.17, fade: "to bottom" },
@@ -289,10 +292,12 @@ async function main() {
       const page = await scene.browser.newPage({ viewport: { width: variant.width, height: variant.height }, colorScheme: "dark" });
       await page.setContent(bannerHtml(spec, variant, sceneUri));
       const png = await page.screenshot({ clip: { x: 0, y: 0, width: variant.width, height: variant.height } });
-      fs.writeFileSync(path.join(ROOT, variant.file), stampPng(png, stampText(spec)));
+      const stamped = stampPng(png, stampText(spec));
+      for (const file of [variant.file, ...(variant.also ?? [])]) {
+        fs.writeFileSync(path.join(ROOT, file), stamped);
+        console.log(`${file} ${variant.width}x${variant.height} ${Math.round(stamped.length / 1024)} KB`);
+      }
       await page.close();
-      const kb = Math.round(fs.statSync(path.join(ROOT, variant.file)).size / 1024);
-      console.log(`${variant.file} ${variant.width}x${variant.height} ${kb} KB`);
     }
   } finally {
     await scene?.close();
