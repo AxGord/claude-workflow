@@ -4,7 +4,7 @@
 // favicon.svg, and the two images docs/banner.png (1200x400, the README's width) and docs/social-preview.png
 // (1280x640, the size GitHub asks of a repository's social preview). One command:
 //
-//   npm run docs:banner [-- --at <replay s>]
+//   npm run docs:banner [-- --at <replay s>]   (default: the first moment with three priced Landed rows)
 //
 // The banner: the logo, the site's name and tagline (docs/index.md's hero) and one line of what the product is made of
 // (the bundled workflows counted from templates/, so the number is never typed) on the left; a schematic of a task's
@@ -21,8 +21,37 @@ import { pathToFileURL } from "node:url";
 import { parse } from "yaml";
 import { ROOT, openScene } from "./scene-capture.mjs";
 
-/** The replay moment (seconds in) the scene is captured at: pool strip busy, the plan pane's lanes running. */
-export const DEFAULT_AT = 5400;
+/** How many Landed rows (each with its spend) the default moment shows: enough to read as a plan pane that has been working. */
+export const DEFAULT_LANDED_ROWS = 3;
+
+/** The replay the site plays, as `npm run docs:replay` exports it. */
+export const REPLAY_FILE = "docs/public/replay/anyparse.json";
+
+/**
+ * The replay moment (seconds in) the scene is captured at: the first second at which the plan pane shows at least
+ * `rows` Landed rows that carry a price (a root session with a task that moved through `land`, ended completed, and
+ * has an entry in the file's `spend`, as `snapshotAt` in src/replay.ts counts them). Read from the replay itself, so a
+ * re-export that moves the lands moves the banner with it; throws when the replay never gets that far.
+ */
+export function defaultAt(file, rows = DEFAULT_LANDED_ROWS) {
+  const ids = new Set(file.sessions);
+  const seen = new Map();
+  const ends = [];
+  for (const [ts, kind, s, data] of file.events) {
+    if (kind === "session_start") {
+      const root = !(typeof data?.parent === "string" && ids.has(data.parent));
+      seen.set(s, { task: root && typeof data?.task === "string" ? data.task : "", landed: false });
+      continue;
+    }
+    const r = seen.get(s);
+    if (r === undefined || r.task === "") continue;
+    if (kind === "transition" && data?.to === "land") r.landed = true;
+    else if (kind === "session_end" && data?.outcome === "completed" && r.landed && typeof file.spend?.[r.task] === "number") ends.push(ts);
+  }
+  if (ends.length < rows) throw new Error(`the replay lands ${ends.length} priced tasks, fewer than the ${rows} the banner's default moment needs`);
+  ends.sort((a, b) => a - b);
+  return Math.ceil(ends[rows - 1] / 1000);
+}
 
 /** The look of the brand: bump it when the drawing changes, so an image rendered by the old one reads as stale. */
 export const DESIGN = "schematic-over-scene-logo-2";
@@ -282,7 +311,8 @@ svg.schematic{position:absolute;left:${schematic.left}px;top:${schematic.top}px;
 
 async function main() {
   const i = process.argv.indexOf("--at");
-  const at = (i === -1 ? DEFAULT_AT : Number(process.argv[i + 1])) * 1000;
+  const replay = JSON.parse(fs.readFileSync(path.join(ROOT, REPLAY_FILE), "utf8"));
+  const at = (i === -1 ? defaultAt(replay) : Number(process.argv[i + 1])) * 1000;
   if (!Number.isFinite(at)) throw new Error("--at takes a number of replay seconds");
   const spec = bannerSpec();
   // the logo and favicon go first: the site the scene is captured from serves docs/public
