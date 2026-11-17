@@ -159,7 +159,7 @@ describe("dashboard paths", () => {
       const res = await fetch(`${base}${p}`);
       expect(res.status, p).toBe(200);
       expect(res.headers.get("content-type"), p).toMatch(/text\/html/);
-      expect(await res.text(), p).toContain("<title>MCP Workflow Engine</title>");
+      expect(await res.text(), p).toContain("<title>Claude Workflow · Dashboard</title>");
     }
   });
 

@@ -83,7 +83,7 @@ no workflow shows "No active workflow"; nothing opens by itself.
 
 ## Dashboard
 
-The web dashboard runs on `localhost:3100` and provides real-time monitoring:
+The web dashboard runs on `localhost:3100` and provides real-time monitoring. Its tab is titled `Claude Workflow · Dashboard` and carries the site's icon (`/favicon.svg`, drawn by `faviconSvg` of `scripts/brand.mjs`, the function that writes the site's `docs/public/favicon.svg`; the name is `NAME` of the same file, which the site config reads too), so a logo or name change reaches both:
 
 - **Sessions panel** — active sessions plus the most recent finished ones (terminal history is capped)
 - **Plan tab** — each queue named by a session's `context.queue_file`: running lines (with the pipeline state and time in it, linked to the session), ready lines in the picker's order (priority, then file order; the priority beside the id), waiting lines with the picker's reason (window ignored), failed, done today (a done line counts when its text holds today's date, `LANDED <sha> YYYY-MM-DD`; marks carry no date). Click a line (or a node of the graph) to open a sticky card beside the list (below it on a narrow window) with its full text and a small dependency graph (dagre, left to right): the lines its `after:` names and the lines that name it, each node coloured by state (done / running / ready / waiting / failed); a node click selects that line, `close` or a second click on the row closes the card. The graph is `queueGraph` in `src/map-layout.ts`; the ids come from `/api/queue` lines' `afterIds`, resolved by the picker's own tokenizer (text in parentheses is prose); a link inside a row follows its link and selects nothing

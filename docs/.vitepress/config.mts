@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
-
-const NAME = "Claude Workflow";
+import { NAME } from "../../scripts/brand.mjs";
 
 /** The bundled workflows, counted from templates/ (the files the loader's bundled tier reads), for the hero's chip: never typed. */
 const bundledWorkflows = fs

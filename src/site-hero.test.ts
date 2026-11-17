@@ -168,7 +168,7 @@ describe("the nav condenses the hero as the page scrolls", () => {
   });
 
   it("the bar's name is the site title with its first word in the banner's gradient, derived from one name", () => {
-    expect(CONFIG).toContain('const NAME = "Claude Workflow";');
+    expect(CONFIG).toContain('import { NAME } from "../../scripts/brand.mjs";');
     expect(CONFIG).toContain("title: NAME,");
     expect(CONFIG).toContain('siteTitle: `<span class="brand-a">');
     expect(FRONT).toContain(`name: Claude Workflow`);

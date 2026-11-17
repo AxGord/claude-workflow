@@ -1,7 +1,8 @@
 import express from "express";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { SessionState } from "./types.js";
@@ -24,6 +25,19 @@ const ROUTES_MODULE = path.join(__dirname, "dashboard-routes.js");
 
 /** The live map's pure modules, compiled beside the route table and served under these names. */
 const MAP_MODULES = ["event-fold.js", "map-layout.js"] as const;
+
+/** The brand's single source (scripts/brand.mjs: the name and the favicon the site and the README banner are drawn from), loaded once; the script sits beside `build/` in the package and `src/` in a checkout. */
+interface Brand {
+  NAME: string;
+  faviconSvg(): string;
+}
+let brandModule: Promise<Brand> | undefined;
+function loadBrand(): Promise<Brand> {
+  brandModule ??= import(
+    pathToFileURL(path.resolve(__dirname, "..", "scripts", "brand.mjs")).href
+  ) as Promise<Brand>;
+  return brandModule;
+}
 
 export function buildApp(
   storage: Storage,
@@ -251,14 +265,30 @@ export function buildApp(
     res.status(404).json({ error: "Unknown API endpoint" });
   });
 
+  // The tab icon is the site's favicon, drawn by the same function that writes docs/public/favicon.svg.
+  app.get("/favicon.svg", async (_req, res) => {
+    try {
+      res.type("image/svg+xml").send((await loadBrand()).faviconSvg());
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // Serve dashboard HTML: every view has a real path (src/dashboard-routes.ts), so any GET that is
   // not a static file answers the page and the page's router picks the view.
   const dashboardDir = path.resolve(__dirname, "..", "dashboard");
+  // The page carries the brand's name as `{{BRAND}}` (title and heading), filled from scripts/brand.mjs.
+  const sendPage = async (_req: express.Request, res: express.Response): Promise<void> => {
+    try {
+      const html = fs.readFileSync(path.join(dashboardDir, "index.html"), "utf8");
+      res.type("html").send(html.replaceAll("{{BRAND}}", (await loadBrand()).NAME));
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  };
+  app.get("/index.html", sendPage);
   app.use(express.static(dashboardDir, { index: false }));
-
-  app.get("*", (_req, res) => {
-    res.sendFile(path.join(dashboardDir, "index.html"));
-  });
+  app.get("*", sendPage);
 
   return app;
 }
