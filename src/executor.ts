@@ -50,6 +50,9 @@ const ADOPT_POLL_MS = 200;
 const REAP_POLL_MS = 50;
 // how often a running exec asks the pool whether its session has a waiter queued
 const POOL_WAIT_POLL_MS = 1_000;
+// The counted pool wait is written to the run's `.wait` file when it has grown by this much since
+// the last write, not on every tick (a session with a long-queued waiter ticked a write per second).
+const WAIT_STORE_STEP_MS = 1_000;
 // two boot-time readings closer than this are the same boot (clock adjustments)
 // A starved wait is noticed within this long of crossing the pool's `starve_after`.
 const STARVE_CHECK_MS = 10_000;
@@ -121,10 +124,13 @@ function truncate(s: string, limit: number = DEFAULT_MAX_OUTPUT): string {
 class DeadlineClock {
   private _waited: number;
   private _last: number;
+  private _stored: number;
 
   /**
-   * `waited`: the wait already counted (by a server that started the run); `store` is told
-   * whenever the count grows, so a server that takes the run over can start from it.
+   * `waited`: the wait already counted (by a server that started the run), counted up to `last`
+   * (ms since epoch; default: now), so a wait since then — a restart's gap — is counted on the
+   * first tick. `store` is told when the count has grown by `WAIT_STORE_STEP_MS` since it was last
+   * told, so a server that takes the run over can start from it and recount from the write's time.
    */
   constructor(
     private readonly _start: number,
@@ -132,9 +138,11 @@ class DeadlineClock {
     private readonly _waitingSince: (() => number | undefined) | undefined,
     waited = 0,
     private readonly _store?: (waited: number) => void,
+    last: number = Date.now(),
   ) {
     this._waited = waited;
-    this._last = Date.now();
+    this._stored = waited;
+    this._last = last;
   }
 
   /** The pool wait counted so far (ms). */
@@ -149,7 +157,10 @@ class DeadlineClock {
       const add = Math.max(0, now - Math.max(this._last, since));
       if (add > 0) {
         this._waited += add;
-        this._store?.(this._waited);
+        if (this._waited - this._stored >= WAIT_STORE_STEP_MS) {
+          this._stored = this._waited;
+          this._store?.(this._waited);
+        }
       }
     }
     this._last = now;
@@ -220,7 +231,9 @@ export class Executor {
 
   /**
    * The deadline clock of a run of `ctx`'s session: its `wf-run` waiters stretch the `timeout`.
-   * `waitFile` keeps the counted wait with the run, so `adopt` after a restart resumes from it.
+   * `waitFile` keeps the counted wait with the run, so `adopt` after a restart resumes from it:
+   * the count is as of the file's mtime (the run's `start` when there is no file), and the wait
+   * since then is counted by the first tick.
    */
   private _clock(
     start: number,
@@ -229,11 +242,12 @@ export class Executor {
     waitFile: string,
   ): DeadlineClock {
     const sid = ctx?.sessionId;
+    const kept = Executor._readWait(waitFile);
     return new DeadlineClock(
       start,
       timeout,
       sid ? () => this.pool.waitingSince(sid, process.pid) : undefined,
-      Executor._readWait(waitFile),
+      kept?.waited ?? 0,
       waited => {
         try {
           fs.writeFileSync(waitFile, String(waited));
@@ -241,16 +255,18 @@ export class Executor {
           /* the run's files are gone: nothing to keep the count for */
         }
       },
+      kept ? Math.min(kept.at, Date.now()) : Math.min(start, Date.now()),
     );
   }
 
-  /** The pool wait a run's file records (ms); 0 when none. */
-  private static _readWait(file: string): number {
+  /** The pool wait a run's file records (ms) and when it was written; undefined when none. */
+  private static _readWait(file: string): { waited: number; at: number } | undefined {
     try {
       const n = Number(fs.readFileSync(file, "utf8"));
-      return Number.isFinite(n) && n > 0 ? n : 0;
+      if (!Number.isFinite(n) || n <= 0) return undefined;
+      return { waited: n, at: fs.statSync(file).mtimeMs };
     } catch {
-      return 0;
+      return undefined;
     }
   }
 
@@ -785,7 +801,8 @@ export class Executor {
   ): Promise<ActionResult | null> {
     const maxOutput = state.max_output ?? DEFAULT_MAX_OUTPUT;
     const started = Date.parse(run.started_at);
-    // the pool wait of the command, counted from this server's takeover on
+    // the pool wait of the command: the recorded count, then the wait since it was recorded (a
+    // restart's gap included)
     const clock = this._clock(
       started,
       state.timeout ?? DEFAULT_EXEC_TIMEOUT,
