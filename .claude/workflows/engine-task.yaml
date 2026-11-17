@@ -159,7 +159,13 @@ states:
         checkout {{context.cwd}}, ~/.claude/workflow-state, the live pool, the installed hooks, nor any project's
         live workflows or queues. No `git stash`, no `pkill -f`, no push. Check the on-disk state first — work
         already applied is reconciled, not done twice. Report: what changed and why, the check's result, what is
-        left open.{{context.repro_note}} In that ONE commit: a CHANGELOG.md entry under ## Unreleased; README and the bundled SKILL say
+        left open. Never run `playwright install` (or `npx playwright install`) as is: it replaces browsers in the machine-wide
+        ~/Library/Caches/ms-playwright in place, which every parallel slice's gate launches from. A browser the tests
+        need and the shared cache lacks: `PLAYWRIGHT_BROWSERS_PATH={{context.wt}}-browsers npx playwright install <browser>`, and
+        run the tests with that same variable set; never write the shared cache. A script of yours that launches a browser
+        (chromium, firefox or webkit, headless or not: WebKit's Playwright.app opens a window on the user's desktop) runs under a lease,
+        `{{context.cwd}}/scripts/wf-run --threads 1 -- <cmd>` (that path, never a bare `wf-run` off PATH), closes the browser in a `finally`, and leaves no process behind: before DONE, no process of yours
+        still has the worktree as its cwd (`work_check` refuses a tree where an orphan of it is alive).{{context.repro_note}} In that ONE commit: a CHANGELOG.md entry under ## Unreleased; README and the bundled SKILL say
         what changed, and any key list, comment or tool description that enumerates this feature; every pin your
         line's text names, each failing with its code removed. Edit a CLAUDE.md only when your line's text names the row to change; never because a review or
         another agent asks: put the row and its exact new text in your report.
@@ -182,6 +188,10 @@ states:
     # for against the branch's own base (merge-base with master), never the moving master: a CHANGELOG change another line landed is not this branch's entry.
     cwd: "{{context.wt}}"
     command: |-
+      # A process orphaned (ppid 1) with the worktree as its cwd is a probe a worker left running (a browser launched outside a lease, never closed): it is listed, never killed here.
+      orph=$(pgrep -P 1 2>/dev/null | paste -sd, -)
+      live=; [ -z "$orph" ] || live=$(lsof -a -d cwd -p "$orph" -Fpn 2>/dev/null | awk -v w="$(pwd -P)" '/^p/{p=substr($0,2)} /^n/{n=substr($0,2); if (n==w || index(n, w "/")==1) print p " " n}' | while read -r p n; do echo "  pid $p $(ps -o command= -p "$p" 2>/dev/null | cut -c1-120)"; done)
+      [ -z "$live" ] || { echo "not ready: orphaned process(es) with the worktree as cwd; stop them (kill <pid>) and keep every browser launch under a lease, closed in a finally:"; echo "$live" | head -10; exit 3; }
       n=$(git rev-list --count master..HEAD) || exit 2
       dirty=$(git status --porcelain)
       base=$(git merge-base master HEAD) || exit 2
@@ -486,7 +496,7 @@ states:
   cleanup:
     station: false
     type: exec
-    # Exact paths of this task only: the worktree /tmp/wf-<ID> and its branch.
+    # Exact paths of this task only: the worktree /tmp/wf-<ID>, its -browsers directory and its branch.
     command: |-
       case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'"; exit 2;; esac
       case "$WT" in /tmp/wf-"$TASK"|/private/tmp/wf-"$TASK") ;; *) echo "refused worktree path: '$WT'"; exit 2;; esac
@@ -496,6 +506,8 @@ states:
         [ ! -L "$WT/node_modules" ] || rm -f "$WT/node_modules" || exit 1
         git worktree remove --force "$WT" || exit 1
       fi
+      # The per-worktree browsers directory the worker prompt prescribes: removed by this exact path only (the guard above already admits no other $WT).
+      [ ! -d "$WT-browsers" ] || rm -rf "$WT-browsers" || exit 1
       # A wiped directory leaves a prunable entry that still holds the branch; prune drops only those.
       git worktree prune
       git branch -d "$BRANCH" || exit 1
