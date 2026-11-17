@@ -272,7 +272,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 32px;
   margin: 0 auto;
-  max-width: calc(var(--vp-layout-max-width) - 64px);
+  max-width: var(--hero-content-w);
 }
 .hero-sr {
   position: absolute;
@@ -494,6 +494,9 @@ onBeforeUnmount(() => {
   --hero-brand-s: 3;
   --hero-text-min: 520px;
   --hero-dg-max: 594px;
+  /* the landing's content width, the bar's and the hero's alike: VitePress's home container (the feature grid's 1152px) inside the layout's
+     width, so on a wide screen the logo, the hero's text and diagram and the feature cards share their left and right edges */
+  --hero-content-w: min(1152px, calc(var(--vp-layout-max-width) - 64px));
   --hero-fade: 48px;
   --hero-search-w0: 48px;
   --hero-search-w1: 48px;
@@ -581,6 +584,9 @@ onBeforeUnmount(() => {
   background: linear-gradient(90deg, #58a6ff, #3fb950);
   -webkit-background-clip: text;
   background-clip: text;
+}
+.Layout.has-hero .VPNavBar .container {
+  max-width: var(--hero-content-w);
 }
 .Layout.has-hero .VPNavBarTitle .title {
   transform-origin: 0 50%;

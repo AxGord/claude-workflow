@@ -44,20 +44,25 @@ export default defineConfig({
     logo: { light: "/logo-light.svg", dark: "/logo.svg", alt: "Claude Workflow" },
     nav: [
       // One entry, the docs index: the landing has no sidebar, so this menu is where its reader finds every page. "Get started"
-      // is the hero's button and GitHub is the icon beside the theme switch: each appears once.
+      // is the hero's button and GitHub is the icon beside the theme switch: each appears once. A click on "Docs" goes to the start
+      // of the docs: VitePress's dropdown cannot be a link, so this is a custom item (theme/DocsNav.vue, registered in theme/index.ts).
       {
-        text: "Docs",
-        items: [
-          { text: "Getting started", link: "/getting-started" },
-          { text: "Concepts", link: "/concepts" },
-          { text: "Workflow YAML", link: "/workflow-yaml" },
-          { text: "Action states", link: "/action-states" },
-          { text: "Thread pool", link: "/pool" },
-          { text: "Task queue and dispatch", link: "/queue" },
-          { text: "Dashboard and plan pane", link: "/dashboard" },
-          { text: "FAQ", link: "/faq" },
-          { text: "Development", link: "/development" },
-        ],
+        component: "DocsNav",
+        props: {
+          link: "/getting-started",
+          text: "Docs",
+          items: [
+            { text: "Getting started", link: "/getting-started" },
+            { text: "Concepts", link: "/concepts" },
+            { text: "Workflow YAML", link: "/workflow-yaml" },
+            { text: "Action states", link: "/action-states" },
+            { text: "Thread pool", link: "/pool" },
+            { text: "Task queue and dispatch", link: "/queue" },
+            { text: "Dashboard and plan pane", link: "/dashboard" },
+            { text: "FAQ", link: "/faq" },
+            { text: "Development", link: "/development" },
+          ],
+        },
       },
     ],
     sidebar: [

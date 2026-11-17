@@ -98,7 +98,8 @@ describe("the nav condenses the hero as the page scrolls", () => {
     expect(NAV_CSS).toContain("--hero-scale-end: calc(var(--hero-brand-y) * 0.55);");
     expect(NAV_CSS).toContain("--hero-rise-start: calc(var(--hero-brand-y) * 0.45);");
     // the travel is vertical only: the hero shares the bar's width and gutters, so no x is measured
-    expect(HERO).toContain("max-width: calc(var(--vp-layout-max-width) - 64px)");
+    expect(HERO).toMatch(/\.hero-inner \{[^}]*max-width: var\(--hero-content-w\);/);
+    expect(NAV_CSS).toMatch(/\.VPNavBar \.container \{\s*max-width: var\(--hero-content-w\);/);
   });
 
   it("falls back to a class toggled by an IntersectionObserver, which is a plain switch under reduced motion", () => {
@@ -251,6 +252,7 @@ describe("one layout for the hero and the bar over the whole scroll range", () =
       /^\s*\/\/.*$/gm,
       "",
     );
+    expect(navBlock).toMatch(/component: "DocsNav"/);
     expect(navBlock).toMatch(/text: "Docs",\s*items: \[/);
     const sidebar = /sidebar: \[([\s\S]*?)\],\s*socialLinks/.exec(CONFIG)?.[1] ?? "";
     const pages = [...sidebar.matchAll(/link: "([^"]+)"/g)].map(m => m[1]);

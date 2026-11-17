@@ -1,6 +1,7 @@
 import DefaultTheme from "vitepress/theme";
 import { h } from "vue";
 import "./terminal-palette.css";
+import DocsNav from "./DocsNav.vue";
 import Hero from "./Hero.vue";
 import Install from "./Install.vue";
 import PoolDemo from "./PoolDemo.vue";
@@ -17,6 +18,7 @@ export default {
   extends: DefaultTheme,
   Layout: () => h(DefaultTheme.Layout, null, { "home-hero-before": () => h(Hero), "home-hero-after": () => [h(Scene), h(Install)] }),
   enhanceApp({ app }: { app: { component: (name: string, c: unknown) => void } }) {
+    app.component("DocsNav", DocsNav);
     app.component("WorkflowGraphs", WorkflowGraphs);
     app.component("StatusLine", StatusLine);
     app.component("PoolDemo", PoolDemo);
