@@ -6,6 +6,7 @@ import { EventLog } from "./event-log.js";
 import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -170,4 +171,24 @@ export function assertUnderTmp(dir: string): string {
   if (resolved === "" || !resolved.startsWith(tmp + path.sep))
     throw new Error(`not under the temp dir ${tmp}: ${JSON.stringify(dir)}`);
   return dir;
+}
+
+/**
+ * `spawnSync` of a child process with a `timeout`: a child that hangs or cannot start fails the test
+ * at once, with the child's own output in the message, instead of hanging the suite until the test's
+ * guard fires with no word on which child it was. The timeout must be below the test's own.
+ */
+export function spawnChild(
+  cmd: string,
+  args: string[],
+  options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding"> & {
+    timeout: number;
+  },
+): { status: number | null; stdout: string; stderr: string } {
+  const r = spawnSync(cmd, args, { ...options, encoding: "utf8" });
+  if (r.error)
+    throw new Error(
+      `${cmd} ${args.join(" ")}: ${r.error.message} (timeout ${options.timeout} ms)\n${r.stdout}${r.stderr}`,
+    );
+  return r;
 }

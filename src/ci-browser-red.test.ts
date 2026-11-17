@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { spawnChild } from "./test-helpers.js";
 
 // CI exports CHROME_BIN for a Chrome that may not start. That alone must not run the opt-in browser
 // tests; and when opted in with a Chrome that cannot start, the failure names it, not a raw ENOENT.
 function run(extra: Record<string, string>): string {
-  const r = spawnSync(
+  const r = spawnChild(
     "npx",
     [
       "vitest",
@@ -16,7 +16,6 @@ function run(extra: Record<string, string>): string {
     ],
     {
       env: { ...process.env, CHROME_BIN: "/usr/bin/false", ...extra },
-      encoding: "utf8",
       timeout: 120_000,
     },
   );
