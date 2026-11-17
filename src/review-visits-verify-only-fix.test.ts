@@ -59,9 +59,17 @@ async function sandbox(queueExtra = "") {
     def.states[s].command = `echo "gate green (stub of npm run check): $(git log --oneline -1)"`;
     delete def.states[s].resource;
   }
-  def.states.project_land.command = "echo 'stub: would land'; exit 9";
-  delete def.states.project_land.env;
+  // The land keeps its real "master moved past the branch" exit 5 and also takes it once when `conflictNext` asked
+  // (project_rebase then reports the conflict once without touching the tree); otherwise it ends at the stubbed merge.
+  const mark = join(main, ".force-conflict");
+  def.states.project_land.command = [
+    `[ -e "${mark}" ] && { echo "master moved (forced)"; exit 5; }`,
+    `git merge-base --is-ancestor master "$BRANCH" || { echo "master moved past $BRANCH's base: rebase"; exit 5; }`,
+    `echo 'stub: would land'; exit 9`,
+  ].join("\n");
   delete def.states.project_land.resource;
+  const realRebase = def.states.project_rebase.command as string;
+  def.states.project_rebase.command = `if [ -e "${mark}" ]; then rm -f "${mark}"; echo "rebase of $BRANCH onto master conflicts: aborted"; exit 1; fi\n${realRebase}`;
   const project = join(base, "project-workflows");
   mkdirSync(project);
   writeFileSync(join(project, "engine-task.yaml"), stringify(def));
@@ -75,14 +83,15 @@ async function sandbox(queueExtra = "") {
   const id = first.sessionId;
   const to = (t: string) => engine.transition(id, t);
   const set = (k: string, v: string) => engine.setContext(id, k, v);
-  return { engine, id, to, set, main, WT, sha: () => git(WT, "rev-parse", "HEAD") };
+  const conflictNext = () => writeFileSync(mark, "");
+  return { engine, id, to, set, main, WT, sha: () => git(WT, "rev-parse", "HEAD"), conflictNext };
 }
 
 const FIXES = "FIXES:\n1. do the browser check and record it in CHANGELOG.md";
 
 describe("engine-task: a fix round that changes no code, with review visits spent", () => {
   it("does not route the verify-only fix round to blocked", async () => {
-    const { to, set, WT, sha } = await sandbox();
+    const { to, set, WT, sha, conflictNext } = await sandbox();
     let s = await to("prepare");
     expect(s.currentStateName).toBe("work");
     // the worker's ONE commit: code + a CHANGELOG entry
@@ -105,9 +114,9 @@ describe("engine-task: a fix round that changes no code, with review visits spen
     expect(s.currentStateName).toBe("review"); // review visit 2: MERGE, then the land's rebase conflicts
     await set("reviewed_sha", sha());
     await set("review_text", "MERGE");
+    conflictNext();
     s = await to("filed");
-    expect(s.currentStateName).toBe("land_failed");
-    s = await to("rebase_fix");
+    expect(s.currentStateName).toBe("rebase_fix"); // the conflict goes to the worker by itself
     // the resolution changes code too, so the rebased tip is reviewed again
     writeFileSync(join(WT, "src/x.ts"), "export const x = 3;\n");
     git(WT, "commit", "-q", "-a", "--amend", "-m", "the change (rebased)");
@@ -157,7 +166,7 @@ describe("engine-task: a fix round that changes no code, with review visits spen
     writeFileSync(join(main, "src/y.ts"), `const l0 = 0;\n${y}`);
     writeFileSync(join(main, "CHANGELOG.md"), "## Unreleased\n- master\n");
     git(main, "commit", "-q", "-a", "-m", "master moves");
-    s = await to("rebase_fix");
+    s = await to("retry"); // the land finds master moved, its rebase conflicts: rebase_fix follows by itself
     expect(s.currentStateName).toBe("rebase_fix");
     expect(() => git(WT, "-c", "core.editor=true", "rebase", "master")).toThrow();
     return sb;
@@ -242,7 +251,7 @@ describe("engine-task: a fix round that changes no code, with review visits spen
   }, 60000);
 
   it("a fix round that changes code still spends a review visit and is blocked when they are spent", async () => {
-    const { to, set, WT, sha } = await sandbox();
+    const { to, set, WT, sha, conflictNext } = await sandbox();
     let s = await to("prepare");
     mkdirSync(join(WT, "src"), { recursive: true });
     writeFileSync(join(WT, "src/x.ts"), "export const x = 1;\n");
@@ -261,8 +270,9 @@ describe("engine-task: a fix round that changes no code, with review visits spen
     s = await to("check");
     await set("reviewed_sha", sha());
     await set("review_text", "MERGE");
+    conflictNext();
     s = await to("filed");
-    s = await to("rebase_fix");
+    expect(s.currentStateName).toBe("rebase_fix");
     writeFileSync(join(WT, "src/x.ts"), "export const x = 3;\n");
     git(WT, "commit", "-q", "-a", "--amend", "--no-edit");
     s = await to("gate");
@@ -277,7 +287,7 @@ describe("engine-task: a fix round that changes no code, with review visits spen
   }, 60000);
 
   it("a code-free round after MERGE on a breaking line waits for the parent, not the land", async () => {
-    const { to, set, WT, sha } = await sandbox("    breaking: true\n");
+    const { to, set, WT, sha, conflictNext } = await sandbox("    breaking: true\n");
     let s = await to("prepare");
     mkdirSync(join(WT, "src"), { recursive: true });
     writeFileSync(join(WT, "src/x.ts"), "export const x = 1;\n");
@@ -291,9 +301,9 @@ describe("engine-task: a fix round that changes no code, with review visits spen
     await set("review_text", "MERGE");
     s = await to("filed");
     expect(s.currentStateName).toBe("breaking_ready");
+    conflictNext();
     s = await to("merge");
-    expect(s.currentStateName).toBe("land_failed");
-    s = await to("rebase_fix");
+    expect(s.currentStateName).toBe("rebase_fix");
     writeFileSync(join(WT, "CHANGELOG.md"), "## Unreleased\n- x\n- master's\n");
     git(WT, "commit", "-q", "-a", "--amend", "--no-edit");
     s = await to("gate");

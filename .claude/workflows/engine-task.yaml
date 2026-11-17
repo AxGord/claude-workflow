@@ -507,7 +507,26 @@ states:
     env:
       BRANCH: "{{context.branch}}"
     timeout: 120000
-    on_success: project_gate_rebased
+    on_timeout: land_failed
+    cases:
+      "0": project_gate_rebased
+      "1": rebase_conflict
+    default: land_failed
+
+  # A conflicting rebase is the one land failure whose answer is always `rebase_fix`: this exec state routes it there
+  # with no parent and no driver choice, twice per task. Its own max_visits is the bound: the third conflict follows
+  # on_exhausted to land_failed (stdout and exit code stay those of project_rebase), where the parent decides.
+  rebase_conflict:
+    station: false
+    type: exec
+    command: |-
+      echo "rebase of $BRANCH onto master conflicts: the worker resolves it (rebase_fix)"
+    env:
+      BRANCH: "{{context.branch}}"
+    max_visits: 2
+    on_exhausted: land_failed
+    timeout: 20000
+    on_success: rebase_fix
     on_error: land_failed
 
   land_failed:
@@ -517,8 +536,10 @@ states:
       {{stderr}}
       - 3 (the main checkout is not on master, or has uncommitted changes) → never stash or reset someone's
         work: tell the user and `retry` once it is clean, or `stop`.
-      - 1 with "rebase of … onto master conflicts" (master moved under a reviewed branch) → `rebase_fix`: the
-        worker resolves the rebase in its own round, which does NOT spend the work visits a review's FIXES used.
+      - 1 with "rebase of … onto master conflicts" (master moved under a reviewed branch): the workflow already sent
+        the first two such conflicts of a task to `rebase_fix` by itself, so this is the third: the worker's resolutions
+        did not hold against a master that kept moving. `fix` hands the conflict to the worker as a fix round, `close` when
+        it cannot be resolved.
       - 1 (the build red on master + the branch — the merge is taken back) → `fix`: the cause goes to the worker
         as its fix round; `close` when it cannot be fixed in the branch.
       - 4 (the merge could not be taken back safely) → `stop` and report the main checkout's state printed above.
@@ -527,7 +548,6 @@ states:
     transitions:
       retry: project_land
       fix: work
-      rebase_fix: rebase_fix
       close: blocked
       stop: stopped
 
@@ -544,10 +564,11 @@ states:
         yours; never drop either to make it apply), keep ONE commit, `npm run check` green, clean worktree.
         Report each conflicted file and how you resolved it.
 
-      Then END your turn. On its notification verify ON-TREE: `git -C {{context.cwd}} merge-base --is-ancestor
-      master {{context.branch}}` succeeds, `git -C {{context.cwd}} log --oneline master..{{context.branch}}` shows one
+      Then END your turn. On its notification verify ON-TREE: `git -C {{context.cwd}} log --oneline master..{{context.branch}}` shows one
       commit and `git -C {{context.wt}} status --porcelain` is empty → `gate` (the review that follows sees a
-      changed tip and judges the resolution); stuck → `blocked`.
+      changed tip and judges the resolution); stuck → `blocked`. Master having moved on AGAIN since is not a reason to
+      ask the parent or to go back: the land rebases a lagging branch itself, and only a new conflict there returns here
+      (the workflow counts it against the same two rounds). So whether master is an ancestor of the branch is not part of this verify.
     transitions:
       gate: project_gate
       blocked: blocked
