@@ -11,7 +11,7 @@ description: Building and testing the engine, its source layout, and how the sit
 npm run build    # tsc 7 (the `typescript7` alias) → compiles src/ to build/
 npm run dev      # tsc 7 --watch
 npm start        # node build/index.js
-npm test         # vitest run
+npm test         # vitest run (src/test-git-env.ts, the setup file, points git at no global config so a fixture commit never signs)
 npm run check    # tsc 7 --noEmit + format:check + lint + scan + vitest + check:ci (the pre-commit gate)
 npm run check:ci # the suite as CI runs it (scripts/check-ci.sh): env -i, an empty HOME, no system git
                  # config, TMPDIR inside it, git user.useConfigOnly (no guessed identity), TZ America/St_Johns (CHECK_CI_TZ),
