@@ -123,7 +123,7 @@ admitted, running tasks finish; the pick answers `window 0 — paused: <the reas
   --retry`: failed→running, `difficulty:` +1; `--running <ID> --force REASON`: mark a line the picker would not admit), `--header <key>`, `--add '<YAML mapping>' [--after ID|--before ID]`, `--edit <ID>
   [--set key=value]… [--append-note T] [--from W]` (`key=` removes), `--batch-size <N> --reason T`, `--header-set archive_after_days=N|exclusive_hold=yes|no [--reason T]` (`archive_after_days=` / `exclusive_hold=` removes the key; another key is refused; the reason is echoed, not written), `--archive --older-than <days> [--include-unended] [--dry-run]`, `--restore <ID>` (an archived line back into the queue).
 - Converting the old Markdown queue (`- [m] ID | key: value | … |` lines under `## Tasks`), once:
-  `wf-queue --convert <old.md>` prints the YAML; `--into <new.yaml>` writes it; `--into <existing.yaml>
+  `wf-queue --convert <old.md> [--status S]` prints the YAML; `--into <new.yaml>` writes it (`--status pending` is refused, exit 2 and no file written, when a line has no `difficulty:`, as for an append); `--into <existing.yaml>
   [--status backlog]` APPENDS the old file's open (not done) lines with that status (`--status pending` is
   refused, exit 2 and the file unchanged, when an appended line has no `difficulty:`, as `queue_add` refuses it). Marks map to
   statuses (`[-]`/`[~]` → done with a note), `⏸` → `parked`, fields before the first metadata field

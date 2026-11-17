@@ -18,7 +18,7 @@
 //   wf-queue --convert <old.md|config.json> [--into <file.yaml>] [--status S] [--dry-run]
 //       an old Markdown queue (or a JSON config) as YAML: printed without --into; --into a new file
 //       writes it; --into an existing queue appends the old queue's open tasks with --status (default backlog;
-//       --status pending refuses, exit 2 and the file unchanged, a task with no difficulty:)
+//       --status pending refuses, exit 2 and no file written or changed, a task with no difficulty:)
 // Exit: 0 admitted ≥1 · 10 nothing admitted, running tasks still run · 11 nothing admitted and nothing
 // runs (done; what stays pending is blocked) · 12 nothing runs and batch_size is 0 (paused) · 2 error.
 import fs from "node:fs";

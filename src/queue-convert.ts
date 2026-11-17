@@ -6,6 +6,7 @@ import YAML, { Scalar, type YAMLMap, type YAMLSeq } from "yaml";
 import {
   QueueError,
   STATUSES,
+  type QueueLine,
   type Status,
   TASK_KEYS,
   difficultyRequired,
@@ -216,7 +217,7 @@ function restatus(tasks: ConvertedTask[], status: Status | undefined): Converted
   return tasks;
 }
 
-/** A whole Markdown queue as YAML text (checked to read back as a queue). */
+/** A whole Markdown queue as YAML text (checked to read back as a queue; `status` `pending` refuses a line with no `difficulty:`). */
 export function markdownToYaml(
   text: string,
   file?: string,
@@ -242,8 +243,18 @@ export function markdownToYaml(
   for (const t of restatus(q.tasks, status)) tasks.items.push(taskNode(doc, t));
   top.add(doc.createPair("tasks", tasks));
   const out = doc.toString({ lineWidth: 0 });
-  parseQueue(out, file ?? "<converted>");
+  const parsed = parseQueue(out, file ?? "<converted>");
+  // an explicit `--status pending` is a write a pick would run: the same refusal as the append
+  if (status === "pending") refuseNoDifficulty(parsed.lines);
   return out;
+}
+
+/** The `queue_add` refusal for the first line `lines` holds that is pending with no `difficulty:`. */
+function refuseNoDifficulty(lines: readonly QueueLine[]): void {
+  for (const line of lines) {
+    const why = difficultyRequired(line);
+    if (why !== null) throw new QueueError(why);
+  }
 }
 
 /**
@@ -281,10 +292,7 @@ export function appendMarkdown(
   const parsed = parseQueue(out, file ?? "<converted>");
   // the same refusal as queue_add: a converted pending line with no difficulty is never written
   const added = new Set(add.map(t => t.id));
-  for (const line of parsed.lines) {
-    const why = added.has(line.id) ? difficultyRequired(line) : null;
-    if (why !== null) throw new QueueError(why);
-  }
+  refuseNoDifficulty(parsed.lines.filter(l => added.has(l.id)));
   return { text: out, added: add.length };
 }
 
