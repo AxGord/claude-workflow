@@ -133,8 +133,11 @@ describe("the nav condenses the hero as the page scrolls", () => {
     expect(NAV_CSS).not.toMatch(/--vp-nav-bg-color\) \d+%/);
   });
 
-  it("reserves the room: the bar is fixed from 960px over a hero that pads under it, the content has no top padding of its own", () => {
+  it("reserves the room: the bar is fixed at every width, the content pads under it below 960px and from 960px the hero pads under it", () => {
     expect(NAV_CSS).toMatch(/\.Layout\.has-hero \.VPNav \{\s*position: fixed;/);
+    expect(NAV_CSS).toMatch(
+      /\.Layout\.has-hero \.VPContent \{\s*padding-top: var\(--vp-nav-height\);/,
+    );
     expect(NAV_CSS).toMatch(/\.Layout\.has-hero \.VPContent \{\s*padding-top: 0;/);
     expect(HERO).toContain(
       "padding-top: calc(var(--vp-nav-height) / 2 + var(--hero-brand-y) - var(--hero-brand-h) / 2)",
@@ -243,13 +246,11 @@ describe("one layout for the hero and the bar over the whole scroll range", () =
       expect(HERO, word).not.toContain(word);
   });
 
-  it("the merge is for the desktop layout only: below 960px the bar is VitePress's own and the hero has no room reserved for a brand", () => {
+  it("the merge is for the desktop layout only: below 960px the bar is VitePress's own, pinned, and the hero has no room reserved for a brand", () => {
     // every rule that moves, shows or hides the bar or its title is inside the one desktop block
     const at = NAV_CSS.indexOf("@media (min-width: 960px) {");
     const desktop = NAV_CSS.slice(at, NAV_CSS.indexOf("@keyframes hero-brand-scale"));
     for (const sel of [
-      ".Layout.has-hero .VPNav {",
-      ".Layout.has-hero .VPContent {",
       ".Layout.has-hero .VPNavBar::before",
       ".Layout.has-hero .VPNavBarTitle .title {",
       ".Layout.has-hero .VPNavBar .content-body::before {",
@@ -259,6 +260,14 @@ describe("one layout for the hero and the bar over the whole scroll range", () =
       expect(NAV_CSS.slice(0, at), `${sel} before the desktop block`).not.toContain(sel);
       expect(desktop, sel).toContain(sel);
     }
+    // the pinned bar and the content's room under it are the rules below 960px, so they sit before the desktop block
+    expect(NAV_CSS.slice(0, at)).toMatch(/\.Layout\.has-hero \.VPNav \{\s*position: fixed;/);
+    expect(NAV_CSS.slice(0, at)).toMatch(
+      /\.Layout\.has-hero \.VPContent \{\s*padding-top: var\(--vp-nav-height\);/,
+    );
+    expect(NAV_CSS.slice(0, at)).toMatch(
+      /\.Layout\.has-hero \.VPNavBar \{\s*background-color: var\(--vp-nav-bg-color\);/,
+    );
     // the scroll-driven animations are desktop-only too
     expect(NAV_CSS).toContain(
       "@media (prefers-reduced-motion: no-preference) and (min-width: 960px)",
