@@ -34,7 +34,7 @@ provide("toggle-appearance", () => {
 // scroll up; from 960px nothing moves. This is the one scroll listener for every page (passive, throttled to a frame): it
 // only flips `nav-autohide-hidden` on <html>, the rules below move the bars with `transform`. The bar is always shown at the
 // page top, a movement under NAV_SCROLL_THRESHOLD px decides nothing (a jittering finger), and an open menu (the nav screen
-// or the sidebar) keeps it shown; a bar with keyboard focus inside it is shown too (`:focus-within`, in the rules below).
+// or the sidebar) keeps it shown; keyboard focus inside either bar shows both (`:focus-visible`, in the rules below).
 const NAV_SCROLL_THRESHOLD = 10;
 const NAV_HIDDEN = "nav-autohide-hidden";
 
@@ -116,9 +116,10 @@ onBeforeUnmount(() => stopAutohide());
   :root.nav-autohide-hidden .Layout .VPLocalNav {
     transform: translateY(calc(-100% - var(--vp-nav-height)));
   }
-  /* a bar holding keyboard focus is shown, whatever the scroll said: the focused element may not sit off-screen */
-  :root.nav-autohide-hidden .Layout .VPNav:focus-within,
-  :root.nav-autohide-hidden .Layout .VPLocalNav:focus-within {
+  /* keyboard focus (:focus-visible, so a TAPPED control does not hold the bar open) in either bar shows both bars together:
+     showing one alone would leave the local nav under an empty gap, or the bar over a hidden local nav */
+  :root.nav-autohide-hidden:has(.VPNav :focus-visible, .VPLocalNav :focus-visible) .Layout .VPNav,
+  :root.nav-autohide-hidden:has(.VPNav :focus-visible, .VPLocalNav :focus-visible) .Layout .VPLocalNav {
     transform: none;
   }
 }

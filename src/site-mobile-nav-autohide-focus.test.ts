@@ -43,9 +43,11 @@ describe("the reveal rule", () => {
   );
   const media = layout.slice(layout.indexOf("@media (max-width: 959.98px)"));
 
-  it("cancels the hidden transform of both bars while focus is inside them, below 960 px only", () => {
-    const rule =
-      /nav-autohide-hidden \.Layout \.VPNav:focus-within,\s*:root\.nav-autohide-hidden \.Layout \.VPLocalNav:focus-within\s*\{\s*transform:\s*none;/;
+  it("cancels the hidden transform of both bars while keyboard focus is inside either, below 960 px only", () => {
+    const has = String.raw`:root\.nav-autohide-hidden:has\(\.VPNav :focus-visible, \.VPLocalNav :focus-visible\)`;
+    const rule = new RegExp(
+      `${has} \\.Layout \\.VPNav,\\s*${has} \\.Layout \\.VPLocalNav\\s*\\{\\s*transform:\\s*none;`,
+    );
     expect(media).toMatch(rule);
     expect(media.search(rule), "inside the below-960 px block").toBeLessThan(
       media.indexOf("\n}\n"),
