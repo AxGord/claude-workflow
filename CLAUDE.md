@@ -36,7 +36,7 @@ npm run build    # tsc → compiles src/ to build/
 npm run dev      # tsc --watch
 npm start        # node build/index.js
 npm test         # vitest run (src/*.test.ts)
-npm run check    # tsc --noEmit && format:check (biome) && lint (eslint vs eslint-baseline.json: only NEW findings fail) && scan && vitest
+npm run check    # check:static (tsc --noEmit && format:check (biome) && lint (eslint vs eslint-baseline.json: only NEW findings fail) && scan) && check:tests (vitest && test:pane && check:ci)
 npm run scan     # ast-grep scan --error: rules/*.yml (sgconfig.yml) are errors, 0 findings; a vetted site takes `// ast-grep-ignore: <rule-id> -- <why>` (needs ast-grep on PATH)
 ```
 
