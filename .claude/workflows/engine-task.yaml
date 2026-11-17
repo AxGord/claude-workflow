@@ -165,10 +165,12 @@ states:
         another agent asks: put the row and its exact new text in your report.
 
       context_set `worker_agent` = its id.
-      A later visit (a fix round) — SendMessage `{{context.worker_agent}}` with the cause verbatim (the gate's
-      output, the review's FIXES list, or the land's failure); it amends its ONE commit.
-      Then END your turn on this task. On the worker's DONE → `check` (the engine reads the tree; you have no
-      Bash); the worker is stuck, or the work is wrong and another round would not help → `blocked`.
+      A later visit (a fix round) — the worker has NOT seen the cause yet: SendMessage `{{context.worker_agent}}` with it
+      verbatim (the gate's output, the review's FIXES list, or the land's failure) BEFORE anything else; it amends its
+      ONE commit. Never `check` on entering this state: the tree is still the one that was reviewed or failed.
+      Then END your turn on this task. Only the worker's DONE for THIS round → `check` (the engine reads the tree; you
+      have no Bash; a check on the unamended reviewed commit is refused); the worker is stuck, or the work is wrong and
+      another round would not help → `blocked`.
     transitions:
       check: work_check
       blocked: blocked
@@ -184,11 +186,23 @@ states:
       dirty=$(git status --porcelain)
       base=$(git merge-base master HEAD) || exit 2
       if git diff --name-only "$base" HEAD | grep -qx CHANGELOG.md; then nolog=; else nolog=1; fi
+      # A fix round is open when a review text exists and its verdict (read as review_filed reads it) is not MERGE: review_filed sends every such text, a non-canonical verdict line too, to the worker. HEAD still at the reviewed commit means the list never reached the worker; the refusal prints the list itself, because work_unready forwards only this stdout.
+      v=$(printf '%s\n' "$TEXT" | grep -E '^(VERDICT +)?(MERGE|FIXES)' | tail -1 | sed -E 's/^VERDICT +//')
+      [ -n "$v" ] || { printf '%s\n' "$TEXT" | sed '/^[[:space:]]*$/d' | tail -1 | grep -Eq '(^|[^A-Za-z])MERGE[.[:space:]]*$' && v=MERGE; }
+      case "$v" in
+        MERGE*) ;;
+        *) if [ -n "$TEXT" ] && [ -n "$REVIEWED" ] && [ "$(git rev-parse HEAD)" = "$REVIEWED" ]; then
+             echo "not ready: the review asked for FIXES and HEAD is still the reviewed commit $(git rev-parse --short HEAD): the worker has not amended. Send it this review's FIXES list verbatim first, then check on its DONE:"
+             printf '%s\n' "$TEXT" | head -c 8000
+             exit 3
+           fi;;
+      esac
       [ "$n" = 1 ] && [ -z "$dirty" ] && [ -z "$nolog" ] && { git log --oneline -1; exit 0; }
       [ "$n" = 1 ] || echo "not ready: $n commit(s) over master, expected one"
       [ -z "$nolog" ] || echo "not ready: no CHANGELOG.md entry for this change (add one under ## Unreleased)"
       [ -z "$dirty" ] || { echo uncommitted:; echo "$dirty" | head -10; }
       exit 3
+    env: { TEXT: "{{context.review_text}}", REVIEWED: "{{context.reviewed_sha}}" }
     timeout: 20000
     cases: { "0": project_gate, "3": work_unready }
     default: gate_failed
