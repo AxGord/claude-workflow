@@ -262,12 +262,13 @@ describe("the install steps come right after the scene", () => {
 describe("the Status Line page section describes the band; the old script is gone", () => {
   const section = read("docs/dashboard.md").split("## Status Line")[1]?.split("\n## ")[0] ?? "";
 
-  it("says what the band shows and names the last commit that ships the removed script", () => {
+  it("says what the band shows and names the commit before the removal that still ships the script", () => {
     expect(section).toMatch(/^<StatusLine \/>$/m);
     expect(section).toContain("hooks/plan-pane.tsx");
     expect(section).toContain("`[plan]`");
     expect(section).toContain("is removed");
-    expect(section).toContain("`4f17809`");
+    expect(section).toContain("`838504b`");
+    expect(section).not.toContain("4f17809");
     expect(section).not.toContain("statusLine");
     expect(section).not.toContain("WF_STATUS_LIST");
   });
