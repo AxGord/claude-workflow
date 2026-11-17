@@ -422,6 +422,57 @@ describe("pool-gate hook (real processes)", () => {
     expect(hook(project(), "haxe b.hxml")).toEqual({ code: 0, stdout: "", stderr: "" });
   });
 
+  it("a leading `cd` runs the command in another project: that project's config decides", () => {
+    const here = project(); // no config here
+    const there = project(realCfg());
+    const wrapped = hook(path.join(here, "sub"), `cd ${there} && ${nodeCmd}`);
+    const out = JSON.parse(wrapped.stdout) as {
+      hookSpecificOutput: { updatedInput: { command: string } };
+    };
+    expect(out.hookSpecificOutput.updatedInput.command).toContain("--threads 1-2");
+  });
+
+  describe("a leading `cd` into a directory with no config keeps the call cwd's rules", () => {
+    const wrappedBy = (stdout: string) =>
+      (JSON.parse(stdout) as { hookSpecificOutput: { updatedInput: { command: string } } })
+        .hookSpecificOutput.updatedInput.command;
+
+    it("a git repo without a config: the caller's lease applies", () => {
+      const caller = project(realCfg());
+      const bare = project();
+      const r = hook(path.join(caller, "sub"), `cd ${bare} && ${nodeCmd}`);
+      expect(wrappedBy(r.stdout)).toContain("--threads 1-2");
+    });
+
+    it("outside any git repo: the caller's lease applies", () => {
+      const caller = project(realCfg());
+      const outside = fs.realpathSync(tmp("wf-gate-outside-"));
+      const r = hook(path.join(caller, "sub"), `cd ${outside} && ${nodeCmd}`);
+      expect(wrappedBy(r.stdout)).toContain("--threads 1-2");
+    });
+
+    it("the caller's deny applies", () => {
+      const caller = project(JSON.stringify({ rules: [{ match: "pkill", deny: "no pkill" }] }));
+      const bare = project();
+      for (const dir of [bare, fs.realpathSync(tmp("wf-gate-outside-"))]) {
+        const r = hook(path.join(caller, "sub"), `cd ${dir} && pkill node`);
+        expect(JSON.parse(r.stdout)).toMatchObject({
+          hookSpecificOutput: {
+            permissionDecision: "deny",
+            permissionDecisionReason: "pool-gate: no pkill",
+          },
+        });
+      }
+    });
+
+    it("a target with its own config wins over the caller's", () => {
+      const caller = project(JSON.stringify({ rules: [{ match: "node -e", deny: "caller" }] }));
+      const there = project(realCfg());
+      const r = hook(path.join(caller, "sub"), `cd ${there} && ${nodeCmd}`);
+      expect(wrappedBy(r.stdout)).toContain("--threads 1-2");
+    });
+  });
+
   it("a pool-gate.json left without a .yaml → the command passes, one line naming the conversion", () => {
     const dir = project();
     fs.mkdirSync(path.join(dir, ".claude", "workflows"), { recursive: true });

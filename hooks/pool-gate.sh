@@ -10,6 +10,10 @@ case $p in
   *'"cwd":"'*) d=${p#*\"cwd\":\"}; d=${d%%\"*} ;;
   *) d= ;;
 esac
+# A command that starts with `cd` runs elsewhere than the payload cwd: node resolves the target.
+case $p in
+  *'"command":"cd '*|*'"command": "cd '*) d= ;;
+esac
 case $d in
   *\\*) d= ;;
   /*) ;;

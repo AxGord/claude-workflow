@@ -6,7 +6,9 @@
 # The environment is emptied (`env -i`) and rebuilt from the bare minimum: PATH = node's directory
 # plus the system dirs, a fresh empty HOME, no system git config, `user.useConfigOnly` (git refuses
 # to commit without an identity the test configured itself instead of guessing one from the host),
-# and a time zone and language that are neither this machine's nor CI's UTC.
+# and a time zone and language that are neither this machine's nor CI's UTC. The one variable carried
+# over is VITEST_MAX_WORKERS (the pool gate's lease share; empty = vitest's own default): it sizes the
+# run, it cannot change a test's result.
 #
 # Usage: scripts/check-ci.sh [vitest args…]   (npm run check:ci)
 root=$(cd "$(dirname "$0")/.." && pwd) || exit 2
@@ -34,4 +36,5 @@ env -i \
   CI=true \
   GIT_CONFIG_NOSYSTEM=1 \
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.useConfigOnly GIT_CONFIG_VALUE_0=true \
+  VITEST_MAX_WORKERS="${VITEST_MAX_WORKERS:-}" \
   "$root/node_modules/.bin/vitest" run "$@"

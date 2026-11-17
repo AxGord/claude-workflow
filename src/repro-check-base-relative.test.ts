@@ -93,14 +93,14 @@ describe("repro check compares against the worktree's own base", () => {
     expect(readFileSync(`${wt}-logs/repro-verdict.txt`, "utf8")).not.toContain("src/landed.ts");
   });
 
-  it("the workflow file is not ignored, and the rest of .claude/ stays ignored", () => {
-    const rel = ".claude/workflows/engine-task.yaml";
+  it("the workflow and pool-gate files are not ignored, and the rest of .claude/ stays ignored", () => {
     const listed = (p: string) =>
       git(here, "ls-files", "--cached", "--others", "--exclude-standard", "--", p).trim();
-    expect(listed(rel)).toBe(rel);
+    for (const rel of [".claude/workflows/engine-task.yaml", ".claude/workflows/pool-gate.yaml"])
+      expect(listed(rel)).toBe(rel);
     for (const other of [
       ".claude/batch/queue.yaml",
-      ".claude/workflows/pool-gate.yaml",
+      ".claude/workflows/other.yaml",
       ".claude/settings.local.json",
     ])
       expect(() => git(here, "check-ignore", "-q", "--no-index", other), other).not.toThrow();

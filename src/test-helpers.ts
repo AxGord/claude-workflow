@@ -185,7 +185,11 @@ export function spawnChild(
     timeout: number;
   },
 ): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync(cmd, args, { ...options, encoding: "utf8" });
+  // VITEST_MAX_WORKERS (the pool gate's lease share, set for the suite that runs this test) overrides
+  // a child's own --maxWorkers flag: a child that names its worker count keeps it.
+  const env = { ...(options.env ?? process.env) };
+  if (args.some(a => a.startsWith("--maxWorkers"))) delete env.VITEST_MAX_WORKERS;
+  const r = spawnSync(cmd, args, { ...options, env, encoding: "utf8" });
   if (r.error)
     throw new Error(
       `${cmd} ${args.join(" ")}: ${r.error.message} (timeout ${options.timeout} ms)\n${r.stdout}${r.stderr}`,

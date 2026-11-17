@@ -23,3 +23,4 @@ docs/public/workflows.json
 !/.claude/workflows/
 /.claude/workflows/*
 !/.claude/workflows/engine-task.yaml
+!/.claude/workflows/pool-gate.yaml

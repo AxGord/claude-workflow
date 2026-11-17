@@ -1,0 +1,44 @@
+# The engine repo's own pool gate (tracked, so every /tmp/wf-* worktree has it): a worker's or a
+# reviewer's own test run is leased like the workflow's exec states. A command already under
+# `wf-run` (the exec states, a hand-written lease) or with WF_THREADS in its environment is never
+# wrapped again. Vitest's own default is one worker per cpu minus one, so every rule hands the
+# lease's share to the run through VITEST_MAX_WORKERS (it overrides a --maxWorkers flag, which is
+# why an explicit flag gets a fixed lease of the same size): held = used. tsc 7, lint and scan run
+# for a second or less and take no lease.
+rules:
+  # --maxWorkers=N (or --max-workers N): N threads, for the common N; any other N falls to the
+  # suite-sized rule below
+
+  - match: '/^(?:(?:npx(?:\s+-\S+)*\s+|npm\s+exec\s+(?:--\s+)?|\S*node_modules/\.bin/)?vitest|npm\s+(?:run\s+)?test)(?=\s|$).*\s--max-?[wW]orkers(?:=|\s+)1(?!\d)/s'
+    threads: 1
+    pass: env:VITEST_MAX_WORKERS
+  - match: '/^(?:(?:npx(?:\s+-\S+)*\s+|npm\s+exec\s+(?:--\s+)?|\S*node_modules/\.bin/)?vitest|npm\s+(?:run\s+)?test)(?=\s|$).*\s--max-?[wW]orkers(?:=|\s+)2(?!\d)/s'
+    threads: 2
+    pass: env:VITEST_MAX_WORKERS
+  - match: '/^(?:(?:npx(?:\s+-\S+)*\s+|npm\s+exec\s+(?:--\s+)?|\S*node_modules/\.bin/)?vitest|npm\s+(?:run\s+)?test)(?=\s|$).*\s--max-?[wW]orkers(?:=|\s+)4(?!\d)/s'
+    threads: 4
+    pass: env:VITEST_MAX_WORKERS
+  - match: '/^(?:(?:npx(?:\s+-\S+)*\s+|npm\s+exec\s+(?:--\s+)?|\S*node_modules/\.bin/)?vitest|npm\s+(?:run\s+)?test)(?=\s|$).*\s--max-?[wW]orkers(?:=|\s+)8(?!\d)/s'
+    threads: 8
+    pass: env:VITEST_MAX_WORKERS
+  # one named test file runs on one worker, two on two
+  - match: '/^(?:(?:npx(?:\s+-\S+)*\s+|npm\s+exec\s+(?:--\s+)?|\S*node_modules/\.bin/)?vitest|npm\s+(?:run\s+)?test)(?=\s|$)(?:(?!\.test\.)[\s\S])*\.test\.(?:(?!\.test\.)[\s\S])*$/'
+    threads: 1
+    pass: env:VITEST_MAX_WORKERS
+  - match: '/^(?:(?:npx(?:\s+-\S+)*\s+|npm\s+exec\s+(?:--\s+)?|\S*node_modules/\.bin/)?vitest|npm\s+(?:run\s+)?test)(?=\s|$)(?:(?!\.test\.)[\s\S])*\.test\.(?:(?!\.test\.)[\s\S])*\.test\.(?:(?!\.test\.)[\s\S])*$/'
+    threads: 2
+    pass: env:VITEST_MAX_WORKERS
+  # the whole suite (or a directory, a -t filter, 3+ files): up to the default worker count
+  - match: '/^(?:(?:npx(?:\s+-\S+)*\s+|npm\s+exec\s+(?:--\s+)?|\S*node_modules/\.bin/)?vitest|npm\s+(?:run\s+)?test)(?=\s|$)/'
+    threads: 4-14
+    pass: env:VITEST_MAX_WORKERS
+  # the gate's own scripts: vitest runs inside them
+  - match: npm run check
+    threads: 4-14
+    pass: env:VITEST_MAX_WORKERS
+  - match: npm run check:ci
+    threads: 4-14
+    pass: env:VITEST_MAX_WORKERS
+  - match: '/^(?:(?:ba)?sh\s+)?\S*check-ci\.sh(?=\s|$)/'
+    threads: 4-14
+    pass: env:VITEST_MAX_WORKERS

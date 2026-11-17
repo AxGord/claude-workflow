@@ -62,6 +62,25 @@ export interface DecideOptions {
 
 // ---- config ----
 
+/**
+ * The directory a command runs in: `cwd`, moved by the leading `cd <dir>` segments joined by `&&`,
+ * `;` or a newline (`cd /tmp/wf-X && npx vitest run …`: the call's cwd is the caller's project, the
+ * command's is the worktree). A `cd` it cannot resolve (an option, a variable or substitution, `~`,
+ * a missing directory) ends the walk there.
+ */
+export function commandDir(command: string, cwd: string): string {
+  let dir = path.resolve(cwd);
+  for (const seg of splitSegments(command) ?? []) {
+    const [cd, target] = seg.words;
+    if (seg.words.length !== 2 || cd.value !== "cd" || !["&&", ";", "\n"].includes(seg.op)) break;
+    if (/^[-~]|[$`]/.test(target.value)) break;
+    const next = path.resolve(dir, target.value);
+    if (!fs.statSync(next, { throwIfNoEntry: false })?.isDirectory()) break;
+    dir = next;
+  }
+  return dir;
+}
+
 /** The nearest pool-gate.yaml from `cwd` up to the git root; none outside a git repo. */
 export function findConfig(cwd: string): { file: string; config: GateConfig } | undefined {
   const dirs: string[] = [];

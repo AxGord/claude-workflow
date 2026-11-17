@@ -3,7 +3,7 @@
 // rewrite between them (Claude Code keeps a single `updatedInput`).
 import fs from "node:fs";
 import path from "node:path";
-import { decide, findConfig, rtkRewriter, toolShell } from "./pool-gate.js";
+import { commandDir, decide, findConfig, rtkRewriter, toolShell } from "./pool-gate.js";
 
 export interface HookOutput {
   readonly permissionDecision?: string;
@@ -21,7 +21,10 @@ export function poolGateOutput(
 ): HookOutput | undefined {
   let found;
   try {
-    found = findConfig(cwd);
+    // The config of the directory the command runs in (a leading `cd`); a directory with none
+    // (outside a git repo, or a repo without one) keeps the caller's rules, its denies too.
+    const dir = commandDir(command, cwd);
+    found = findConfig(dir) ?? (dir === path.resolve(cwd) ? undefined : findConfig(cwd));
   } catch (err) {
     stderr(`pool-gate: config ignored — ${(err as Error).message}`);
     return undefined;
