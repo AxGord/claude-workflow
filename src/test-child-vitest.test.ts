@@ -4,6 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnChild } from "./test-helpers.js";
+import {
+  isUnderOuterWorker,
+  isWorker,
+  PROBE_SOURCE,
+  type ProbeRec,
+} from "./test-child-vitest-probe.js";
 
 // ENG-TEST-CHILD-VITEST-OUTPUT-AND-WORKERS: a test that spawns a child `vitest` must (1) not depend on
 // the child's stdout being nothing but the JSON report, and (2) run the child on one worker, not at
@@ -13,21 +19,13 @@ import { spawnChild } from "./test-helpers.js";
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = "src/test-git-no-sign.test.ts";
 
-interface Rec {
-  pid: number;
-  ppid: number;
-  argv1: string;
-  ev: "start" | "beat";
-  at: number;
-}
-
 let outerReport: {
   testResults: {
     status: string;
     assertionResults: { failureMessages: string[] }[];
   }[];
 };
-let recs: Rec[];
+let recs: ProbeRec[];
 let scratch = "";
 
 beforeAll(() => {
@@ -36,17 +34,7 @@ beforeAll(() => {
   const probe = path.join(dir, "probe.cjs");
   const log = path.join(dir, "procs.jsonl");
   const out = path.join(dir, "out.json");
-  fs.writeFileSync(
-    probe,
-    [
-      'const fs = require("node:fs");',
-      'const wt = require("node:worker_threads");',
-      "const write = ev => fs.appendFileSync(process.env.WF_PROBE_FILE, JSON.stringify({pid: process.pid, ppid: process.ppid, argv1: process.argv[1], ev, at: Date.now()}) + '\\n');",
-      "write('start');",
-      "if (wt.isMainThread) setInterval(() => write('beat'), 25).unref();",
-      "if (wt.isMainThread) process.stdout.write('probe {\"noise\": true}\\n');",
-    ].join("\n"),
-  );
+  fs.writeFileSync(probe, PROBE_SOURCE);
   // below the 600 s hook guard; the child itself runs a child vitest of up to 270 s
   spawnChild(
     "npx",
@@ -67,14 +55,12 @@ beforeAll(() => {
     .readFileSync(log, "utf8")
     .split("\n")
     .filter(Boolean)
-    .map(l => JSON.parse(l) as Rec);
+    .map(l => JSON.parse(l) as ProbeRec);
 }, 600_000);
 
 afterAll(() => {
   if (scratch) fs.rmSync(scratch, { recursive: true, force: true });
 });
-
-const isWorker = (r: Rec): boolean => r.argv1.endsWith("workers/forks.js");
 
 describe("a test that spawns a child vitest", () => {
   it("reads the report from a file, so a stray `{` on stdout does not break it", () => {
@@ -83,15 +69,11 @@ describe("a test that spawns a child vitest", () => {
   });
 
   it("runs the child on one worker at a time", () => {
-    const first = new Map<number, Rec>();
+    const first = new Map<number, ProbeRec>();
     for (const r of recs) if (!first.has(r.pid)) first.set(r.pid, r);
-    const underWorker = (r: Rec): boolean => {
-      for (let p = first.get(r.ppid); p; p = first.get(p.ppid)) if (isWorker(p)) return true;
-      return false;
-    };
     // a worker is killed without a goodbye: it lived from its first record to its last heartbeat
     const spans = [...first.values()]
-      .filter(r => isWorker(r) && underWorker(r))
+      .filter(r => isWorker(r) && isUnderOuterWorker(r))
       .map(r => ({
         from: r.at,
         to: Math.max(...recs.filter(e => e.pid === r.pid).map(e => e.at)),
