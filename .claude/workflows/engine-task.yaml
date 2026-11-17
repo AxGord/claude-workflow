@@ -197,14 +197,14 @@ states:
       dirty=$(git status --porcelain)
       base=$(git merge-base master HEAD) || exit 2
       if git diff --name-only "$base" HEAD | grep -qx CHANGELOG.md; then nolog=; else nolog=1; fi
-      # A fix round is open when a review text exists and its verdict (read as review_filed reads it) is not MERGE: review_filed sends every such text, a non-canonical verdict line too, to the worker. HEAD still at the reviewed commit means the list never reached the worker; the refusal prints the list itself, because work_unready forwards only this stdout.
+      # A fix round is open when a review text exists and its verdict (read as review_filed reads it) is not MERGE: review_filed sends every such text, a non-canonical verdict line too, to the worker. HEAD still at the reviewed commit means the list never reached the worker; the refusal prints the review's last 8000 bytes (the verdict and its FIXES list close the text), because work_unready forwards only this stdout.
       v=$(printf '%s\n' "$TEXT" | grep -E '^(VERDICT +)?(MERGE|FIXES)' | tail -1 | sed -E 's/^VERDICT +//')
       [ -n "$v" ] || { printf '%s\n' "$TEXT" | sed '/^[[:space:]]*$/d' | tail -1 | grep -Eq '(^|[^A-Za-z])MERGE[.[:space:]]*$' && v=MERGE; }
       case "$v" in
         MERGE*) ;;
-        *) if [ -n "$TEXT" ] && [ -n "$REVIEWED" ] && [ "$(git rev-parse HEAD)" = "$REVIEWED" ]; then
+        *) if [ -n "$TEXT" ] && [ -n "$REVIEWED" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse --verify -q "$REVIEWED^{commit}" 2>/dev/null)" ]; then
              echo "not ready: the review asked for FIXES and HEAD is still the reviewed commit $(git rev-parse --short HEAD): the worker has not amended. Send it this review's FIXES list verbatim first, then check on its DONE:"
-             printf '%s\n' "$TEXT" | head -c 8000
+             printf '%s\n' "$TEXT" | tail -c 8000
              exit 3
            fi;;
       esac

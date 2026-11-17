@@ -162,6 +162,8 @@ states:
       value already set ({{context.tokens_worker}}, empty = 0) PLUS this agent's tokens from its notification's
       usage line. Then transition `check`: the engine verifies the tree (artifacts outrank the report) in the
       next step; the worker is stuck, or the work is wrong and another round would not help → `blocked`.
+      On a fix round send the cause to the worker BEFORE anything else and never `check` on entering this state: the
+      branch is still the reviewed commit, and a `check` on it is refused.
     transitions:
       check: work_check
       blocked: blocked
@@ -174,12 +176,26 @@ states:
       branch=batch/$TASK
       n=$(git log --oneline "HEAD..$branch" 2>/dev/null | wc -l | tr -d ' ')
       dirty=$(git -C "$WT" status --porcelain)
+      # A fix round is open when a review text exists and its verdict is not MERGE: the worker's branch still at the
+      # reviewed commit means the fix list never reached it. The refusal prints the last 8000 bytes of the review (the
+      # verdict and its list close the text), because work_unready forwards only this stdout.
+      v=$(printf '%s\n' "$TEXT" | grep -E '^(VERDICT +)?(MERGE|FIXES)' | tail -1 | sed -E 's/^VERDICT +//')
+      case "$v" in
+        MERGE*) ;;
+        *) if [ -n "$TEXT" ] && [ -n "$REVIEWED" ] && [ "$(git rev-parse "$branch" 2>/dev/null)" = "$(git rev-parse --verify -q "$REVIEWED^{commit}" 2>/dev/null)" ]; then
+             echo "not ready: the review asked for FIXES and $branch is still the reviewed commit $(git rev-parse --short "$branch"): the worker has not amended. Send it this review verbatim first (the full list is in the review file it names), then check on its DONE:"
+             printf '%s\n' "$TEXT" | tail -c 8000
+             exit 3
+           fi;;
+      esac
       echo "commits on $branch beyond HEAD: $n"; git log --oneline "HEAD..$branch" 2>/dev/null | head -5
       [ -z "$dirty" ] || { echo "worktree $WT not clean:"; echo "$dirty" | head -10; }
       [ "$n" -gt 0 ] && [ -z "$dirty" ]
     env:
       TASK: "{{context.task}}"
       WT: "{{context.wt}}"
+      TEXT: "{{context.review_text}}"
+      REVIEWED: "{{context.reviewed_sha}}"
     timeout: 60000
     on_success: review_scope
     on_error: work_unverified
@@ -231,9 +247,11 @@ states:
            before that handback: never end your turn with live background work. End every wait loop on the
            watched job's exit, a FAILED marker or a timeout, never on the success marker alone.
 
-      2. END your turn on this task (the reviewer has no session to `link_agent` to).
-      On its notification: context_set `tokens_review` = the value already set ({{context.tokens_review}},
-      empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the
+      2. context_set `reviewed_sha` = the sha of the worker's latest DONE (the commit the reviewer reads); END your
+         turn on this task (the reviewer has no session to `link_agent` to).
+      On its notification: context_set `review_text` = its one-line handback verbatim (`work_check` refuses
+      a tree still at `reviewed_sha` after a FIXES, so the list must reach the worker first) and `tokens_review` =
+      the value already set ({{context.tokens_review}}, empty = 0) PLUS this agent's tokens, then route by the verdict: MERGE → `land`; FIXES → `fix` (the
       worker's cause = the verdict line + "read /tmp/wf-batch-logs/{{context.task}}/review.md whole"; with design=yes the driver first asks its decider, see its instructions, and adds "read {{context.wt}}.log/decisions.md whole"); REJECT → `reject`. The context_set first, the transition after
       it returned.
     transitions:
