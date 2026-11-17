@@ -516,6 +516,12 @@ onBeforeUnmount(() => {
     --hero-brand-s: 2;
   }
 }
+/* at 2x the title (logo and name, 166px) is 331px wide, past a 320px phone's content box: it scales to 1.6 there */
+@media (max-width: 379px) {
+  .Layout.has-hero {
+    --hero-brand-s: 1.6;
+  }
+}
 @media (min-width: 960px) {
   .Layout.has-hero {
     --hero-search-w0: 300px;

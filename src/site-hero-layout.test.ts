@@ -14,7 +14,7 @@ import { chromium, type Browser } from "playwright";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BASE = "/claude-workflow/";
-const WIDTHS = [1440, 1024, 960, 768, 375];
+const WIDTHS = [1440, 1024, 960, 768, 375, 320];
 const STEP = 8;
 /** The least gap a bar box keeps from the viewport's right edge. */
 const GUTTER = 8;
