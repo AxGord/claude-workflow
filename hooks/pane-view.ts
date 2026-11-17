@@ -1,14 +1,22 @@
 // What the plan pane draws, as data: a Snapshot (and the pane's own fold / tab / card state) in, a tree of the
-// four primitives the pane is made of (box, text, button, link) out. Pure and import-free (types only, and
-// the pure ./tab-links), so the mod (hooks/plan-pane.tsx, which maps the tree onto Claude Code's elements) and the
-// documentation site (the landing's scene, docs/.vitepress/theme/PaneView.vue, which maps it onto the DOM) draw
-// the SAME pane: there is no second copy of its rows, glyphs, colors, bars or sections.
+// four primitives the pane is made of (box, text, button, link) out. Pure and import-free (types only), so the mod
+// (hooks/plan-pane.tsx, which maps the tree onto Claude Code's elements) and the documentation site (the landing's
+// scene, docs/.vitepress/theme/PaneView.vue, which maps it onto the DOM) draw the SAME pane: there is no second copy of its rows, glyphs, colors, bars or sections.
 
-import { TAB_LINKS } from './tab-links'
 import type { DaySpend, FailedLine, FailedSpend, PoolCounts, PoolLine, PoolState, SessionRow, Snapshot, View } from '../types'
 
 /** The engine's own dashboard: its API answers the workflow graphs, its page draws one session's graph. */
 export const DASHBOARD = 'http://127.0.0.1:3100'
+/**
+ * The path and label of the link under each tab (the pane's `View` ids); src/dashboard-routes.test.ts pins the paths
+ * to `routePath`. Waiting has no view of its own: its lines are the Plan view's pending section, so it links there.
+ */
+export const TAB_LINKS = {
+  plan: { path: '/plan', label: 'plan ↗' },
+  sessions: { path: '/sessions', label: 'sessions ↗' },
+  waiting: { path: '/plan', label: 'plan ↗' },
+  pool: { path: '/pool', label: 'pool ↗' },
+} as const
 /** The pane's title, as `$.ui.open` gives it. */
 export const PANE_TITLE = 'Workflow plan'
 /** How far back the Landed tree goes: the Cost tab's own range. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TAB_LINKS } from "../hooks/tab-links.js";
+import { TAB_LINKS } from "../hooks/pane-view.js";
 import { parseRoute, routePath, routeTab, type Route } from "./dashboard-routes.js";
 
 const TABLE: [string, Route][] = [

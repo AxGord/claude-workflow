@@ -1,8 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spawnOf, startText } from './plan-pane'
-import { cells, dayOf, dayText, failedHeading, fitCells, foldFlipped, paneTree, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
-import { TAB_LINKS } from './tab-links'
+import { TAB_LINKS, cells, dayOf, dayText, failedHeading, fitCells, foldFlipped, paneTree, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
 import type { PaneEl, PaneNode } from './pane-view'
 import type { Snapshot, View } from '../types'
 import { API_POOL } from './fixtures/api-pool'
