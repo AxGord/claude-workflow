@@ -6,7 +6,14 @@ import { describe, expect, it } from "vitest";
 function run(extra: Record<string, string>): string {
   const r = spawnSync(
     "npx",
-    ["vitest", "run", "src/dashboard-browser.test.ts", "-t", "takes a refresh in place"],
+    [
+      "vitest",
+      "run",
+      "--maxWorkers=1",
+      "src/dashboard-browser.test.ts",
+      "-t",
+      "takes a refresh in place",
+    ],
     {
       env: { ...process.env, CHROME_BIN: "/usr/bin/false", ...extra },
       encoding: "utf8",
