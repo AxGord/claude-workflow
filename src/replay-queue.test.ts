@@ -390,7 +390,7 @@ describe("the export script captures the queue through the engine's own pick", (
   const script = read("scripts/export-replay.mjs");
   it("reads the queue file and passes the allowlist of projects to captureReplayQueue", () => {
     expect(script).toContain('load("replay-queue.js")');
-    expect(script).toContain("captureReplayQueue(queue, ranSince, [project, ...also])");
+    expect(script).toContain("captureReplayQueue(queue, ranSince, [project, ...also], running)");
     expect(script).toContain('args.queue === "none"');
   });
   it("the check still runs on the finished file before anything is written", () => {

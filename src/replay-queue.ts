@@ -16,7 +16,10 @@ import { REPLAY_QUEUE_NOTE, type ReplayQueue, type ReplayQueueLine } from "./rep
 /**
  * The queue's pending lines at the start of a window, in the order the pick visits them. `ranSince` is the task ids of every
  * session of the kept projects that started at or after the window's start (not only the window's own: a line that ran and
- * landed after the window was pending at its start). The queue is the file as it is now with those lines (and any still running) set back to pending, the
+ * landed after the window was pending at its start). `runningAtStart` is the task ids of the root sessions claimed before the
+ * window's start and not ended at it: those lines are running at the start, whatever their status is now, so a line after
+ * one waits on it. The queue is the file as it is now with the `ranSince` lines (and any still running) set back to pending,
+ * the `runningAtStart` lines set to running, the
  * window size lifted (the replay's own pipelines bound what runs at once); a line of a project outside `projects` (the
  * basename of its resolved repo) is left out, and a wait on one is the fixed text "manual condition" or "overlaps a line
  * outside the replay". Only ids, difficulty, priority, kind and one of a fixed set of reasons are written: never a line's
@@ -26,13 +29,15 @@ export function captureReplayQueue(
   queue: Queue,
   ranSince: ReadonlySet<string>,
   projects: readonly string[],
+  runningAtStart: ReadonlySet<string> = new Set(),
 ): ReplayQueue {
   const rolled: Queue = {
     ...queue,
     batchSize: queue.lines.length + 1,
-    lines: queue.lines.map(l =>
-      ranSince.has(l.id) || l.status === "running" ? { ...l, status: "pending" } : l,
-    ),
+    lines: queue.lines.map(l => {
+      if (runningAtStart.has(l.id)) return { ...l, status: "running" };
+      return ranSince.has(l.id) || l.status === "running" ? { ...l, status: "pending" } : l;
+    }),
   };
   const blocks = new Map<string, PickBlock>();
   const plan = planPick(rolled, { ignoreWindow: true, blocks });

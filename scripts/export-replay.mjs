@@ -162,7 +162,7 @@ async function main() {
     workflows,
     ...(ledger === undefined ? {} : { ledger }),
     taskKinds: queueFile === undefined ? {} : await readKinds(queueFile),
-    ...(queue === undefined ? {} : { queue: ranSince => captureReplayQueue(queue, ranSince, [project, ...also]) }),
+    ...(queue === undefined ? {} : { queue: (ranSince, running) => captureReplayQueue(queue, ranSince, [project, ...also], running) }),
     ...(args.from === undefined ? {} : { from: args.from }),
     ...(args.hours === undefined ? {} : { hours: Number(args.hours) }),
     maxBytes: Number(args["max-kb"] ?? 300) * 1000,

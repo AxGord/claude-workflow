@@ -207,9 +207,13 @@ export interface BuildOptions {
   /**
    * the queue at the window's start (`captureReplayQueue`, src/replay-queue.ts): called with the task ids of EVERY root session of
    * the kept projects that started at or after the window's start (the window's own and those that ran after it, which were
-   * pending at the start too); undefined writes none
+   * pending at the start too), and with the task ids of every root session that was claimed before the window's start and
+   * not yet ended at it (running at the start, whatever became of it after); undefined writes none
    */
-  readonly queue?: (ranSince: ReadonlySet<string>) => ReplayQueue | undefined;
+  readonly queue?: (
+    ranSince: ReadonlySet<string>,
+    runningAtStart: ReadonlySet<string>,
+  ) => ReplayQueue | undefined;
 }
 
 const ms = (ts: string): number => Date.parse(ts);
@@ -361,9 +365,13 @@ export function buildReplay(events: readonly WfEvent[], opts: BuildOptions): Rep
           });
     const spend = opts.ledger === undefined ? {} : ledgerSpend(opts.ledger, tasks);
     const ranSince = new Set<string>();
-    for (const t of all)
-      if (t.parent === null && typeof t.task === "string" && t.start >= first) ranSince.add(t.task);
-    const queue = opts.queue?.(ranSince);
+    const runningAtStart = new Set<string>();
+    for (const t of all) {
+      if (t.parent !== null || typeof t.task !== "string") continue;
+      if (t.start >= first) ranSince.add(t.task);
+      else if (t.end === undefined || t.end > first) runningAtStart.add(t.task);
+    }
+    const queue = opts.queue?.(ranSince, runningAtStart);
     return {
       version: 1,
       project: opts.project,
