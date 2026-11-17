@@ -1,14 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import vue from "@vitejs/plugin-vue";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
+import { browserInstalled, browserPath, ROOT } from "./site-browser-helpers.js";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const COMPONENT = path.join(ROOT, "docs/.vitepress/theme/WorkflowGraphs.vue");
 
 /** The page the landing's "The workflows" section is: the real component, mounted in a real browser. */
@@ -16,24 +15,8 @@ const PAGE = `<!doctype html><html><head><meta name="viewport" content="width=de
 <style>body{margin:0;padding:0 16px;background:#111;color:#ddd;font-family:sans-serif}</style></head>
 <body><div id="app"></div><script type="module" src="/@entry"></script></body></html>`;
 
-/** The playwright version's own browser when installed, else any installed headless shell (layout is the same). */
-function browserPath(): string | undefined {
-  if (fs.existsSync(chromium.executablePath())) return undefined;
-  const cache = path.join(os.homedir(), "Library/Caches/ms-playwright");
-  for (const d of fs.existsSync(cache) ? fs.readdirSync(cache).sort().reverse() : []) {
-    if (!d.startsWith("chromium_headless_shell-")) continue;
-    for (const sub of fs.readdirSync(path.join(cache, d))) {
-      const exe = path.join(cache, d, sub, "chrome-headless-shell");
-      if (fs.existsSync(exe)) return exe;
-    }
-  }
-  return undefined;
-}
-
 /** Opt-in like the dashboard's real-browser tests: a headless launch can raise a window on macOS and a CI image may hold no browser. */
-const HAVE_BROWSER =
-  process.env.WF_BROWSER_TESTS === "1" &&
-  (fs.existsSync(chromium.executablePath()) || browserPath() !== undefined);
+const HAVE_BROWSER = process.env.WF_BROWSER_TESTS === "1" && browserInstalled();
 
 let server: ViteDevServer;
 let browser: Browser;

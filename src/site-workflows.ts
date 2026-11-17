@@ -20,7 +20,10 @@ export function writeSiteWorkflows(root: string): { file: string; text: string; 
     const text = renderWorkflows(describeWorkflows(loader.getAll()));
     const file = path.join(root, SITE_WORKFLOWS_FILE);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, text);
+    // atomic: a test file reading the export while another run's setup rewrites it never sees a cut one
+    const part = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(part, text);
+    fs.renameSync(part, file);
     return { file, text, count: loader.getAll().size };
   } finally {
     fs.rmSync(empty, { recursive: true, force: true });

@@ -1,19 +1,17 @@
-import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import http, { type Server } from "node:http";
-import os from "node:os";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium, type Browser } from "playwright";
+import {
+  browserInstalled,
+  browserPath,
+  serveBuiltSite,
+  type BuiltSite,
+} from "./site-browser-helpers.js";
 
 // The landing's hero and nav as ONE layout over the whole scroll range, in a real browser: the built site is served
 // and the page is scrolled in 8 px steps. Opt-in like the other real-browser tests (WF_BROWSER_TESTS=1): a headless
 // launch can raise a window on macOS and a CI image may hold no browser. The source of the same rules is pinned,
 // browser or not, in src/site-hero.test.ts.
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const BASE = "/claude-workflow/";
 const WIDTHS = [1440, 1024, 960, 768, 375, 320];
 const STEP = 8;
 /** The least gap a bar box keeps from the viewport's right edge. */
@@ -21,72 +19,20 @@ const GUTTER = 8;
 /** The scroll at which the bar is fully condensed (`--hero-brand-y`, 96 px, 88 below 640 px), and a little past it. */
 const CONDENSED = 120;
 
-/** The playwright version's own browser when installed, else any installed headless shell (layout is the same). */
-function browserPath(): string | undefined {
-  if (fs.existsSync(chromium.executablePath())) return undefined;
-  const cache = path.join(os.homedir(), "Library/Caches/ms-playwright");
-  for (const d of fs.existsSync(cache) ? fs.readdirSync(cache).sort().reverse() : []) {
-    if (!d.startsWith("chromium_headless_shell-")) continue;
-    for (const sub of fs.readdirSync(path.join(cache, d))) {
-      const exe = path.join(cache, d, sub, "chrome-headless-shell");
-      if (fs.existsSync(exe)) return exe;
-    }
-  }
-  return undefined;
-}
+const HAVE_BROWSER = process.env.WF_BROWSER_TESTS === "1" && browserInstalled();
 
-const HAVE_BROWSER =
-  process.env.WF_BROWSER_TESTS === "1" &&
-  (fs.existsSync(chromium.executablePath()) || browserPath() !== undefined);
-
-const TYPES: Record<string, string> = {
-  ".html": "text/html",
-  ".js": "text/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-};
-
-let out = "";
-let server: Server;
+let site: BuiltSite | undefined;
 let browser: Browser;
-let url = "";
 
 beforeAll(async () => {
   if (!HAVE_BROWSER) return;
-  out = fs.mkdtempSync(path.join(os.tmpdir(), "wf-hero-layout-"));
-  execFileSync(
-    "node",
-    ["node_modules/vitepress/bin/vitepress.js", "build", "docs", "--outDir", out],
-    { cwd: ROOT, stdio: "pipe" },
-  );
-  server = http.createServer((req, res) => {
-    let rel = decodeURIComponent((req.url ?? "/").split("?")[0] ?? "/");
-    if (!rel.startsWith(BASE)) rel = BASE;
-    rel = rel.slice(BASE.length);
-    const file = path.join(out, rel === "" ? "index.html" : rel);
-    const found = [file, `${file}.html`].find(
-      f => f.startsWith(out) && fs.existsSync(f) && fs.statSync(f).isFile(),
-    );
-    if (!found) {
-      res.statusCode = 404;
-      res.end();
-      return;
-    }
-    res.setHeader("content-type", TYPES[path.extname(found)] ?? "application/octet-stream");
-    res.end(fs.readFileSync(found));
-  });
-  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const addr = server.address();
-  url = `http://127.0.0.1:${typeof addr === "object" && addr ? addr.port : 0}${BASE}`;
+  site = await serveBuiltSite("wf-hero-layout");
   browser = await chromium.launch({ executablePath: browserPath() });
 }, 180_000);
 
 afterAll(async () => {
   await browser?.close();
-  server?.close();
-  if (out) fs.rmSync(out, { recursive: true, force: true });
+  site?.close();
 });
 
 type Box = [number, number, number, number];
@@ -165,7 +111,7 @@ async function sweep(
     colorScheme: scheme,
   });
   try {
-    await page.goto(url);
+    await page.goto(site?.url ?? "");
     await page.waitForSelector(".hero");
     const samples: Sample[] = [];
     for (let y = 0; y <= to; y += STEP) {
@@ -241,11 +187,18 @@ describe.skipIf(!HAVE_BROWSER)("the hero and the nav are one layout in a real br
   }
 
   it("the search's left edge is the diagram's left edge at the top, and sits beside the cluster, narrower, once condensed", async () => {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+    });
     try {
-      await page.goto(url);
+      await page.goto(site?.url ?? "");
       await page.waitForSelector(".hero");
-      const read = (): Promise<{ search: Box; diagram: Box; toggle: Box; links: Box }> =>
+      const read = (): Promise<{
+        search: Box;
+        diagram: Box;
+        toggle: Box;
+        links: Box;
+      }> =>
         page.evaluate(() => {
           const b = (s: string): Box => {
             const r = (document.querySelector(s) as Element).getBoundingClientRect();
@@ -277,9 +230,11 @@ describe.skipIf(!HAVE_BROWSER)("the hero and the nav are one layout in a real br
   }, 60_000);
 
   it("the diagram does not exceed the text block, and the chips and buttons wrap instead of overflowing, at every width", async () => {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const page = await browser.newPage({
+      viewport: { width: 1440, height: 900 },
+    });
     try {
-      await page.goto(url);
+      await page.goto(site?.url ?? "");
       await page.waitForSelector(".hero");
       for (const width of [
         320, 360, 375, 414, 480, 600, 700, 768, 900, 959, 960, 1024, 1180, 1280, 1440, 1920,
@@ -295,7 +250,10 @@ describe.skipIf(!HAVE_BROWSER)("the hero and the nav are one layout in a real br
           const inner = r(document.querySelector(".hero-inner") as Element);
           const kids = [
             ...document.querySelectorAll(".hero-tagline, .hero-actions a, .hero-chips li"),
-          ].map(e => ({ name: (e.textContent ?? "").trim().slice(0, 12), box: r(e) }));
+          ].map(e => ({
+            name: (e.textContent ?? "").trim().slice(0, 12),
+            box: r(e),
+          }));
           const diagram = r(document.querySelector(".hero-diagram") as Element);
           const wide =
             getComputedStyle(document.querySelector(".hero-inner") as Element).display === "grid";
@@ -336,7 +294,7 @@ describe.skipIf(!HAVE_BROWSER)("the hero and the nav are one layout in a real br
         colorScheme: scheme,
       });
       try {
-        await page.goto(url);
+        await page.goto(site?.url ?? "");
         await page.waitForSelector(".hero");
         await page.evaluate(() => window.scrollTo(0, 300));
         await page.evaluate(

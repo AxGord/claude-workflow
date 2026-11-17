@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildDocs } from "./site-browser-helpers.js";
 import { setTerminal, shared, toggleZoom } from "../docs/.vitepress/theme/replay-store.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -164,14 +164,10 @@ describe("docs:build compiles the landing with the replay", () => {
     for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  it("renders the block and ships the replay file beside the page", () => {
+  it("renders the block and ships the replay file beside the page", async () => {
     const out = fs.mkdtempSync(path.join(os.tmpdir(), "wf-site-"));
     dirs.push(out);
-    execFileSync(
-      "node",
-      ["node_modules/vitepress/bin/vitepress.js", "build", "docs", "--outDir", out],
-      { cwd: ROOT, stdio: "pipe" },
-    );
+    await buildDocs(out);
     const page = fs.readFileSync(path.join(out, "index.html"), "utf8");
     expect(page).toContain("map-replay");
     // the live graphs and the status line are in the landing, the workflow definitions ship beside it

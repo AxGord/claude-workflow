@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SITE_WORKFLOWS_FILE, writeSiteWorkflows } from "./site-workflows.js";
 import { graphModuleExpression } from "./test-helpers.js";
 
@@ -60,6 +60,26 @@ describe("ENG-SITE-GENERATED-ON-REBASE: docs/public/workflows.json is a build pr
       expect(fs.readFileSync(file, "utf8")).toBe(read(SITE_WORKFLOWS_FILE));
       expect(out.text).toBe(read(SITE_WORKFLOWS_FILE));
     } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writeSiteWorkflows replaces the file atomically: it never writes the file itself, only renames a finished one onto it", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wf-site-root-"));
+    const write = vi.spyOn(fs, "writeFileSync");
+    const rename = vi.spyOn(fs, "renameSync");
+    try {
+      fs.symlinkSync(path.join(ROOT, "templates"), path.join(root, "templates"));
+      const { file } = writeSiteWorkflows(root);
+      const wrote = write.mock.calls.map(c => String(c[0]));
+      expect(wrote, "the export's own file is never opened for writing").not.toContain(file);
+      expect(rename.mock.calls.map(c => String(c[1]))).toEqual([file]);
+      expect(fs.readdirSync(path.dirname(file)), "no partial file is left beside it").toEqual([
+        path.basename(file),
+      ]);
+    } finally {
+      write.mockRestore();
+      rename.mockRestore();
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
