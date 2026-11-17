@@ -1107,6 +1107,8 @@ test('the Pool tab: budget, load, locks, the STARVED note, leases and waiters in
   // a lease: what it holds, how long, the OVERRUN flag; then whose and for what
   expect((await texts(/4 threads \(asked 2-4\)/))[0]).toContain('prio 0 · 3m10s')
   expect((await texts(/^\s*OVERRUN ~9$/))).toHaveLength(1)
+  // an idle reservation shows beside it: held 2, running well below
+  expect((await texts(/^\s*UNDERUSE ~0$/))).toHaveLength(1)
   expect(await texts(/proj · 94fe30d6 · post-land 0002ab99/)).toHaveLength(1)
   // the step shows, the label's second line does not
   expect(await texts(/proj · af2cce95 · slice-worker\/sync_gate_run · tree=\$\(pwd -P\)$/)).toHaveLength(1)
@@ -1136,6 +1138,7 @@ test('at a narrow pane no line reaches past the width and both flags survive the
   const lease = all.find(t => t.includes('(asked 2-4)')) ?? ''
   expect(lease.endsWith(' OVERRUN ~9')).toBe(true)
   expect(lease).toContain('…')
+  expect(all.find(t => t.includes('(asked 1-2)'))?.endsWith(' UNDERUSE ~0')).toBe(true)
   expect(all.find(t => t.includes('1. 4 threads'))?.endsWith(' STARVED')).toBe(true)
   await ui.unmount()
 })
@@ -1192,12 +1195,13 @@ test('an engine that does not answer shows one dim line on the Pool tab, as an a
   await ui.unmount()
 })
 
-test('poolView keeps what the pane draws: the project\'s last name, an 8-character session, the label\'s first line, the overrun only on a lease that overruns', () => {
+test('poolView keeps what the pane draws: the project\'s last name, an 8-character session, the label\'s first line, the overrun only on a lease that overruns, the underuse only on one that underuses', () => {
   const v = poolView(API_POOL)
   expect(v.leases.map(l => [l.pid, l.project, l.session, l.overrun, l.priority])).toEqual([
     [55908, 'proj', '94fe30d6', 9, '0'],
     [1548, 'proj', 'af2cce95', null, '0 normal'],
   ])
+  expect(v.leases.map(l => l.underuse)).toEqual([null, 0])
   expect(v.leases[1]?.label).toBe('tree=$(pwd -P)')
   expect(v.waiting[0]).toMatchObject({ isStarved: true, priority: '1 high', step: '' })
   expect(poolView({}).leases).toEqual([])

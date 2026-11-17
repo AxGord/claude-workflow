@@ -87,6 +87,8 @@ export type PoolLine = {
   label: string
   /** a lease whose processes run well above its threads: the busy cpus it runs, else null */
   overrun: number | null
+  /** a lease whose processes have run well below its threads for 30 s (the pool's UNDERUSE): the busy cpus it runs, else null */
+  underuse: number | null
   isStarved: boolean
 }
 

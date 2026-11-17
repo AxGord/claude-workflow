@@ -546,6 +546,7 @@ export function poolView(api: any): PoolView {
       step: String(e.step ?? ''),
       label: String(e.label ?? '').split('\n')[0] ?? '',
       overrun: r?.overrun ? Math.round(num(r.runs)) : null,
+      underuse: r?.underuse ? Math.round(num(r.runs)) : null,
       isStarved: Boolean(r?.starved),
     }
   }

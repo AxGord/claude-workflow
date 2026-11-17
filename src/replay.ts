@@ -1359,6 +1359,7 @@ export function poolStateAt(file: ReplayFile, at: number): PoolState {
     step: "",
     label,
     overrun: null,
+    underuse: null,
     isStarved: false,
   });
   const named = seen.filter(m => m[0] !== "starved");
