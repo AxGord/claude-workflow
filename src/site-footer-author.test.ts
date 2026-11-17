@@ -21,7 +21,9 @@ describe("the footer's source", () => {
   const config = fs.readFileSync(path.join(ROOT, "docs/.vitepress/config.mts"), "utf8");
 
   it("names the author in the copyright, linked to his site", () => {
-    expect(config).toContain(`copyright: '© 2026 <a href="${AUTHOR_URL}">Alexander Gordeyko</a>'`);
+    expect(config).toContain(
+      `copyright: '© 2026 <a href="${AUTHOR_URL}" target="_self">Alexander Gordeyko</a>'`,
+    );
     expect(config).toContain('message: "Released under the MIT License."');
   });
 });

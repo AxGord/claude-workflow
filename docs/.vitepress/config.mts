@@ -129,7 +129,7 @@ export default defineConfig({
     // VitePress renders `copyright` as HTML; its default rule keeps the footer on pages without a sidebar only.
     footer: {
       message: "Released under the MIT License.",
-      copyright: '© 2026 <a href="https://axgord.github.io/">Alexander Gordeyko</a>',
+      copyright: '© 2026 <a href="https://axgord.github.io/" target="_self">Alexander Gordeyko</a>',
     },
   },
 });
