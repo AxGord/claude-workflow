@@ -2,11 +2,12 @@
 // The nav's Docs: a link to the start of the docs with the page list beside it. VitePress's own dropdown is a button that only
 // opens its menu (a click goes nowhere), and it has no link-plus-menu item, so this is a custom nav item (config.mts: `component:
 // "DocsNav"`). On the bar the title is a link and the caret opens the list (hover and keyboard focus open it too; the caret only
-// opens, so a click or Enter on it while hover or focus already opened it keeps it open, and a tap on touch opens it); in the mobile menu (`screenMenu`) it is VitePress's own expandable group, as before.
+// opens, so a click or Enter on it while hover or focus already opened it keeps it open, and a tap on touch opens it); in the mobile menu (`screenMenu`) it is always expanded: the "Docs" link (to the start of the docs) with every page's link under it, no toggle.
 import { useData } from "vitepress";
 import { VPLink } from "vitepress/theme";
 import VPMenu from "vitepress/dist/client/theme-default/components/VPMenu.vue";
-import VPNavScreenMenuGroup from "vitepress/dist/client/theme-default/components/VPNavScreenMenuGroup.vue";
+import VPNavScreenMenuGroupLink from "vitepress/dist/client/theme-default/components/VPNavScreenMenuGroupLink.vue";
+import VPNavScreenMenuLink from "vitepress/dist/client/theme-default/components/VPNavScreenMenuLink.vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
 interface Item {
@@ -39,7 +40,10 @@ function onFocusOut(e: FocusEvent): void {
 </script>
 
 <template>
-  <VPNavScreenMenuGroup v-if="screenMenu" :text="text" :items="items" />
+  <div v-if="screenMenu" class="DocsNavScreen">
+    <VPNavScreenMenuLink :item="{ text, link }" />
+    <VPNavScreenMenuGroupLink v-for="item in items" :key="item.link" :item="item" />
+  </div>
   <div
     v-else
     ref="root"
@@ -61,6 +65,14 @@ function onFocusOut(e: FocusEvent): void {
 </template>
 
 <style scoped>
+.DocsNavScreen {
+  border-bottom: 1px solid var(--vp-c-divider);
+  padding-bottom: 8px;
+}
+.DocsNavScreen :deep(.VPNavScreenMenuLink) {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
 .DocsNav {
   position: relative;
   display: flex;

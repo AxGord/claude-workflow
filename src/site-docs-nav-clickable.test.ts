@@ -73,15 +73,20 @@ describe.skipIf(!HAVE_BROWSER)("the nav's Docs item on desktop", () => {
     }
   });
 
-  it("the mobile menu at 375 px still lists every page", async () => {
-    const page = await browser.newPage({ viewport: { width: 375, height: 800 } });
+  it("the mobile menu at 390 px shows every Docs page with no click on Docs", async () => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     try {
       await page.goto(site?.url ?? "");
       await page.click(".VPNavBarHamburger");
-      await page.click(".VPNavScreenMenuGroup .button");
-      const items = page.locator(".VPNavScreenMenuGroup .items a");
+      const items = page.locator(".DocsNavScreen a");
       await items.first().waitFor({ state: "visible" });
-      expect(await items.count(), "pages in the mobile menu").toBe(PAGES);
+      expect(await items.count(), "Docs link plus the pages").toBe(PAGES + 1);
+      expect(await page.locator(".DocsNavScreen a:visible").count(), "visible links").toBe(
+        PAGES + 1,
+      );
+      expect(await page.locator(".VPNavScreenMenuGroup").count(), "no collapsible group").toBe(0);
+      await items.first().click();
+      await page.waitForURL(/\/claude-workflow\/getting-started$/);
     } finally {
       await page.close();
     }
