@@ -43,17 +43,14 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 /plugin install workflow
 ```
 
-Other install channels (this repository, npm, a local checkout, manual), the CLAUDE.md snippet,
-the two ways to use it and your own workflow:
-[Getting started](https://axgord.github.io/claude-workflow/getting-started).
-
 **Two ways to use it.** *One task:* with the CLAUDE.md snippet every conversation starts the `master` workflow,
 which picks a bundled one (`bug-fix`, `coding`, `new-feature`, ...) and hands the agent one prompt at a time; a
 named one starts with `start({ workflow: "bug-fix" })` or by asking. *A queue:* for many tasks, a queue file
 plus the `batch` workflow runs one task workflow per line, several at once, each under a driver agent. A
 workflow of your own comes from asking the agent (it loads the bundled `workflow-authoring` skill) or from
 writing the YAML by hand. Step by step:
-[Getting started](https://axgord.github.io/claude-workflow/getting-started).
+[Getting started](https://axgord.github.io/claude-workflow/getting-started), which also covers the other
+install channels (this repository, npm, a local checkout, manual) and the CLAUDE.md snippet.
 
 ## Quick start
 
