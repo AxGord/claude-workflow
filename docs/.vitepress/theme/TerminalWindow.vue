@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The Claude Code window drawn over the map, translucent with a backdrop blur: the parent conversation's lines on
+// The Claude Code window drawn over the map, translucent with a backdrop blur, dark in the site's dark theme and white in its light one: the parent conversation's lines on
 // the left and the workflow plan pane docked on the right, both at the scene's clock (replay-store.ts). The pane
 // IS the mod's: `snapshotAt` (src/replay.ts) turns the replay's events into the Snapshot the mod builds from the
 // engine, and `paneTree` (hooks/pane-view.ts, the code the mod draws with) turns it into the pane; the
@@ -76,7 +76,7 @@ function act(a: PaneAction): void {
 </script>
 
 <template>
-  <section class="cc-window" aria-label="The Claude Code window: the conversation and the workflow plan pane">
+  <section class="cc-window term-follows-site" aria-label="The Claude Code window: the conversation and the workflow plan pane">
     <div class="cc-title"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>claude — anyparse</div>
     <div class="cc-body">
       <div class="cc-convo">
@@ -102,13 +102,13 @@ function act(a: PaneAction): void {
   height: 700px;
   display: flex;
   flex-direction: column;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--cc-border);
   border-radius: 14px;
-  background: rgba(13, 17, 23, 0.72);
+  background: var(--cc-bg);
   backdrop-filter: blur(14px) saturate(1.2);
   -webkit-backdrop-filter: blur(14px) saturate(1.2);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-  color: #d6dde6;
+  box-shadow: var(--cc-shadow);
+  color: var(--cc-text);
   font: 15px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow: hidden;
 }
@@ -117,8 +117,8 @@ function act(a: PaneAction): void {
   align-items: center;
   gap: 8px;
   padding: 9px 14px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  color: #9aa4ae;
+  border-bottom: 1px solid var(--cc-rule);
+  color: var(--cc-muted);
   font-size: 13px;
 }
 .dot {
@@ -160,17 +160,17 @@ function act(a: PaneAction): void {
   overflow: hidden;
 }
 .cc-bullet {
-  color: #7d8590;
+  color: var(--cc-dim);
   white-space: pre;
 }
 .cc-prompt {
   margin-top: 10px;
   padding: 6px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--cc-input);
   border-radius: 8px;
 }
 .cc-caret {
-  color: #9aa4ae;
+  color: var(--cc-muted);
 }
 .cc-dock {
   width: calc(80ch + 28px);
@@ -178,12 +178,12 @@ function act(a: PaneAction): void {
   display: flex;
   flex-direction: column;
   padding: 10px 14px;
-  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-left: 1px solid var(--cc-rule);
   overflow: hidden;
 }
 .cc-dock-title {
   margin-bottom: 6px;
-  color: #9aa4ae;
+  color: var(--cc-muted);
   font-weight: 700;
 }
 .cc-pane {
@@ -192,9 +192,27 @@ function act(a: PaneAction): void {
 </style>
 
 <style>
-/* the window is dark in both site themes; its see-through glass over a light map would turn it grey and its text
-   hard to read, so in the light theme the glass is nearly opaque */
+/* the window follows the site's theme: dark glass by default, a white terminal under `html:not(.dark)`; the pane and
+   the conversation lines inside it read the same switch (PaneView.vue's `--tc-*`). The glass is see-through in the dark
+   theme and nearly opaque in the light one, where a translucent window over the map would turn grey. */
+.cc-window {
+  --cc-bg: rgba(13, 17, 23, 0.72);
+  --cc-text: #d6dde6;
+  --cc-muted: #9aa4ae;
+  --cc-dim: #7d8590;
+  --cc-border: rgba(255, 255, 255, 0.14);
+  --cc-rule: rgba(255, 255, 255, 0.1);
+  --cc-input: rgba(255, 255, 255, 0.18);
+  --cc-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
 html:not(.dark) .cc-window {
-  background: rgba(13, 17, 23, 0.94);
+  --cc-bg: rgba(255, 255, 255, 0.94);
+  --cc-text: #1f2328;
+  --cc-muted: #57606a;
+  --cc-dim: #6e7781;
+  --cc-border: rgba(31, 35, 40, 0.18);
+  --cc-rule: rgba(31, 35, 40, 0.12);
+  --cc-input: rgba(31, 35, 40, 0.22);
+  --cc-shadow: 0 24px 60px rgba(31, 35, 40, 0.22);
 }
 </style>

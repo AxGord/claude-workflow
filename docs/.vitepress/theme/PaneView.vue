@@ -5,25 +5,9 @@
 import { defineComponent, h, type PropType, type VNode } from "vue";
 import type { PaneAction, PaneEl, PaneNode } from "../../../hooks/pane-view";
 
-/** The terminal's named colors, as a dark terminal theme draws them. */
-const COLORS: Record<string, string> = {
-  black: "#3b4048",
-  red: "#ff6b6b",
-  green: "#4ec98a",
-  yellow: "#e5c07b",
-  blue: "#61a8ff",
-  magenta: "#d38aea",
-  cyan: "#4fc1d9",
-  white: "#e6e6e6",
-  gray: "#8b949e",
-  grey: "#8b949e",
-  cyanBright: "#7fe6ff",
-  greenBright: "#7ee2a8",
-  redBright: "#ff8f8f",
-  yellowBright: "#ffe08a",
-  blueBright: "#8cc2ff",
-};
-const colorOf = (c: string): string => COLORS[c] ?? c;
+/** A color of the tree is a theme key of Claude Code (`TONE` of hooks/pane-view.ts): the stylesheet below gives each key a
+ *  value per terminal ground, so the same tree draws on a dark and on a light terminal. Anything else (`#rrggbb`) is kept. */
+const colorOf = (c: string): string => (/^[A-Za-z]+$/.test(c) ? `var(--tc-${c})` : c);
 
 export default defineComponent({
   name: "PaneView",
@@ -68,12 +52,37 @@ export default defineComponent({
 </script>
 
 <style>
+/* the dark terminal's palette; a terminal that follows the site's light theme (`term-follows-site`) redefines it below.
+   One `--tc-<theme key>` per value of `TONE` (hooks/pane-view.ts), pinned by src/site-terminal-light.test.ts */
 .pv {
   --pv-dim: #7d8590;
+  --pv-link: #b1b9f9;
+  --pv-hover: rgba(255, 255, 255, 0.06);
+  --tc-success: #4eba65;
+  --tc-error: #ff6b80;
+  --tc-warning: #ffc107;
+  --tc-suggestion: #b1b9f9;
+  --tc-claude: #d77757;
+  --tc-inactive: #999999;
+  --tc-remember: #b1b9f9;
+  --tc-autoAccept: #af87ff;
   display: flex;
   flex-direction: column;
   white-space: pre;
   min-width: 0;
+}
+html:not(.dark) .term-follows-site .pv {
+  --pv-dim: #6e7781;
+  --pv-link: #5769f7;
+  --pv-hover: rgba(0, 0, 0, 0.06);
+  --tc-success: #2c7a39;
+  --tc-error: #ab2b3f;
+  --tc-warning: #966c1e;
+  --tc-suggestion: #5769f7;
+  --tc-claude: #d77757;
+  --tc-inactive: #666666;
+  --tc-remember: #0000ff;
+  --tc-autoAccept: #8700ff;
 }
 .pv-box {
   display: flex;
@@ -83,10 +92,10 @@ export default defineComponent({
   cursor: pointer;
 }
 .pv-btn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--pv-hover);
 }
 .pv-link {
-  color: #4fc1d9;
+  color: var(--pv-link);
   text-decoration: underline;
 }
 </style>

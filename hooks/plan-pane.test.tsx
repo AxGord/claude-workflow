@@ -927,10 +927,10 @@ test('Next: every row on one line while they fit; one row too long for the pane 
   }
 })
 
-test('priority glyphs: urgent red, high orange, low grey, normal and none no glyph; the text form is gone', () => {
-  expect(prioGlyph('urgent')).toEqual({ glyph: '⇈', color: 'red' })
-  expect(prioGlyph('high')).toEqual({ glyph: '↑', color: '#ff8800' })
-  expect(prioGlyph('low')).toEqual({ glyph: '↓', color: 'gray' })
+test('priority glyphs: urgent red, high orange, low grey (theme keys), normal and none no glyph; the text form is gone', () => {
+  expect(prioGlyph('urgent')).toEqual({ glyph: '⇈', color: 'error' })
+  expect(prioGlyph('high')).toEqual({ glyph: '↑', color: 'claude' })
+  expect(prioGlyph('low')).toEqual({ glyph: '↓', color: 'inactive' })
   expect(prioGlyph('normal')).toBeUndefined()
   expect(prioGlyph(undefined)).toBeUndefined()
   expect(prioGlyph('constructor')).toBeUndefined()
@@ -1436,7 +1436,7 @@ test('single-task view: a section with nothing to show is left out', () => {
 test('single-task view: an exec past its timeout is red; a last exec shows only while none runs, its exit green at 0 and red otherwise', () => {
   const over = paneTree({ snapshot: { at: T0, sessions: [sessionRow({ exec: { state: 'x', since: T0 - 90_000, command: 'sleep 99', timeoutMs: 30_000 } })], queue: null, lands: [], recent: 0, days: {}, error: '' } as unknown as Snapshot, tab: 'sessions', expanded: '', folded: [], now: T0, columns: 100, rows: 40, poolCounts: null, pool: null })
   const execEl = elements(over).find(e => e.el === 'text' && nodeText(e) === ' 1m30s/30s')
-  expect(execEl && execEl.el === 'text' ? execEl.props.color : undefined).toBe('red')
+  expect(execEl && execEl.el === 'text' ? execEl.props.color : undefined).toBe('error')
   const ok = singleLines([sessionRow({ lastExec: { state: 'gate', code: 0, ms: 2000, at: T0 - 3 * MIN } })], { pool: null })
   expect(ok).toContain('▶ Nothing running')
   expect(ok).toContain('    last exec gate exit 0 in 2s 3m ago')
@@ -1597,14 +1597,14 @@ test('single-task view: an exec is late only past its timeout stretched by the p
     return { color: el && el.el === 'text' ? el.props.color : undefined, text: el ? nodeText(el) : '' }
   }
   const base = { state: 'x', since: T0 - 90_000, command: 'gate', timeoutMs: 30_000 }
-  expect(colorOf(base).color).toBe('red')
-  expect(colorOf({ ...base, waitMs: 5000 }).color).toBe('red')
+  expect(colorOf(base).color).toBe('error')
+  expect(colorOf({ ...base, waitMs: 5000 }).color).toBe('error')
   // 90 s run, 30 s timeout, 70 s of pool wait counted: deadline 100 s, not late
   const waiting = colorOf({ ...base, waitMs: 70_000 })
   expect(waiting.color).toBeUndefined()
   expect(waiting.text).toBe(' 1m30s/30s +1m10s pool wait')
   // the stretch is capped at four timeouts (120 s): a 130 s run is late whatever the wait
-  expect(colorOf({ ...base, since: T0 - 130_000, waitMs: 500_000 }).color).toBe('red')
+  expect(colorOf({ ...base, since: T0 - 130_000, waitMs: 500_000 }).color).toBe('error')
   expect(execDeadlineMs(30_000, 500_000)).toBe(120_000)
   expect(execDeadlineMs(30_000, 0)).toBe(30_000)
 })

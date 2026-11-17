@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { AgentSeen, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
-import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOf, spawnLine, statusBandTree, two } from './pane-view'
+import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOf, spawnLine, statusBandTree, TONE, two } from './pane-view'
 import type { Move, PaneAction, PaneEl, PaneNode } from './pane-view'
 
 const PANE = 'workflow-plan'
@@ -886,7 +886,7 @@ export const register: Register = on => {
       const now = await $.clock.now()
       return (
         <Text>
-          <Text color="cyan">[{r.tag !== '' ? r.tag : r.workflow}] </Text>
+          <Text color={TONE.info}>[{r.tag !== '' ? r.tag : r.workflow}] </Text>
           {r.workflow} @ <Text weight="bold">{r.state}</Text>
           {leaf.id !== r.id ? <Text> › {leaf.workflow} @ <Text weight="bold">{leaf.state}</Text></Text> : null}
           <Text dimColor> {age(now - leaf.since)} · {r.id}</Text>
@@ -940,12 +940,12 @@ export const register: Register = on => {
     ].filter(x => x !== '')
     return (
       <Text>
-        <Text color="cyan">⧗ </Text>
+        <Text color={TONE.info}>⧗ </Text>
         <Text dimColor>{slices.length} {slices.length === 1 ? 'slice' : 'slices'} · {total} {total === 1 ? 'agent' : 'agents'}: </Text>
         {slices.slice(0, SHOW).map(([label, v], i) => (
           <Text>
             {i > 0 ? <Text dimColor> · </Text> : null}
-            <Text color="cyan">{label}</Text> <Text dimColor>{v.state}{v.agents > 1 ? ` ×${v.agents}` : ''}</Text>
+            <Text color={TONE.info}>{label}</Text> <Text dimColor>{v.state}{v.agents > 1 ? ` ×${v.agents}` : ''}</Text>
           </Text>
         ))}
         {rest.length > 0 ? <Text dimColor> · {rest.join(' · ')}</Text> : null}
@@ -1000,7 +1000,7 @@ export const register: Register = on => {
       const now = await $.clock.now()
       return (
         <Text>
-          <Text color="cyan">⚙ [{top.tag !== '' ? top.tag : live.workflow}] </Text>
+          <Text color={TONE.info}>⚙ [{top.tag !== '' ? top.tag : live.workflow}] </Text>
           <Text dimColor>{spawn?.role ?? roleOf(live.workflow)}</Text>
           {modelText}
           <Text dimColor> · </Text>
@@ -1015,11 +1015,11 @@ export const register: Register = on => {
       const land = s?.lands.find(l => l.slice === seen.label)
       return (
         <Text>
-          <Text color="cyan">⚙ [{seen.label}] </Text>
+          <Text color={TONE.info}>⚙ [{seen.label}] </Text>
           <Text dimColor>{spawn?.role ?? seen.role}</Text>
           {modelText}
           <Text dimColor> · </Text>
-          {land && seen.role === 'driver' ? <Text color="green">✓ landed {land.sha}</Text> : <Text dimColor>ended at {seen.state}</Text>}
+          {land && seen.role === 'driver' ? <Text color={TONE.ok}>✓ landed {land.sha}</Text> : <Text dimColor>ended at {seen.state}</Text>}
         </Text>
       )
     }

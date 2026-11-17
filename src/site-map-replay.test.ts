@@ -50,7 +50,7 @@ describe("the landing's replay runs the dashboard map's own code", () => {
     expect(DASH_CSS).toContain(".replace(/^:root\\s*\\{/m, `.${DASH} {`)");
   });
 
-  it("the landing's stage follows the site's theme: map and pool strip wear the tokens, the terminal stays dark", () => {
+  it("the landing's stage follows the site's theme: map and pool strip wear the tokens, the terminal has its own light and dark palettes", () => {
     const literal = /#[0-9a-fA-F]{3,8}\b|\brgba?\(/;
     // the strip is a `.dash` element, so it takes the light or the dark set with `html.dark`, as the map above it
     expect(SCENE).toContain('class="stage-strip" :class="DASH"');
@@ -63,9 +63,9 @@ describe("the landing's replay runs the dashboard map's own code", () => {
     expect(SCENE).not.toMatch(/class="stage(?:-frame)?"[^>]*:class="DASH"/);
     const terminal = read("docs/.vitepress/theme/TerminalWindow.vue");
     expect(terminal).not.toContain("DASH");
-    // dark glass over a light map would read grey: the light theme makes it nearly opaque
+    // the window itself follows the site's theme (src/site-terminal-light.test.ts pins its palettes)
     expect(terminal).toContain(
-      "<style>\n/* the window is dark in both site themes; its see-through glass over a light map would turn it grey and its text\n   hard to read, so in the light theme the glass is nearly opaque */\nhtml:not(.dark) .cc-window {\n  background: rgba(13, 17, 23, 0.94);",
+      "html:not(.dark) .cc-window {\n  --cc-bg: rgba(255, 255, 255, 0.94);",
     );
     // the strip: every colour it draws is a --ps-* variable; dark by default, the dashboard's tokens under `.dash`
     const body = (sel: string): string =>

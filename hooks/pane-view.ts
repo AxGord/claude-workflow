@@ -19,6 +19,23 @@ export const TAB_LINKS = {
 } as const
 /** The pane's title, as `$.ui.open` gives it. */
 export const PANE_TITLE = 'Workflow plan'
+/**
+ * The pane's colours by role. A value is a theme key of Claude Code (the mod API's `Color` follows the person's theme),
+ * never an ANSI name or a hex: a terminal profile maps ANSI names to a palette of its own, so a name readable on a dark
+ * ground can vanish on a white one, where a theme key is chosen by the theme for its own ground. The site's terminal
+ * (`docs/.vitepress/theme/PaneView.vue`) defines every value for both of its grounds.
+ */
+export const TONE = {
+  ok: 'success',
+  bad: 'error',
+  warn: 'warning',
+  info: 'suggestion',
+  live: 'claude',
+  quiet: 'inactive',
+  next: 'remember',
+  pool: 'autoAccept',
+  high: 'claude',
+} as const
 /** How far back the Landed tree goes: the Cost tab's own range. */
 export const LAND_DAYS = 14
 /** The Failed section lists the lines that ended within this many days; the rest fold under `+N older`. */
@@ -34,7 +51,7 @@ export type PaneAction =
   | { readonly kind: 'expand'; readonly id: string }
   | { readonly kind: 'pane' }
 
-/** A text's look: a terminal color name or `#rrggbb`, dim, bold. */
+/** A text's look: a color (a `TONE` value, a theme key), dim, bold. */
 export type TextProps = { readonly color?: string; readonly dimColor?: boolean; readonly weight?: 'bold' }
 
 export type PaneEl =
@@ -98,11 +115,11 @@ export function cells(s: string): number {
   return n
 }
 
-/** A queue line's priority as one cell: urgent ⇈ red, high ↑ orange, low ↓ grey; normal (or none) has no glyph. */
+/** A queue line's priority as one cell: urgent ⇈ `bad`, high ↑ `high` (Claude's orange), low ↓ `quiet`; normal (or none) has no glyph. */
 export const PRIO_GLYPHS: Record<string, { glyph: string; color: string }> = {
-  urgent: { glyph: '⇈', color: 'red' },
-  high: { glyph: '↑', color: '#ff8800' },
-  low: { glyph: '↓', color: 'gray' },
+  urgent: { glyph: '⇈', color: TONE.bad },
+  high: { glyph: '↑', color: TONE.high },
+  low: { glyph: '↓', color: TONE.quiet },
 }
 export function prioGlyph(priority: string | undefined): { glyph: string; color: string } | undefined {
   return priority !== undefined && Object.hasOwn(PRIO_GLYPHS, priority) ? PRIO_GLYPHS[priority] : undefined
@@ -201,7 +218,7 @@ export function level(d: string): PaneEl {
   const full = Math.min(5, Math.max(1, Math.round(n / 2)))
   return text(
     {},
-    text({ color: n <= 3 ? 'green' : n <= 6 ? 'yellow' : 'red', weight: n >= 9 ? 'bold' : undefined }, '▰'.repeat(full)),
+    text({ color: n <= 3 ? TONE.ok : n <= 6 ? TONE.warn : TONE.bad, weight: n >= 9 ? 'bold' : undefined }, '▰'.repeat(full)),
     text({ dimColor: true }, '▱'.repeat(5 - full)),
   )
 }
@@ -222,9 +239,9 @@ function poolBody(st: PoolState | null, now: number, columns: number): PaneNode 
       text(
         {},
         lead,
-        l.overrun !== null ? text({ color: 'red', weight: 'bold' }, ` OVERRUN ~${l.overrun}`) : null,
-        l.underuse !== null ? text({ color: 'yellow', weight: 'bold' }, ` UNDERUSE ~${l.underuse}`) : null,
-        l.isStarved ? text({ color: 'red', weight: 'bold' }, ' STARVED') : null,
+        l.overrun !== null ? text({ color: TONE.bad, weight: 'bold' }, ` OVERRUN ~${l.overrun}`) : null,
+        l.underuse !== null ? text({ color: TONE.warn, weight: 'bold' }, ` UNDERUSE ~${l.underuse}`) : null,
+        l.isStarved ? text({ color: TONE.bad, weight: 'bold' }, ' STARVED') : null,
       ),
       who === '' ? null : text({ dimColor: true }, fitCells('     ' + who, columns)),
     )
@@ -233,11 +250,11 @@ function poolBody(st: PoolState | null, now: number, columns: number): PaneNode 
     text({ weight: 'bold' }, fitCells(`budget ${p.budget} · held ${p.held} · load ${p.load.toFixed(2)}`, columns)),
     text({ dimColor: true }, fitCells(`external ${p.external.toFixed(1)} · threshold ${p.threshold}`, columns)),
     text({ dimColor: true }, fitCells(`locks: ${p.locks.length > 0 ? p.locks.join(', ') : 'none'}`, columns)),
-    p.starvedNote !== '' ? text({ color: 'red' }, fitCells(p.starvedNote, columns)) : null,
-    text({ color: 'green', weight: 'bold' }, `▶ Leases (${p.leases.length})`),
+    p.starvedNote !== '' ? text({ color: TONE.bad }, fitCells(p.starvedNote, columns)) : null,
+    text({ color: TONE.ok, weight: 'bold' }, `▶ Leases (${p.leases.length})`),
     p.leases.length === 0 ? text({ dimColor: true }, '  none') : null,
     p.leases.map(l => row(l, '■')),
-    text({ color: 'blue', weight: 'bold' }, fitCells(`◷ Waiting (${p.waiting.length}), in admission order`, columns)),
+    text({ color: TONE.next, weight: 'bold' }, fitCells(`◷ Waiting (${p.waiting.length}), in admission order`, columns)),
     p.waiting.length === 0 ? text({ dimColor: true }, '  none') : null,
     p.waiting.map((l, i) => row(l, `${i + 1}.`)),
     text({ dimColor: true }, `read ${spanText(now - st.at)} ago`),
@@ -261,12 +278,12 @@ export function statusBandTree(s: Snapshot): PaneEl | null {
     { flexDirection: 'row', gap: 2 },
     text(
       {},
-      hasChildren(main) ? text({ color: 'cyanBright', weight: 'bold' }, '◆ ') : text({ color: main.isWorking ? 'cyanBright' : 'cyan' }, '⚙ '),
+      hasChildren(main) ? text({ color: TONE.live, weight: 'bold' }, '◆ ') : text({ color: main.isWorking ? TONE.live : TONE.info }, '⚙ '),
       `${main.workflow}:${main.state}`,
-      others > 0 ? text({ color: 'cyan' }, ` (${others})`) : null,
+      others > 0 ? text({ color: TONE.info }, ` (${others})`) : null,
     ),
     q ? text({ dimColor: true }, `▶ ${q.running.length}/${q.window} · ⏭ ${q.ready.length} · ✓ ${s.recent}`) : null,
-    button('band-plan', { kind: 'pane' }, [text({ color: 'cyan' }, '[plan]')], 'p'),
+    button('band-plan', { kind: 'pane' }, [text({ color: TONE.info }, '[plan]')], 'p'),
   )
 }
 
@@ -352,14 +369,14 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
   const row = (...segs: Seg[]) => rowOf(columns, ...segs)
   const dim = (t: string): Seg => ({ t, p: { dimColor: true } })
   const modelSeg = (r: SessionRow): Seg => (r.model !== undefined && r.model !== '' ? dim(` · ${r.model}`) : '')
-  const tagSeg = (r: SessionRow): Seg => (r.tag !== '' ? { t: `[${r.tag}]`, p: { color: 'cyan' } } : '')
+  const tagSeg = (r: SessionRow): Seg => (r.tag !== '' ? { t: `[${r.tag}]`, p: { color: TONE.info } } : '')
 
   // (1) the current session
   const currentLines = (level: number): PaneNode[] => {
     const r = main
     const isParent = childrenOf(r.id).length > 0
     const head = row(
-      isParent ? { t: '◆ ', p: { color: 'cyanBright', weight: 'bold' } } : { t: '⚙ ', p: { color: r.isWorking ? 'cyanBright' : 'cyan' } },
+      isParent ? { t: '◆ ', p: { color: TONE.live, weight: 'bold' } } : { t: '⚙ ', p: { color: r.isWorking ? TONE.live : TONE.info } },
       r.workflow, tagSeg(r), ' @ ', { t: r.state, p: { weight: 'bold' } },
       dim(` ${sinceText(now - r.since)}${r.visit > 1 ? ` · visit ${r.visit}` : ''}`),
     )
@@ -383,8 +400,8 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
       const wait = r.exec.waitMs ?? 0
       const over = r.exec.timeoutMs > 0 && elapsed > execDeadlineMs(r.exec.timeoutMs, wait) + DEADLINE_GRACE_MS
       return {
-        live: [row(pad, { t: '❯ ', p: { color: 'yellow' } }, r.exec.command !== '' ? commandLine(r.exec.command) : r.exec.state,
-          { t: ` ${spanText(elapsed)}${r.exec.timeoutMs > 0 ? `/${spanText(r.exec.timeoutMs)}` : ''}${wait >= 1000 ? ` +${spanText(wait)} pool wait` : ''}`, p: over ? { color: 'red' } : { dimColor: true } })],
+        live: [row(pad, { t: '❯ ', p: { color: TONE.warn } }, r.exec.command !== '' ? commandLine(r.exec.command) : r.exec.state,
+          { t: ` ${spanText(elapsed)}${r.exec.timeoutMs > 0 ? `/${spanText(r.exec.timeoutMs)}` : ''}${wait >= 1000 ? ` +${spanText(wait)} pool wait` : ''}`, p: over ? { color: TONE.bad } : { dimColor: true } })],
         last: [],
       }
     }
@@ -392,13 +409,13 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
     const e = r.lastExec
     return {
       live: [],
-      last: [row(pad, dim('last exec '), e.state !== '' ? dim(`${e.state} `) : '', { t: `exit ${e.code}`, p: e.code === 0 ? { color: 'green' } : { color: 'red', weight: 'bold' } },
+      last: [row(pad, dim('last exec '), e.state !== '' ? dim(`${e.state} `) : '', { t: `exit ${e.code}`, p: e.code === 0 ? { color: TONE.ok } : { color: TONE.bad, weight: 'bold' } },
         dim(e.ms > 0 ? ` in ${spanText(e.ms)}` : ''), e.at > 0 ? dim(` ${sinceText(now - e.at)} ago`) : '')],
     }
   }
   const agentSeg = (r: SessionRow): Seg[] => [dim(` · ${roleOf(r.workflow)}`), modelSeg(r), dim(` · agent ${r.agent.slice(0, 7)}`)]
   const items: Item[] = []
-  if (main.agent !== '') items.push({ primary: row('  ', { t: '◇ ', p: { color: 'cyan' } }, 'agent', ...agentSeg(main), main.agentAt !== undefined ? dim(` ${sinceText(now - main.agentAt)}`) : ''), live: [], last: [], isLastOnly: false })
+  if (main.agent !== '') items.push({ primary: row('  ', { t: '◇ ', p: { color: TONE.info } }, 'agent', ...agentSeg(main), main.agentAt !== undefined ? dim(` ${sinceText(now - main.agentAt)}`) : ''), live: [], last: [], isLastOnly: false })
   const self = execLines(main, '    ')
   if (self.live.length > 0) items.push({ primary: row('  ', dim('this session')), ...self, isLastOnly: false })
   else if (self.last.length > 0) items.push({ primary: row('  ', dim('this session')), live: [], last: self.last, isLastOnly: true })
@@ -406,7 +423,7 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
     for (const c of childrenOf(r.id)) {
       const pad = '  '.repeat(depth + 1)
       items.push({
-        primary: row(pad, { t: '⚙ ', p: { color: c.isWorking && childrenOf(c.id).length === 0 ? 'cyanBright' : 'cyan' } }, c.workflow, tagSeg(c), ' @ ', { t: c.state, p: { weight: 'bold' } },
+        primary: row(pad, { t: '⚙ ', p: { color: c.isWorking && childrenOf(c.id).length === 0 ? TONE.live : TONE.info } }, c.workflow, tagSeg(c), ' @ ', { t: c.state, p: { weight: 'bold' } },
           dim(` ${sinceText(now - c.since)}`), ...(c.agent !== '' ? agentSeg(c) : [])),
         ...execLines(c, pad + '    '),
         isLastOnly: false,
@@ -417,7 +434,7 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
   walk(main, 0)
   // another root session of this Claude session is a row of its own
   for (const o of roots.filter(r => r.id !== main.id)) {
-    items.push({ primary: row('  ', { t: '⚙ ', p: { color: 'cyan' } }, o.workflow, tagSeg(o), ' @ ', { t: o.state, p: { weight: 'bold' } }, dim(` ${sinceText(now - o.since)}`)), ...execLines(o, '      '), isLastOnly: false })
+    items.push({ primary: row('  ', { t: '⚙ ', p: { color: TONE.info } }, o.workflow, tagSeg(o), ' @ ', { t: o.state, p: { weight: 'bold' } }, dim(` ${sinceText(now - o.since)}`)), ...execLines(o, '      '), isLastOnly: false })
     walk(o, 1)
   }
   const runningLines = (level: number): PaneNode[] => {
@@ -427,7 +444,7 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
     const shown = level === 0 ? items : liveItems
     if (shown.length === 0) return []
     const cap = level === 0 ? RUNNING_CAP : RUNNING_CAP_SHORT
-    const heading = liveItems.length > 0 ? text({ color: 'green', weight: 'bold' }, fitCells(`▶ Running under it (${liveItems.length})`, columns)) : text({ dimColor: true, weight: 'bold' }, '▶ Nothing running')
+    const heading = liveItems.length > 0 ? text({ color: TONE.ok, weight: 'bold' }, fitCells(`▶ Running under it (${liveItems.length})`, columns)) : text({ dimColor: true, weight: 'bold' }, '▶ Nothing running')
     const out: PaneNode[] = [heading]
     for (const i of shown.slice(0, cap)) out.push(i.primary, ...i.live, ...(level === 0 ? i.last : []))
     if (shown.length > cap) out.push(row(dim(`  +${shown.length - cap} more`)))
@@ -442,17 +459,17 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
     if (level >= 2) return []
     if (!pool) {
       if (input.pool && input.pool.error !== '') return [row(dim(`▤ pool: ${input.pool.error}`))]
-      return counts ? [row({ t: '▤ pool ', p: { color: 'magenta', weight: 'bold' } }, dim(`held ${counts.held}/${counts.budget}`))] : []
+      return counts ? [row({ t: '▤ pool ', p: { color: TONE.pool, weight: 'bold' } }, dim(`held ${counts.held}/${counts.budget}`))] : []
     }
     const strip = row(
-      { t: '▤ pool ', p: { color: 'magenta', weight: 'bold' } }, `held ${pool.held}/${pool.budget} · load ${pool.load.toFixed(1)} · waiting ${pool.waiting.length}`,
-      pool.starvedNote !== '' ? { t: ' STARVED', p: { color: 'red', weight: 'bold' } } : '',
+      { t: '▤ pool ', p: { color: TONE.pool, weight: 'bold' } }, `held ${pool.held}/${pool.budget} · load ${pool.load.toFixed(1)} · waiting ${pool.waiting.length}`,
+      pool.starvedNote !== '' ? { t: ' STARVED', p: { color: TONE.bad, weight: 'bold' } } : '',
     )
     if (level >= 1) return [strip]
     return [
       strip,
-      ...pool.leases.filter(own).map(l => row('  ', { t: '▸ ', p: { color: 'green', weight: 'bold' } }, `${l.request} · ${spanText(l.ageMs)}`, dim(l.step !== '' ? ` ${l.step}` : ''), l.overrun !== null ? { t: ` OVERRUN ~${l.overrun}`, p: { color: 'red', weight: 'bold' } } : '')),
-      ...pool.waiting.filter(own).map(l => row('  ', { t: '◷ ', p: { color: 'blue', weight: 'bold' } }, `${l.request} · waits ${spanText(l.ageMs)}`, dim(l.step !== '' ? ` ${l.step}` : ''))),
+      ...pool.leases.filter(own).map(l => row('  ', { t: '▸ ', p: { color: TONE.ok, weight: 'bold' } }, `${l.request} · ${spanText(l.ageMs)}`, dim(l.step !== '' ? ` ${l.step}` : ''), l.overrun !== null ? { t: ` OVERRUN ~${l.overrun}`, p: { color: TONE.bad, weight: 'bold' } } : '')),
+      ...pool.waiting.filter(own).map(l => row('  ', { t: '◷ ', p: { color: TONE.next, weight: 'bold' } }, `${l.request} · waits ${spanText(l.ageMs)}`, dim(l.step !== '' ? ` ${l.step}` : ''))),
     ]
   }
   const holderLines = (level: number): PaneNode[] => {
@@ -539,7 +556,7 @@ export function paneTree(input: PaneInput): PaneNode {
   const tabRow = box(
     { flexDirection: 'row', gap: 2 },
     tabs.map(t =>
-      button('tab-' + t.id, { kind: 'tab', id: t.id }, [t.id === tab ? text({ weight: 'bold', color: 'cyan' }, t.label) : text({ dimColor: true }, t.label)], t.key),
+      button('tab-' + t.id, { kind: 'tab', id: t.id }, [t.id === tab ? text({ weight: 'bold', color: TONE.info }, t.label) : text({ dimColor: true }, t.label)], t.key),
     ),
   )
   const footer = text({ dimColor: true }, `updated ${age(now - s.at) || 'just now'}`)
@@ -552,8 +569,8 @@ export function paneTree(input: PaneInput): PaneNode {
     const hasChildren = childrenOf(r.id).length > 0
     const isRoot = r.parent === '' || !byId.has(r.parent)
     const mark = isRoot && hasChildren
-      ? text({ color: 'cyanBright', weight: 'bold' }, '◆')
-      : text({ color: r.isWorking && !hasChildren ? 'cyanBright' : 'cyan' }, '⚙')
+      ? text({ color: TONE.live, weight: 'bold' }, '◆')
+      : text({ color: r.isWorking && !hasChildren ? TONE.live : TONE.info }, '⚙')
     const cardOpen = open === r.id
     const pad = '  '.repeat(depth)
     const tailText = ` ${age(now - r.since)}${cardOpen ? ' ▾' : ''}`
@@ -564,7 +581,7 @@ export function paneTree(input: PaneInput): PaneNode {
     if (!twoLines) {
       return button('s-' + r.id, press, [
         pad, mark, ' ',
-        r.workflow, r.tag !== '' ? text({ color: 'cyan' }, `[${r.tag}]`) : null, ' @ ', state,
+        r.workflow, r.tag !== '' ? text({ color: TONE.info }, `[${r.tag}]`) : null, ' @ ', state,
         tail,
       ])
     }
@@ -573,7 +590,7 @@ export function paneTree(input: PaneInput): PaneNode {
     const wf = fitCells(r.workflow, room1)
     const tag = r.tag !== '' ? fitCells(`[${r.tag}]`, Math.max(0, room1 - cells(wf))) : ''
     return button('s-' + r.id, press, [
-      text({}, pad, mark, ' ', wf, text({ color: 'cyan' }, tag), '\n', pad, TAB, '@ ', state, tail),
+      text({}, pad, mark, ' ', wf, text({ color: TONE.info }, tag), '\n', pad, TAB, '@ ', state, tail),
     ])
   }
   // The open session's card: where it came from, where it is, where it can go.
@@ -674,24 +691,24 @@ export function paneTree(input: PaneInput): PaneNode {
     const failTwo = !fitsOneLine(shownFailed.map(l => `    ${BAR_W} ${markOf(l.id)} ${failCost.text(l.usd)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
     body = col(
       text({}, text({ weight: 'bold' }, q.file.replace(/^.*\//, '')), text({ dimColor: true }, `  pending ${q.pending} · done ${q.done}${q.failed > 0 ? ` · failed ${q.failed}` : ''}`)),
-      header('running', 'green', `▶ Running ${q.running.length}/${q.window}`),
+      header('running', TONE.ok, `▶ Running ${q.running.length}/${q.window}`),
       isOpen('running') && q.running.length === 0 ? text({ dimColor: true }, '  nothing') : null,
       isOpen('running')
         ? q.running.map(l => {
             const p = pipelineOf.get(l.id)
             const since = sinceOf(l.id)
             if (!runTwo) {
-              return text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', l.id, '  ', text({ color: p ? 'cyan' : 'yellow' }, whereOf(l.id)), text({ dimColor: true }, ` ${since}`))
+              return text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', l.id, '  ', text({ color: p ? TONE.info : TONE.warn }, whereOf(l.id)), text({ dimColor: true }, ` ${since}`))
             }
             // two lines: bar, kind, id; the state, the next step and the age indented under them
             const pad = '  ' + TAB
             return col(
               text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', fitCells(l.id, Math.max(1, columns - 10))),
-              text({}, pad, text({ color: p ? 'cyan' : 'yellow' }, fitCells(whereOf(l.id), Math.max(1, columns - pad.length - (since === '' ? 0 : cells(since) + 1)))), text({ dimColor: true }, ` ${since}`)),
+              text({}, pad, text({ color: p ? TONE.info : TONE.warn }, fitCells(whereOf(l.id), Math.max(1, columns - pad.length - (since === '' ? 0 : cells(since) + 1)))), text({ dimColor: true }, ` ${since}`)),
             )
           })
         : null,
-      header('next', 'blue', `⏭ Next (${nextRows.length})`),
+      header('next', TONE.next, `⏭ Next (${nextRows.length})`),
       isOpen('next') && nextRows.length === 0 ? text({ dimColor: true }, '  nothing ready') : null,
       isOpen('next')
         ? [...nextRows.slice(0, showReady), null, ...(nextMore ? nextRows.slice(showReady) : [])].map(l =>
@@ -705,7 +722,7 @@ export function paneTree(input: PaneInput): PaneNode {
               : text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', l.id, ' ', prioCell(l.priority)),
           )
         : null,
-      header('lands', 'green', landedHeading(s.lands.length, s.landedUsd, s.parentUsd, s.landBranch)),
+      header('lands', TONE.ok, landedHeading(s.lands.length, s.landedUsd, s.parentUsd, s.landBranch)),
       isOpen('lands')
         ? [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
             // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day with its spend, its lands one level deeper
@@ -728,7 +745,7 @@ export function paneTree(input: PaneInput): PaneNode {
             ]
           })
         : null,
-      header('failed', 'red', failedHeading(recentFailed.length, q.failedSpend)),
+      header('failed', TONE.bad, failedHeading(recentFailed.length, q.failedSpend)),
       isOpen('failed') && q.failedLines.length === 0 ? text({ dimColor: true }, '  nothing') : null,
       isOpen('failed') && q.failedLines.length > 0 && recentFailed.length === 0 ? text({ dimColor: true }, `  none in the last ${FAILED_DAYS} days`) : null,
       isOpen('failed')
@@ -758,14 +775,14 @@ export function paneTree(input: PaneInput): PaneNode {
     s.queue ? tabRow : null,
     box({ flexDirection: 'row', gap: 2, key: 'header-links' }, link(`${DASHBOARD}${own.path}`, own.label), link(`${DASHBOARD}/map`, 'map ↗')),
     body,
-    s.error !== '' ? text({ color: 'red' }, s.error) : null,
+    s.error !== '' ? text({ color: TONE.bad }, s.error) : null,
     footer,
   )
 }
 
 /** A spawn of a workflow agent, before its session is linked: `⚙ [slice] driver · opus`. */
 export function spawnLine(label: string, role: string, model: string): PaneEl {
-  return text({}, text({ color: 'cyan' }, `⚙ [${label}] `), text({ dimColor: true }, role), model !== '' ? text({ dimColor: true }, ` · ${model}`) : null)
+  return text({}, text({ color: TONE.info }, `⚙ [${label}] `), text({ dimColor: true }, role), model !== '' ? text({ dimColor: true }, ` · ${model}`) : null)
 }
 
 /** How a workflow agent ended, as its end notification draws it. */
@@ -776,11 +793,11 @@ export type AgentEnd =
 /** A workflow agent's end notification: `⚙ [slice] driver · 12m · ✓ landed abc1234` (or stopped / failed / the step it ended at). */
 export function endLine(label: string, role: string, duration: string, end: AgentEnd): PaneEl {
   const outcome =
-    end.kind === 'killed' ? text({ color: 'red' }, `✗ stopped by hand at ${end.state}`)
-    : end.kind === 'failed' ? text({ color: 'red' }, `✗ failed at ${end.state}`)
-    : end.kind === 'landed' ? text({ color: 'green' }, `✓ landed${end.sha !== '' ? ' ' + end.sha : ''}`)
+    end.kind === 'killed' ? text({ color: TONE.bad }, `✗ stopped by hand at ${end.state}`)
+    : end.kind === 'failed' ? text({ color: TONE.bad }, `✗ failed at ${end.state}`)
+    : end.kind === 'landed' ? text({ color: TONE.ok }, `✓ landed${end.sha !== '' ? ' ' + end.sha : ''}`)
     : text({ dimColor: true }, `ended at ${end.state}`)
-  return text({}, text({ color: 'cyan' }, `⚙ [${label}] `), text({ dimColor: true }, `${role}${duration !== '' ? ` · ${duration}` : ''} · `), outcome)
+  return text({}, text({ color: TONE.info }, `⚙ [${label}] `), text({ dimColor: true }, `${role}${duration !== '' ? ` · ${duration}` : ''} · `), outcome)
 }
 
 /** A driver's one-line hand-back by its outcome: landed, needs the parent (with the reason), waiting. */
@@ -793,8 +810,8 @@ export function handBackLine(id: string, h: HandBack): PaneEl {
   const short = (r: string) => (r.length > 140 ? r.slice(0, 139) + '…' : r)
   return text(
     {},
-    h.kind === 'landed' ? text({ color: 'green' }, `✓ [${id}] landed${h.sha !== '' ? ' ' + h.sha : ''}`)
-    : h.kind === 'needs' ? text({}, text({ color: 'yellow' }, `⏸ [${id}] needs the parent: `), short(h.reason))
+    h.kind === 'landed' ? text({ color: TONE.ok }, `✓ [${id}] landed${h.sha !== '' ? ' ' + h.sha : ''}`)
+    : h.kind === 'needs' ? text({}, text({ color: TONE.warn }, `⏸ [${id}] needs the parent: `), short(h.reason))
     : text({ dimColor: true }, `… [${id}] waiting`),
   )
 }
@@ -806,12 +823,12 @@ export type Move = { readonly label?: string; readonly name: string; readonly to
 export function movesLine(moves: readonly Move[], tail: readonly string[]): PaneEl {
   const parts: PaneNode[] = []
   for (const m of moves) {
-    if (m.label !== undefined) parts.push(text({ color: 'cyan' }, `[${m.label}] `))
-    parts.push(text({}, text({ dimColor: true }, `${m.name}→`), text({ color: m.isErrored ? 'red' : 'cyanBright', weight: 'bold' }, m.to), ' '))
+    if (m.label !== undefined) parts.push(text({ color: TONE.info }, `[${m.label}] `))
+    parts.push(text({}, text({ dimColor: true }, `${m.name}→`), text({ color: m.isErrored ? TONE.bad : TONE.live, weight: 'bold' }, m.to), ' '))
   }
   return text(
     {},
-    text({ color: 'cyan' }, '⚙ '),
+    text({ color: TONE.info }, '⚙ '),
     parts,
     tail.length > 0 ? text({ dimColor: true }, `${parts.length > 0 ? '· ' : ''}${tail.join(' ')}`) : null,
   )
