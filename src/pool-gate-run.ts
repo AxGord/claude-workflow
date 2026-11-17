@@ -19,21 +19,38 @@ export function poolGateOutput(
   env: NodeJS.ProcessEnv,
   stderr: (line: string) => void,
 ): HookOutput | undefined {
-  let found;
+  // The config of the directory the command runs in (a leading `cd`) routes the heavy commands; a
+  // directory with none (outside a git repo, or a repo without one) keeps the caller's rules. The
+  // session's own project (the payload cwd) keeps its denies even when the target has a config.
+  // Each lookup fails alone: a malformed file is ignored with one stderr line and the other still applies.
+  const lookup = (dir: string) => {
+    try {
+      return findConfig(dir);
+    } catch (err) {
+      stderr(`pool-gate: config ignored — ${(err as Error).message}`);
+      return undefined;
+    }
+  };
+  let dir = path.resolve(cwd);
   try {
-    // The config of the directory the command runs in (a leading `cd`); a directory with none
-    // (outside a git repo, or a repo without one) keeps the caller's rules, its denies too.
-    const dir = commandDir(command, cwd);
-    found = findConfig(dir) ?? (dir === path.resolve(cwd) ? undefined : findConfig(cwd));
+    dir = commandDir(command, cwd);
   } catch (err) {
-    stderr(`pool-gate: config ignored — ${(err as Error).message}`);
-    return undefined;
+    stderr(`pool-gate: command directory ignored — ${(err as Error).message}`);
   }
+  const caller = lookup(cwd);
+  const found = dir === path.resolve(cwd) ? caller : (lookup(dir) ?? caller);
   // build/pool-gate-hook.js → the plugin root.
   const root = path.resolve(path.dirname(fs.realpathSync(process.argv[1])), "..");
+  const wfRun = path.join(root, "scripts", "wf-run");
+  const shell = toolShell(env);
+  if (caller && caller.file !== found?.file) {
+    const denied = decide(command, caller.config, { wfRun, shell, env });
+    if (denied.kind === "deny")
+      return { permissionDecision: "deny", permissionDecisionReason: denied.reason };
+  }
   const decision = decide(command, found?.config, {
-    wfRun: path.join(root, "scripts", "wf-run"),
-    shell: toolShell(env),
+    wfRun,
+    shell,
     env,
     // Claude Code keeps one PreToolUse rewrite of a command — this one — so RTK's goes inside.
     rewrite: rtkRewriter(cwd, env),

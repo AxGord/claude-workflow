@@ -465,11 +465,23 @@ describe("pool-gate hook (real processes)", () => {
       }
     });
 
-    it("a target with its own config wins over the caller's", () => {
-      const caller = project(JSON.stringify({ rules: [{ match: "node -e", deny: "caller" }] }));
+    it("a target with its own config routes the heavy command, not the caller's", () => {
+      const caller = project(JSON.stringify({ rules: [{ match: "node -e", threads: "8" }] }));
       const there = project(realCfg());
       const r = hook(path.join(caller, "sub"), `cd ${there} && ${nodeCmd}`);
       expect(wrappedBy(r.stdout)).toContain("--threads 1-2");
+    });
+
+    it("the caller's deny applies in a target with its own config", () => {
+      const caller = project(JSON.stringify({ rules: [{ match: "node -e", deny: "caller" }] }));
+      const there = project(realCfg());
+      const r = hook(path.join(caller, "sub"), `cd ${there} && ${nodeCmd}`);
+      expect(JSON.parse(r.stdout)).toMatchObject({
+        hookSpecificOutput: {
+          permissionDecision: "deny",
+          permissionDecisionReason: "pool-gate: caller",
+        },
+      });
     });
   });
 
