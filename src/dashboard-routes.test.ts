@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TAB_LINKS } from "../hooks/tab-links.js";
 import { parseRoute, routePath, routeTab, type Route } from "./dashboard-routes.js";
 
 const TABLE: [string, Route][] = [
@@ -63,5 +64,20 @@ describe("dashboard route table", () => {
       "map",
       "map",
     ]);
+  });
+});
+
+describe("the plan pane's tab links", () => {
+  it("each tab links the path routePath gives its dashboard view (Waiting has none: the Plan view)", () => {
+    const view: Record<keyof typeof TAB_LINKS, Route> = {
+      plan: { view: "plan" },
+      sessions: { view: "sessions" },
+      waiting: { view: "plan" },
+      pool: { view: "pool" },
+    };
+    for (const tab of Object.keys(view) as (keyof typeof TAB_LINKS)[]) {
+      expect(TAB_LINKS[tab].path, tab).toBe(routePath(view[tab]));
+      expect(parseRoute(TAB_LINKS[tab].path), tab).toEqual(view[tab]);
+    }
   });
 });

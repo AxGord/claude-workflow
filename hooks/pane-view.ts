@@ -1,9 +1,10 @@
 // What the plan pane draws, as data: a Snapshot (and the pane's own fold / tab / card state) in, a tree of the
-// four primitives the pane is made of (box, text, button, link) out. Pure and import-free (types only), so the
-// mod (hooks/plan-pane.tsx, which maps the tree onto Claude Code's elements) and the documentation site (the
-// landing's scene, docs/.vitepress/theme/PaneView.vue, which maps it onto the DOM) draw the SAME pane: there is
-// no second copy of its rows, glyphs, colors, bars or sections.
+// four primitives the pane is made of (box, text, button, link) out. Pure and import-free (types only, and
+// the pure ./tab-links), so the mod (hooks/plan-pane.tsx, which maps the tree onto Claude Code's elements) and the
+// documentation site (the landing's scene, docs/.vitepress/theme/PaneView.vue, which maps it onto the DOM) draw
+// the SAME pane: there is no second copy of its rows, glyphs, colors, bars or sections.
 
+import { TAB_LINKS } from './tab-links'
 import type { DaySpend, FailedLine, FailedSpend, PoolCounts, PoolLine, PoolState, SessionRow, Snapshot, View } from '../types'
 
 /** The engine's own dashboard: its API answers the workflow graphs, its page draws one session's graph. */
@@ -540,8 +541,11 @@ export function paneTree(input: PaneInput): PaneNode {
         : null,
     )
   }
+  // the tab row alone on its row; under it the open tab's own dashboard view, then the live map
+  const own = TAB_LINKS[tab]
   return col(
-    box({ flexDirection: 'row', gap: 2 }, s.queue ? tabRow : null, link(`${DASHBOARD}/map`, 'map ↗')),
+    s.queue ? tabRow : null,
+    box({ flexDirection: 'row', gap: 2, key: 'header-links' }, link(`${DASHBOARD}${own.path}`, own.label), link(`${DASHBOARD}/map`, 'map ↗')),
     body,
     s.error !== '' ? text({ color: 'red' }, s.error) : null,
     footer,

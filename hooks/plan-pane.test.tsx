@@ -1,7 +1,10 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spawnOf, startText } from './plan-pane'
-import { cells, dayOf, dayText, failedHeading, fitCells, foldFlipped, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
+import { cells, dayOf, dayText, failedHeading, fitCells, foldFlipped, paneTree, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
+import { TAB_LINKS } from './tab-links'
+import type { PaneEl, PaneNode } from './pane-view'
+import type { Snapshot, View } from '../types'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -309,10 +312,55 @@ for (const withQueue of [true, false])
     const out = await $.command.run({ command: 'wf-map', args: '' })
     expect(JSON.stringify(out)).toContain('http://127.0.0.1:3100/map')
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    const link = await ui.find({ type: 'Link' })
-    expect(JSON.stringify(link)).toContain('http://127.0.0.1:3100/map')
+    const links = JSON.stringify(await ui.findAll({ type: 'Link' }))
+    expect(links).toContain('http://127.0.0.1:3100/map')
     await ui.unmount()
   })
+
+/** Every element of a pane tree, depth first. */
+function elements(n: PaneNode): PaneEl[] {
+  if (n === null || typeof n === 'string') return []
+  if (Array.isArray(n)) return n.flatMap(elements)
+  const el = n as PaneEl
+  return [el, ...(el.el === 'link' ? [] : el.children.flatMap(elements))]
+}
+
+const EMPTY_QUEUE = { file: '/q', window: 3, done: 0, failed: 0, pending: 0, running: [], ready: [], unblocked: [], waiting: [], failedLines: [], marks: {} }
+
+/** The pane's tree on a view, with or without a work queue. */
+function treeOn(tab: View, withQueue = true): PaneEl[] {
+  const snapshot = { at: 0, sessions: [], queue: withQueue ? EMPTY_QUEUE : null, lands: [], recent: 0, days: {}, error: '' } as unknown as Snapshot
+  const tree = paneTree({ snapshot, tab, expanded: '', folded: [], now: 0, columns: 100, rows: 30, poolCounts: { held: 14, budget: 14 }, pool: null })
+  return (tree as PaneEl).el === 'box' ? ((tree as PaneEl & { el: 'box' }).children as PaneEl[]) : []
+}
+
+test("the header's first link is the open tab's own dashboard view, `map ↗` beside it", () => {
+  // the paths are pinned to the dashboard's `routePath` in src/dashboard-routes.test.ts
+  for (const tab of ['plan', 'sessions', 'waiting', 'pool'] as const) {
+    const links = elements(treeOn(tab)).filter(e => e.el === 'link') as (PaneEl & { el: 'link' })[]
+    expect(links.slice(0, 2).map(l => [l.href, l.label])).toEqual([
+      [`http://127.0.0.1:3100${TAB_LINKS[tab].path}`, TAB_LINKS[tab].label],
+      ['http://127.0.0.1:3100/map', 'map ↗'],
+    ])
+  }
+  // Waiting has no view of its own: the Plan view
+  expect(TAB_LINKS.waiting).toEqual(TAB_LINKS.plan)
+  // no queue: the pane is the Sessions tree whatever tab was chosen
+  const bare = elements(treeOn('pool', false)).filter(e => e.el === 'link') as (PaneEl & { el: 'link' })[]
+  expect(bare[0]!.href).toBe('http://127.0.0.1:3100/sessions')
+})
+
+test("the tab row never includes a link: it is its own row, the links on the row under it", () => {
+  const rows = treeOn('pool')
+  const tabRow = rows[0]!
+  expect(tabRow.el).toBe('box')
+  const inTabRow = elements(tabRow)
+  expect(inTabRow.filter(e => e.el === 'button').map(e => (e as PaneEl & { el: 'button' }).key)).toEqual(['tab-plan', 'tab-sessions', 'tab-waiting', 'tab-pool'])
+  expect(inTabRow.some(e => e.el === 'link')).toBe(false)
+  const linksRow = rows[1]!
+  expect(elements(linksRow).filter(e => e.el === 'link')).toHaveLength(2)
+  expect(elements(linksRow).some(e => e.el === 'button')).toBe(false)
+})
 
 test('movedTo names the active frame of a nested reply, the flat line otherwise, else nothing', () => {
   expect(movedTo('slice-dispatch @ collect (visit 304)\n\nbody')).toBe('collect')
