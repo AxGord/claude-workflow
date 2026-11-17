@@ -35,8 +35,8 @@ export type QueueLine = {
 /** A `failed` queue line: `recent` = it ended within the last two days (queue_mark's `ended`; a line with none is older), its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured). */
 export type FailedLine = { id: string; difficulty: string; date: string; reason: string; recent: boolean; usd?: number }
 
-/** The Failed header's spend over the lines it counts (the recent ones): the ledger's agent `usd` and parent `parentUsd` summed over every run of each line, and how many of those lines have no ledger row (they add 0). */
-export type FailedSpend = { usd: number; parentUsd: number; missing: number }
+/** The Failed header's spend over the lines it counts (the recent ones): the ledger's agent `usd` and parent `parentUsd` summed over every run of each line, and how many of those lines have no ledger row (they add 0) and, when any, how many have a run with no recorded spend (left out of the sums). */
+export type FailedSpend = { usd: number; parentUsd: number; missing: number; unmeasured?: number }
 
 export type QueueView = {
   file: string

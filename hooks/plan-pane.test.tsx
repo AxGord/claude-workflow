@@ -714,7 +714,7 @@ test('Failed is folded by default, shows its count, and unfolds on a click with 
 /** A task's ledger row with the parent's own spend of that stretch beside the agents' (`parent_spend`). */
 const withParent = (row: string, usd: number) => JSON.stringify({ ...JSON.parse(row), parent_spend: { conversation: 'c1', project: '-proj', from: '2026-11-07T08:00:00Z', to: '2026-11-07T09:00:00Z', usd } })
 
-test('ledgerTotalsOf sums every run of a line: the agents\' usd and the parent\'s, a row with neither adding 0, a row with no task skipped', () => {
+test('ledgerTotalsOf sums every run of a line: the agents\' usd and the parent\'s, a row with neither adding 0 and marking its line unmeasured, a row with no task skipped', () => {
   const text = [
     ran1('F-1', noon(5), 1.5, 'failed'),
     withParent(ran1('F-1', noon(6), 2, 'failed'), 0.25),
@@ -722,7 +722,7 @@ test('ledgerTotalsOf sums every run of a line: the agents\' usd and the parent\'
     '{"workflow":"x","spend":{"usd":99}}',
     'not json',
   ].join('\n')
-  expect([...ledgerTotalsOf(text)]).toEqual([['F-1', { usd: 3.5, parentUsd: 0.25 }], ['F-2', { usd: 0, parentUsd: 0 }]])
+  expect([...ledgerTotalsOf(text)]).toEqual([['F-1', { usd: 3.5, parentUsd: 0.25 }], ['F-2', { usd: 0, parentUsd: 0, isUnmeasured: true }]])
 })
 
 test('ledgerTotalsOf: a row nested under a same-task row adds only its parent spend (the parent row\'s spend already covers it); a row under another task\'s row counts whole', () => {
@@ -737,11 +737,14 @@ test('failedSpend sums the counted lines and counts the ones the ledger has no r
   const totals = new Map([['F-1', { usd: 3.5, parentUsd: 0.25 }], ['F-2', { usd: 0, parentUsd: 0 }]])
   const sp = failedSpend([line('F-1'), line('F-2'), line('F-3')], totals)
   expect(sp).toEqual({ usd: 3.5, parentUsd: 0.25, missing: 1 })
+  expect(failedSpend([line('F-1'), line('F-2')], new Map([['F-1', { usd: 3.5, parentUsd: 0 }], ['F-2', { usd: 2, parentUsd: 1, isUnmeasured: true as const }]]))).toEqual({ usd: 3.5, parentUsd: 0, missing: 0, unmeasured: 1 })
   expect(failedHeading(3, sp)).toBe('✗ Failed (3) · $3.50 (parent $0.25) · 1 not in the ledger')
   expect(failedHeading(2, { usd: 41.2, parentUsd: 0, missing: 0 })).toBe('✗ Failed (2) · $41.20')
   expect(failedHeading(2, { usd: 0, parentUsd: 0, missing: 2 })).toBe('✗ Failed (2) · no ledger rows')
   expect(failedHeading(0, { usd: 0, parentUsd: 0, missing: 0 })).toBe('✗ Failed (0)')
   expect(failedHeading(2, undefined)).toBe('✗ Failed (2)')
+  expect(failedHeading(3, { usd: 3.5, parentUsd: 0, missing: 0, unmeasured: 1 })).toBe('✗ Failed (3) · $3.50 · 1 unmeasured')
+  expect(failedHeading(1, { usd: 0, parentUsd: 0, missing: 0, unmeasured: 1 })).toBe('✗ Failed (1) · 1 unmeasured')
 })
 
 test('the Failed header carries the summed spend of the lines it counts over every run of each, the parent beside it, and how many the ledger lacks', async ($, on) => {

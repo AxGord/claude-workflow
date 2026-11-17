@@ -287,12 +287,12 @@ export function ledgerLandedOf(text: string): Map<string, LedgerLand> {
   return out
 }
 
-/** What the ledger rows of a queue line add up to: the agents' `spend.usd` and the parent's `parent_spend.usd` (a row records either as absent: it adds 0). */
-export type TaskTotals = { usd: number; parentUsd: number }
+/** What the ledger rows of a queue line add up to: the agents' `spend.usd` and the parent's `parent_spend.usd` (a row records either as absent: it adds 0). `isUnmeasured` is set when a row that counts toward `usd` recorded no spend: the line is measured whole or not at all, so its sum is not a cost. */
+export type TaskTotals = { usd: number; parentUsd: number; isUnmeasured?: true }
 
 /** The totals of the ledger's rows by queue line id, over every run of a line and whatever workflow ran it; a row with no `task` is skipped. A row's `spend` already covers its descendant sessions, so a row whose `parent_session_id` is a row of the same task (a recon child of the pipeline) adds only its `parent_spend`. */
 export function ledgerTotalsOf(text: string): Map<string, TaskTotals> {
-  type Row = { task: string; session: string; parentSession: string; usd: number; parentUsd: number }
+  type Row = { task: string; session: string; parentSession: string; usd: number; parentUsd: number; isUsdMeasured: boolean }
   const rows: Row[] = []
   const usdOf = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
   for (const line of text.split('\n')) {
@@ -305,6 +305,7 @@ export function ledgerTotalsOf(text: string): Map<string, TaskTotals> {
         session: typeof j.session_id === 'string' ? j.session_id : '',
         parentSession: typeof j.parent_session_id === 'string' ? j.parent_session_id : '',
         usd: usdOf(j.spend?.usd),
+        isUsdMeasured: typeof j.spend?.usd === 'number' && Number.isFinite(j.spend.usd),
         parentUsd: usdOf(j.parent_spend?.usd),
       })
     } catch {
@@ -315,27 +316,32 @@ export function ledgerTotalsOf(text: string): Map<string, TaskTotals> {
   const out = new Map<string, TaskTotals>()
   for (const r of rows) {
     const cur = out.get(r.task) ?? { usd: 0, parentUsd: 0 }
-    if (r.parentSession === '' || !sessions.has(`${r.task}\n${r.parentSession}`)) cur.usd += r.usd
+    if (r.parentSession === '' || !sessions.has(`${r.task}\n${r.parentSession}`)) {
+      cur.usd += r.usd
+      if (!r.isUsdMeasured) cur.isUnmeasured = true
+    }
     cur.parentUsd += r.parentUsd
     out.set(r.task, cur)
   }
   return out
 }
 
-/** The Failed header's spend over the lines it counts: the sum of their ledger totals, and how many have no ledger row. */
+/** The Failed header's spend over the lines it counts: the sum of their ledger totals, how many have no ledger row, and how many have a run with no recorded spend (those are left out of the sums, as their rows show `—`). */
 export function failedSpend(lines: FailedLine[], totals: Map<string, TaskTotals>): FailedSpend {
   let usd = 0
   let parentUsd = 0
   let missing = 0
+  let unmeasured = 0
   for (const l of lines) {
     const t = totals.get(l.id)
     if (!t) missing++
+    else if (t.isUnmeasured) unmeasured++
     else {
       usd += t.usd
       parentUsd += t.parentUsd
     }
   }
-  return { usd, parentUsd, missing }
+  return { usd, parentUsd, missing, ...(unmeasured > 0 ? { unmeasured } : {}) }
 }
 
 type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[]; landed: Map<string, LedgerLand>; totals: Map<string, TaskTotals> }
@@ -655,11 +661,14 @@ async function build($: any): Promise<Snapshot> {
   // a failed line carries what the ledger says it cost
   const failedRecent = loaded.queue ? loaded.queue.failedLines.filter(l => l.recent) : []
   // a failed line's runs may all be older than the recent window: its cost comes from the whole ledger
-  const failedTotals = ledger !== NO_LEDGER ? new Map([...ledger.totals, ...(await fullTotalsAt($, dir, failedRecent.map(l => l.id)))]) : ledger.totals
+  // (every failed line, not only the counted ones: an older row folded under `+N older` reads the same source)
+  const failedTotals = ledger !== NO_LEDGER ? new Map([...ledger.totals, ...(await fullTotalsAt($, dir, (loaded.queue?.failedLines ?? []).map(l => l.id)))]) : ledger.totals
   const queue = loaded.queue && {
     ...loaded.queue,
     failedLines: loaded.queue.failedLines.map(l => {
-      const usd = ledger.spends.get(l.id)?.usd
+      // the row reads the header's source (the whole ledger), so the rows add up to the header; a line with a run of no recorded spend stays `—`
+      const t = failedTotals.get(l.id)
+      const usd = t && !t.isUnmeasured ? t.usd : undefined
       return usd !== undefined ? { ...l, usd } : l
     }),
     ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(failedRecent, failedTotals) } : {}),

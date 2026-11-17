@@ -168,12 +168,13 @@ export function landedHeading(count: number, landed: number | undefined, parent:
   return `✓ Landed · ${LAND_DAYS}d (${count})${landed !== undefined ? ' · ' + usdText(landed) : ''}${parent !== undefined ? ' · parent ' + usdText(parent) + share : ''}${branch !== 'main' ? ' · ' + branch : ''}`
 }
 
-/** `✗ Failed (28) · $41.20 (parent $6.10) · 3 not in the ledger`: the count, the lines' spend, the parent's spend when it has one, how many lines the ledger has no row of (they add 0; `no ledger rows` when none has). */
+/** `✗ Failed (28) · $41.20 (parent $6.10) · 3 not in the ledger · 2 unmeasured`: the count, the lines' spend, the parent's spend when it has one, how many lines the ledger has no row of (they add 0; `no ledger rows` when none has) and how many have a run with no recorded spend (left out of the sums; their rows show `—`). */
 export function failedHeading(count: number, spend: FailedSpend | undefined): string {
   const head = `✗ Failed (${count})`
   if (!spend || count === 0) return head
-  const measured = count - spend.missing
-  return `${head}${measured > 0 ? ' · ' + usdText(spend.usd) + (spend.parentUsd > 0 ? ` (parent ${usdText(spend.parentUsd)})` : '') : ''}${spend.missing === count ? ' · no ledger rows' : spend.missing > 0 ? ` · ${spend.missing} not in the ledger` : ''}`
+  const measured = count - spend.missing - (spend.unmeasured ?? 0)
+  const unmeasured = spend.unmeasured ? ` · ${spend.unmeasured} unmeasured` : ''
+  return `${head}${measured > 0 ? ' · ' + usdText(spend.usd) + (spend.parentUsd > 0 ? ` (parent ${usdText(spend.parentUsd)})` : '') : ''}${spend.missing === count ? ' · no ledger rows' : spend.missing > 0 ? ` · ${spend.missing} not in the ledger` : ''}${unmeasured}`
 }
 
 /** The role an agent plays for the workflow its session runs. */
