@@ -43,8 +43,22 @@ export default defineConfig({
     siteTitle: `<span class="brand-a">${NAME.split(" ")[0]}</span> ${NAME.split(" ").slice(1).join(" ")}`,
     logo: { light: "/logo-light.svg", dark: "/logo.svg", alt: "Claude Workflow" },
     nav: [
-      // "Get started" is the hero's button, GitHub is the icon beside the search: each appears once.
-      { text: "Docs", link: "/concepts" },
+      // One entry, the docs index: the landing has no sidebar, so this menu is where its reader finds every page. "Get started"
+      // is the hero's button and GitHub is the icon beside the theme switch: each appears once.
+      {
+        text: "Docs",
+        items: [
+          { text: "Getting started", link: "/getting-started" },
+          { text: "Concepts", link: "/concepts" },
+          { text: "Workflow YAML", link: "/workflow-yaml" },
+          { text: "Action states", link: "/action-states" },
+          { text: "Thread pool", link: "/pool" },
+          { text: "Task queue and dispatch", link: "/queue" },
+          { text: "Dashboard and plan pane", link: "/dashboard" },
+          { text: "FAQ", link: "/faq" },
+          { text: "Development", link: "/development" },
+        ],
+      },
     ],
     sidebar: [
       {

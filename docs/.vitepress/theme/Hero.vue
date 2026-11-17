@@ -5,8 +5,13 @@
 // the hero of docs/index.md; the chips are the banner's, the workflow count derived from templates/ at build time
 // (`__BUNDLED_WORKFLOWS__`, config.mts). The diagram is the banner's schematic of a task's life
 // (scripts/render-banner.mjs `schematicSvg`), drawn here from the same words at two widths so it stays legible on a phone.
+// ONE layout over the whole scroll range, shared by the hero and the bar (the numbers are the CSS variables of
+// `.Layout.has-hero`): the left column is the text (and, in the bar, the title), the right column is the diagram, and the search
+// sits on the bar over the diagram's left edge while the page is at its top, then shrinks and slides to the right
+// cluster (docs, theme, GitHub) as the title condenses. The title scales down first, below the bar, and only then rises into it,
+// so the big title never reaches the row of the search; the hero's text and diagram fade out before they reach the bar's edge.
 // Scroll linkage: CSS scroll-driven animation where the browser has it and motion is allowed; otherwise a sentinel's
-// IntersectionObserver toggles `hero-condensed` on the root, with a transition, or none under reduced motion.
+// IntersectionObserver toggles `hero-condensed` on the root (and one per faded element `hero-faded`), with a transition, or none under reduced motion.
 import { VPButton } from "vitepress/theme";
 import { useData } from "vitepress";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
@@ -119,6 +124,7 @@ const diagrams = [
 
 const sentinel = ref<HTMLElement | null>(null);
 let watch: IntersectionObserver | null = null;
+let fades: IntersectionObserver | null = null;
 const root = (): HTMLElement => document.documentElement;
 
 onMounted(() => {
@@ -129,9 +135,20 @@ onMounted(() => {
     if (e) root().classList.toggle("hero-condensed", !e.isIntersecting);
   });
   watch.observe(sentinel.value);
+  // the fallback of the scroll-driven fade: an element is faded once any part of it is above the line `--hero-fade` under the bar
+  const bar = document.querySelector(".VPNavBar")?.getBoundingClientRect().height ?? 64;
+  const fade = Number.parseFloat(getComputedStyle(document.querySelector(".Layout") ?? root()).getPropertyValue("--hero-fade")) || 48;
+  fades = new IntersectionObserver(
+    entries => {
+      for (const e of entries) e.target.classList.toggle("hero-faded", e.boundingClientRect.top < (e.rootBounds?.top ?? 0));
+    },
+    { rootMargin: `-${bar + fade}px 0px 0px 0px`, threshold: [0, 1] },
+  );
+  for (const el of document.querySelectorAll(".hero .hero-fade")) fades.observe(el);
 });
 onBeforeUnmount(() => {
   watch?.disconnect();
+  fades?.disconnect();
   root().classList.remove("hero-condensed");
 });
 </script>
@@ -142,15 +159,15 @@ onBeforeUnmount(() => {
     <div class="hero-inner">
       <div class="hero-text">
         <h1 id="hero-title" class="hero-sr">{{ hero.name }}: {{ hero.text }}</h1>
-        <p class="hero-tagline">{{ hero.tagline }}</p>
-        <div class="hero-actions">
+        <p class="hero-tagline hero-fade">{{ hero.tagline }}</p>
+        <div class="hero-actions hero-fade">
           <VPButton v-for="a in hero.actions" :key="a.link" tag="a" size="big" :theme="a.theme" :text="a.text" :href="a.link" />
         </div>
-        <ul class="hero-chips">
+        <ul class="hero-chips hero-fade">
           <li v-for="c in chips" :key="c.text"><i :class="`t-${c.tone}`"></i>{{ c.text }}</li>
         </ul>
       </div>
-      <div class="hero-diagram">
+      <div class="hero-diagram hero-fade">
         <svg
           v-for="d in diagrams"
           :key="d.id"
@@ -448,15 +465,13 @@ onBeforeUnmount(() => {
     padding-bottom: 64px;
   }
   .hero-inner {
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: max(var(--hero-text-min), calc(100% - var(--hero-dg-max))) minmax(0, 1fr);
     align-items: center;
-    gap: 48px;
+    gap: 0;
   }
   .hero-text {
-    flex: 0 0 480px;
-  }
-  .hero-diagram {
-    flex: 1 1 auto;
+    padding-right: 24px;
   }
   .dg-compact {
     display: none;
@@ -471,15 +486,39 @@ onBeforeUnmount(() => {
 /* The nav and the hero are one band on the landing (the page's `pageClass: has-hero`): the nav is fixed over the hero
    and transparent at the top, its title (logo and name) is the hero's brand at several times its size, and the
    scroll shrinks it into the bar's left while the bar's own background comes in. The bar's geometry is the
-   hero's (same width, same gutters), so the brand's only travel is vertical and the sizes are CSS numbers: nothing is measured. */
+   hero's (same width, same gutters), so the brand's only travel is vertical and the sizes are CSS numbers: nothing is measured.
+   The grid both share from 960px: a left column of `--hero-text-min` at least (the text; in the bar, the title) and a
+   right column of `--hero-dg-max` at most (the diagram; in the bar, the search's left edge while the page is at its top). */
 .Layout.has-hero {
   --hero-brand-y: 96px;
   --hero-brand-s: 3;
+  --hero-text-min: 520px;
+  --hero-dg-max: 594px;
+  --hero-fade: 48px;
+  --hero-search-w0: 48px;
+  --hero-search-w1: 48px;
+  /* scroll distances of the phases: the title scales down below the bar first, then rises into it; the search condenses
+     with the scale; the bar's surface is solid before the title reaches it and its divider comes in last */
+  --hero-scale-end: calc(var(--hero-brand-y) * 0.55);
+  --hero-rise-start: calc(var(--hero-brand-y) * 0.45);
+  --hero-bar-end: calc(var(--hero-brand-y) * 0.5);
+  --hero-line-start: calc(var(--hero-brand-y) * 0.85);
+}
+@media (min-width: 640px) {
+  .Layout.has-hero {
+    --hero-search-w0: 240px;
+    --hero-search-w1: 150px;
+  }
 }
 @media (max-width: 639px) {
   .Layout.has-hero {
     --hero-brand-y: 88px;
     --hero-brand-s: 2;
+  }
+}
+@media (min-width: 960px) {
+  .Layout.has-hero {
+    --hero-search-w0: 300px;
   }
 }
 .Layout.has-hero .VPNav {
@@ -493,26 +532,33 @@ onBeforeUnmount(() => {
   display: none;
 }
 
-/* the bar's own background, replaced by one that fades in with the scroll (!important: VitePress switches its own
-   on at the first pixel, in selectors that outrank a theme override) */
+/* the bar's own background, replaced by one that comes in with the scroll (!important: VitePress switches its own
+   on at the first pixel, in selectors that outrank a theme override); the surface is opaque, and so is complete
+   before the brand reaches the bar, with the divider last */
 .Layout.has-hero .VPNavBar:not(.screen-open),
 .Layout.has-hero .VPNavBar .content-body,
 .Layout.has-hero .VPNavBar .divider,
 .Layout.has-hero .VPNavBar .divider-line {
   background-color: transparent !important;
 }
-.Layout.has-hero .VPNavBar::before {
+.Layout.has-hero .VPNavBar::before,
+.Layout.has-hero .VPNavBar::after {
   content: "";
   position: absolute;
   inset: 0;
   z-index: -1;
-  border-bottom: 1px solid var(--vp-c-divider);
-  background: var(--vp-nav-bg-color);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.3s;
 }
-.hero-condensed .Layout.has-hero .VPNavBar::before {
+.Layout.has-hero .VPNavBar::before {
+  background: var(--vp-nav-bg-color);
+}
+.Layout.has-hero .VPNavBar::after {
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+.hero-condensed .Layout.has-hero .VPNavBar::before,
+.hero-condensed .Layout.has-hero .VPNavBar::after {
   opacity: 1;
 }
 
@@ -532,13 +578,16 @@ onBeforeUnmount(() => {
 }
 .Layout.has-hero .VPNavBarTitle .title {
   transform-origin: 0 50%;
-  transform: translateY(var(--hero-brand-y)) scale(var(--hero-brand-s));
+  translate: 0 var(--hero-brand-y);
+  scale: var(--hero-brand-s);
   transition:
-    transform 0.3s ease,
+    scale 0.25s ease,
+    translate 0.3s ease,
     opacity 0.25s;
 }
 .hero-condensed .Layout.has-hero .VPNavBarTitle .title {
-  transform: none;
+  translate: none;
+  scale: none;
 }
 /* the enlarged title's box covers the hero's first lines: only its logo and name take the pointer, so the text under
    the box stays selectable (a click on either still follows the link) */
@@ -549,12 +598,94 @@ onBeforeUnmount(() => {
   pointer-events: auto;
 }
 
-@keyframes hero-brand-shrink {
+/* The search: on the bar's row, `--hero-search-w0` wide with its left edge on the diagram's (from 960px; below it, beside the
+   right cluster), then `--hero-search-w1` wide and next to the cluster. The bar's content row is [free space] [search]
+   [free space] [cluster]: the two pseudo-elements are the free spaces and share it by flex-grow, 0 and 1 at the top, 1 and 0
+   once condensed, so the search never overlaps a neighbour at any point of the way. */
+.Layout.has-hero .VPNavBar .content-body {
+  column-gap: 0;
+}
+.Layout.has-hero .VPNavBar .content-body::before,
+.Layout.has-hero .VPNavBar .content-body::after {
+  content: "";
+  flex: 0 0 0;
+}
+.Layout.has-hero .VPNavBar .content-body::before {
+  order: 0;
+  flex-grow: 1;
+}
+.Layout.has-hero .VPNavBar .content-body::after {
+  order: 2;
+  flex-grow: 0;
+}
+.Layout.has-hero .VPNavBar .content-body > * {
+  order: 3;
+}
+.Layout.has-hero .VPNavBar .content-body > .VPNavBarSearch {
+  order: 1;
+  /* it gives way to the cluster where the row is short (960px: the left column leaves 376px for it, Docs and the menu),
+     never below its condensed width */
+  flex: 0 1 auto;
+  min-width: var(--hero-search-w1);
+  padding-left: 0;
+  width: var(--hero-search-w0);
+  transition: width 0.3s ease;
+}
+.Layout.has-hero .VPNavBar .VPNavBarSearch #local-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.hero-condensed .Layout.has-hero .VPNavBar .content-body > .VPNavBarSearch {
+  width: var(--hero-search-w1);
+}
+@media (min-width: 960px) {
+  /* the left column of the bar is the hero's: the content row, and so the search, starts on the diagram's left edge */
+  .Layout.has-hero .VPNavBar .container > .title {
+    flex: 0 0 max(var(--hero-text-min), calc(100% - var(--hero-dg-max)));
+  }
+  /* the content row may be narrower than what it holds (its automatic minimum would be the search at its full width) */
+  .Layout.has-hero .VPNavBar .container > .content {
+    min-width: 0;
+  }
+  .Layout.has-hero .VPNavBar .content-body::before {
+    flex-grow: 0;
+    transition: flex-grow 0.3s ease;
+  }
+  .Layout.has-hero .VPNavBar .content-body::after {
+    flex-grow: 1;
+    transition: flex-grow 0.3s ease;
+  }
+  .hero-condensed .Layout.has-hero .VPNavBar .content-body::before {
+    flex-grow: 1;
+  }
+  .hero-condensed .Layout.has-hero .VPNavBar .content-body::after {
+    flex-grow: 0;
+  }
+}
+
+/* what the hero holds fades out before it reaches the bar's edge, so nothing is ever drawn cut at the bar line:
+   `--hero-fade` px of travel, ending where the element's top meets the bar's bottom */
+.hero-fade {
+  transition: opacity 0.25s;
+}
+.hero-faded {
+  opacity: 0;
+}
+
+@keyframes hero-brand-scale {
   from {
-    transform: translateY(var(--hero-brand-y)) scale(var(--hero-brand-s));
+    scale: var(--hero-brand-s);
   }
   to {
-    transform: none;
+    scale: 1;
+  }
+}
+@keyframes hero-brand-rise {
+  from {
+    translate: 0 var(--hero-brand-y);
+  }
+  to {
+    translate: 0 0;
   }
 }
 @keyframes hero-bar-in {
@@ -565,25 +696,98 @@ onBeforeUnmount(() => {
     opacity: 1;
   }
 }
+@keyframes hero-search-in {
+  from {
+    width: var(--hero-search-w0);
+  }
+  to {
+    width: var(--hero-search-w1);
+  }
+}
+@keyframes hero-space-open {
+  from {
+    flex-grow: 0;
+  }
+  to {
+    flex-grow: 1;
+  }
+}
+@keyframes hero-space-close {
+  from {
+    flex-grow: 1;
+  }
+  to {
+    flex-grow: 0;
+  }
+}
+@keyframes hero-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
     .Layout.has-hero .VPNavBarTitle .title {
-      animation: hero-brand-shrink linear both;
-      animation-timeline: scroll(root block);
-      animation-range: 0px var(--hero-brand-y);
+      animation:
+        hero-brand-scale linear both,
+        hero-brand-rise linear both;
+      animation-timeline: scroll(root block), scroll(root block);
+      animation-range:
+        0px var(--hero-scale-end),
+        var(--hero-rise-start) var(--hero-brand-y);
       transition: opacity 0.25s;
     }
     .Layout.has-hero .VPNavBar::before {
       animation: hero-bar-in linear both;
       animation-timeline: scroll(root block);
-      animation-range: 0px var(--hero-brand-y);
+      animation-range: 0px var(--hero-bar-end);
+      transition: none;
+    }
+    .Layout.has-hero .VPNavBar::after {
+      animation: hero-bar-in linear both;
+      animation-timeline: scroll(root block);
+      animation-range: var(--hero-line-start) var(--hero-brand-y);
+      transition: none;
+    }
+    .Layout.has-hero .VPNavBar .content-body > .VPNavBarSearch {
+      animation: hero-search-in linear both;
+      animation-timeline: scroll(root block);
+      animation-range: 0px var(--hero-scale-end);
+      transition: none;
+    }
+    .hero-fade {
+      animation: hero-fade-out linear both;
+      animation-timeline: view(block calc(var(--vp-nav-height) + var(--hero-fade)) 0px);
+      animation-range: exit 0px exit var(--hero-fade);
+      transition: none;
+    }
+  }
+  @media (prefers-reduced-motion: no-preference) and (min-width: 960px) {
+    .Layout.has-hero .VPNavBar .content-body::before {
+      animation: hero-space-open linear both;
+      animation-timeline: scroll(root block);
+      animation-range: 0px var(--hero-scale-end);
+      transition: none;
+    }
+    .Layout.has-hero .VPNavBar .content-body::after {
+      animation: hero-space-close linear both;
+      animation-timeline: scroll(root block);
+      animation-range: 0px var(--hero-scale-end);
       transition: none;
     }
   }
 }
 @media (prefers-reduced-motion: reduce) {
   .Layout.has-hero .VPNavBarTitle .title,
-  .Layout.has-hero .VPNavBar::before {
+  .Layout.has-hero .VPNavBar::before,
+  .Layout.has-hero .VPNavBar::after,
+  .Layout.has-hero .VPNavBar .content-body > .VPNavBarSearch,
+  .Layout.has-hero .VPNavBar .content-body::before,
+  .Layout.has-hero .VPNavBar .content-body::after,
+  .hero-fade {
     transition: none;
   }
 }

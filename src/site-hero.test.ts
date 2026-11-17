@@ -81,13 +81,22 @@ describe("the landing's hero is the banner as live HTML, merged with the nav", (
 });
 
 describe("the nav condenses the hero as the page scrolls", () => {
-  it("scroll-driven where the browser has it and motion is allowed, with the title shrinking to the bar's left", () => {
+  it("scroll-driven where the browser has it and motion is allowed: the title scales down below the bar first, then rises into it", () => {
     expect(NAV_CSS).toContain("@supports (animation-timeline: scroll())");
     expect(NAV_CSS).toContain("@media (prefers-reduced-motion: no-preference)");
-    expect(NAV_CSS).toMatch(/animation-timeline: scroll\(root block\);/);
+    expect(NAV_CSS).toMatch(/animation-timeline: scroll\(root block\), scroll\(root block\);/);
     expect(NAV_CSS).toMatch(
-      /@keyframes hero-brand-shrink \{\s*from \{\s*transform: translateY\(var\(--hero-brand-y\)\) scale\(var\(--hero-brand-s\)\);\s*\}\s*to \{\s*transform: none;/,
+      /@keyframes hero-brand-scale \{\s*from \{\s*scale: var\(--hero-brand-s\);\s*\}\s*to \{\s*scale: 1;/,
     );
+    expect(NAV_CSS).toMatch(
+      /@keyframes hero-brand-rise \{\s*from \{\s*translate: 0 var\(--hero-brand-y\);\s*\}\s*to \{\s*translate: 0 0;/,
+    );
+    expect(NAV_CSS).toMatch(
+      /animation-range:\s*0px var\(--hero-scale-end\),\s*var\(--hero-rise-start\) var\(--hero-brand-y\);/,
+    );
+    // the two phases follow each other (the scale ends about where the rise starts), so the big title is never in the bar's row
+    expect(NAV_CSS).toContain("--hero-scale-end: calc(var(--hero-brand-y) * 0.55);");
+    expect(NAV_CSS).toContain("--hero-rise-start: calc(var(--hero-brand-y) * 0.45);");
     // the travel is vertical only: the hero shares the bar's width and gutters, so no x is measured
     expect(HERO).toContain("max-width: calc(var(--vp-layout-max-width) - 64px)");
   });
@@ -97,11 +106,26 @@ describe("the nav condenses the hero as the page scrolls", () => {
     expect(HERO).toContain('classList.toggle("hero-condensed", !e.isIntersecting)');
     expect(HERO).toContain('classList.remove("hero-condensed")');
     expect(NAV_CSS).toMatch(
-      /\.hero-condensed \.Layout\.has-hero \.VPNavBarTitle \.title \{\s*transform: none;/,
+      /\.hero-condensed \.Layout\.has-hero \.VPNavBarTitle \.title \{\s*translate: none;\s*scale: none;/,
     );
     expect(NAV_CSS).toMatch(
-      /@media \(prefers-reduced-motion: reduce\) \{\s*\.Layout\.has-hero \.VPNavBarTitle \.title,\s*\.Layout\.has-hero \.VPNavBar::before \{\s*transition: none;/,
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.Layout\.has-hero \.VPNavBarTitle \.title,[^}]*\.hero-fade \{\s*transition: none;/,
     );
+  });
+
+  it("the bar's surface is opaque and complete before the title reaches it, its divider last, in both themes", () => {
+    expect(NAV_CSS).toMatch(
+      /\.Layout\.has-hero \.VPNavBar::before \{\s*background: var\(--vp-nav-bg-color\);/,
+    );
+    expect(NAV_CSS).toMatch(
+      /\.Layout\.has-hero \.VPNavBar::after \{\s*border-bottom: 1px solid var\(--vp-c-divider\);/,
+    );
+    expect(NAV_CSS).toMatch(/animation-range: 0px var\(--hero-bar-end\);/);
+    expect(NAV_CSS).toMatch(/animation-range: var\(--hero-line-start\) var\(--hero-brand-y\);/);
+    expect(NAV_CSS).toContain("--hero-bar-end: calc(var(--hero-brand-y) * 0.5);");
+    expect(NAV_CSS).toContain("--hero-line-start: calc(var(--hero-brand-y) * 0.85);");
+    // no translucent mix: the surface is VitePress's own colour of the current theme
+    expect(NAV_CSS).not.toMatch(/--vp-nav-bg-color\) \d+%/);
   });
 
   it("reserves the room: the bar is fixed at every width over a hero that pads under it, the content has no top padding of its own", () => {
@@ -144,7 +168,7 @@ describe("the nav condenses the hero as the page scrolls", () => {
 });
 
 describe("one of each: GitHub and Get started", () => {
-  it("GitHub is the icon beside the search only; the nav has no text link and the hero no button for it", () => {
+  it("GitHub is the icon beside the theme switch only; the nav has no text link and the hero no button for it", () => {
     const navBlock = (/nav: \[([\s\S]*?)\],\s*sidebar/.exec(CONFIG)?.[1] ?? "").replace(
       /^\s*\/\/.*$/gm,
       "",
@@ -155,5 +179,82 @@ describe("one of each: GitHub and Get started", () => {
     expect(CONFIG).toContain('socialLinks: [{ icon: "github"');
     expect(FRONT).not.toMatch(/github/i);
     expect(FRONT.match(/text: Get started/g)).toHaveLength(1);
+  });
+});
+
+describe("one layout for the hero and the bar over the whole scroll range", () => {
+  it("the grid is one pair of numbers, used by the hero and by the bar: the search starts on the diagram's left edge", () => {
+    expect(NAV_CSS).toMatch(/--hero-text-min: 520px;/);
+    expect(NAV_CSS).toMatch(/--hero-dg-max: \d+px;/);
+    const grid = "max(var(--hero-text-min), calc(100% - var(--hero-dg-max)))";
+    // the hero: a left column of the text and a right column of the diagram
+    expect(HERO).toContain(`grid-template-columns: ${grid} minmax(0, 1fr);`);
+    // the bar: the title's wrapper is the same left column, so the content row (the search first) starts where the diagram does
+    expect(NAV_CSS).toMatch(
+      new RegExp(
+        `\\.Layout\\.has-hero \\.VPNavBar \\.container > \\.title \\{\\s*flex: 0 0 ${grid.replaceAll(/[()]/g, "\\$&")};`,
+      ),
+    );
+  });
+
+  it("the search is wider at the top and shrinks next to the right cluster: two free spaces share the row by flex-grow", () => {
+    expect(NAV_CSS).toMatch(/--hero-search-w0: 300px;/);
+    expect(NAV_CSS).toMatch(/--hero-search-w1: 150px;/);
+    // where the row is short (960 px) the search gives way to the cluster, down to its condensed width, and the content row
+    // may be narrower than what it holds, so nothing leaves the viewport
+    expect(NAV_CSS).toMatch(
+      /> \.VPNavBarSearch \{\s*order: 1;[^}]*flex: 0 1 auto;\s*min-width: var\(--hero-search-w1\);/,
+    );
+    expect(NAV_CSS).toMatch(/\.container > \.content \{\s*min-width: 0;/);
+    expect(NAV_CSS).toMatch(
+      /\.VPNavBar \.content-body::before,\s*\.Layout\.has-hero \.VPNavBar \.content-body::after \{\s*content: "";\s*flex: 0 0 0;/,
+    );
+    expect(NAV_CSS).toMatch(
+      /@keyframes hero-space-open \{\s*from \{\s*flex-grow: 0;\s*\}\s*to \{\s*flex-grow: 1;/,
+    );
+    expect(NAV_CSS).toMatch(
+      /@keyframes hero-space-close \{\s*from \{\s*flex-grow: 1;\s*\}\s*to \{\s*flex-grow: 0;/,
+    );
+    expect(NAV_CSS).toMatch(
+      /@keyframes hero-search-in \{\s*from \{\s*width: var\(--hero-search-w0\);\s*\}\s*to \{\s*width: var\(--hero-search-w1\);/,
+    );
+    expect(NAV_CSS).toMatch(
+      /\.hero-condensed \.Layout\.has-hero \.VPNavBar \.content-body > \.VPNavBarSearch \{\s*width: var\(--hero-search-w1\);/,
+    );
+  });
+
+  it("what the hero holds fades before the bar's edge: the tagline, buttons, chips and the diagram as one unit", () => {
+    for (const cls of ["hero-tagline", "hero-actions", "hero-chips", "hero-diagram"])
+      expect(HERO, cls).toMatch(new RegExp(`class="${cls} hero-fade"`));
+    expect(NAV_CSS).toContain("--hero-fade: 48px;");
+    expect(NAV_CSS).toMatch(
+      /\.hero-fade \{\s*animation: hero-fade-out linear both;\s*animation-timeline: view\(block calc\(var\(--vp-nav-height\) \+ var\(--hero-fade\)\) 0px\);\s*animation-range: exit 0px exit var\(--hero-fade\);/,
+    );
+    // the fallback: the same line, an element is faded once any of it is above it
+    expect(HERO).toContain('getPropertyValue("--hero-fade")');
+    expect(HERO).toContain("rootMargin: `-${bar + fade}px 0px 0px 0px`");
+    expect(HERO).toContain('classList.toggle("hero-faded"');
+    expect(NAV_CSS).toMatch(/\.hero-faded \{\s*opacity: 0;/);
+  });
+
+  it("the diagram is drawn smaller than the text block is tall, and the buttons and chips wrap", () => {
+    // 594 px is 70% of the 848 px it filled before; its height (594 x 224/640) stays under the text column's
+    const width = Number(/--hero-dg-max: (\d+)px;/.exec(NAV_CSS)?.[1]);
+    expect(width).toBeLessThan(848 * 0.8);
+    expect(width).toBeGreaterThan(848 * 0.6);
+    expect(HERO).toMatch(/\.hero-actions \{\s*display: flex;\s*flex-wrap: wrap;/);
+    expect(HERO).toMatch(/\.hero-chips \{\s*display: flex;\s*flex-wrap: wrap;/);
+  });
+
+  it("the nav is one Docs menu holding every page of the sidebar, so the landing (no sidebar) has an index and no link stands alone", () => {
+    const navBlock = (/nav: \[([\s\S]*?)\],\s*sidebar/.exec(CONFIG)?.[1] ?? "").replaceAll(
+      /^\s*\/\/.*$/gm,
+      "",
+    );
+    expect(navBlock).toMatch(/text: "Docs",\s*items: \[/);
+    const sidebar = /sidebar: \[([\s\S]*?)\],\s*socialLinks/.exec(CONFIG)?.[1] ?? "";
+    const pages = [...sidebar.matchAll(/link: "([^"]+)"/g)].map(m => m[1]);
+    expect(pages.length).toBeGreaterThanOrEqual(9);
+    for (const page of pages) expect(navBlock, String(page)).toContain(`link: "${page}"`);
   });
 });
