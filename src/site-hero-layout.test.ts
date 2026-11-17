@@ -7,7 +7,7 @@ import {
   type BuiltSite,
 } from "./site-browser-helpers.js";
 
-// The landing's hero and nav as ONE layout over the whole scroll range, in a real browser: the built site is served
+// The landing's hero and nav as ONE layout over the whole scroll range (the desktop layout merges them; below 960 px the bar is VitePress's own), in a real browser: the built site is served
 // and the page is scrolled in 8 px steps. Opt-in like the other real-browser tests (WF_BROWSER_TESTS=1): a headless
 // launch can raise a window on macOS and a CI image may hold no browser. The source of the same rules is pinned,
 // browser or not, in src/site-hero.test.ts.
@@ -39,9 +39,6 @@ type Box = [number, number, number, number];
 interface Sample {
   y: number;
   boxes: Record<string, Box>;
-  /** the hero's text boxes still visible (effective opacity above 0.1) that straddle the bar's bottom edge */
-  straddling: string[];
-  barBottom: number;
   /** the bar's container, and the viewport's width: every box of the bar lies inside both */
   container: Box;
   viewW: number;
@@ -71,29 +68,9 @@ function measureInPage(): Omit<Sample, "y"> {
     const b = box(e);
     if (b) boxes[k] = b;
   }
-  const barBottom = document.querySelector(".VPNavBar")?.getBoundingClientRect().bottom ?? 0;
-  const opacity = (e: Element): number => {
-    let o = 1;
-    for (let n: Element | null = e; n; n = n.parentElement)
-      o *= Number(getComputedStyle(n).opacity);
-    return o;
-  };
-  const straddling: string[] = [];
-  const texts = [
-    ...document.querySelectorAll(
-      ".hero-tagline, .hero-actions a, .hero-chips, .hero-chips li, .hero-diagram",
-    ),
-  ];
-  for (const e of texts) {
-    const b = box(e);
-    if (b && b[1] < barBottom && b[3] > barBottom && opacity(e) > 0.1)
-      straddling.push(`${e.className || e.tagName} opacity ${opacity(e).toFixed(2)}`);
-  }
   const c = (document.querySelector(".VPNavBar .container") as Element).getBoundingClientRect();
   return {
     boxes,
-    straddling,
-    barBottom,
     container: [c.left, c.top, c.right, c.bottom],
     viewW: document.documentElement.clientWidth,
   };
@@ -177,11 +154,6 @@ describe.skipIf(!HAVE_BROWSER)("the hero and the nav are one layout in a real br
           expect(Object.keys(last.boxes), k).toContain(k);
         expect(overlaps(samples)).toEqual([]);
         expect(outside(samples)).toEqual([]);
-      }, 120_000);
-
-      it(`no hero text still visible straddles the bar's bottom edge, ${width} px${reduced ? ", reduced motion" : ""}`, async () => {
-        const samples = await sweep(width, reduced, 700);
-        expect(samples.flatMap(s => s.straddling.map(t => `y=${s.y}: ${t}`))).toEqual([]);
       }, 120_000);
     }
   }

@@ -13,7 +13,11 @@ const LANDING = read("docs/index.md");
 const FRONT = /^---\n([\s\S]*?)\n---/.exec(LANDING)?.[1] ?? "";
 
 interface Banner {
-  bannerSpec(): { name: string; tagline: string; chips: { text: string; tone: string }[] };
+  bannerSpec(): {
+    name: string;
+    tagline: string;
+    chips: { text: string; tone: string }[];
+  };
   schematicSvg(): string;
 }
 const B = (await import(
@@ -110,7 +114,7 @@ describe("the nav condenses the hero as the page scrolls", () => {
       /\.hero-condensed \.Layout\.has-hero \.VPNavBarTitle \.title \{\s*translate: none;\s*scale: none;/,
     );
     expect(NAV_CSS).toMatch(
-      /@media \(prefers-reduced-motion: reduce\) \{\s*\.Layout\.has-hero \.VPNavBarTitle \.title,[^}]*\.hero-fade \{\s*transition: none;/,
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\.Layout\.has-hero \.VPNavBarTitle \.title,[^}]*\.content-body::after \{\s*transition: none;/,
     );
   });
 
@@ -129,11 +133,11 @@ describe("the nav condenses the hero as the page scrolls", () => {
     expect(NAV_CSS).not.toMatch(/--vp-nav-bg-color\) \d+%/);
   });
 
-  it("reserves the room: the bar is fixed at every width over a hero that pads under it, the content has no top padding of its own", () => {
+  it("reserves the room: the bar is fixed from 960px over a hero that pads under it, the content has no top padding of its own", () => {
     expect(NAV_CSS).toMatch(/\.Layout\.has-hero \.VPNav \{\s*position: fixed;/);
     expect(NAV_CSS).toMatch(/\.Layout\.has-hero \.VPContent \{\s*padding-top: 0;/);
     expect(HERO).toContain(
-      "padding: calc(var(--vp-nav-height) / 2 + var(--hero-brand-y) - var(--hero-brand-h) / 2)",
+      "padding-top: calc(var(--vp-nav-height) / 2 + var(--hero-brand-y) - var(--hero-brand-h) / 2)",
     );
     expect(HERO).toContain("padding-top: calc(var(--hero-brand-h) + 28px)");
   });
@@ -224,18 +228,48 @@ describe("one layout for the hero and the bar over the whole scroll range", () =
     );
   });
 
-  it("what the hero holds fades before the bar's edge: the tagline, buttons, chips and the diagram as one unit", () => {
+  it("what the hero holds does not fade: it scrolls under the opaque bar as plain content, on every layout", () => {
     for (const cls of ["hero-tagline", "hero-actions", "hero-chips", "hero-diagram"])
-      expect(HERO, cls).toMatch(new RegExp(`class="${cls} hero-fade"`));
-    expect(NAV_CSS).toContain("--hero-fade: 48px;");
-    expect(NAV_CSS).toMatch(
-      /\.hero-fade \{\s*animation: hero-fade-out linear both;\s*animation-timeline: view\(block calc\(var\(--vp-nav-height\) \+ var\(--hero-fade\)\) 0px\);\s*animation-range: exit 0px exit var\(--hero-fade\);/,
+      expect(HERO, cls).toMatch(new RegExp(`class="${cls}"`));
+    // no fade class, variable, keyframes, view() timeline, or observer toggling an opacity class
+    for (const word of [
+      "hero-fade",
+      "hero-faded",
+      "--hero-fade",
+      "view(block",
+      "hero-fade-out",
+      "rootMargin",
+    ])
+      expect(HERO, word).not.toContain(word);
+  });
+
+  it("the merge is for the desktop layout only: below 960px the bar is VitePress's own and the hero has no room reserved for a brand", () => {
+    // every rule that moves, shows or hides the bar or its title is inside the one desktop block
+    const at = NAV_CSS.indexOf("@media (min-width: 960px) {");
+    const desktop = NAV_CSS.slice(at, NAV_CSS.indexOf("@keyframes hero-brand-scale"));
+    for (const sel of [
+      ".Layout.has-hero .VPNav {",
+      ".Layout.has-hero .VPContent {",
+      ".Layout.has-hero .VPNavBar::before",
+      ".Layout.has-hero .VPNavBarTitle .title {",
+      ".Layout.has-hero .VPNavBar .content-body::before {",
+      ".Layout.has-hero .VPNavBar .container {",
+    ]) {
+      expect(NAV_CSS.split(sel).length - 1, sel).toBeGreaterThan(0);
+      expect(NAV_CSS.slice(0, at), `${sel} before the desktop block`).not.toContain(sel);
+      expect(desktop, sel).toContain(sel);
+    }
+    // the scroll-driven animations are desktop-only too
+    expect(NAV_CSS).toContain(
+      "@media (prefers-reduced-motion: no-preference) and (min-width: 960px)",
     );
-    // the fallback: the same line, an element is faded once any of it is above it
-    expect(HERO).toContain('getPropertyValue("--hero-fade")');
-    expect(HERO).toContain("rootMargin: `-${bar + fade}px 0px 0px 0px`");
-    expect(HERO).toContain('classList.toggle("hero-faded"');
-    expect(NAV_CSS).toMatch(/\.hero-faded \{\s*opacity: 0;/);
+    // the phone's brand sizes are gone: nothing enlarges the title below 960px
+    expect(NAV_CSS).not.toMatch(/max-width: (639|379)px/);
+    // the hero's padding for the enlarged brand is desktop-only
+    expect(HERO).toMatch(
+      /@media \(min-width: 960px\) \{\s*\.hero \{[^}]*padding-top: calc\(var\(--vp-nav-height\) \/ 2 \+ var\(--hero-brand-y\) - var\(--hero-brand-h\) \/ 2\);/,
+    );
+    expect(HERO).toMatch(/\.hero \{[^}]*\n {2}padding: 32px 24px 40px;/);
   });
 
   it("the diagram is drawn smaller than the text block is tall, and the buttons and chips wrap", () => {

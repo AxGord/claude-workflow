@@ -7,8 +7,8 @@ import {
   type BuiltSite,
 } from "./site-browser-helpers.js";
 
-// The landing's enlarged hero title (the nav's own title at scale 2 below 640 px, scroll top) must fit a 320 px phone:
-// nothing of it past the viewport, no horizontal overflow of the page. Real browser.
+// The landing's bar on a 320 px phone (VitePress's own bar and title below 960 px, scroll top) must fit it:
+// nothing of the title past the viewport, no horizontal overflow of the page. Real browser.
 
 // Runs whenever a browser is installed (no opt-in variable): a skipped test would read as green on the unfixed tree.
 const HAVE_BROWSER = browserInstalled();
@@ -27,7 +27,7 @@ afterAll(async () => {
   site?.close();
 });
 
-describe.skipIf(!HAVE_BROWSER)("the hero title at 320 px, scroll top", () => {
+describe.skipIf(!HAVE_BROWSER)("the bar's title at 320 px, scroll top", () => {
   for (const reduced of [false, true]) {
     it(`fits the viewport with no horizontal overflow${reduced ? ", reduced motion" : ""}`, async () => {
       const page = await browser.newPage({
