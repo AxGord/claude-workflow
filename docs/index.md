@@ -1,5 +1,6 @@
 ---
 layout: home
+pageClass: has-hero
 title: Claude Workflow
 hero:
   name: Claude Workflow
@@ -12,9 +13,6 @@ hero:
     - theme: alt
       text: How it works
       link: /concepts
-    - theme: alt
-      text: GitHub
-      link: https://github.com/AxGord/claude-workflow
 features:
   - title: Agents keep their step
     details: A workflow is a YAML state machine. The engine tracks the state, enforces the guards and hands the agent one prompt at a time, so a long task survives context loss and a restart.

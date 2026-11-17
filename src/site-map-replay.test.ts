@@ -135,6 +135,13 @@ describe("docs:build compiles the landing with the replay", () => {
     );
     expect(page).toContain("tr-play");
     expect(page).toContain("stage-frame");
+    // the hero (src/site-hero.test.ts pins its source; one build serves both, two would share docs/.vitepress/.temp)
+    const templates = fs.readdirSync(path.join(ROOT, "templates")).filter(f => f.endsWith(".yaml"));
+    expect(page).toContain('class="hero"');
+    expect(page).toContain(`${templates.length} workflows`);
+    expect(page).toMatch(/class="Layout[^"]*has-hero/);
+    expect(page).toContain('<span class="brand-a">Claude</span> Workflow');
+    expect(fs.readFileSync(path.join(out, "concepts.html"), "utf8")).not.toContain("has-hero");
     expect(fs.readFileSync(path.join(out, "replay", "anyparse.json"), "utf8")).toBe(
       read("docs/public/replay/anyparse.json"),
     );

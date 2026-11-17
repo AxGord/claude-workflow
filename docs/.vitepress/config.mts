@@ -1,9 +1,17 @@
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
 
+const NAME = "Claude Workflow";
+
+/** The bundled workflows, counted from templates/ (the files the loader's bundled tier reads), for the hero's chip: never typed. */
+const bundledWorkflows = fs
+  .readdirSync(fileURLToPath(new URL("../../templates", import.meta.url)))
+  .filter(f => f.endsWith(".yaml")).length;
+
 // A GitHub project page: https://axgord.github.io/claude-workflow/
 export default defineConfig({
-  title: "Claude Workflow",
+  title: NAME,
   description: "Workflows for Claude Code agents: states, gates, a machine-wide thread pool, a live map",
   base: "/claude-workflow/",
   cleanUrls: true,
@@ -25,16 +33,18 @@ export default defineConfig({
     },
   },
   vite: {
+    define: { __BUNDLED_WORKFLOWS__: JSON.stringify(bundledWorkflows) },
     // The landing's replay imports the live map's own code (src/, dashboard/), outside the docs root.
     server: { fs: { allow: [fileURLToPath(new URL("../..", import.meta.url))] } },
   },
   themeConfig: {
     // Logo 2 in the nav, one file per colour scheme (docs/public/logo.svg for dark, logo-light.svg for light).
+    // The name is the hero's brand on the landing (enlarged by the scroll-linked CSS in Hero.vue, its first word in the banner's gradient).
+    siteTitle: `<span class="brand-a">${NAME.split(" ")[0]}</span> ${NAME.split(" ").slice(1).join(" ")}`,
     logo: { light: "/logo-light.svg", dark: "/logo.svg", alt: "Claude Workflow" },
     nav: [
-      { text: "Get started", link: "/getting-started" },
+      // "Get started" is the hero's button, GitHub is the icon beside the search: each appears once.
       { text: "Docs", link: "/concepts" },
-      { text: "GitHub", link: "https://github.com/AxGord/claude-workflow" },
     ],
     sidebar: [
       {
