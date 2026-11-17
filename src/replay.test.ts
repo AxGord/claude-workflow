@@ -368,6 +368,33 @@ describe("the committed replay (docs/public/replay/anyparse.json)", () => {
     expect(Math.min(...waiting)).toBeLessThan(Math.max(...waiting));
   });
 
+  it("shows every driver on its workflow's driver model: no lane reads `driver · opus` or `driver · sonnet`", () => {
+    const drivers = Object.entries(file.workflows).filter(([, w]) => w.driver !== undefined);
+    expect(drivers.map(([name]) => name)).toEqual(
+      expect.arrayContaining(["slice-pipeline", "engine-task"]),
+    );
+    for (const [, w] of drivers) expect(w.driver?.model).toBe("haiku");
+    const chips = new Set<string>();
+    const step = 300_000;
+    for (let t = 0; t <= file.durationMs; t += step) {
+      const live = fold(events.slice(0, rowsUntil(file, t)));
+      const { bands } = layout(live, file.workflows, {
+        now: Date.parse(file.start) + t,
+        width: 1000,
+      });
+      for (const b of bands)
+        for (const lane of b.lanes) if (lane.driver) chips.add(lane.driver.text);
+    }
+    expect(chips.size).toBeGreaterThan(0);
+    for (const text of chips) expect(text).not.toMatch(/driver · (opus|sonnet)/);
+    // the replayed conversation's spawn lines carry the same model
+    const spawns = conversationAt(file, file.durationMs).filter(
+      l => l.kind === "spawn" && l.role === "driver",
+    );
+    expect(spawns.length).toBeGreaterThan(0);
+    for (const l of spawns) expect(l).toMatchObject({ model: "haiku" });
+  });
+
   it("is under 300 KB", () => {
     expect(Buffer.byteLength(raw)).toBeLessThan(300_000);
   });
