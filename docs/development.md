@@ -25,6 +25,8 @@ npm run format:check   # biome format check (formatter only; part of check)
 npm run scan     # ast-grep scan --error: structural rules in rules/ (sgconfig.yml), e.g. .then() without .catch(); 0 findings
 ```
 
+The engine's own slice workflow is a tracked file: `.claude/workflows/engine-task.yaml` (`extends: batch-task`, the project tier of this checkout). `.gitignore` un-ignores that one file and keeps the rest of `.claude/` ignored, so a slice changes the workflow through its worktree like any other source. Its `repro_check` and `repro_route` list a bug branch's changes against the branch's own base (`git merge-base master HEAD`), not the moving `master`.
+
 ## Architecture
 
 | File | Responsibility |

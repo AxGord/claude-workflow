@@ -1,0 +1,515 @@
+name: engine-task
+extends: batch-task
+description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree /tmp/wf-<ID>, branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → cleanup → done (says whether Claude needs a restart)."
+
+# The session's cwd is the engine's main checkout (the dispatcher starts it there). The live server and the
+# installed hooks run from that checkout's build/: the worker never touches it, only project_land does.
+states:
+  project_prepare:
+    station: false
+    type: exec
+    # stdout is the worktree path alone (→ context.wt); messages go to stderr.
+    command: |-
+      case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'" >&2; exit 2;; esac
+      main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)") || exit 2
+      branch=eng/$(printf %s "$TASK" | sed 's/^[Ee][Nn][Gg]-//' | tr '[:upper:]' '[:lower:]')
+      wt=/tmp/wf-$TASK
+      if [ -d "$wt" ]; then
+        echo "kept $wt ($(git -C "$wt" symbolic-ref --short HEAD) @ $(git -C "$wt" rev-parse --short HEAD))" >&2
+      else
+        git -C "$main" worktree add "$wt" -b "$branch" master >&2 || exit 1
+        echo "made $wt on $branch @ $(git -C "$wt" rev-parse --short HEAD)" >&2
+      fi
+      [ -e "$wt/node_modules" ] || ln -s "$main/node_modules" "$wt/node_modules" || exit 1
+      printf %s "$wt"
+    env:
+      TASK: "{{context.task}}"
+    timeout: 120000
+    context_set:
+      wt: "{{stdout}}"
+    on_success: project_branch
+    on_error: prepare_failed
+
+  project_branch:
+    station: false
+    type: exec
+    command: printf %s "$(git -C "$WT" symbolic-ref --short HEAD)"
+    env:
+      WT: "{{context.wt}}"
+    timeout: 10000
+    context_set:
+      branch: "{{stdout}}"
+    on_success: repro_route
+    on_error: prepare_failed
+
+  repro_route:
+    station: false
+    type: exec
+    # A `kind: bug` line (read from its queue line; no driver sets a kind) is reproduced before any edit. Every other line
+    # goes straight to `work`, this exec printing nothing, so its prompt reads as before. "Changed" is measured against the
+    # branch's own base (merge-base with master), never the moving master: a line landing meanwhile is not this branch's change.
+    cwd: "{{context.wt}}"
+    command: |-
+      kind=$(awk -v id="$TASK" '$0=="  - id: " id {f=1; next} f && /^  - /{exit} f && /^    kind: /{print $2; exit}' "$QUEUE" 2>/dev/null)
+      if [ "$kind" = bug ] && [ ! -f "$WT-logs/repro-verdict.txt" ]; then
+        base=$(git merge-base master HEAD) || exit 2
+        changed=$( { git diff --name-only "$base" -- . ':!*.test.ts' ':!*.test.tsx' ':!*/fixtures/*'; git ls-files --others --exclude-standard -- . ':!*.test.ts' ':!*.test.tsx' ':!*/fixtures/*'; } | sort -u)
+        [ -n "$changed" ] || { echo "kind: bug and no reproduction on record"; exit 10; }
+        mkdir -p "$WT-logs"; { echo "skipped: the branch already changed source before the reproduce step existed for it"; echo "$changed"; } > "$WT-logs/repro-verdict.txt"
+      fi
+      exit 0
+    env: { TASK: "{{context.task}}", QUEUE: "{{context.queue_file}}", WT: "{{context.wt}}" }
+    timeout: 10000
+    cases: { "0": work, "10": repro }
+    default: work
+
+  repro:
+    # Before the worker: one agent, repro.txt and a failing vitest test, no source edit; `repro_check` is the judge.
+    full_on_revisit: true
+    max_visits: 4
+    on_exhausted: repro_stop
+    prompt: |-
+      {{stdout}}
+      {{context.task}} is `kind: bug`: it is reproduced before the worker starts (visit {{visits.repro}} of 4). Worktree {{context.wt}}.
+      First visit — spawn ONE reproducer: Agent, model {{context.model}}, effort {{context.effort}} (`-` → high), `run_in_background: true`, prompt:
+
+        Reproduce engine bug {{context.task}} (its line in {{context.queue_file}}); no fix. Work ONLY in {{context.wt}}: (1) run the symptom the line describes, the real page or command, not a search of the source, `mkdir -p {{context.wt}}-logs` and write {{context.wt}}-logs/repro.txt: the first line the command, then its output. (2) Write a failing vitest test that holds the symptom by executing the behaviour the line names (a test that only reads source text, such as a regex over a .css or .ts file, reproduces a guess at the cause, not the symptom; when the line names a measurement, put it in repro.txt, or write a line starting not measured with the reason there): `src/<name>.test.ts` (uncommitted; change no other file: source edits are refused). Never commit, never push, no `git stash`, no workflow tool (mcp__plugin_workflow_wf__*); do not touch the main checkout. Your LAST message is one line: `REPRO-READY test=<the test file, relative to the worktree>`; a symptom no test can hold (an environment fault, a hang) → make repro.txt's first line `untestable: <why>` and answer `REPRO-UNTESTABLE`; the symptom does not appear → `REPRO-NONE <what you ran>`.
+
+      context_set `repro_agent` = its id. A later visit (the output above is a REFUSED or NOT-REPRODUCED verdict): SendMessage `{{context.repro_agent}}` that output verbatim (it is gone → a fresh agent, same prompt, plus that output). END your turn. On its line: `REPRO-READY` → context_set `repro_test` = the test file, then `check`; `REPRO-UNTESTABLE` → `check`; `REPRO-NONE`, or a NOT-REPRODUCED it cannot turn red → `not_reproduced`.
+    transitions:
+      check: repro_check
+      not_reproduced: repro_stop
+
+  repro_check:
+    station: false
+    type: exec
+    # repro.txt, no source edit against the branch's own base (merge-base with master, never the moving master), and the named vitest file red: its verdict is what `work` starts from.
+    cwd: "{{context.wt}}"
+    command: |-
+      logs="$WT-logs"; f="$logs/repro.txt"; d="$logs/repro"; mkdir -p "$d"
+      [ -s "$f" ] || { echo "REFUSED: $f is missing or empty"; exit 11; }
+      keep="$(dirname "$QUEUE")/../backups/slice-logs/$TASK"; mkdir -p "$keep" && cp -p "$f" "$keep/repro.txt"
+      base=$(git merge-base master HEAD) || { echo "REFUSED: no merge-base of master and HEAD"; exit 13; }
+      changed=$( { git diff --name-only "$base" -- . ':!*.test.ts' ':!*.test.tsx' ':!*/fixtures/*'; git ls-files --others --exclude-standard -- . ':!*.test.ts' ':!*.test.tsx' ':!*/fixtures/*'; } | sort -u)
+      [ -z "$changed" ] || { echo "REFUSED: files differ from the branch base before the bug is reproduced (only *.test.ts and fixtures may):"; echo "$changed" | head -20; exit 12; }
+      case "$(head -1 "$f")" in
+        untestable:*) { head -1 "$f"; echo "the reviewer judges this reason: $f"; } > "$logs/repro-verdict.txt"; echo "UNTESTABLE (the reviewer judges the reason): $(head -1 "$f")"; exit 0;;
+      esac
+      case "$REPRO_TEST" in ''|*[!A-Za-z0-9._/-]*) echo "REFUSED: repro_test must be the test file (got '$REPRO_TEST')"; exit 13;; esac
+      [ -f "$REPRO_TEST" ] || { echo "REFUSED: no test file $REPRO_TEST in the worktree"; exit 13; }
+      out="$d/vitest.json"; rm -f "$out"
+      npx vitest run "$REPRO_TEST" --reporter=json --outputFile="$out" > "$d/run.log" 2>&1
+      [ -s "$out" ] || { echo "REFUSED: no vitest report; $d/run.log:"; tail -20 "$d/run.log"; exit 13; }
+      node -e '
+        const fs = require("fs"); const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        if (j.numFailedTests > 0) { console.log(j.numFailedTests + " of " + j.numTotalTests + " tests red on master"); process.exit(0); }
+        if (j.numTotalTests === 0) { const m = (j.testResults || []).map((t) => t.message || "").join("; "); console.log("the file ran no test: " + (m || "(no tests found)")); process.exit(13); }
+        console.log(j.numTotalTests + " test(s) green on master"); process.exit(20);
+      ' "$out" > "$d/verdict.txt"; rc=$?
+      case "$rc" in
+        0) { echo "reproduced: $REPRO_TEST $(cat "$d/verdict.txt")"; echo "repro: $f"; } > "$logs/repro-verdict.txt"; cp -p "$logs/repro-verdict.txt" "$keep/"; echo "REPRODUCED: $REPRO_TEST $(cat "$d/verdict.txt")";;
+        20) echo "NOT-REPRODUCED: $REPRO_TEST passes on master ($(cat "$d/verdict.txt"))"; exit 20;;
+        *) echo "REFUSED: $(cat "$d/verdict.txt")"; exit 13;;
+      esac
+    env: { REPRO_TEST: "{{context.repro_test}}", WT: "{{context.wt}}", QUEUE: "{{context.queue_file}}", TASK: "{{context.task}}" }
+    timeout: 600000
+    resource: { threads: { min: 1, max: 2 } }
+    context_set:
+      repro_note: " Reproduce step of this bug line: {{stdout}} Its record is {{context.wt}}-logs/repro.txt; the test (uncommitted in your worktree, when it reproduced) stays in your ONE commit and is green at the end."
+      repro_review_note: " This is a kind: bug line, reproduced before the worker: {{stdout}} ({{context.wt}}-logs/repro.txt). An UNTESTABLE reason is yours to judge: a FIXES item when it does not stand."
+    on_timeout: repro
+    cases: { "0": work }
+    default: repro
+
+  repro_stop:
+    prompt: |-
+      {{context.task}} was not reproduced ({{stdout}}). What was run: {{context.wt}}-logs/repro.txt. Name that in your NEEDS-PARENT line when `blocked` asks: `reason=not reproduced`. Transition `stop`.
+    transitions:
+      stop: blocked
+
+  prepare_failed:
+    prompt: |-
+      The worktree for {{context.task}} was not made (exit {{exit_code}}):
+      {{stderr}}
+      A stale branch `eng/…` without its directory /tmp/wf-{{context.task}}: decide (delete it only if it holds
+      nothing unmerged) and `retry`. Otherwise `queue_mark({file: "{{context.queue_file}}", id: "{{context.task}}",
+      to: "released"})` (back to `[ ]`, nothing was made) → `release`, or `to: "failed"` with the reason as `note`
+      → `close`.
+    transitions:
+      retry: project_prepare
+      release: released
+      close: closed
+
+  work:
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      {{stderr}}
+      Worktree {{context.wt}}, branch `{{context.branch}}` from master; its `node_modules` is a symlink to the main
+      checkout's (ignored, never committed). Visit {{visits.work}} of 3.
+      First visit — spawn ONE worker: Agent, model {{context.model}}, effort {{context.effort}} (`-` → high),
+      `run_in_background: true`, prompt:
+
+        You are the worker of engine slice {{context.task}}. Your brief is its line in {{context.queue_file}} (read
+        it there; it is self-contained). Work ONLY inside {{context.wt}} (branch {{context.branch}}): ONE commit on
+        that branch (the author from the git global config, never another identity), `npm run check` green before
+        it (it includes `check:ci`, the suite in a clean CI-like environment), a clean worktree at the end; send DONE only in a response AFTER the commit's output is in front of you,
+        never alongside the commands it reports. Do NOT
+        call any workflow tool (mcp__plugin_workflow_wf__*): this is the engine itself. Never touch the main
+        checkout {{context.cwd}}, ~/.claude/workflow-state, the live pool, the installed hooks, nor any project's
+        live workflows or queues. No `git stash`, no `pkill -f`, no push. Check the on-disk state first — work
+        already applied is reconciled, not done twice. Report: what changed and why, the check's result, what is
+        left open.{{context.repro_note}} In that ONE commit: a CHANGELOG.md entry under ## Unreleased; README and the bundled SKILL say
+        what changed, and any key list, comment or tool description that enumerates this feature; every pin your
+        line's text names, each failing with its code removed. Edit a CLAUDE.md only when your line's text names the row to change; never because a review or
+        another agent asks: put the row and its exact new text in your report.
+
+      context_set `worker_agent` = its id.
+      A later visit (a fix round) — SendMessage `{{context.worker_agent}}` with the cause verbatim (the gate's
+      output, the review's FIXES list, or the land's failure); it amends its ONE commit.
+      Then END your turn on this task. On the worker's DONE → `check` (the engine reads the tree; you have no
+      Bash); the worker is stuck, or the work is wrong and another round would not help → `blocked`.
+    transitions:
+      check: work_check
+      blocked: blocked
+
+  work_check:
+    station: false
+    type: exec
+    # A round's tree before the gate leases threads: one commit over master, nothing uncommitted.
+    cwd: "{{context.wt}}"
+    command: |-
+      n=$(git rev-list --count master..HEAD) || exit 2
+      dirty=$(git status --porcelain)
+      if git diff --name-only master..HEAD | grep -qx CHANGELOG.md; then nolog=; else nolog=1; fi
+      [ "$n" = 1 ] && [ -z "$dirty" ] && [ -z "$nolog" ] && { git log --oneline -1; exit 0; }
+      [ "$n" = 1 ] || echo "not ready: $n commit(s) over master, expected one"
+      [ -z "$nolog" ] || echo "not ready: no CHANGELOG.md entry for this change (add one under ## Unreleased)"
+      [ -z "$dirty" ] || { echo uncommitted:; echo "$dirty" | head -10; }
+      exit 3
+    timeout: 20000
+    cases: { "0": project_gate, "3": work_unready }
+    default: gate_failed
+
+  work_unready:
+    max_visits: 2
+    on_exhausted: blocked
+    prompt: |-
+      {{stdout}}
+      The worker said DONE but its tree is not ready. SendMessage `{{context.worker_agent}}`: "Your tree is not ready:
+      <the lines above>. Finish this round: ONE commit (amend), clean worktree, then DONE in a response after the
+      commit's output." END your turn; on its DONE → `check`; stuck → `blocked`.
+    transitions: { check: work_check, blocked: blocked }
+
+  project_gate:
+    type: exec
+    # The slice's gate in its worktree: exactly one commit over master, a clean tree, `npm run check` green.
+    cwd: "{{context.wt}}"
+    command: |-
+      n=$(git rev-list --count master..HEAD) || exit 2
+      [ "$n" = 1 ] || { echo "refused: $n commits over master, expected one"; exit 3; }
+      dirty=$(git status --porcelain)
+      [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
+      log=$(mktemp); npm run check >"$log" 2>&1; rc=$?
+      if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
+      grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
+      echo "gate green: $(git log --oneline -1)"
+    timeout: 1800000
+    resource: { threads: { min: 4, max: budget } }
+    max_output: 16384
+    on_timeout: gate_failed
+    cases:
+      "0": review
+    default: gate_failed
+
+  project_gate_rebased:
+    type: exec
+    # The slice's gate after a rebase onto a moved master (the reviewed change unchanged: straight to land, no review visit) in its worktree: exactly one commit over master, a clean tree, `npm run check` green.
+    cwd: "{{context.wt}}"
+    command: |-
+      n=$(git rev-list --count master..HEAD) || exit 2
+      [ "$n" = 1 ] || { echo "refused: $n commits over master, expected one"; exit 3; }
+      dirty=$(git status --porcelain)
+      [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
+      log=$(mktemp); npm run check >"$log" 2>&1; rc=$?
+      if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
+      grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
+      echo "gate green: $(git log --oneline -1)"
+    timeout: 1800000
+    resource: { threads: { min: 4, max: budget } }
+    max_output: 16384
+    on_timeout: gate_failed
+    cases:
+      "0": project_land
+    default: gate_failed
+
+  gate_failed:
+    prompt: |-
+      The gate of {{context.task}} failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      - 1 (`npm run check` red) or 3 (not one commit / a dirty worktree) → `fix`: the output above is the
+        worker's fix round.
+      - 124 (timeout) → `retry` once; again → `close`.
+      - the failure is outside the slice (master itself red, the environment) → `close` with the reason.
+    transitions:
+      fix: work
+      retry: project_gate
+      close: blocked
+
+  review:
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      Gate green on `{{context.branch}}`:
+      {{stdout}}
+      Re-entered after a FIXES round (context `reviewer_agent` is set): do not spawn. SendMessage that reviewer: "Fix
+      round for {{context.task}}: the worker amended. Re-check YOUR list against `git -C {{context.wt}} diff
+      {{context.reviewed_sha}} HEAD` only, then whatever that diff newly touches. A gap you missed in round 1 that the
+      diff does not touch is an open item for a follow-up line, not a FIXES item. Run every command in the foreground.
+      Last line MERGE or FIXES: and a numbered list." Then context_set `reviewed_sha` = HEAD of {{context.wt}} and handle
+      its answer as below. (A reviewer that no longer answers → spawn a fresh one as on the first entry.)
+      First entry — spawn ONE reviewer: Agent, model opus, effort high, `run_in_background: false`, prompt:
+
+        Review engine slice {{context.task}} READ-ONLY: change no file, make no commit, call no workflow tool
+        (mcp__plugin_workflow_wf__*). The brief is its line in {{context.queue_file}}; the change is HEAD of
+        {{context.wt}}: first `git -C {{context.wt}} show --stat HEAD`, then ONE path per call, verbatim
+        (`rtk proxy git -C {{context.wt}} show HEAD -- <path>`), src/ first — never the whole `show HEAD` or several
+        paths at once (an output over the tool limit is persisted and then read again whole); the working-tree source
+        around a hunk by line range (`sed -n A,Bp`, ≤150 lines). Check: the brief is done; the behavior is correct (concurrency, crash and restart paths,
+        exit codes); tests would fail without the change; README / CHANGELOG / bundled SKILL say what changed;
+        a CLAUDE.md row the change makes stale is never a FIXES item: before the verdict line, one line per row,
+        `CLAUDE.md: <file:line> → <exact new text>` (the parent edits it); no live state touched; a hook that returns updatedInput without permissionDecision "allow" makes auto mode
+        refuse the call — a FIXES item; on a security or allow-list line, a bypass outside the families the line names
+        is an open item for a follow-up line, not a FIXES item. Run every command in the foreground (never
+        run_in_background). Last line, on a line of its own with nothing else on it — the verdict: `MERGE` or `FIXES:` and a numbered list.{{context.repro_review_note}}
+
+      After spawning: context_set `reviewer_agent` = its id and `reviewed_sha` = HEAD of {{context.wt}}.
+
+      On the reviewer's answer: context_set `review_text` = its final message verbatim, then `filed` (the engine
+      files it under the queue's backups/slice-logs/<task>/ and routes MERGE → land, FIXES → work; on FIXES the list
+      goes to the worker as its fix round, verbatim). Re-entered
+      after a rebase onto a moved master with the reviewed change unchanged (`git -C {{context.wt}} range-diff
+      ORIG_HEAD...HEAD` shows only the base moved) → `merge` without a new reviewer.
+    transitions:
+      filed: review_filed
+      merge: project_land
+
+  review_filed:
+    station: false
+    type: exec
+    # The reviewer's text outlives the driver: a closed task's follow-up and the curator read it.
+    command: |-
+      d="$(dirname "$QUEUE")/../backups/slice-logs/$TASK"; mkdir -p "$d"
+      n=$(( $(ls "$d"/review-*.md 2>/dev/null | wc -l) + 1 )); printf '%s\n' "$TEXT" > "$d/review-$n.md"; echo "wrote $d/review-$n.md"
+      printf '%s\n' "$TEXT" | grep '^CLAUDE.md:' >> "$d/claude-md.txt" || true
+      v=$(printf '%s\n' "$TEXT" | grep -E '^(VERDICT +)?(MERGE|FIXES)' | tail -1 | sed -E 's/^VERDICT +//')
+      # A verdict written inline at the end of the last line: only MERGE is read there, anything else goes to a fix round.
+      [ -n "$v" ] || { printf '%s\n' "$TEXT" | sed '/^[[:space:]]*$/d' | tail -1 | grep -Eq '(^|[^A-Za-z])MERGE[.[:space:]]*$' && v=MERGE; }
+      case "$v" in
+        MERGE*) if awk -v id="$TASK" '$0=="  - id: "id{f=1;next} f&&/^  - id:/{exit} f&&/^    breaking: true$/{b=1} END{exit !b}' "$QUEUE"; then exit 20; fi; exit 0;;
+        *) exit 10;;
+      esac
+    env: { TEXT: "{{context.review_text}}", QUEUE: "{{context.queue_file}}", TASK: "{{context.task}}" }
+    timeout: 10000
+    cases: { "0": project_land, "10": work, "20": breaking_ready }
+    default: work
+
+  breaking_ready:
+    prompt: |-
+      {{context.task}} is reviewed and its line is `breaking: true`: it does not land by itself. Hand back
+      `NEEDS-PARENT task={{context.task}} session=<this session> reason=breaking land ready see={{context.wt}}`. The
+      parent lands it with the window empty, converts the consumers and restarts in one step. On its word: `merge`,
+      or `close` if the line is dropped.
+    transitions:
+      merge: project_land
+      close: blocked
+
+  project_land:
+    type: exec
+    # One land into master at a time. ff-only: master becomes exactly the tree project_gate passed, so the
+    # land only builds (the live hooks and new servers run master's build/ at once); a red build takes the
+    # merge back (`reset --keep`, never `--hard`) and rebuilds master.
+    command: |-
+      case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'"; exit 2;; esac
+      [ -n "$BRANCH" ] || { echo "refused: no branch"; exit 2; }
+      main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)") || exit 2
+      cd "$main" || exit 2
+      head=$(git symbolic-ref --short HEAD)
+      [ "$head" = master ] || { echo "refused: $main is on $head, not master"; exit 3; }
+      if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        echo "refused: $main has uncommitted changes"; git status --short --untracked-files=no | head -5; exit 3
+      fi
+      git merge-base --is-ancestor master "$BRANCH" || { echo "master moved past $BRANCH's base: rebase"; exit 5; }
+      base=$(git rev-parse HEAD)
+      git merge --ff-only -q "$BRANCH" || { echo "ff-merge of $BRANCH failed"; exit 1; }
+      merged=$(git rev-parse HEAD)
+      # The pre-merge sha survives a failed land: a retry finds the merge done (base == merged) and syncs from it.
+      mark="$(git rev-parse --path-format=absolute --git-common-dir)/land-before-$TASK"
+      if [ "$base" = "$merged" ] && [ -s "$mark" ] && git merge-base --is-ancestor "$(cat "$mark")" "$merged"; then from=$(cat "$mark"); else from=$base; printf %s "$base" >"$mark"; fi
+      log=$(mktemp)
+      # A changed package.json / lock installs its dependencies in place (npm install, never ci: live hooks read node_modules) before the build (and master's again on a take-back).
+      deps=$(git diff --name-only "$from" "$merged" -- package.json package-lock.json)
+      [ -z "$deps" ] || { npm install --no-audit --no-fund >"$log" 2>&1 || echo "npm install failed on master + $BRANCH"; git checkout -q -- package-lock.json; }
+      if ! npm run build >>"$log" 2>&1; then
+        tail -60 "$log"; rm -f "$log"
+        [ "$(git rev-parse HEAD)" = "$merged" ] || { echo "HEAD moved during the land: nothing taken back"; exit 4; }
+        if [ "$base" = "$merged" ]; then echo "the merge from an earlier land is still on master and the build is red: nothing taken back, the mark is kept"; exit 1; fi
+        git reset -q --keep "$base" || { echo "local edits on files the merge changed: the merge is left on top"; exit 4; }
+        rm -f "$mark"
+        [ -z "$deps" ] || { npm install --no-audit --no-fund >/dev/null 2>&1 || echo "WARNING: npm install of master failed: node_modules is the branch's"; git checkout -q -- package-lock.json; }
+        npm run build >/dev/null 2>&1 || echo "WARNING: the rebuild of master failed too: build/ is stale"
+        echo "npm run build failed on master + $BRANCH: the merge is taken back"; exit 1
+      fi
+      rm -f "$log"
+      sh "$main/scripts/sync-live-skills.sh" "$from" "$merged"
+      rm -f "$mark"
+      changed=$(git diff --name-only "$from" "$merged" -- src hooks templates .claude-plugin .mcp.json | head -5)
+      if [ -n "$changed" ]; then
+        echo "RESTART Claude: the server, hooks or bundled workflows changed ($(echo $changed))"
+      else
+        echo "no restart needed (server, hooks and bundled workflows unchanged)"
+      fi
+      echo "landed $BRANCH: $(git rev-parse --short HEAD)"
+    env:
+      TASK: "{{context.task}}"
+      BRANCH: "{{context.branch}}"
+    timeout: 600000
+    resource: { locks: ["{{context.cwd}}-land"] }
+    max_output: 16384
+    context_set:
+      land_out: "{{stdout}}"
+    on_timeout: land_state_124
+    cases:
+      "0": mark_done
+      "4": land_state_4
+      "5": project_rebase
+    default: land_failed
+
+  # The driver has no shell: the main checkout's state after a timeout or a failed take-back is printed here,
+  # and land_failed reads it from stdout; the exit code keeps the land's own.
+  land_state_4:
+    type: exec
+    cwd: "{{context.cwd}}"
+    command: &land_state |-
+      echo "main checkout after the land:"
+      git log --oneline -3
+      echo "status (empty = clean):"
+      git status --short | head -20
+      exit "$CODE"
+    env:
+      CODE: "4"
+    timeout: 20000
+    on_success: land_failed
+    on_error: land_failed
+
+  land_state_124:
+    type: exec
+    cwd: "{{context.cwd}}"
+    command: *land_state
+    env:
+      CODE: "124"
+    timeout: 20000
+    on_success: land_failed
+    on_error: land_failed
+
+  project_rebase:
+    type: exec
+    cwd: "{{context.wt}}"
+    command: |-
+      git rebase master >&2 || { git rebase --abort; echo "rebase of $BRANCH onto master conflicts: aborted"; exit 1; }
+      echo "rebased $BRANCH onto master $(git rev-parse --short master)"
+    env:
+      BRANCH: "{{context.branch}}"
+    timeout: 120000
+    on_success: project_gate_rebased
+    on_error: land_failed
+
+  land_failed:
+    prompt: |-
+      The land of {{context.task}} failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      - 3 (the main checkout is not on master, or has uncommitted changes) → never stash or reset someone's
+        work: tell the user and `retry` once it is clean, or `stop`.
+      - 1 with "rebase of … onto master conflicts" (master moved under a reviewed branch) → `rebase_fix`: the
+        worker resolves the rebase in its own round, which does NOT spend the work visits a review's FIXES used.
+      - 1 (the build red on master + the branch — the merge is taken back) → `fix`: the cause goes to the worker
+        as its fix round; `close` when it cannot be fixed in the branch.
+      - 4 (the merge could not be taken back safely) → `stop` and report the main checkout's state printed above.
+      - 124 (timeout) → read the main checkout's state printed above: master's head is not this task's merge and
+        status is empty → `retry`; otherwise `stop` and report that state.
+    transitions:
+      retry: project_land
+      fix: work
+      rebase_fix: rebase_fix
+      close: blocked
+      stop: stopped
+
+  rebase_fix:
+    max_visits: 2
+    on_exhausted: blocked
+    prompt: |-
+      Master moved under the reviewed branch `{{context.branch}}` and the rebase conflicts. SendMessage
+      `{{context.worker_agent}}` (gone → a fresh worker: Agent, model {{context.model}}, effort {{context.effort}},
+      `run_in_background: true`, on the worktree {{context.wt}}) with exactly:
+
+        Master moved under your reviewed branch {{context.branch}} and `git rebase master` conflicts. In
+        {{context.wt}}: rebase onto master and resolve every conflict KEEPING BOTH SIDES (master's change and
+        yours; never drop either to make it apply), keep ONE commit, `npm run check` green, clean worktree.
+        Report each conflicted file and how you resolved it.
+
+      Then END your turn. On its notification verify ON-TREE: `git -C {{context.cwd}} merge-base --is-ancestor
+      master {{context.branch}}` succeeds, `git -C {{context.cwd}} log --oneline master..{{context.branch}}` shows one
+      commit and `git -C {{context.wt}} status --porcelain` is empty → `gate` (the review that follows sees a
+      changed tip and judges the resolution); stuck → `blocked`.
+    transitions:
+      gate: project_gate
+      blocked: blocked
+
+  cleanup:
+    station: false
+    type: exec
+    # Exact paths of this task only: the worktree /tmp/wf-<ID> and its branch.
+    command: |-
+      case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'"; exit 2;; esac
+      case "$WT" in /tmp/wf-"$TASK"|/private/tmp/wf-"$TASK") ;; *) echo "refused worktree path: '$WT'"; exit 2;; esac
+      if [ -d "$WT" ]; then
+        dirty=$(git -C "$WT" status --porcelain)
+        [ -z "$dirty" ] || { echo "kept $WT: not clean"; echo "$dirty" | head -5; exit 1; }
+        [ ! -L "$WT/node_modules" ] || rm -f "$WT/node_modules" || exit 1
+        git worktree remove --force "$WT" || exit 1
+      fi
+      # A wiped directory leaves a prunable entry that still holds the branch; prune drops only those.
+      git worktree prune
+      git branch -d "$BRANCH" || exit 1
+      echo "removed $WT and $BRANCH"
+    env:
+      TASK: "{{context.task}}"
+      WT: "{{context.wt}}"
+      BRANCH: "{{context.branch}}"
+    timeout: 120000
+    on_success: done
+    on_error: cleanup_failed
+
+  blocked:
+    prompt: |-
+      {{context.task}} will not land as it stands. A driver hands back NEEDS-PARENT first and does the rest on the
+      parent's answer. On `close` or `stop`: `queue_mark({file: "{{context.queue_file}}", id: "{{context.task}}", to:
+      "failed", note: "<the reason, one line>"})`; keep the worktree {{context.wt}} and the branch for the
+      user; then transition it (`stop` when the next lines depend on it).
+      On the parent's message that the work is committed and green and it has amended the branch itself (the one
+      missing edit, e.g. a CLAUDE.md row): no queue_mark, transition `parent_edited` (the gate runs, then the land).
+    transitions:
+      close: closed
+      stop: stopped
+      parent_edited: project_gate_rebased
+
+  done:
+    terminal: true
+    outcome: complete
+    prompt: |-
+      Engine slice {{context.task}} landed and cleaned:
+      {{context.land_out}}
+      Tell the user its restart line as is. Its slot is free — in the dispatcher session
+      {{parent_session_id}} transition `slot_free`.
