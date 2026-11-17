@@ -11,7 +11,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-9' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-10' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -30,12 +30,16 @@ const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { sh
 const GRAPH_TTL_MS = 5 * 60 * 1000
 const RECENT = 6
 
-type Parsed = { mtime: number; row: SessionRow | null; claude: string; queueFile: string }
+type Parsed = { mtime: number; row: SessionRow | null; claude: string; queueFile: string; execRc: string }
 /** Parsed state files by name, re-read only when the file's mtime moved. */
 const cache = new Map<string, Parsed>()
-/** workflow → state → where it goes; empty until the dashboard answers. */
-let graph = new Map<string, Map<string, string[]>>()
+/** What the dashboard's workflow definitions give one state: where it goes, and for an exec the command and the timeout in ms (the engine's default when the definition names none). */
+type StateInfo = { next: string[]; command: string; timeoutMs: number }
+/** workflow → its agent's model ('' none) and state → what it gives; empty until the dashboard answers. */
+let graph = new Map<string, { model: string; states: Map<string, StateInfo> }>()
 let graphAt = 0
+/** An exec whose definition names no `timeout` runs under the engine's default (`DEFAULT_EXEC_TIMEOUT`). */
+const DEFAULT_EXEC_TIMEOUT_MS = 30_000
 
 function moves(history: unknown): { from: string; to: string; at: number }[] {
   if (!Array.isArray(history)) return []
@@ -71,19 +75,27 @@ function exits(st: Record<string, any>): string[] {
 
 async function loadGraph($: any, now: number): Promise<void> {
   if (now - graphAt < GRAPH_TTL_MS) return
-  graphAt = now
   const res = await $.http.fetch(`${DASHBOARD}/api/workflows`).catch(() => undefined)
+  // an unanswered read is not kept: the next refresh asks again, so a dashboard that comes up later fills the graph at once
   if (!res || !res.ok) return
-  const next = new Map<string, Map<string, string[]>>()
+  const next = new Map<string, { model: string; states: Map<string, StateInfo> }>()
   try {
     for (const [name, wf] of Object.entries(JSON.parse(res.text) as Record<string, any>)) {
-      const states = new Map<string, string[]>()
-      for (const [s, def] of Object.entries((wf?.states ?? {}) as Record<string, any>)) states.set(s, exits(def ?? {}))
-      next.set(name, states)
+      const states = new Map<string, StateInfo>()
+      for (const [s, def] of Object.entries((wf?.states ?? {}) as Record<string, any>)) {
+        const d = (def ?? {}) as Record<string, any>
+        states.set(s, {
+          next: exits(d),
+          command: typeof d.command === 'string' ? d.command : '',
+          timeoutMs: typeof d.timeout === 'number' && d.timeout > 0 ? d.timeout : DEFAULT_EXEC_TIMEOUT_MS,
+        })
+      }
+      next.set(name, { model: typeof wf?.driver?.model === 'string' ? wf.driver.model : '', states })
     }
   } catch {
     return
   }
+  graphAt = now
   graph = next
 }
 
@@ -93,16 +105,22 @@ function parseSession(text: string): Parsed | null {
   const claude = typeof j.claude_session_id === 'string' ? j.claude_session_id : ''
   const ctx = (j.context ?? {}) as Record<string, unknown>
   const queueFile = !j.parent_session_id && typeof ctx.queue_file === 'string' ? ctx.queue_file : ''
-  if (stack.length === 0) return { mtime: 0, row: null, claude, queueFile: '' }
+  if (stack.length === 0) return { mtime: 0, row: null, claude, queueFile: '', execRc: '' }
   const frame = stack[j.active_frame ?? 0] ?? stack[stack.length - 1]
   // the queue line a task session runs: slice-pipeline names it `slice`, engine-task and the generic task workflows `task`
   const tag = typeof ctx.slice === 'string' ? ctx.slice : typeof ctx.task === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(ctx.task) ? ctx.task : ''
   const state = String(frame?.current_state ?? '?')
   const done = moves(j.history)
+  const run = j.running_exec as { state?: unknown; started_at?: unknown; rc?: unknown } | undefined
+  const execSince = Date.parse(String(run?.started_at ?? ''))
+  const ended = Array.isArray(j.history) ? [...j.history].reverse().find((h: any) => typeof h?.exit_code === 'number') : undefined
+  const links = Array.isArray(j.agent_links) ? j.agent_links : []
+  const agentAt = Date.parse(String(links.at(-1)?.at ?? ''))
   return {
     mtime: 0,
     claude,
     queueFile,
+    execRc: typeof run?.rc === 'string' ? run.rc : '',
     row: {
       id: String(j.session_id ?? ''),
       parent: String(j.parent_session_id ?? ''),
@@ -115,6 +133,11 @@ function parseSession(text: string): Parsed | null {
       visit: Number(frame?.state_visits?.[state] ?? 0),
       recent: done.slice(-RECENT),
       next: [],
+      ...(typeof j.agent_id === 'string' && Number.isFinite(agentAt) ? { agentAt } : {}),
+      ...(run && Number.isFinite(execSince) ? { exec: { state: String(run.state ?? state), since: execSince, command: '', timeoutMs: 0 } } : {}),
+      ...(ended
+        ? { lastExec: { state: String(ended.from ?? ended.to ?? ''), code: ended.exit_code as number, ms: Number(ended.duration_ms ?? 0), at: Date.parse(String(ended.at ?? '')) || 0 } }
+        : {}),
     },
   }
 }
@@ -616,10 +639,16 @@ async function loadPoolCounts($: any): Promise<void> {
   }
 }
 
-/** A refresh's pool step, for a queue session with the pane open: the full read on the Pool tab (it also gives the label's counts), the cheap counts read on any other tab; else it drops what an earlier read left. */
+/** Whether the pane draws the single-task view: no work queue, a session to show, and a dashboard that answered (a failed queue read is a dashboard that is down, so the pool is not called either). */
+function isSingleView(s: Snapshot): boolean {
+  return !s.queue && s.error === '' && s.sessions.length > 0
+}
+
+/** A refresh's pool step, with the pane open: for a queue session the full read on the Pool tab (it also gives the label's counts), the cheap counts read on any other tab; for the single-task view the full read on every refresh (its pool strip and the holders). Else it drops what an earlier read left. */
 async function refreshPool($: any, s: Snapshot): Promise<void> {
-  const isOpen = Boolean(s.queue) && (await read($, paneOpen))
-  if (isOpen && (await read($, view)) === 'pool') {
+  const isSingle = isSingleView(s)
+  const isOpen = (Boolean(s.queue) || isSingle) && (await read($, paneOpen))
+  if (isOpen && (isSingle || (await read($, view)) === 'pool')) {
     await loadPool($)
     return
   }
@@ -653,7 +682,17 @@ async function build($: any): Promise<Snapshot> {
       cache.set(f.name, p)
     }
     if (p.claude !== sid || !p.row) continue
-    sessions.push({ ...p.row, next: graph.get(p.row.workflow)?.get(p.row.state) ?? [] })
+    const wf = graph.get(p.row.workflow)
+    const exec = p.row.exec
+    const info = exec ? wf?.states.get(exec.state) : undefined
+    // the pool wait the engine has counted against the exec's deadline sits beside its exit-code file
+    const waited = exec && p.execRc !== '' ? Number(await $.fs.read(`${p.execRc}.wait`).catch(() => '')) : 0
+    sessions.push({
+      ...p.row,
+      next: wf?.states.get(p.row.state)?.next ?? [],
+      ...(wf && wf.model !== '' ? { model: wf.model } : {}),
+      ...(exec ? { exec: { ...exec, command: info?.command ?? '', timeoutMs: info?.timeoutMs ?? 0, ...(Number.isFinite(waited) && waited > 0 ? { waitMs: waited } : {}) } } : {}),
+    })
     if (p.queueFile !== '') queueFile = p.queueFile
   }
   const loaded = queueFile !== '' ? await loadQueue($, queueFile, now) : { queue: null, error: '' }
@@ -1074,8 +1113,8 @@ export const register: Register = on => {
       columns: e.props?.bodyColumns ?? 100,
       rows: e.viewport?.rows ?? 30,
       poolCounts: (await read($, poolCountsAtom)) as PoolCounts | null,
-      // the pool atom is read only on the Pool tab: a read subscribes the pane to it
-      pool: tab === 'pool' ? ((await read($, poolAtom)) as PoolState | null) : null,
+      // the pool atom is read only where the pane draws the pool (the Pool tab, the single-task view): a read subscribes the pane to it
+      pool: tab === 'pool' || (s !== null && isSingleView(s)) ? ((await read($, poolAtom)) as PoolState | null) : null,
     })
     return draw(tree, ui, $)
   })

@@ -1,9 +1,9 @@
 import { expect, mock, test } from 'claude-code/testing'
 
 import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spawnOf, startText } from './plan-pane'
-import { TAB_LINKS, cells, dayOf, dayText, failedHeading, fitCells, foldFlipped, paneTree, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
+import { SINGLE_FOLD_LEVELS, SINGLE_FOLD_ORDER, TAB_LINKS, cells, dayOf, dayText, execDeadlineMs, failedHeading, fitCells, foldFlipped, nodeText, paneTree, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
 import type { PaneEl, PaneNode } from './pane-view'
-import type { Snapshot, View } from '../types'
+import type { PoolState, SessionRow, Snapshot, View } from '../types'
 import { API_POOL } from './fixtures/api-pool'
 import { API_QUEUE } from './fixtures/api-queue'
 import { START_REPLY, TRANSITION_REPLY } from './fixtures/engine-replies'
@@ -51,6 +51,12 @@ let clockShift = 0
 /** How much later the session file reads as written (a test that swaps `sessionText` moves it so the pane re-reads it). */
 let sessionTouch = 0
 
+/** What GET /api/workflows answers (the graph: where a state goes, an exec's command and timeout, a driver's model); undefined: 404. */
+let workflowsReply: string | undefined
+
+/** What an exec's `.wait` file reads as (the pool wait the engine counted, ms); undefined: no such file. */
+let waitFileText: string | undefined
+
 /** Every `process.run` request, as JSON (the git log of the Landed tree). */
 const ran: string[] = []
 
@@ -66,6 +72,8 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
   openFails = false
   poolReply = { status: 200, text: JSON.stringify(API_POOL) }
   countsReply = { status: 200, text: JSON.stringify({ budget: 12, held: 6 }) }
+  workflowsReply = undefined
+  waitFileText = undefined
   const clock = ticking ? mock.clock(on, { now: NOW }) : undefined
   on('session.id', () => ({ value: SID }))
   if (!ticking) on('clock.now', () => ({ value: NOW + clockShift }))
@@ -76,9 +84,13 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
       ...(landed ? [{ name: 'ledger.jsonl', kind: 'file', size: 9, mtimeMs: 1 }] : []),
     ],
   }))
-  on('fs.read', (_: unknown, e: { path: string }) => ({
-    value: e.path.endsWith('ledger.jsonl') ? (landed?.ledger ?? '') : withQueue ? sessionText : sessionText.replace(`"queue_file":"${QUEUE}"`, '"x":1'),
-  }))
+  on('fs.read', (_: unknown, e: { path: string }) => {
+    if (e.path.endsWith('.wait')) {
+      if (waitFileText === undefined) throw new Error('ENOENT')
+      return { value: waitFileText }
+    }
+    return { value: e.path.endsWith('ledger.jsonl') ? (landed?.ledger ?? '') : withQueue ? sessionText : sessionText.replace(`"queue_file":"${QUEUE}"`, '"x":1') }
+  })
   on('process.run', (_: unknown, e: unknown) => {
     ran.push(JSON.stringify(e))
     return { value: landed ? { exitCode: 0, stdout: typeof landed.git === 'function' ? landed.git(e) : landed.git, stderr: '' } : { exitCode: 1, stdout: '', stderr: '' } }
@@ -86,6 +98,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
   on('http.fetch', (_: unknown, e: { url: string }) => {
     fetched.push(e.url)
     if (queueDown) throw new Error('ECONNREFUSED')
+    if (e.url.endsWith('/api/workflows') && workflowsReply !== undefined) return { value: { status: 200, ok: true, headers: {}, text: workflowsReply } }
     if (e.url.endsWith('/api/pool?counts=1')) {
       if (!countsReply) throw new Error('ECONNREFUSED')
       return { value: { status: countsReply.status, ok: countsReply.status === 200, headers: {}, text: countsReply.text } }
@@ -1333,4 +1346,278 @@ test('the ledger fallback also finds a land of a line the queue has archived', a
   } finally {
     delete (API_QUEUE as Record<string, unknown>).archivedIds
   }
+})
+
+// --- the single-task view: a session with no work queue, one screen with no tabs ---
+
+/** The text of every line of a tree: a column lays its children one per line, a row, a text and a button are one line. */
+function paneLines(n: PaneNode): string[] {
+  if (n === null) return []
+  if (typeof n === 'string') return [n]
+  if (Array.isArray(n)) return n.flatMap(paneLines)
+  const el = n as PaneEl
+  if (el.el === 'box' && el.props.flexDirection === 'column') return el.children.flatMap(paneLines)
+  return [nodeText(el)]
+}
+
+const T0 = 1_800_000_000_000
+const MIN = 60_000
+const sessionRow = (over: Partial<SessionRow> = {}): SessionRow => ({
+  id: '94fe30d6-aaaa-bbbb', parent: '', workflow: 'slice-pipeline', state: 'review', tag: 'ENG-X', since: T0 - 5 * MIN, isWorking: false, agent: '', visit: 1,
+  recent: [], next: [], ...over,
+})
+const MOVES = [
+  { from: 'plan', to: 'work', at: T0 - 40 * MIN },
+  { from: 'work', to: 'gate', at: T0 - 20 * MIN },
+  { from: 'gate', to: 'review', at: T0 - 5 * MIN },
+]
+const poolState = (): PoolState => ({ at: T0, pool: poolView(API_POOL), error: '' })
+
+/** The single-task view's lines for sessions, at a pane size. */
+function singleLines(sessions: SessionRow[], opt: { rows?: number; columns?: number; pool?: PoolState | null; error?: string } = {}): string[] {
+  const snapshot = { at: T0, sessions, queue: null, lands: [], recent: 0, days: {}, error: opt.error ?? '' } as unknown as Snapshot
+  const tree = paneTree({ snapshot, tab: 'sessions', expanded: '', folded: [], now: T0, columns: opt.columns ?? 100, rows: opt.rows ?? 40, poolCounts: null, pool: opt.pool === undefined ? poolState() : opt.pool })
+  return paneLines(tree)
+}
+
+/** A full single-task view: a pipeline with an agent, a child running an exec, a last exec, history, and the pool. */
+const FULL = (): SessionRow[] => [
+  sessionRow({ agent: 'agent-0123456789', agentAt: T0 - 30 * MIN, model: 'opus', visit: 2, recent: MOVES, next: ['approve→land', 'rework→work'], lastExec: { state: 'gate', code: 1, ms: 93_000, at: T0 - 6 * MIN } }),
+  sessionRow({ id: 'c1', parent: '94fe30d6-aaaa-bbbb', workflow: 'slice-worker', state: 'sync_gate_run', tag: '', since: T0 - 2 * MIN, isWorking: true, agent: 'worker-9876543', model: 'sonnet',
+    exec: { state: 'sync_gate_run', since: T0 - 75_000, command: 'node bin/dev.js   slice-gate\nsecond line', timeoutMs: 600_000 } }),
+]
+
+test('single-task view: each section reads off the session, top to bottom, with no tab row and no spend', () => {
+  const lines = singleLines(FULL())
+  const at = (re: RegExp) => lines.findIndex(l => re.test(l))
+  expect(lines.some(l => /Plan|Waiting/.test(l))).toBe(false)
+  // (1) the current session: workflow[task] @ state, time in it, the visit; the states passed, the transitions it offers
+  expect(lines[at(/slice-pipeline/)]).toMatch(/^◆ slice-pipeline\[ENG-X\] @ review 5m · visit 2$/)
+  expect(lines[at(/ done /)]).toBe('  done plan → work → gate → review')
+  expect(lines[at(/ next /)]).toBe('  next approve→land  rework→work')
+  // (2) what runs under it: the linked agent (role, model, id, age), the child session, its exec with elapsed / timeout, the last exec's exit
+  expect(lines[at(/Running under it/)]).toBe('▶ Running under it (2)')
+  expect(lines[at(/◇ agent/)]).toBe('  ◇ agent · driver · opus · agent agent-0 30m')
+  expect(lines[at(/slice-worker/)]).toBe('  ⚙ slice-worker @ sync_gate_run 2m · worker · sonnet · agent worker-')
+  expect(lines[at(/❯/)]).toBe('      ❯ node bin/dev.js slice-gate 1m15s/10m00s')
+  expect(lines[at(/last exec/)]).toBe('    last exec gate exit 1 in 1m33s 6m ago')
+  // (3) the pool: the cheap strip, this session's own lease marked, the other holders by label
+  expect(lines[at(/▤ pool/)]).toBe('▤ pool held 6/12 · load 9.1 · waiting 1 STARVED')
+  expect(lines[at(/▸/)]).toBe('  ▸ 4 threads (asked 2-4) · 3m10s OVERRUN ~9')
+  expect(lines[at(/tree=\$\(pwd -P\)/)]).toBe('  · tree=$(pwd -P) 2 threads (asked 1-2) · 1m08s')
+  // (4) the last transitions, newest first, with their age
+  expect(lines.slice(at(/Last transitions/))).toEqual(['↳ Last transitions', '  gate → review 5m ago', '  work → gate 20m ago', '  plan → work 40m ago', 'updated just now'])
+  // (5) spend: the engine measures none for a running session, so no section and no figure
+  expect(lines.some(l => /\$|spend/i.test(l.replace('tree=$(pwd -P)', '')))).toBe(false)
+  // the sections come in order
+  const order = [/slice-pipeline/, /Running under it/, /▤ pool/, /Last transitions/].map(at)
+  expect(order).toEqual([...order].sort((a, b) => a - b))
+  expect(order.every(i => i >= 0)).toBe(true)
+})
+
+test('single-task view: a section with nothing to show is left out', () => {
+  const bare = singleLines([sessionRow()], { pool: null })
+  expect(bare.some(l => /Running|Nothing running/.test(l))).toBe(false)
+  expect(bare.some(l => /pool/.test(l))).toBe(false)
+  expect(bare.some(l => /Last transitions/.test(l))).toBe(false)
+  expect(bare.some(l => / done /.test(l))).toBe(true)
+  // no history: `(start)`; a state the dashboard has no exits for says so
+  expect(bare.find(l => / done /.test(l))).toBe('  done (start) → review')
+  expect(bare.find(l => / next /.test(l))).toContain('the dashboard is not answering')
+  // the pool alone, from a read with no leases of this session and no waiters: the strip and the others
+  const others = singleLines([sessionRow({ id: 'zzzzzzzz-1' })])
+  expect(others.filter(l => /▸|◷/.test(l))).toEqual([])
+  expect(others.filter(l => /^ {2}· /.test(l))).toHaveLength(2)
+  // a pool read that failed is one dim line; with no session there is nothing to draw
+  expect(singleLines([sessionRow()], { pool: { at: T0, pool: null, error: 'the dashboard is not answering' } }).some(l => /▤ pool: the dashboard is not answering/.test(l))).toBe(true)
+  expect(singleLines([])).toContain('No active workflow in this session.')
+})
+
+test('single-task view: an exec past its timeout is red; a last exec shows only while none runs, its exit green at 0 and red otherwise', () => {
+  const over = paneTree({ snapshot: { at: T0, sessions: [sessionRow({ exec: { state: 'x', since: T0 - 90_000, command: 'sleep 99', timeoutMs: 30_000 } })], queue: null, lands: [], recent: 0, days: {}, error: '' } as unknown as Snapshot, tab: 'sessions', expanded: '', folded: [], now: T0, columns: 100, rows: 40, poolCounts: null, pool: null })
+  const execEl = elements(over).find(e => e.el === 'text' && nodeText(e) === ' 1m30s/30s')
+  expect(execEl && execEl.el === 'text' ? execEl.props.color : undefined).toBe('red')
+  const ok = singleLines([sessionRow({ lastExec: { state: 'gate', code: 0, ms: 2000, at: T0 - 3 * MIN } })], { pool: null })
+  expect(ok).toContain('▶ Nothing running')
+  expect(ok).toContain('    last exec gate exit 0 in 2s 3m ago')
+  // a running exec replaces the last one in the session's rows
+  const both = singleLines([sessionRow({ lastExec: { state: 'gate', code: 0, ms: 2000, at: T0 - 3 * MIN }, exec: { state: 'x', since: T0 - 5000, command: 'make', timeoutMs: 0 } })], { pool: null })
+  expect(both.some(l => /last exec/.test(l))).toBe(false)
+  expect(both).toContain('    ❯ make 5s')
+})
+
+test('single-task view: the fold order is spend-less transitions, the other holders, the pool, what runs, and the current session keeps its head line', () => {
+  expect([...SINGLE_FOLD_ORDER]).toEqual(['transitions', 'holders', 'pool', 'running', 'current'])
+  expect(SINGLE_FOLD_LEVELS).toEqual({ transitions: 2, holders: 1, pool: 2, running: 2, current: 1 })
+  /** the smallest pane height at which a line of the view still shows */
+  const lowest = (re: RegExp): number => {
+    for (let rows = 4; rows <= 60; rows++) if (singleLines(FULL(), { rows }).some(l => re.test(l))) return rows
+    return Infinity
+  }
+  const keep = {
+    transitionsAll: lowest(/plan → work 40m ago/),
+    transitionsHead: lowest(/Last transitions/),
+    holders: lowest(/^ {2}· tree=/),
+    poolOwn: lowest(/▸ 4 threads/),
+    pool: lowest(/▤ pool/),
+    runningAll: lowest(/last exec/),
+    running: lowest(/Running under it/),
+    breadcrumb: lowest(/ done /),
+    head: lowest(/^◆ slice-pipeline/),
+  }
+  // the less important a section, the taller the pane it needs
+  expect(keep.transitionsAll).toBeGreaterThan(keep.transitionsHead)
+  expect(keep.transitionsHead).toBeGreaterThan(keep.holders)
+  expect(keep.holders).toBeGreaterThan(keep.poolOwn)
+  expect(keep.poolOwn).toBeGreaterThan(keep.pool)
+  expect(keep.pool).toBeGreaterThan(keep.runningAll)
+  expect(keep.runningAll).toBeGreaterThan(keep.running)
+  expect(keep.running).toBeGreaterThan(keep.breadcrumb)
+  expect(keep.breadcrumb).toBeGreaterThan(keep.head)
+  expect(keep.head).toBe(4)
+  // never taller than the pane: the sum of the unfolded lines fits `rows` minus the header links and footer
+  for (let rows = 5; rows <= 40; rows++) expect(singleLines(FULL(), { rows }).length).toBeLessThanOrEqual(Math.max(rows, 4))
+})
+
+test('single-task view: every line is cut to the pane width, at any width', () => {
+  for (const columns of [20, 33, 60, 100])
+    for (const l of singleLines(FULL(), { columns })) expect(cells(l)).toBeLessThanOrEqual(columns)
+})
+
+test('the single-task view is the pane of a session with no queue; a queue keeps its tabs and its Sessions tree', () => {
+  const noQueue = singleLines([sessionRow()])
+  expect(noQueue.some(l => /^Plan|^Sessions|^Waiting/.test(l))).toBe(false)
+  const queued = paneLines(paneTree({ snapshot: { at: T0, sessions: [sessionRow()], queue: EMPTY_QUEUE, lands: [], recent: 0, days: {}, error: '' } as unknown as Snapshot, tab: 'sessions', expanded: '', folded: [], now: T0, columns: 100, rows: 40, poolCounts: null, pool: null }))
+  expect(queued.some(l => /Sessions 1/.test(l))).toBe(true)
+  expect(queued.some(l => /Last transitions|Running under it/.test(l))).toBe(false)
+})
+
+const WORKFLOWS = JSON.stringify({
+  'slice-pipeline': { name: 'slice-pipeline', driver: { model: 'opus', effort: 'high' }, states: { review: { transitions: { approve: 'land', rework: 'work' } }, gate: { type: 'exec', command: 'node bin/dev.js slice-gate', timeout: 600000, on_success: 'review', on_error: 'work' } } },
+})
+const EXEC_SESSION = JSON.stringify({
+  session_id: '94fe30d6-aaaa-bbbb',
+  claude_session_id: SID,
+  started_at: '2026-11-07T09:00:00Z',
+  agent_id: 'agent-0123456789',
+  agent_links: [{ agent_id: 'agent-0123456789', at: '2026-11-07T09:30:00Z' }],
+  running_exec: { state: 'gate', frame: 0, started_at: '2026-11-07T10:03:45Z', pgid: 1, out: '/run/o', err: '/run/e', rc: '/run/r', boot_ms: 1 },
+  stack: [{ workflow: 'slice-pipeline', current_state: 'gate', state_visits: { gate: 2 } }],
+  history: [
+    { frame: 0, from: 'plan', to: 'gate', at: '2026-11-07T10:00:00Z', event: 'transition' },
+    { frame: 0, from: 'gate', to: 'work', at: '2026-11-07T10:01:00Z', event: 'action', exit_code: 3, duration_ms: 4000 },
+    { frame: 0, from: 'work', to: 'gate', at: '2026-11-07T10:02:00Z', event: 'transition' },
+  ],
+})
+
+test('an unanswered /api/workflows is asked again on the next refresh, and once it answers, not again', async ($, on) => {
+  const clock = engine(on, false, undefined, true)!
+  const asked = () => fetched.filter(u => u.endsWith('/api/workflows')).length
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  expect(asked()).toBe(1)
+  await clock.advance(15000)
+  expect(asked()).toBe(2)
+  workflowsReply = WORKFLOWS
+  await clock.advance(15000)
+  expect(asked()).toBe(3)
+  await clock.advance(15000)
+  expect(asked()).toBe(3)
+})
+
+test('the pane of a session with no queue draws the exec in flight, the last exit and the agent from the session file and the dashboard\'s workflows', async ($, on) => {
+  engine(on, false)
+  workflowsReply = WORKFLOWS
+  sessionText = EXEC_SESSION
+  sessionTouch = 1000
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string)
+  expect(texts).toContain('⚙ slice-pipeline @ gate 3m · visit 2')
+  expect(texts).toContain('    ❯ node bin/dev.js slice-gate 1m15s/10m00s')
+  expect(texts).toContain('  ◇ agent · driver · opus · agent agent-0 35m')
+  expect(texts.some(t => /^ {2}next /.test(t) && t.includes('ok→review') && t.includes('err→work'))).toBe(true)
+  await ui.unmount()
+})
+
+test('single-task view: the pool is read once per refresh with the pane open, never per render and never while it is closed', async ($, on) => {
+  const clock = engine(on, false, undefined, true)!
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  await clock.advance(30000)
+  expect(poolFetches()).toBe(0)
+  await $.command.run({ command: 'wf-plan', args: '' })
+  expect(poolFetches()).toBe(1)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // drawing again and again reads nothing
+  for (let i = 0; i < 3; i++) await ui.findAll({ type: 'Text' })
+  expect(poolFetches()).toBe(1)
+  await clock.advance(15000)
+  expect(poolFetches()).toBe(2)
+  expect(countsFetches()).toBe(0)
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string)
+  expect(texts.some(t => /^▤ pool held 6\/12 · load 9\.1 · waiting 1/.test(t))).toBe(true)
+  // closed again: no reads
+  await $.command.run({ command: 'wf-plan', args: '' })
+  await clock.advance(60000)
+  expect(poolFetches()).toBe(2)
+  await ui.unmount()
+})
+
+test('single-task view: a pane exactly as tall as the unfolded view keeps every section, with other holders or none', () => {
+  // the header links row and the footer are the two lines around the body
+  for (const [sessions, pool] of [[FULL(), poolState()], [[sessionRow({ id: '94fe30d6-aaaa-bbbb', recent: MOVES })], poolState()]] as const) {
+    const full = singleLines(sessions, { rows: 60, pool })
+    expect(singleLines(sessions, { rows: full.length + 1, pool })).toEqual(full)
+    expect(singleLines(sessions, { rows: full.length, pool })).not.toEqual(full)
+  }
+  // only this session's own leases in the pool: no holders, no blank row counted for them
+  const mineOnly: PoolState = { at: T0, pool: { ...poolView(API_POOL), leases: poolView(API_POOL).leases.slice(0, 1), waiting: [] }, error: '' }
+  const alone = [sessionRow({ id: '94fe30d6-aaaa-bbbb', recent: MOVES })]
+  const full = singleLines(alone, { rows: 60, pool: mineOnly })
+  expect(singleLines(alone, { rows: full.length + 1, pool: mineOnly })).toEqual(full)
+})
+
+test('single-task view: a second root session brings its child sessions and their execs', () => {
+  const lines = singleLines([
+    ...FULL(),
+    sessionRow({ id: 'r2-0000', workflow: 'recon-pipe', state: 'scan', tag: 'ENG-Y', since: T0 - 3 * MIN }),
+    sessionRow({ id: 'r2-child', parent: 'r2-0000', workflow: 'recon-worker', state: 'build', tag: '', since: T0 - MIN, exec: { state: 'build', since: T0 - 20_000, command: 'make all', timeoutMs: 60_000 } }),
+  ])
+  expect(lines).toContain('  ⚙ recon-pipe[ENG-Y] @ scan 3m')
+  expect(lines).toContain('    ⚙ recon-worker @ build 1m')
+  expect(lines).toContain('        ❯ make all 20s/1m00s')
+  expect(lines).toContain('▶ Running under it (4)')
+})
+
+test('single-task view: an exec is late only past its timeout stretched by the pool wait the engine counted, up to four timeouts', () => {
+  const colorOf = (exec: NonNullable<SessionRow['exec']>) => {
+    const tree = paneTree({ snapshot: { at: T0, sessions: [sessionRow({ exec })], queue: null, lands: [], recent: 0, days: {}, error: '' } as unknown as Snapshot, tab: 'sessions', expanded: '', folded: [], now: T0, columns: 100, rows: 40, poolCounts: null, pool: null })
+    const el = elements(tree).find(e => e.el === 'text' && /^ \d\S*\/\S+/.test(nodeText(e)))
+    return { color: el && el.el === 'text' ? el.props.color : undefined, text: el ? nodeText(el) : '' }
+  }
+  const base = { state: 'x', since: T0 - 90_000, command: 'gate', timeoutMs: 30_000 }
+  expect(colorOf(base).color).toBe('red')
+  expect(colorOf({ ...base, waitMs: 5000 }).color).toBe('red')
+  // 90 s run, 30 s timeout, 70 s of pool wait counted: deadline 100 s, not late
+  const waiting = colorOf({ ...base, waitMs: 70_000 })
+  expect(waiting.color).toBeUndefined()
+  expect(waiting.text).toBe(' 1m30s/30s +1m10s pool wait')
+  // the stretch is capped at four timeouts (120 s): a 130 s run is late whatever the wait
+  expect(colorOf({ ...base, since: T0 - 130_000, waitMs: 500_000 }).color).toBe('red')
+  expect(execDeadlineMs(30_000, 500_000)).toBe(120_000)
+  expect(execDeadlineMs(30_000, 0)).toBe(30_000)
+})
+
+test('the pool wait of an exec is read from the .wait file beside its exit-code file', async ($, on) => {
+  engine(on, false)
+  workflowsReply = WORKFLOWS
+  waitFileText = '70000'
+  sessionText = EXEC_SESSION.replace('"timeout":600000', '"timeout":600000')
+  sessionTouch = 2000
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string)
+  expect(texts).toContain('    ❯ node bin/dev.js slice-gate 1m15s/10m00s +1m10s pool wait')
+  await ui.unmount()
 })

@@ -287,6 +287,208 @@ export type PaneInput = {
   readonly pool: PoolState | null
 }
 
+/**
+ * The sections of the single-task view (a session with no work queue) in the order they fold when the pane is too
+ * short: the least important first. A section folds through its levels (`SINGLE_FOLD_LEVELS`), the last of which
+ * drops it; the current session's own lines never drop, they shrink to its head line.
+ */
+export const SINGLE_FOLD_ORDER = ['transitions', 'holders', 'pool', 'running', 'current'] as const
+export type SingleSection = (typeof SINGLE_FOLD_ORDER)[number]
+/** How far each section folds: `transitions` three rows, one row, none; `holders` the other holders, none; `pool` the strip with this session's leases, the strip, none; `running` every row with its exec lines, the live rows only, none; `current` all its lines, the head line. */
+export const SINGLE_FOLD_LEVELS: Record<SingleSection, number> = { transitions: 2, holders: 1, pool: 2, running: 2, current: 1 }
+
+/** How many rows of the other holders and of the running section the unfolded view lists, and the section's short form keeps. */
+const HOLDERS_CAP = 4
+const RUNNING_CAP = 6
+const RUNNING_CAP_SHORT = 3
+/** An exec's deadline stretches by its pool wait up to this many times its timeout (`POOL_WAIT_CEILING_FACTOR` of src/types.ts, held equal by src/pane-exec-deadline.test.ts). */
+const POOL_WAIT_CEILING_FACTOR = 4
+/** The pool wait is stored in steps of a second: an exec is not called late inside this grace. */
+const DEADLINE_GRACE_MS = 2000
+/** How long an exec may run before the engine times it out: its timeout plus the pool wait counted, capped like the engine's `DeadlineClock`. */
+export const execDeadlineMs = (timeoutMs: number, waitMs: number): number => Math.min(timeoutMs + waitMs, timeoutMs * POOL_WAIT_CEILING_FACTOR)
+/** The states of the breadcrumb: the last few passed. */
+const CRUMBS = 4
+
+/** A run of text or a coloured run; `rowOf` lays them on one line cut to the pane width, never wrapped. */
+type Seg = string | { readonly t: string; readonly p: TextProps }
+function rowOf(columns: number, ...segs: Seg[]): PaneEl {
+  let left = columns
+  const out: PaneNode[] = []
+  for (const g of segs) {
+    if (left <= 0) break
+    const t = typeof g === 'string' ? g : g.t
+    const cut = fitCells(t, left)
+    left -= cells(cut)
+    out.push(typeof g === 'string' ? cut : text(g.p, cut))
+    if (cut !== t) break
+  }
+  return text({}, ...out)
+}
+
+/** A span of ms as the pane writes a time in a state: seconds under a minute, else minutes. */
+const sinceText = (ms: number): string => (ms < 60000 ? spanText(ms) : age(ms))
+
+/** An exec's command on one line: whitespace folded, the first line of a script. */
+const commandLine = (command: string): string => (command.trim().split('\n')[0] ?? '').replace(/\s+/g, ' ')
+
+/**
+ * The single-task view: the pane of a session that runs no work queue, one screen with no tabs. Top to bottom: the
+ * current session (workflow @ state, time in it, the visit, the states passed, the transitions it offers), what runs
+ * under it (child sessions, linked agents, an exec in flight, the last exec's exit), the pool (budget, held, load,
+ * waiting; this session's own leases marked, the other holders), the last three transitions. A section with nothing
+ * to show is left out; when the pane is too short the sections fold in `SINGLE_FOLD_ORDER`. The engine measures no
+ * spend of a session still running (the ledger row is written when it ends), so none is drawn.
+ */
+function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
+  const columns = input.columns
+  const now = input.now
+  const byId = new Map(s.sessions.map(r => [r.id, r]))
+  const childrenOf = (id: string): SessionRow[] => s.sessions.filter(r => r.parent === id)
+  const roots = s.sessions.filter(r => r.parent === '' || !byId.has(r.parent))
+  const main = roots.find(r => childrenOf(r.id).length > 0) ?? roots[0]
+  if (!main) return text({ dimColor: true }, 'No active workflow in this session.')
+  const mine = new Set(s.sessions.map(r => r.id))
+  const row = (...segs: Seg[]) => rowOf(columns, ...segs)
+  const dim = (t: string): Seg => ({ t, p: { dimColor: true } })
+  const modelSeg = (r: SessionRow): Seg => (r.model !== undefined && r.model !== '' ? dim(` · ${r.model}`) : '')
+  const tagSeg = (r: SessionRow): Seg => (r.tag !== '' ? { t: `[${r.tag}]`, p: { color: 'cyan' } } : '')
+
+  // (1) the current session
+  const currentLines = (level: number): PaneNode[] => {
+    const r = main
+    const isParent = childrenOf(r.id).length > 0
+    const head = row(
+      isParent ? { t: '◆ ', p: { color: 'cyanBright', weight: 'bold' } } : { t: '⚙ ', p: { color: r.isWorking ? 'cyanBright' : 'cyan' } },
+      r.workflow, tagSeg(r), ' @ ', { t: r.state, p: { weight: 'bold' } },
+      dim(` ${sinceText(now - r.since)}${r.visit > 1 ? ` · visit ${r.visit}` : ''}`),
+    )
+    if (level >= 1) return [head]
+    const passed = r.recent.length > 0 ? [r.recent[0]!.from, ...r.recent.map(m => m.to)].filter(x => x !== '') : []
+    const crumbs = passed.at(-1) === r.state ? passed.slice(0, -1) : passed
+    const shown = crumbs.slice(-CRUMBS)
+    const path = crumbs.length === 0 ? '(start)' : `${crumbs.length > shown.length ? '… → ' : ''}${shown.join(' → ')}`
+    return [
+      head,
+      row(dim('  done '), path, dim(' → '), { t: r.state, p: { weight: 'bold' } }),
+      row(dim('  next '), r.next.length > 0 ? r.next.join('  ') : dim('(unknown: the dashboard is not answering)')),
+    ]
+  }
+
+  // (2) what runs under it: the session's own agent and exec, its child sessions with theirs
+  type Item = { primary: PaneEl; live: PaneEl[]; last: PaneEl[]; isLastOnly: boolean }
+  const execLines = (r: SessionRow, pad: string): { live: PaneEl[]; last: PaneEl[] } => {
+    if (r.exec) {
+      const elapsed = Math.max(0, now - r.exec.since)
+      const wait = r.exec.waitMs ?? 0
+      const over = r.exec.timeoutMs > 0 && elapsed > execDeadlineMs(r.exec.timeoutMs, wait) + DEADLINE_GRACE_MS
+      return {
+        live: [row(pad, { t: '❯ ', p: { color: 'yellow' } }, r.exec.command !== '' ? commandLine(r.exec.command) : r.exec.state,
+          { t: ` ${spanText(elapsed)}${r.exec.timeoutMs > 0 ? `/${spanText(r.exec.timeoutMs)}` : ''}${wait >= 1000 ? ` +${spanText(wait)} pool wait` : ''}`, p: over ? { color: 'red' } : { dimColor: true } })],
+        last: [],
+      }
+    }
+    if (!r.lastExec) return { live: [], last: [] }
+    const e = r.lastExec
+    return {
+      live: [],
+      last: [row(pad, dim('last exec '), e.state !== '' ? dim(`${e.state} `) : '', { t: `exit ${e.code}`, p: e.code === 0 ? { color: 'green' } : { color: 'red', weight: 'bold' } },
+        dim(e.ms > 0 ? ` in ${spanText(e.ms)}` : ''), e.at > 0 ? dim(` ${sinceText(now - e.at)} ago`) : '')],
+    }
+  }
+  const agentSeg = (r: SessionRow): Seg[] => [dim(` · ${roleOf(r.workflow)}`), modelSeg(r), dim(` · agent ${r.agent.slice(0, 7)}`)]
+  const items: Item[] = []
+  if (main.agent !== '') items.push({ primary: row('  ', { t: '◇ ', p: { color: 'cyan' } }, 'agent', ...agentSeg(main), main.agentAt !== undefined ? dim(` ${sinceText(now - main.agentAt)}`) : ''), live: [], last: [], isLastOnly: false })
+  const self = execLines(main, '    ')
+  if (self.live.length > 0) items.push({ primary: row('  ', dim('this session')), ...self, isLastOnly: false })
+  else if (self.last.length > 0) items.push({ primary: row('  ', dim('this session')), live: [], last: self.last, isLastOnly: true })
+  const walk = (r: SessionRow, depth: number) => {
+    for (const c of childrenOf(r.id)) {
+      const pad = '  '.repeat(depth + 1)
+      items.push({
+        primary: row(pad, { t: '⚙ ', p: { color: c.isWorking && childrenOf(c.id).length === 0 ? 'cyanBright' : 'cyan' } }, c.workflow, tagSeg(c), ' @ ', { t: c.state, p: { weight: 'bold' } },
+          dim(` ${sinceText(now - c.since)}`), ...(c.agent !== '' ? agentSeg(c) : [])),
+        ...execLines(c, pad + '    '),
+        isLastOnly: false,
+      })
+      walk(c, depth + 1)
+    }
+  }
+  walk(main, 0)
+  // another root session of this Claude session is a row of its own
+  for (const o of roots.filter(r => r.id !== main.id)) {
+    items.push({ primary: row('  ', { t: '⚙ ', p: { color: 'cyan' } }, o.workflow, tagSeg(o), ' @ ', { t: o.state, p: { weight: 'bold' } }, dim(` ${sinceText(now - o.since)}`)), ...execLines(o, '      '), isLastOnly: false })
+    walk(o, 1)
+  }
+  const runningLines = (level: number): PaneNode[] => {
+    if (level >= 2) return []
+    const liveItems = items.filter(i => !i.isLastOnly)
+    // the short form keeps what is alive: the rows and a running exec, no last-exec line
+    const shown = level === 0 ? items : liveItems
+    if (shown.length === 0) return []
+    const cap = level === 0 ? RUNNING_CAP : RUNNING_CAP_SHORT
+    const heading = liveItems.length > 0 ? text({ color: 'green', weight: 'bold' }, fitCells(`▶ Running under it (${liveItems.length})`, columns)) : text({ dimColor: true, weight: 'bold' }, '▶ Nothing running')
+    const out: PaneNode[] = [heading]
+    for (const i of shown.slice(0, cap)) out.push(i.primary, ...i.live, ...(level === 0 ? i.last : []))
+    if (shown.length > cap) out.push(row(dim(`  +${shown.length - cap} more`)))
+    return out
+  }
+
+  // (3) the pool: the strip, this session's own leases and waiters marked, the other holders by label
+  const pool = input.pool?.pool ?? null
+  const counts = input.poolCounts
+  const own = (l: PoolLine) => l.session !== '' && s.sessions.some(r => r.id.startsWith(l.session))
+  const poolLines = (level: number): PaneNode[] => {
+    if (level >= 2) return []
+    if (!pool) {
+      if (input.pool && input.pool.error !== '') return [row(dim(`▤ pool: ${input.pool.error}`))]
+      return counts ? [row({ t: '▤ pool ', p: { color: 'magenta', weight: 'bold' } }, dim(`held ${counts.held}/${counts.budget}`))] : []
+    }
+    const strip = row(
+      { t: '▤ pool ', p: { color: 'magenta', weight: 'bold' } }, `held ${pool.held}/${pool.budget} · load ${pool.load.toFixed(1)} · waiting ${pool.waiting.length}`,
+      pool.starvedNote !== '' ? { t: ' STARVED', p: { color: 'red', weight: 'bold' } } : '',
+    )
+    if (level >= 1) return [strip]
+    return [
+      strip,
+      ...pool.leases.filter(own).map(l => row('  ', { t: '▸ ', p: { color: 'green', weight: 'bold' } }, `${l.request} · ${spanText(l.ageMs)}`, dim(l.step !== '' ? ` ${l.step}` : ''), l.overrun !== null ? { t: ` OVERRUN ~${l.overrun}`, p: { color: 'red', weight: 'bold' } } : '')),
+      ...pool.waiting.filter(own).map(l => row('  ', { t: '◷ ', p: { color: 'blue', weight: 'bold' } }, `${l.request} · waits ${spanText(l.ageMs)}`, dim(l.step !== '' ? ` ${l.step}` : ''))),
+    ]
+  }
+  const holderLines = (level: number): PaneNode[] => {
+    if (level >= 1 || !pool) return []
+    const others = pool.leases.filter(l => !own(l))
+    const out: PaneNode[] = others.slice(0, HOLDERS_CAP).map(l => row('  ', dim('· '), l.label !== '' ? l.label : l.project, dim(` ${l.request} · ${spanText(l.ageMs)}`)))
+    if (others.length > HOLDERS_CAP) out.push(row(dim(`  +${others.length - HOLDERS_CAP} more`)))
+    return out
+  }
+
+  // (4) the last three transitions
+  const transitionLines = (level: number): PaneNode[] => {
+    const last = main.recent.slice(-3).reverse()
+    if (level >= 2 || last.length === 0) return []
+    return [
+      text({ dimColor: true, weight: 'bold' }, fitCells('↳ Last transitions', columns)),
+      ...last.slice(0, level === 0 ? 3 : 1).map(m => row('  ', dim(m.from !== '' ? `${m.from} → ` : ''), m.to, dim(` ${sinceText(now - m.at)} ago`))),
+    ]
+  }
+
+  const render: Record<SingleSection, (level: number) => PaneNode[]> = {
+    current: currentLines, running: runningLines, pool: poolLines, holders: holderLines, transitions: transitionLines,
+  }
+  const level: Record<SingleSection, number> = { current: 0, running: 0, pool: 0, holders: 0, transitions: 0 }
+  const layout = ['current', 'running', 'pool', 'holders', 'transitions'] as const
+  const lines = () => layout.flatMap(k => render[k](level[k]))
+  // fold the least important section one level at a time until the view fits
+  for (;;) {
+    if (lines().length <= room) break
+    const next = SINGLE_FOLD_ORDER.find(k => level[k] < SINGLE_FOLD_LEVELS[k])
+    if (next === undefined) break
+    level[next]++
+  }
+  return col(lines())
+}
+
 /** The plan pane's whole body: the tab row, the chosen tab's rows, an error line and the footer. Pure. */
 export function paneTree(input: PaneInput): PaneNode {
   const s = input.snapshot
@@ -398,7 +600,10 @@ export function paneTree(input: PaneInput): PaneNode {
   ]
 
   let body: PaneNode
-  if (tab === 'sessions' || (tab === 'plan' && !q)) {
+  if (!q) {
+    // no work queue: the single-task view, one screen with no tabs (the height the header links, the error and the footer leave)
+    body = singleTaskBody(s, input, Math.max(1, input.rows - 3 - (s.error !== '' ? 1 : 0)))
+  } else if (tab === 'sessions') {
     const sessTwo = !fitsOneLine(roots.flatMap(x => plainTree(x, 0)), columns)
     const lines = roots.flatMap(r => tree(r, 0, sessTwo))
     // the height cap counts lines: a two-line row takes two
@@ -406,8 +611,6 @@ export function paneTree(input: PaneInput): PaneNode {
     body = lines.length === 0
       ? text({ dimColor: true }, 'No active workflow in this session.')
       : col(lines.slice(0, cap), lines.length > cap ? moreRow('sessions-more', `+${lines.length - cap} more`, '  ') : null, isOpen('sessions-more') ? lines.slice(cap) : null)
-  } else if (!q) {
-    body = text({ dimColor: true }, 'No work queue in this session: the Sessions tab shows its workflow.')
   } else if (tab === 'pool') {
     body = poolBody(input.pool, now, columns)
   } else if (tab === 'waiting') {

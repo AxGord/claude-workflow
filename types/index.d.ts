@@ -16,6 +16,14 @@ export type SessionRow = {
   recent: { from: string; to: string; at: number }[]
   /** where the current state can go, from the workflow's graph (`name→target`, exec `code→target`); empty unknown */
   next: string[]
+  /** the model the workflow's agent runs on, from the workflow's `driver:` block of the dashboard's /api/workflows; absent: the workflow declares none, or the dashboard did not answer */
+  model?: string
+  /** ms since the epoch of the last `link_agent` of the session; absent: none */
+  agentAt?: number
+  /** the exec in flight (`running_exec`): its state, when it began, and the command and timeout the workflow's definition gives that state ('' and 0 until the dashboard answers), and `waitMs`, the pool wait the engine has counted against its deadline (the run's `.wait` file; absent: none) */
+  exec?: { state: string; since: number; command: string; timeoutMs: number; waitMs?: number }
+  /** the last exec the session finished: its state, exit code, run time and when it ended; absent: none yet */
+  lastExec?: { state: string; code: number; ms: number; at: number }
 }
 
 /** One queue task, as the engine's dashboard answers it (/api/queue). */
