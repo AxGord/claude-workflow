@@ -11,7 +11,20 @@ export const shared = reactive<{
   speed: number;
   /** whether the Claude Code window is drawn over the map (the `T` key and the transport's button flip it) */
   terminal: boolean;
-}>({ file: null, at: 0, duration: 0, playing: false, speed: DEFAULT_SPEED, terminal: true });
+  /** whether the window fills the whole stage (its green button, a double-click on its title bar); only a shown window is zoomed */
+  zoom: boolean;
+}>({ file: null, at: 0, duration: 0, playing: false, speed: DEFAULT_SPEED, terminal: true, zoom: false });
+
+/** Show or hide the Claude Code window: the one switch the pill, the `T` key and the window's close and minimise buttons share. A hidden window is not zoomed. */
+export function setTerminal(on: boolean): void {
+  shared.terminal = on;
+  if (!on) shared.zoom = false;
+}
+
+/** Zoom the window to fill the stage, or back to its place. */
+export function toggleZoom(): void {
+  shared.zoom = !shared.zoom;
+}
 
 let raf = 0;
 let last = 0;

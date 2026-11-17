@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { setTerminal, shared, toggleZoom } from "../docs/.vitepress/theme/replay-store.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -12,6 +13,7 @@ const VUE = read("docs/.vitepress/theme/MapReplay.vue");
 const SCENE = read("docs/.vitepress/theme/Scene.vue");
 const STORE = read("docs/.vitepress/theme/replay-store.ts");
 const TRANSPORT = read("docs/.vitepress/theme/Transport.vue");
+const WINDOW = read("docs/.vitepress/theme/TerminalWindow.vue");
 const THEME = read("docs/.vitepress/theme/index.ts");
 const CONFIG = read("docs/.vitepress/config.mts");
 const DASH_CSS = read("docs/.vitepress/theme/dashboard-css.ts");
@@ -236,5 +238,59 @@ describe("the plan pane's Landed day row", () => {
   it("says `landed` beside its count when its sum includes failed or closed lines that are not rows", () => {
     const pane = read("hooks/pane-view.ts");
     expect(pane).toContain("spend.failed + spend.closed > 0 ? ' landed' : ''");
+  });
+
+  it("the window's traffic lights work: close and minimise hide it into the Terminal button, green and a title double-click zoom it", () => {
+    const button = (cls: string): string =>
+      new RegExp(`<button[^>]*class="dot ${cls}"[^>]*>`).exec(WINDOW)?.[0] ?? "";
+    // real buttons with a name each, not painted dots
+    expect(button("r")).toContain('@click="setTerminal(false)"');
+    expect(button("r")).toContain("aria-label=");
+    expect(button("y")).toContain('@click="setTerminal(false)"');
+    expect(button("y")).toContain("aria-label=");
+    expect(button("g")).toContain('@click="toggleZoom"');
+    expect(button("g")).toContain(":aria-label=");
+    expect(WINDOW).toContain('<div class="cc-title" @dblclick="toggleZoom">');
+    // a double-click on a light is not also a double-click on the title bar
+    expect(WINDOW).toContain('<span class="lights" @dblclick.stop>');
+    // the glyphs show on hover of the group or when a button has the keyboard
+    expect(WINDOW).toContain(".lights:hover .glyph,\n.lights:focus-within .glyph {\n  opacity: 1;");
+    // zoomed fills the stage; the minimise is a transition of the same v-show the pill flips, plain under reduced motion
+    expect(WINDOW).toContain(':class="{ zoomed: shared.zoom }"');
+    expect(WINDOW).toContain("width: 1920px;\n  height: 1080px;");
+    expect(SCENE).toContain(
+      '<Transition name="cc-minimise"><TerminalWindow v-show="shared.terminal" /></Transition>',
+    );
+    // the rule that turns the zoom's own transition off sits in the scoped block, after the base rule it must beat
+    const scoped = WINDOW.slice(0, WINDOW.indexOf("</style>"));
+    const base = scoped.indexOf(".cc-window {\n  position: absolute;");
+    const reducedAt = scoped.indexOf(
+      "@media (prefers-reduced-motion: reduce) {\n  .cc-window {\n    transition: none;",
+    );
+    expect(base).toBeGreaterThanOrEqual(0);
+    expect(reducedAt).toBeGreaterThan(base);
+    // and the minimise's enter and leave rules are off under it too
+    const reduced = WINDOW.slice(WINDOW.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
+    expect(reduced).toContain(".cc-window.cc-minimise-leave-active {\n    transition: none;");
+    // the pill, the T key and the lights share one switch; Esc leaves zoom
+    expect(TRANSPORT).toContain('@click="setTerminal(!shared.terminal)"');
+    expect(SCENE).toContain("else setTerminal(!shared.terminal);");
+    expect(SCENE).toContain('if (e.key === "Escape") {\n    if (shared.zoom) toggleZoom();');
+  });
+
+  it("hiding the window also ends its zoom, so it comes back in place", () => {
+    shared.terminal = true;
+    shared.zoom = false;
+    toggleZoom();
+    expect(shared.zoom).toBe(true);
+    setTerminal(false);
+    expect(shared.terminal).toBe(false);
+    expect(shared.zoom).toBe(false);
+    setTerminal(true);
+    expect(shared.terminal).toBe(true);
+    expect(shared.zoom).toBe(false);
+    toggleZoom();
+    toggleZoom();
+    expect(shared.zoom).toBe(false);
   });
 });

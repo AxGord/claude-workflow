@@ -22,7 +22,7 @@ import {
 import type { View } from "../../../types";
 import { conversationTail, poolCountsAt, poolStateAt, snapshotAt, type ConversationLine } from "../../../src/replay";
 import PaneView from "./PaneView.vue";
-import { shared } from "./replay-store";
+import { setTerminal, shared, toggleZoom } from "./replay-store";
 
 /** The pane's body in cells and rows (the CSS sizes the dock to them). */
 const COLUMNS = 80;
@@ -76,8 +76,15 @@ function act(a: PaneAction): void {
 </script>
 
 <template>
-  <section class="cc-window term-follows-site" aria-label="The Claude Code window: the conversation and the workflow plan pane">
-    <div class="cc-title"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>claude — anyparse</div>
+  <section class="cc-window term-follows-site" :class="{ zoomed: shared.zoom }" aria-label="The Claude Code window: the conversation and the workflow plan pane">
+    <div class="cc-title" @dblclick="toggleZoom">
+      <span class="lights" @dblclick.stop>
+        <button type="button" class="dot r" aria-label="Close: hide the window into the Terminal button" @click="setTerminal(false)"><span class="glyph" aria-hidden="true">×</span></button>
+        <button type="button" class="dot y" aria-label="Minimise: hide the window into the Terminal button" @click="setTerminal(false)"><span class="glyph" aria-hidden="true">−</span></button>
+        <button type="button" class="dot g" :aria-label="shared.zoom ? 'Leave full stage (Esc)' : 'Fill the stage'" @click="toggleZoom"><span class="glyph" aria-hidden="true">{{ shared.zoom ? "⤡" : "⤢" }}</span></button>
+      </span>
+      claude — anyparse
+    </div>
     <div class="cc-body">
       <div class="cc-convo">
         <div class="cc-lines">
@@ -111,20 +118,69 @@ function act(a: PaneAction): void {
   color: var(--cc-text);
   font: 15px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   overflow: hidden;
+  transform-origin: 100% 100%;
+  transition:
+    right 0.25s ease,
+    bottom 0.25s ease,
+    width 0.25s ease,
+    height 0.25s ease,
+    border-radius 0.25s ease;
+}
+/* in this scoped block so it ties the base rule's specificity and, coming later, wins: no zoom animation under reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .cc-window {
+    transition: none;
+  }
+}
+/* zoomed: the window fills the whole stage (the stage is 1920x1080, drawn scaled) */
+.cc-window.zoomed {
+  right: 0;
+  bottom: 0;
+  width: 1920px;
+  height: 1080px;
+  border-radius: 0;
 }
 .cc-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 9px 14px;
   border-bottom: 1px solid var(--cc-rule);
   color: var(--cc-muted);
   font-size: 13px;
+  user-select: none;
+}
+.lights {
+  display: flex;
+  gap: 8px;
+  margin-right: 4px;
 }
 .dot {
-  width: 12px;
-  height: 12px;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
+  cursor: pointer;
+  font: inherit;
+}
+.dot:focus-visible {
+  outline: 2px solid var(--cc-text);
+  outline-offset: 2px;
+}
+/* the macOS affordance: the glyphs show while the pointer is over the group (or a button has the keyboard) */
+.glyph {
+  color: black;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  opacity: 0;
+}
+.lights:hover .glyph,
+.lights:focus-within .glyph {
+  opacity: 1;
 }
 .r {
   background: #ff5f56;
@@ -134,7 +190,6 @@ function act(a: PaneAction): void {
 }
 .g {
   background: #27c93f;
-  margin-right: 10px;
 }
 .cc-body {
   flex: 1;
@@ -188,5 +243,27 @@ function act(a: PaneAction): void {
 }
 .cc-pane {
   overflow: hidden;
+}
+</style>
+
+<style>
+/* minimising into the Terminal button under the stage (and back out of it): the window shrinks toward its bottom-right
+   corner as it fades; plain under reduced motion */
+.cc-window.cc-minimise-enter-active,
+.cc-window.cc-minimise-leave-active {
+  transition:
+    transform 0.25s ease,
+    opacity 0.25s ease;
+}
+.cc-window.cc-minimise-enter-from,
+.cc-window.cc-minimise-leave-to {
+  opacity: 0;
+  transform: translate(60px, 120px) scale(0.2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-window.cc-minimise-enter-active,
+  .cc-window.cc-minimise-leave-active {
+    transition: none;
+  }
 }
 </style>

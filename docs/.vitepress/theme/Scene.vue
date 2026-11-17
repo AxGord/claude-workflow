@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The landing's scene: one 16:9 stage (drawn at 1920x1080 and scaled to the page's width) that the live map fills
 // above a thin strip of the machine's thread pool, the Claude Code window drawn over the map (hidden and shown by the
-// transport's button or `T`), and one transport bar under the stage that drives them all. The recorders (scripts/scene-capture.mjs) capture this same stage at scale 1,
+// transport's button or `T`, or by its own close, minimise and zoom buttons), and one transport bar under the stage that drives them all. The recorders (scripts/scene-capture.mjs) capture this same stage at scale 1,
 // through the `?record` hook: the page then hands over `seek(ms)` instead of playing on its own clock.
 import { nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { withBase } from "vitepress";
@@ -11,7 +11,7 @@ import MapReplay from "./MapReplay.vue";
 import PoolStrip from "./PoolStrip.vue";
 import TerminalWindow from "./TerminalWindow.vue";
 import Transport from "./Transport.vue";
-import { load, pause, play, seekTo, shared } from "./replay-store";
+import { load, pause, play, seekTo, setTerminal, shared, toggleZoom } from "./replay-store";
 
 const STAGE_W = 1920;
 const STAGE_H = 1080;
@@ -42,11 +42,13 @@ async function seek(ms: number): Promise<void> {
 }
 
 function onKey(e: KeyboardEvent): void {
-  if (e.key !== "t" && e.key !== "T") return;
+  if (e.key !== "t" && e.key !== "T" && e.key !== "Escape") return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const t = e.target as HTMLElement | null;
   if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-  shared.terminal = !shared.terminal;
+  if (e.key === "Escape") {
+    if (shared.zoom) toggleZoom();
+  } else setTerminal(!shared.terminal);
 }
 
 onMounted(async () => {
@@ -96,7 +98,7 @@ onBeforeUnmount(() => {
         <div v-if="shared.file && shared.file.pool" class="stage-strip" :class="DASH" :style="{ height: `${STRIP_H}px` }">
           <PoolStrip :file="shared.file" :at="shared.at" />
         </div>
-        <TerminalWindow v-show="shared.terminal" />
+        <Transition name="cc-minimise"><TerminalWindow v-show="shared.terminal" /></Transition>
         <div v-if="status" class="stage-status">{{ status }}</div>
       </div>
     </div>

@@ -3,7 +3,7 @@
 // map and the terminal window together (one clock, replay-store.ts); the last button (and the `T` key) hides or
 // shows the Claude Code window over the map.
 import { elapsed, SPEEDS } from "../../../src/replay";
-import { seekTo, shared, toggle } from "./replay-store";
+import { seekTo, setTerminal, shared, toggle } from "./replay-store";
 
 const speeds = SPEEDS;
 
@@ -39,7 +39,7 @@ function scrub(e: Event): void {
       :class="{ on: shared.terminal }"
       :aria-pressed="shared.terminal"
       title="Show or hide the Claude Code window (T)"
-      @click="shared.terminal = !shared.terminal"
+      @click="setTerminal(!shared.terminal)"
     >
       Terminal <kbd>T</kbd>
     </button>
