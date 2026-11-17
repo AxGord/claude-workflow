@@ -88,6 +88,10 @@ export default defineConfig({
     socialLinks: [{ icon: "github", link: "https://github.com/AxGord/claude-workflow" }],
     search: { provider: "local" },
     outline: [2, 3],
-    footer: { message: "Released under the MIT License.", copyright: "Claude Workflow" },
+    // VitePress renders `copyright` as HTML; its default rule keeps the footer on pages without a sidebar only.
+    footer: {
+      message: "Released under the MIT License.",
+      copyright: '© 2026 <a href="https://axgord.github.io/">Alexander Gordeyko</a>',
+    },
   },
 });
