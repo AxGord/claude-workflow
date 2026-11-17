@@ -5,6 +5,10 @@ description: Reference for authoring workflow YAML — state types, skill gates,
 
 ## Workflow Authoring Reference
 
+### When a user asks for a workflow
+
+This is the "ask the agent" path of `docs/getting-started.md`: the user describes a process in their words and you write the workflow. Write the YAML to this reference, save it with `create({ name, scope: "project", definition })` (a project workflow, `.claude/workflows/<name>.yaml`; `scope: "global"` for every project), and say what you did NOT run: saving only proves the file loaded, not that its commands work. A saved project workflow is listed in `master`'s routing prompt (Step 1, `Available workflows:`), so a later message that matches its description starts it; the user can also name it (`start({ workflow: "<name>" })`). The other two ways to use the engine are the same page's Mode 1 (`start()` with no arguments opens `master`, which routes to a bundled workflow) and Mode 2 (a queue file plus `batch`, see Task queue below).
+
 ### Deployment & reload
 
 - Bundled templates load from `templates/` next to the server's `build/` (i.e. `${CLAUDE_PLUGIN_ROOT}/templates`) — once, at server boot. Editing them does NOT hot-reload a running server.

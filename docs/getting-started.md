@@ -1,6 +1,6 @@
 ---
 title: Getting started
-description: Install the plugin and run your first workflow
+description: Install the plugin, then use it two ways (one task, or a queue) and make a workflow of your own
 ---
 
 # Getting started
@@ -64,7 +64,116 @@ claude --plugin-dir ./
 
 Supported marketplace sources: the **npm package** (`claude-mcp-workflow`) and a **local directory**. A marketplace entry that points at the git repository (git URL as a plugin source) is **not** supported — `build/` is gitignored, so a git-sourced install has no compiled MCP server to run. (Cloning for development works — see above — because you run `npm run build` yourself.)
 
-## Your first workflow
+## Recommended CLAUDE.md Snippet
+
+The engine only helps when the agent actually starts a workflow. Add this to your `~/.claude/CLAUDE.md`, once; after it every conversation begins inside the engine, with nothing for you to type:
+
+```markdown
+- **ALWAYS** start every conversation by calling `mcp__plugin_workflow_wf__start()` (no arguments) before doing anything else, including answering the user
+  - **EXCEPTION**: If you are a sub-agent spawned by the Task tool, do NOT call `start()` without arguments — the parent agent manages the workflow session. Follow the start instructions from the parent's preamble instead
+```
+
+## Mode 1 — one task at a time
+
+With the snippet, `start()` with no arguments opens the bundled `master` workflow. It does no work: it reads your message and routes to the workflow that fits (`bug-fix`, `coding`, `new-feature`, `explore`, `planning`, `code-review`, ... — the table in [Concepts](/concepts#bundled-workflows)). From then on the agent gets one prompt per step and moves on by calling `transition`.
+
+What happened in a scratch project, on the message "the login page crashes with a null error when the password is empty":
+
+1. The agent called `start()`. The answer began `SESSION: e1477cd2` / `master @ route` and carried the routing prompt (the routing rules and the list of the workflows).
+2. It chose `bug_fix` (a concrete symptom is a bug), and one `transition` later the answer was the first prompt of `bug-fix`: `[0] master @ run_bug_fix (waiting)`, `[1] bug-fix @ classify ← ACTIVE`, "Classify the bug before proceeding", with the transitions it may take (`visual`, `logic`).
+
+You see this as the agent's own messages; the session also shows in the plan pane (`/wf-plan`, its Sessions tab is the tree of `master` → `bug-fix`) and on the dashboard at `http://localhost:3100` (a live map of the workflow, the current state highlighted). See [Dashboard and plan pane](/dashboard). The route and the two answers above are the real output of a scratch run; the pane and the dashboard were not looked at for this page.
+
+To pick the workflow yourself, name it: ask "run the bug-fix workflow on this", or have the agent call `start({ workflow: "bug-fix" })`. A workflow of your own (below) is also listed in `master`'s routing prompt as a project workflow, so a message that matches its description starts it.
+
+## Mode 2 — a queue of tasks
+
+When there are many independent tasks, write them to a queue instead of working one by one. A queue is a YAML file, `.claude/batch/<name>.yaml`; the bundled `batch` workflow (master routes a "do all of these" message to it, or ask for it by name) admits lines into a window, starts one `batch-task` session per line, each run by a cheap driver agent that has a worker and a reviewer do the work in a worktree and lands the result, and re-picks every time a slot frees.
+
+A minimal queue (add the lines by asking the agent, which calls `queue_add`, or with `wf-queue --queue demo --add '<YAML mapping>'`; the first add creates the file):
+
+```yaml
+batch_size: 2                 # how many tasks run at once
+reason: two at once
+tasks:
+  - id: T1
+    status: pending
+    difficulty: 3             # 1-10, required on a pending line: it picks the agents' model and effort
+    touches: [ src/login ]    # lines whose touches overlap never run together
+    text: |-
+      Fix the null error when the password is empty (login page).
+  - id: T2
+    status: pending
+    difficulty: 2
+    touches: [ docs ]
+    text: |-
+      Document the password rules in docs/login.md.
+  - id: T3
+    status: pending
+    difficulty: 4
+    after: [ T1 ]             # starts only when T1 is done
+    touches: [ test/login ]
+    text: |-
+      Add a test for the empty password.
+```
+
+The engine also writes `added`, `base` and `text_hash` on every line it adds. `wf-queue --queue demo --dry-run --explain` shows what a pick would do without starting anything; on this file it printed `T1` and `T2` as admitted, `T3: window full` (with `batch_size: 5` it reads `T3: after: T1 (pending)`), and the summary `batch_size 2, running 0, pending 3, admitted 2 (dry run)`. To run it, ask the agent to run the queue (`start({ workflow: "batch" })`); its `plan_queue` step resumes a queue that has pending lines. Everything else — priorities, `owner:`, the model table, drivers, the plan pane's Plan tab — is in [Task queue and dispatch](/queue).
+
+Checked for this page: the add and the dry-run pick above. Not re-run: a whole dispatch (worktrees, drivers, land), which [Task queue and dispatch](/queue) describes.
+
+## Your own workflow
+
+A project with its own procedure can have its own workflow. There are two paths.
+
+### Ask the agent
+
+The agent loads the bundled `workflow-authoring` skill (the reference for the YAML format) and writes the file. Say what the process is, in your words:
+
+> Make me a workflow for releasing my small npm library: run the tests, bump the version, build, then ask me before publishing. Save it for this project.
+
+What this produced in a scratch project (the engine built from this repository; the skill was the project's own `.claude/skills/workflow-authoring`): the agent loaded `workflow-authoring`, tried to write `.claude/workflows/release.yaml` with the Write tool (denied: the run was headless), and saved it with the engine's `create` tool (`scope: "project"`), which answered `Workflow "release" created at <project>/.claude/workflows/release.yaml`. The file has 14 states; its start and the confirmation step:
+
+```yaml
+name: release
+description: "Release the npm library: test, bump version, build, confirm with
+  the user, publish"
+initial: choose_bump
+max_transitions: 30
+states:
+  choose_bump:
+    prompt: "Ask the user which version bump to release: patch, minor or major. Then
+      store the answer with the workflow context_set tool as key `bump` (exactly
+      one of: patch, minor, major) and transition to `continue`."
+    transitions:
+      continue: run_tests
+  run_tests:
+    type: exec
+    command: npm test
+    timeout: 600000
+    on_timeout: tests_failed
+    on_success: bump_version
+    on_error: tests_failed
+  # ... bump_version and build (exec), a failure prompt after each ...
+  confirm_publish:
+    prompt: Tests passed, version is now {{context.new_version}}, build succeeded.
+      Ask the user explicitly whether to publish to npm now. Transition
+      `publish` only on a clear yes; otherwise `cancel`.
+    transitions:
+      publish: publish
+      cancel: cancelled
+  publish:
+    type: exec
+    command: npm publish
+    timeout: 120000
+    on_timeout: publish_failed
+    on_success: published
+    on_error: publish_failed
+  # ... publish_failed, cancelled, published, finish and failed ...
+```
+
+The engine's own loader accepted it (a `Loader` over the bundled templates plus that directory: 22 workflows, `release` among the project's own), and a later `start()` in the same project listed it in `master`'s routing prompt (`Available workflows: - release — Release the npm library: ...`). Not checked: running `release` itself (its `npm` steps need a real package), and what an interactive session shows when the Write tool asks for permission. Read what the agent wrote before you rely on it: the agent's own summary said the build runs after `npm version`, so a failed build leaves the bump commit and tag in place.
+
+### Write the YAML by hand
 
 About ten minutes, once the plugin is installed and Claude Code restarted.
 
@@ -96,15 +205,6 @@ states:
 4. Open `http://localhost:3100` (the dashboard): the session appears with its current state, and the workflow as a graph. The agent can also call `status` to read it back at any time.
 
 From here: [Workflow YAML](/workflow-yaml) for the format, [Action states](/action-states) for steps the engine runs itself.
-
-## Recommended CLAUDE.md Snippet
-
-The engine only helps when the agent actually starts a workflow. Add this to your `~/.claude/CLAUDE.md`:
-
-```markdown
-- **ALWAYS** start every conversation by calling `mcp__plugin_workflow_wf__start()` (no arguments) before doing anything else, including answering the user
-  - **EXCEPTION**: If you are a sub-agent spawned by the Task tool, do NOT call `start()` without arguments — the parent agent manages the workflow session. Follow the start instructions from the parent's preamble instead
-```
 
 ## Recommended Permissions
 
