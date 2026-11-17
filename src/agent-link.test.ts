@@ -182,8 +182,8 @@ describe("agent links (engine)", () => {
     await engine.reapOrphanedSessions();
     return { p, r1, r2 };
   }
-  const earlier = (r1: string) =>
-    `rev1 → ${r1} → child @ go — linked at its parent's review visit 1, the parent is now at visit 2: an earlier visit's agent — not woken; abort({ session_id: '${r1}', force: true }) once it is not needed`;
+  const earlier = (r1: string, p: string) =>
+    `rev1 → ${r1} → child @ go — linked at its parent's review visit 1, the parent is now at visit 2: an earlier visit's agent — not woken; abort({ session_id: '${r1}', caller_session_id: '${p}' }) once it is not needed`;
 
   it("a restart mid-review: resume wakes the current reviewer only; status marks the earlier one", async () => {
     const m = mount();
@@ -194,7 +194,9 @@ describe("agent links (engine)", () => {
     const text = formatResume(r);
     expect(text).toContain(`rev2 → ${r2} → child @ go\n`);
     expect(text).toContain(`SendMessage({ to: "rev2"`);
-    expect(text).toContain(earlier(r1));
+    expect(text).toContain(earlier(r1, p));
+    // ENG-ABORT-GUARD-FOLLOWUPS: the closing abort hint names a caller, else the abort guard refuses it
+    expect(text).toContain("abort({ session_id, caller_session_id: <your own session id> })");
     expect(text).not.toContain(`SendMessage({ to: "rev1"`);
     expect(text).not.toContain("worker1");
     expect(next.linkedAgentLines(p)).toEqual([
@@ -206,11 +208,11 @@ describe("agent links (engine)", () => {
 
   it("a restart mid-review: the SessionStart pickup wakes the current reviewer only", async () => {
     const m = mount();
-    const { r1, r2 } = await midReview(m);
+    const { p, r1, r2 } = await midReview(m);
     const text = await pickupReport(m.storage, "conv", process.pid);
     expect(text).toContain(`rev2 → ${r2} → child @ go\n`);
     expect(text).toContain(`SendMessage({ to: "rev2"`);
-    expect(text).toContain(earlier(r1));
+    expect(text).toContain(earlier(r1, p));
     expect(text).not.toContain(`SendMessage({ to: "rev1"`);
     expect(text).not.toContain("worker1");
   });

@@ -291,7 +291,7 @@ export function formatResume(result: ResumeResult): string {
         result.routeOf,
       ),
       "",
-      "A session whose agent cannot be woken: abort({ session_id, force: true }).",
+      "A session whose agent cannot be woken: abort({ session_id, caller_session_id: <your own session id> }); a session of another agent's subtree needs force: true with a reason instead.",
     );
   }
   return parts.join("\n");

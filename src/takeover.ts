@@ -170,6 +170,14 @@ export function drivenByRootAgent(
 }
 
 /**
+ * The abort call a note offers for `s`: it names its parent as the caller, so the abort guard
+ * passes even when `s` has active descendants (the one reading the note is the parent's agent).
+ */
+function abortHint(s: SessionState, parent: SessionState | undefined): string {
+  return `abort({ session_id: '${s.session_id}', caller_session_id: '${parent?.session_id ?? s.parent_session_id}' })`;
+}
+
+/**
  * The agent of `s` was linked at an earlier visit of the state its parent stands at now (a fix
  * round re-entered it): the note that says so, else undefined. Such an agent is not this visit's.
  */
@@ -183,10 +191,10 @@ export function earlierVisitNote(
   if (!now || !s.agent_id || !s.agent_step) return undefined;
   if (!standing) {
     const at = s.agent_step;
-    return `linked at its parent's ${at.state} visit ${at.visit}, the parent is now at ${now.state}: an earlier step's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
+    return `linked at its parent's ${at.state} visit ${at.visit}, the parent is now at ${now.state}: an earlier step's agent — not woken; ${abortHint(s, parent)} once it is not needed`;
   }
   if (standing === "current" || standing === "spawned") return undefined;
-  return `linked at its parent's ${now.state} visit ${s.agent_step.visit}, the parent is now at visit ${now.visit}: an earlier visit's agent — not woken; abort({ session_id: '${s.session_id}', force: true }) once it is not needed`;
+  return `linked at its parent's ${now.state} visit ${s.agent_step.visit}, the parent is now at visit ${now.visit}: an earlier visit's agent — not woken; ${abortHint(s, parent)} once it is not needed`;
 }
 
 /**

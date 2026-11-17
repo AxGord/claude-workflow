@@ -47,7 +47,7 @@ function override(call: ScopeCall): string | undefined {
  * descendants, is the one whose end takes others with it.
  */
 export function scopeVerdict(storage: Storage, call: ScopeCall): ScopeVerdict {
-  // a transition naming no caller has nothing to judge by
+  // open on purpose: a step ends no session, and the engine's own prompts transition other sessions without a caller
   if (call.tool === "transition" && call.caller === undefined) return {};
   const all = storage.readAll();
   const target = all.find(s => s.session_id === call.target);
