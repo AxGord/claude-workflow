@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.png" alt="Claude Workflow" width="100%">
+  <a href="https://axgord.github.io/claude-workflow/"><img src="docs/banner.png" alt="Claude Workflow" width="100%"></a>
 </p>
 
 <p align="center">

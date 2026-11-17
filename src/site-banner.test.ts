@@ -177,4 +177,13 @@ describe("scripts/render-banner.mjs: the banner and the social preview are rende
     expect(script).toContain("window.__replay.seek(");
     expect(script).toContain("openScene()");
   });
+
+  it("the README's banner is a link to the site (a click on it opens the site on GitHub and on npm), alt and width kept", () => {
+    const readme = read("README.md");
+    expect(readme).toContain(
+      '<a href="https://axgord.github.io/claude-workflow/"><img src="docs/banner.png" alt="Claude Workflow" width="100%"></a>',
+    );
+    // the site address is the one the config publishes
+    expect(read("docs/.vitepress/config.mts")).toContain("/claude-workflow/");
+  });
 });
