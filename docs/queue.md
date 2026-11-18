@@ -354,8 +354,15 @@ driver:
 
 **The shipped prompts and the driver's rules**
 
-- The shipped worker and reviewer prompts (`batch-task`) forbid ending a turn with live background work (the task notification fires only when the agent stops with none) and require every wait loop to end on failure or a timeout.
-- The `task-driver` (and `agents/driver.md`) answers a notice that the agent waits on its own background work with "finish or kill that work, then repeat your one line".
+- The shipped worker, recon and reviewer prompts (`batch-task`, and `engine-task` here) make an agent WAIT in the foreground and never end a turn with live work.
+  - A sub-agent's Agent tool has no `run_in_background` and every spawn is asynchronous, so the spawn texts no longer say it.
+  - A command the agent waits for runs in a foreground Bash call with the longest timeout (600000).
+  - One that may outlast a call (the check behind a pool lease) is started detached with a done-marker, `nohup sh -c '<cmd>; echo $? > L.done' > L.log 2>&1 & echo $! > L.pid`, then awaited in a chain of foreground calls of `until [ -s L.done ] || ! kill -0 "$(cat L.pid)" 2>/dev/null || [ $i -ge 540 ]; do sleep 1; i=$((i+1)); done` (it ends on the marker, the process's death or a timeout, never on `sleep` alone), re-issued until the marker exists.
+  - The agent never starts a Monitor for a command it waits for. When the harness moves a foreground call to the background at its timeout, it TaskStops it, or waits on it in foreground calls, before any end of turn.
+  - The agent never ends a turn while something it started is alive, mid-run as well as at its last line (the harness notifies its parent for each such stop, and the stop makes a notification-only wake of the main conversation).
+  - A read-only type (`workflow:reviewer`, `workflow:recon`) cannot detach or loop: the read-only gate refuses a redirect, `$( )` and `sleep`. Its brief gives only foreground calls with timeout 600000; a command that would outlast one call is not run and is named in the verdict as unverified.
+  - After it has delivered its last line, the agent answers ONLY a harness `[handback-send-enforce]` prompt with the plain-text line `DELIVERED <task>` (never SendMessage to main, never the report again); a `Driver ping` that asks for its line gets the line.
+- The `task-driver` (and `agents/driver.md`) omits `run_in_background` on a spawn. `DELIVERED <task>` from an agent whose line it holds is no report; from one whose line it has not received, it gets ONE "repeat your one line". A notice that the agent waits on its own background work (a broken brief, not a normal state) gets the WAITING line only, never a ping: a scratch agent pinged on it stopped again with the same notice.
 - It probes a WAITING agent once on a later wake (an enforce prompt, a parent message) that comes after the agent's hand-back and before its notification, never on the hand-back turn itself; the driver has no clock.
 - The shipped `task-driver` instructions (a message after its last line means P still holds the step: `status` on P once and continue):
   - one `status` at the start; after that every transition reply is the next prompt;
@@ -408,7 +415,7 @@ driver:
 The plugin ships three subagent types in `agents/`:
 
 - `workflow:driver` (haiku/medium).
-  - It follows the task-driver rules: probe a WAITING agent once on a later wake (after the hand-back, before the notification), and tell an agent that waits on its own background work to finish or kill it, while the shipped worker and reviewer prompts forbid ending a turn with live background work.
+  - It follows the task-driver rules: probe a WAITING agent once on a later wake (after the hand-back, before the notification), and answer a notice that an agent waits on its own background work with the WAITING line only, while the shipped worker, recon and reviewer prompts make an agent wait in foreground calls and never end a turn with live background work.
   - Of the workflow tools it has only `start`, `status`, `transition`, `context_set`, `link_agent`, `queue_mark` and `queue_edit`, so a driver cannot `abort`, `delete`, `create` or `modify` a session.
 - `workflow:recon` (sonnet/medium) and `workflow:reviewer` (opus/high), both read-only: no Edit tool, a Write tool limited by a PreToolUse(Write) hook to the task report directory. That is an absolute path in scratch space with a `<task>.log` / `<task>-logs` directory in it, outside any git work tree, no `..`; a write inside the worktree is refused.
 

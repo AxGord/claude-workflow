@@ -20,8 +20,8 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 ## Doing what the prompts say
 - `context_set` / `transition` exactly as written, session_id P (or the child session the prompt names);
   never batch a transition with other calls of P.
-- "Spawn ONE worker/reviewer": Agent with the model and effort the prompt names, `run_in_background:
-  true`, the prompt text exactly as given — never shorten or rephrase it; then `link_agent` and the
+- "Spawn ONE worker/reviewer": Agent with the model and effort the prompt names (a sub-agent's Agent tool has no
+  `run_in_background`: every spawn is asynchronous, so omit it whatever the prompt says), the prompt text exactly as given — never shorten or rephrase it; then `link_agent` and the
   context_set it asks for.
   Pass `subagent_type` only when the prompt names one; a prompt that names none -> omit it (the default
   agent). Never choose a type by the role's name: the agent you spawn drives its own session and
@@ -48,9 +48,15 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   with the WAITING line only (plus the once-per-wait probe of the next bullet, when it applies) — never a NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
   a reason to hand back. When your last line is NEEDS-PARENT, LANDED or CLOSED, the enforce prompt IS the request:
   call `SubagentHandback` with that line (`blocked` and `recon_blocked` are not terminal, but you already ended there).
-- On a notification that says the agent "is waiting on its own background work": SendMessage it "Driver ping:
-  finish or kill that background work (TaskStop), then repeat your one line." Then end the turn with the
-  WAITING line; a further such notification gets only the WAITING line.
+- On a notification that says the agent "is waiting on its own background work": answer with the WAITING line only.
+  The briefs forbid that state (a worker waits in FOREGROUND calls), so it is a worker that broke its brief, and a ping
+  does not mend it: a scratch agent pinged this way only stopped again with the same notice, and the agent is woken by
+  its own background task. Never ping on it; the once-per-wait probe below still applies.
+- `DELIVERED <task>` is the awaited agent's answer to a harness enforce prompt after it delivered its line. When you
+  HAVE its line (a `[Subagent hand-back]` came for it), it is not a second report: set no tokens, transition nothing,
+  end the turn with the WAITING line. When you have NOT received its line (it went to another conversation, or you were
+  restarted), SendMessage it ONCE "Driver ping: repeat your one line." — a second `DELIVERED` without the line -> hand
+  back `NEEDS-PARENT` with reason `agent <id> says DELIVERED but no line reached the driver`.
 - ONCE per wait, on a LATER wake that comes after a `[Subagent hand-back]` and before the awaited agent's
   notification (a `[handback-send-enforce]` prompt, a message from the parent), or on a turn the awaited agent's
   line did not start: PROBE it — SendMessage it "Driver ping: if your session has ended, repeat your one line;
@@ -87,7 +93,7 @@ With a current agent, never start a new W session or agent at once:
 
 ## Design choices — ask the DECIDER, not the parent
 Round cap: a THIRD FIXES verdict (the Nth when P's context key `max_fixes` is N) is never fixed — hand back at once, decider or not. On an earlier FIXES with `design=yes`: spawn ONE decider —
-Agent, model opus, effort high, `run_in_background: false`, prompt exactly (fill `<wt>`, `<ID>`, `<queue_file>`
+Agent, model opus, effort high, prompt exactly (fill `<wt>`, `<ID>`, `<queue_file>`
 from P's context; `<memory_index>` = P's context key `memory_index`, else omit that file from the list):
 
     You decide the open design choice(s) of task <ID>, read-only. Read whole: /tmp/wf-batch-logs/<ID>/review.md,

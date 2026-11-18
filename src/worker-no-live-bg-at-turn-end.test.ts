@@ -15,19 +15,19 @@ describe("a worker never ends its turn with live background work", () => {
 
   it("worker rules: stop or await every background task before the one line", () => {
     expect(worker).toMatch(
-      /run_in_background[\s\S]{0,300}(stopped|awaited)[\s\S]{0,200}never end/i,
+      /never\s+end\s+your\s+turn\s+while\s+anything\s+you\s+started\s+is\s+alive/i,
     );
   });
 
   it("worker rules: a wait loop ends on failure too, not on the success marker alone", () => {
-    expect(worker).toMatch(/wait loop[\s\S]{0,300}(FAILED|timeout|exit)/i);
+    expect(worker).toMatch(/until[\s\S]{0,300}(kill -0|timeout|death)/i);
     expect(liveness).toMatch(/wait loop[\s\S]{0,300}(FAILED|timeout|exit)/i);
   });
 
   it("reviewer prompt carries the rule too", () => {
-    expect(reviewerText).toMatch(/wait loop[\s\S]{0,300}(FAILED|timeout|exit)/i);
+    expect(reviewerText).toMatch(/read-only gate refuses a redirect[\s\S]{0,200}unverified/i);
     expect(reviewerText).toMatch(
-      /run_in_background[\s\S]{0,300}(stopped|awaited)[\s\S]{0,200}never end/i,
+      /never\s+end\s+your\s+turn\s+while\s+anything\s+you\s+started\s+is\s+alive/i,
     );
   });
 
@@ -35,12 +35,11 @@ describe("a worker never ends its turn with live background work", () => {
     const text = read(f).replace(/\s+/g, " ");
     const rule = text.slice(text.indexOf('On a notification that says the agent "is waiting'));
 
-    it(`${f}: a notification that the agent waits on its own background work gets "finish or kill"`, () => {
+    it(`${f}: a notification that the agent waits on its own background work gets the WAITING line, never a ping`, () => {
       const bullet = rule.slice(0, rule.indexOf(" - "));
-      expect(bullet).toMatch(
-        /finish or kill that background work[\s\S]{0,40}repeat your one line/i,
-      );
-      expect(bullet).not.toMatch(/carry on/i);
+      expect(bullet).toMatch(/answer with the WAITING line only/i);
+      expect(bullet).toMatch(/Never ping on it/);
+      expect(bullet).not.toMatch(/finish or kill/i);
     });
 
     it(`${f}: a WAITING turn with no notification probes the agent once, on a signal, not a clock`, () => {
