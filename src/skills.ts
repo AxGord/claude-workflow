@@ -8,7 +8,9 @@
 // A skill the user deleted stays deleted (recorded). The release ships two sets: the DEFAULT set
 // (`templates/skills`, copied on every start) and the STACK pack (`templates/skills-stack`, language, domain and
 // tool skills), which the start hook never copies: `wf-skills add <name>` installs one, and from then on it is
-// recorded, updated and removed like a default skill. Only node built-ins here: the hook runs this on every session start.
+// recorded, updated and removed like a default skill. A skill named `learned-<name>` is the user's own: lessons
+// kept beside the bundled skill `<name>`, never shipped, recorded, updated or removed (`splitSkill` moves the
+// additions of an edited copy there). Only node built-ins here: the hook runs this on every session start.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -45,6 +47,9 @@ export interface SkillsContext {
 /** Under its own subdirectory: a `*.json` directly in the state dir is a session to `Storage.list()`. */
 export const MANIFEST_FILE = path.join("skills", "manifest.json");
 const IGNORED_FILES = new Set([".DS_Store"]);
+/** The personal sibling of a bundled skill: `learned-<name>`, written by reflection or by `splitSkill`, invisible to the manifest. */
+export const LEARNED_PREFIX = "learned-";
+export const isLearned = (name: string): boolean => name.startsWith(LEARNED_PREFIX);
 /** A staging directory in the skills dir: a dot name, swept at the start of every sync. */
 const SCRATCH = ".wf-";
 /** Where each set lives under `<root>/templates`. */
@@ -90,7 +95,8 @@ function shippedSet(root: string, set: string): Map<string, FileHashes> {
   const out = new Map<string, FileHashes>();
   if (!fs.existsSync(dir)) return out;
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (ent.isDirectory()) out.set(ent.name, hashTree(path.join(dir, ent.name)));
+    if (ent.isDirectory() && !isLearned(ent.name))
+      out.set(ent.name, hashTree(path.join(dir, ent.name)));
   }
   return out;
 }
@@ -106,7 +112,7 @@ export function stackSkillNames(root: string): Set<string> {
 }
 
 /** The directory a shipped skill is copied from. */
-function sourceDir(root: string, name: string): string {
+export function sourceDir(root: string, name: string): string {
   const stack = path.join(root, "templates", STACK_SET, name);
   return fs.existsSync(stack) ? stack : path.join(root, "templates", DEFAULT_SET, name);
 }
@@ -231,7 +237,9 @@ export function planSkills(ctx: SkillsContext, manifest: Manifest | null): Skill
   const history = loadHistory(ctx.root);
   const entries = manifest?.skills ?? {};
   const deleted = new Set(manifest?.deleted ?? []);
-  const names = [...new Set([...shipped.keys(), ...Object.keys(entries)])].sort();
+  const names = [...new Set([...shipped.keys(), ...Object.keys(entries)])]
+    .filter(n => !isLearned(n))
+    .sort();
   const dir = (name: string): string => path.join(ctx.skillsDir, name);
   const present = (name: string): boolean => kindOf(dir(name)) !== "none";
 
@@ -464,7 +472,8 @@ export function editedNote(named: readonly string[], cmd: string): string {
   return (
     `Workflow plugin: ${named.length} bundled skill(s) carry your edits and differ from the version this release ships, ` +
     `so they were left as they are: ${named.join(", ")}. ` +
-    `Show the difference: ${cmd} diff ${first}; take the shipped version (your copy is saved first): ${cmd} update ${first}.`
+    `Show the difference: ${cmd} diff ${first}; if you only ADDED text, ${cmd} split ${first} moves it to learned-${first} and restores the shipped text; ` +
+    `take the shipped version (your copy is saved first): ${cmd} update ${first}.`
   );
 }
 
@@ -474,31 +483,36 @@ export function updateSkill(ctx: SkillsContext, name: string): string | null {
   if (!shipped) throw new Error(`no bundled skill named ${name}`);
   const result = withSkillsLock(ctx.stateDir, true, () => {
     if (fs.existsSync(ctx.skillsDir)) restoreInterrupted(ctx.skillsDir);
-    const had = readManifest(ctx.stateDir);
-    const row = planSkills(ctx, had).find(r => r.name === name);
-    let backup: string | null = null;
-    const dst = path.join(ctx.skillsDir, name);
-    if (row?.installed && row.state === "edited") {
-      backup = path.join(ctx.stateDir, "skill-backups", `${name}.${Date.now()}.${process.pid}`);
-      fs.mkdirSync(path.dirname(backup), { recursive: true });
-      fs.cpSync(dst, backup, { recursive: true, dereference: true });
-      fs.rmSync(dst, { recursive: true, force: true });
-    }
-    fs.mkdirSync(ctx.skillsDir, { recursive: true });
-    install(ctx, name, shipped);
-    const skills = { ...(had?.skills ?? {}), [name]: { engine: ctx.version, files: shipped } };
-    const noticed = { ...(had?.noticed ?? {}) };
-    delete noticed[name];
-    writeManifest(ctx.stateDir, {
-      version: 1,
-      skills,
-      deleted: (had?.deleted ?? []).filter(n => n !== name),
-      noticed,
-    });
-    return { backup };
+    return { backup: installShipped(ctx, name, shipped) };
   });
   if (result === null) throw new Error("another process is syncing the skills; try again");
   return result.backup;
+}
+
+/** The body of `updateSkill`, run under the skills lock: the shipped version replaces the copy, an edited one saved first. */
+function installShipped(ctx: SkillsContext, name: string, shipped: FileHashes): string | null {
+  const had = readManifest(ctx.stateDir);
+  const row = planSkills(ctx, had).find(r => r.name === name);
+  let backup: string | null = null;
+  const dst = path.join(ctx.skillsDir, name);
+  if (row?.installed && row.state === "edited") {
+    backup = path.join(ctx.stateDir, "skill-backups", `${name}.${Date.now()}.${process.pid}`);
+    fs.mkdirSync(path.dirname(backup), { recursive: true });
+    fs.cpSync(dst, backup, { recursive: true, dereference: true });
+    fs.rmSync(dst, { recursive: true, force: true });
+  }
+  fs.mkdirSync(ctx.skillsDir, { recursive: true });
+  install(ctx, name, shipped);
+  const skills = { ...(had?.skills ?? {}), [name]: { engine: ctx.version, files: shipped } };
+  const noticed = { ...(had?.noticed ?? {}) };
+  delete noticed[name];
+  writeManifest(ctx.stateDir, {
+    version: 1,
+    skills,
+    deleted: (had?.deleted ?? []).filter(n => n !== name),
+    noticed,
+  });
+  return backup;
 }
 
 export interface AddResult {
@@ -587,5 +601,200 @@ export function removeSkills(ctx: SkillsContext): RemovePlan {
   });
   if (result === null) throw new Error("another process is syncing the skills; try again");
   if (!stateExisted) fs.rmSync(ctx.stateDir, { recursive: true, force: true });
+  return result;
+}
+
+/** The `learned-*` skills in the skills dir: the user's, listed apart and never touched by a sync, an update or `remove`. */
+export function learnedSkills(ctx: SkillsContext): string[] {
+  if (!fs.existsSync(ctx.skillsDir)) return [];
+  return fs
+    .readdirSync(ctx.skillsDir)
+    .filter(n => isLearned(n) && kindOf(path.join(ctx.skillsDir, n)) !== "none")
+    .sort();
+}
+
+/**
+ * A new `learned-<name>/SKILL.md`: the description makes Claude Code load it by itself wherever `<name>` applies
+ * (a scratch probe on 2.1.327 loaded it by description alone, with and without an explicit `Skill(<name>)`).
+ */
+export function learnedSkillStub(name: string): string {
+  return (
+    `---\nname: ${LEARNED_PREFIX}${name}\n` +
+    `description: Your own lessons for the ${name} skill - load them whenever ${name} is loaded or its topic comes up\n---\n\n` +
+    `# Learned: ${name}\n\nLessons that belong with the bundled \`${name}\` skill. The engine never ships, updates or removes this file.\n`
+  );
+}
+
+export interface SplitResult {
+  /** The `learned-<name>` directory the additions went to. */
+  readonly learned: string;
+  /** Added text blocks moved into its SKILL.md (a block per run of added lines). */
+  readonly sections: number;
+  /** Files the copy added beside the shipped ones, moved as they were. */
+  readonly files: readonly string[];
+  /** Where the edited copy was saved before the shipped text came back. */
+  readonly backup: string | null;
+}
+
+interface SplitPlan {
+  /** Blocks to append to learned SKILL.md: the added text, and it under its "moved from" line. */
+  readonly sections: readonly { readonly block: string; readonly text: string }[];
+  /** Files new in the copy: relative path → bytes. */
+  readonly added: Readonly<Record<string, Buffer>>;
+}
+
+/** Largest middle part (after the common head and tail are cut) the line matching below will compare. */
+const MAX_LCS_CELLS = 25_000_000;
+
+/** Which lines of `b` are matched to a line of `a` in a longest common subsequence; null when `a` is not a subsequence of `b`. */
+function matchedLines(a: readonly string[], b: readonly string[]): boolean[] | null {
+  const kept = new Array<boolean>(b.length).fill(false);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) kept[head++] = true;
+  let tail = 0;
+  while (
+    tail < a.length - head &&
+    tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  ) {
+    kept[b.length - 1 - tail++] = true;
+  }
+  const am = a.slice(head, a.length - tail);
+  const bm = b.slice(head, b.length - tail);
+  if (am.length === 0) return kept;
+  if (am.length > bm.length || am.length * bm.length > MAX_LCS_CELLS) return null;
+  const w = bm.length + 1;
+  const dp = new Int32Array((am.length + 1) * w);
+  for (let i = am.length - 1; i >= 0; i--) {
+    for (let j = bm.length - 1; j >= 0; j--) {
+      dp[i * w + j] =
+        am[i] === bm[j]
+          ? dp[(i + 1) * w + j + 1] + 1
+          : Math.max(dp[(i + 1) * w + j], dp[i * w + j + 1]);
+    }
+  }
+  if (dp[0] !== am.length) return null;
+  for (let i = 0, j = 0; i < am.length; ) {
+    if (am[i] === bm[j]) {
+      kept[head + j] = true;
+      i++;
+      j++;
+    } else if (dp[(i + 1) * w + j] >= dp[i * w + j + 1]) i++;
+    else j++;
+  }
+  return kept;
+}
+
+/** The line index of the `---` closing a leading frontmatter block, or -1 when the text has none. */
+function frontmatterEnd(lines: readonly string[]): number {
+  if (lines[0] !== "---") return -1;
+  return lines.indexOf("---", 1);
+}
+
+const trimBlank = (lines: readonly string[]): string => lines.join("\n").replace(/^\n+|\s+$/g, "");
+
+/** What `split` would move, or the reason it refuses: only a copy that is the shipped text plus added lines and files splits. */
+function planSplit(ctx: SkillsContext, name: string): SplitPlan {
+  const shipped = shippedSkills(ctx.root).get(name);
+  if (!shipped) throw new Error(`no bundled skill named ${name}`);
+  const mine = path.join(ctx.skillsDir, name);
+  const kind = kindOf(mine);
+  if (kind === "none") throw new Error(`${name} is not installed in ${ctx.skillsDir}`);
+  if (kind === "other") throw new Error(`${mine} is a link: yours, never touched`);
+  const row = planSkills(ctx, readManifest(ctx.stateDir)).find(r => r.name === name);
+  if (row?.state !== "edited")
+    throw new Error(`${name} is not edited (${row?.state}): nothing to split`);
+  const src = sourceDir(ctx.root, name);
+  const have = hashTree(mine);
+  const sections: { block: string; text: string }[] = [];
+  const added: Record<string, Buffer> = {};
+  for (const rel of Object.keys(shipped)) {
+    if (have[rel] === undefined)
+      throw new Error(`refusing: ${rel} was deleted from your copy of ${name}`);
+  }
+  for (const rel of Object.keys(have).sort()) {
+    if (shipped[rel] === undefined) {
+      added[rel] = fs.readFileSync(path.join(mine, rel));
+      continue;
+    }
+    if (have[rel] === shipped[rel]) continue;
+    const text = fs.readFileSync(path.join(mine, rel), "utf8");
+    const was = fs.readFileSync(path.join(src, rel), "utf8").split("\n");
+    const now = text.split("\n");
+    const kept = matchedLines(was, now);
+    if (kept === null) {
+      throw new Error(
+        `refusing: ${rel} of ${name} has lines changed or removed, not only added; ` +
+          `\`wf-skills diff ${name}\` shows them, \`wf-skills update ${name}\` takes the shipped text (your copy is saved first)`,
+      );
+    }
+    const close = frontmatterEnd(now);
+    let anchor = "";
+    for (let i = 0; i < now.length; ) {
+      if (kept[i]) {
+        if (now[i].trim() !== "") anchor = now[i].trim().slice(0, 60);
+        i++;
+        continue;
+      }
+      let end = i;
+      while (end < now.length && !kept[end]) end++;
+      const block = trimBlank(now.slice(i, end));
+      if (rel === "SKILL.md" && close >= 0 && i < close && block !== "") {
+        throw new Error(
+          `refusing: SKILL.md of ${name} has lines added to its frontmatter (name, description): they cannot move into a learned skill`,
+        );
+      }
+      if (block !== "") {
+        const where = anchor ? `${rel}, after "${anchor}"` : rel;
+        sections.push({ block, text: `_Moved from your copy of ${name} (${where}):_\n\n${block}` });
+      }
+      i = end;
+    }
+  }
+  return { sections, added };
+}
+
+/**
+ * Move what the user added to an edited bundled copy into `learned-<name>` and put the shipped text back, so the
+ * copy is updated again, all under one hold of the skills lock. Refuses (nothing written) unless the copy is the
+ * shipped text plus added lines and files; a run that died after the learned write is finished by the next one.
+ */
+export function splitSkill(ctx: SkillsContext, name: string): SplitResult {
+  const result = withSkillsLock(ctx.stateDir, true, () => {
+    if (fs.existsSync(ctx.skillsDir)) restoreInterrupted(ctx.skillsDir);
+    const plan = planSplit(ctx, name);
+    const learned = path.join(ctx.skillsDir, `${LEARNED_PREFIX}${name}`);
+    if (kindOf(learned) === "other")
+      throw new Error(`${learned} is not a directory: left as it is`);
+    for (const [rel, bytes] of Object.entries(plan.added)) {
+      const to = path.join(learned, rel);
+      if (rel === "SKILL.md" || (fs.existsSync(to) && !fs.readFileSync(to).equals(bytes))) {
+        throw new Error(`refusing: ${to} exists with other content`);
+      }
+    }
+    fs.mkdirSync(learned, { recursive: true });
+    const skillFile = path.join(learned, "SKILL.md");
+    const base = fs.existsSync(skillFile)
+      ? fs.readFileSync(skillFile, "utf8")
+      : learnedSkillStub(name);
+    // A block the learned skill already holds was written by a run that died before the restore: not twice.
+    const fresh = plan.sections.filter(sec => !base.includes(sec.block));
+    if (fresh.length > 0) {
+      const tmp = `${skillFile}.tmp.${process.pid}`;
+      fs.writeFileSync(tmp, `${base.trimEnd()}\n\n${fresh.map(sec => sec.text).join("\n\n")}\n`);
+      fs.renameSync(tmp, skillFile);
+    } else if (!fs.existsSync(skillFile)) {
+      fs.writeFileSync(skillFile, base);
+    }
+    for (const [rel, bytes] of Object.entries(plan.added)) {
+      fs.mkdirSync(path.dirname(path.join(learned, rel)), { recursive: true });
+      fs.writeFileSync(path.join(learned, rel), bytes);
+    }
+    const shipped = shippedSkills(ctx.root).get(name);
+    if (!shipped) throw new Error(`no bundled skill named ${name}`);
+    const backup = installShipped(ctx, name, shipped);
+    return { learned, sections: fresh.length, files: Object.keys(plan.added), backup };
+  });
+  if (result === null) throw new Error("another process is syncing the skills; try again");
   return result;
 }

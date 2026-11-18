@@ -36,6 +36,11 @@ states:
       | Project build/config | MEMORY.md | "Needs --legacy-peer-deps" |
       | Workflow friction, concrete fix | Workflow YAML (EVOLVE) | "state X always needs a manual build step → exec state" |
 
+      **Where a skill lesson lands**: a lesson for a bundled skill goes to
+      `learned-<name>` beside it (`~/.claude/skills/learned-<name>/SKILL.md`),
+      never into the shipped copy: an edited copy stops receiving the engine's
+      updates. A skill of the user's own is edited in place.
+
       **Bias check**: prefer skills over memory. If a lesson applies beyond this
       one project (language gotcha, tool behavior, API pattern) → it's a skill,
       NOT memory. Memory is ONLY for things unique to THIS project.
@@ -127,6 +132,7 @@ states:
       Execute the classified action:
 
       - **ENRICH**: identify which skill → research correct answer → use skill-manager ENRICH
+        (a bundled skill's lesson is written to `learned-<name>`, never into the shipped copy)
       - **CREATE**: only if systemic gap → use skill-manager CREATE
       - **MEMORY.md**: write project-specific knowledge to auto-memory
 

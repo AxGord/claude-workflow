@@ -67,6 +67,8 @@ Agent                       Engine                          Storage
 
 Reflection routes each lesson to a skill, project memory or a workflow edit. A lesson bound for memory first passes `home_check`, which asks which bundled skill would have prevented it in a different project, and a process habit the user corrected goes to a skill, not to memory. A workflow suggestion waits for the user's answer before the reflection closes.
 
+A lesson for a bundled skill is written to your own `learned-<name>` beside it, never into the shipped copy ([Learned skills](#learned-skills-your-lessons-beside-the-shipped-text)).
+
 The batch task workflows have no reflect step by design. A skill edit a worker proposes there is handed to the dispatcher with its lessons (about 4 in 564 lesson blocks so far). What the review rounds of that path teach is not classed by any step: an open question, not solved.
 
 The `coding` workflow, drawn by the dashboard's own renderer (click a state to read its prompt; the [landing page](/) draws every bundled workflow):
@@ -127,6 +129,20 @@ When `coding-skill-selector` maps a file extension or a domain to a stack skill 
 
 The state comes from `wf-skills list --json`: `available` is an offer, `deleted` is none. The SessionStart hook keeps a link to the command at `$STATE_DIR/skills/wf-skills` so an agent can run it.
 
+### Learned skills: your lessons beside the shipped text
+
+Reflection never edits a bundled skill. A lesson for bundled skill `<name>` goes to `~/.claude/skills/learned-<name>/SKILL.md`: one file per bundled skill, sections appended. The shipped copy stays unedited, so the manifest keeps updating it.
+
+Claude Code loads the sibling by its description ("Your own lessons for the `<name>` skill - load them whenever `<name>` is loaded or its topic comes up"). A probe on 2.1.327 loaded it that way, with and without an explicit `Skill("<name>")`, so no workflow's `skills:` group names it.
+
+- The manifest and `wf-skills` ignore `learned-*`: never shipped, updated or removed (`remove` keeps it); `list` shows it under its own heading.
+- A wholly new skill that reflection creates is unchanged: a new personal skill.
+- A copy you already enriched by hand is `edited` and stops updating. `wf-skills diff <name>` shows what you added.
+- `wf-skills split <name>` moves the added blocks and files into `learned-<name>`, saves the edited copy to `$STATE_DIR/skill-backups` and restores the shipped text.
+- `split` refuses, writing nothing, when your copy changes or removes a shipped line, deletes a shipped file or adds a line to the frontmatter.
+
+Promotion into the bundle is the maintainer's act: read the learned text, generalise it, commit it to `templates/skills`. Nothing promotes it automatically.
+
 ### Updating and removing the skills
 
 The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it copied, the skill, the path, the sha256 as shipped and the engine version that shipped it. On every start:
@@ -137,6 +153,7 @@ The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it
 - A stack skill is never copied by a start. Once installed (by `wf-skills add`, or earlier by an older release) it is in the manifest, and updated, left alone when edited, and removed like any other.
 - Nothing is removed by a release that moves a skill from the default set into the stack pack: an installed copy stays and keeps being updated.
 - A skill directory that is a link is yours and never touched.
+- A `learned-*` skill is yours: not in the manifest, never updated or removed ([Learned skills](#learned-skills-your-lessons-beside-the-shipped-text)).
 - Copies made before the manifest existed are adopted: one equal to any version the repo ever shipped (`templates/skills-history.txt`, rebuilt by `npm run skills:history`) counts as unedited, any other as edited.
 - A plugin root that is not newer than the one that wrote a copy never takes it back to an older text (the cache and a marketplace directory can both hold the plugin).
 
@@ -144,9 +161,10 @@ The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it
 
 | Command | What it does |
 |---------|--------------|
-| `wf-skills list [--json]` | Each bundled skill: shipped, installed, and `current`, `outdated`, `edited`, `deleted`, not installed or (a stack skill) `available`; changes nothing |
+| `wf-skills list [--json]` | Each bundled skill: shipped, installed, and `current`, `outdated`, `edited`, `deleted`, not installed or (a stack skill) `available`; your `learned-*` skills under their own heading (not in `--json`); changes nothing |
 | `wf-skills add <name>…` / `add --all-stack` | Install shipped skills by name (how a stack skill gets in); a skill already there is left as it is |
 | `wf-skills diff <name>` | Your copy against the version this release ships |
+| `wf-skills split <name>` | Move the text you only ADDED to an edited bundled copy into `learned-<name>` and restore the shipped text, so the copy updates again; refuses (writing nothing) when the diff is not pure additions |
 | `wf-skills update <name>…` | Install the shipped version; an edited copy is saved to `$STATE_DIR/skill-backups` first |
 | `wf-skills remove [--state] [--dry-run]` | Remove every unedited engine copy and the manifest; see below |
 
@@ -159,7 +177,7 @@ The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it
 
 Run `wf-skills remove` **before** `/plugin uninstall`: the command lives in the plugin, and a session started in between copies the skills again.
 
-- It removes every unedited copy and the manifest, and never touches an edited copy or a skill the engine did not ship.
+- It removes every unedited copy and the manifest, and never touches an edited copy, a `learned-*` skill or a skill the engine did not ship.
 - `--dry-run` prints what it would do and changes nothing.
 - The state and pool directories hold your ledger, so they stay unless you add `--state`.
 - `--state` names them and removes them (end every Claude Code session first), the workflow directory too when it is empty.

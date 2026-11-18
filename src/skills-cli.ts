@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 // wf-skills: the bundled skills the SessionStart hook copies into ~/.claude/skills (src/skills.ts).
-//   wf-skills list [--json]         every bundled skill and each one's state: shipped / installed / current, outdated, edited, deleted, available
+//   wf-skills list [--json]         every bundled skill and each one's state: shipped / installed / current, outdated, edited, deleted, available;
+//                                   your learned-* skills under their own heading (never shipped, updated or removed)
 //   wf-skills add <name>… | --all-stack
 //                                   install shipped skills by name; the stack pack (language, domain and tool skills) is
 //                                   installed only this way, then kept current like the default set
 //   wf-skills diff <name>           your copy against the version this release ships (diff -ru)
+//   wf-skills split <name>          move the text you ADDED to an edited bundled copy into learned-<name> and restore the shipped
+//                                   text, so the copy is updated again; refuses unless the diff is pure additions
 //   wf-skills update <name>…        force the shipped version; an edited copy is saved to <state dir>/skill-backups first
 //   wf-skills remove [--state] [--dry-run]
 //                                   remove every UNEDITED engine copy and the manifest; an edited copy and a skill the
@@ -23,12 +26,15 @@ import {
   addSkills,
   editedNote,
   engineVersion,
+  learnedSkills,
   planRemove,
   planSkills,
   readManifest,
   removeSkills,
   shippedSkills,
   skillsDir,
+  sourceDir,
+  splitSkill,
   syncSkills,
   updateSkill,
   type SkillRow,
@@ -38,7 +44,7 @@ import { resolvePoolDir } from "./pool.js";
 import { stateDir, workflowDirs } from "./workflow-dirs.js";
 
 const USAGE =
-  "usage: wf-skills list [--json] | add <name>… | add --all-stack | diff <name> | update <name>… | remove [--state] [--dry-run] | sync [--quiet]";
+  "usage: wf-skills list [--json] | add <name>… | add --all-stack | diff <name> | split <name> | update <name>… | remove [--state] [--dry-run] | sync [--quiet]";
 
 class UsageError extends Error {}
 
@@ -91,6 +97,11 @@ function list(ctx: SkillsContext, json: boolean): void {
   out(
     `${rows.length} skill(s) in ${ctx.skillsDir}: ${count("current")} current, ${count("outdated")} outdated, ${count("edited")} edited, ${count("deleted")} deleted, ${count("missing")} not installed, ${count("available")} stack skill(s) available`,
   );
+  const learned = learnedSkills(ctx);
+  if (learned.length > 0) {
+    out("learned (yours: never shipped, updated or removed):");
+    for (const name of learned) out(`  ${name}`);
+  }
   out(
     readManifest(ctx.stateDir)
       ? `manifest: ${path.join(ctx.stateDir, MANIFEST_FILE)}`
@@ -105,11 +116,9 @@ function diff(ctx: SkillsContext, name: string): void {
     out(`${name} is not installed in ${ctx.skillsDir}`);
     return;
   }
-  const r = spawnSync(
-    "diff",
-    ["-ru", "-x", ".DS_Store", mine, path.join(ctx.root, "templates", "skills", name)],
-    { encoding: "utf8" },
-  );
+  const r = spawnSync("diff", ["-ru", "-x", ".DS_Store", mine, sourceDir(ctx.root, name)], {
+    encoding: "utf8",
+  });
   out(r.stdout.length > 0 ? r.stdout.trimEnd() : `${name}: your copy equals the shipped version`);
 }
 
@@ -193,6 +202,15 @@ function main(argv: readonly string[]): void {
     case "diff":
       only([], 1);
       return diff(ctx, names[0]);
+    case "split": {
+      only([], 1);
+      const r = splitSkill(ctx, names[0]);
+      out(
+        `moved ${r.sections} added block(s)${r.files.length > 0 ? ` and ${r.files.length} added file(s)` : ""} of ${names[0]} to ${r.learned}; ${names[0]} is the shipped text again`,
+      );
+      if (r.backup) out(`your edited copy was saved to ${r.backup}`);
+      return;
+    }
     case "update":
       only([], "some");
       for (const name of names) {

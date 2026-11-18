@@ -175,13 +175,34 @@ E) Write precise description for auto-invocation
 
 Triggered by reflection when Claude makes a verifiable mistake or a user-corrected process pattern (state the rule and the tell; no code verification needed).
 
+0. **Where it is written.** Find out whether the skill is bundled: run
+   `~/.claude/workflow-state/skills/wf-skills list --json` (`$STATE_DIR/skills/wf-skills`
+   when STATE_DIR is set) and look for the name with `"shipped": true`.
+   - A bundled skill (default set or stack pack): write the lesson to
+     `~/.claude/skills/learned-<name>/SKILL.md`, NEVER into the shipped copy: an
+     edited copy stops receiving the engine's updates. One file per bundled skill:
+     create it when absent, append a section when present. A new file starts with
+     exactly this frontmatter, then `# Learned: <name>`:
+     ```
+     ---
+     name: learned-<name>
+     description: Your own lessons for the <name> skill - load them whenever <name> is loaded or its topic comes up
+     ---
+     ```
+     The description is what loads it; keep that wording. When `<name>` is loaded and the
+     sibling exists, `Skill("learned-<name>")` it too.
+   - A skill the engine does not ship (the user's own): edit it in place, as below.
+   - `preferences*`: protected, see above.
+   - A CREATE of a wholly new skill is unchanged: a new personal skill.
+   `wf-skills` never ships, updates or removes `learned-*`; its `split <name>` moves
+   text added to an edited bundled copy there.
 1. Identify the error and the skill it belongs to
 2. Research the correct answer: code verification → web docs → web search
 3. Verify the correct answer by running code (if possible). A factual gotcha
    keeps this verified path unchanged; a user-corrected process pattern
    ("read the current spec before blaming the backend") is a rule and its tell,
    not a fact, and has nothing to run
-4. Add ONLY the verified correction to the existing skill (a process pattern:
+4. Add ONLY the verified correction to the skill chosen in step 0 (a process pattern:
    the rule and the tell)
 5. Format: show the wrong thing and the right thing with exact values
 6. ABSTRACT the incident before writing: a universal/lang skill must carry
