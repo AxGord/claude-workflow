@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
@@ -33,11 +33,11 @@ afterEach(() => {
 
 async function sandbox(queueExtra = "") {
   const TASK = `T-VISITS-${process.pid}-${++seq}`;
-  const WT = `/tmp/wf-${TASK}`;
-  dirs.push(WT, `${WT}-logs`);
-  const base = mkdtempSync(join(tmpdir(), "rv-visits-"));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "rv-visits-")));
   dirs.push(base);
   const main = join(base, "main");
+  // engine-task keeps the worktree beside the repo, outside /tmp: <repo>/../.wt/<repo-name>/<TASK>.
+  const WT = join(base, ".wt", "main", TASK);
   mkdirSync(main);
   git(main, "init", "-q", "-b", "master");
   writeFileSync(join(main, "CHANGELOG.md"), "## Unreleased\n");

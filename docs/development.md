@@ -94,16 +94,27 @@ PLAYWRIGHT_BROWSERS_PATH=<worktree>-browsers npx playwright install <browser>
 - `rebase_fix`'s verify does not ask whether master is an ancestor (a lag without a conflict is rebased by the land itself).
 - `src/land-rebase-conflict-auto-fix.test.ts` pins it.
 
+**The worktree and a reboot**
+
+- The worktree lives where a reboot keeps it: `<repo>/../.wt/<repo-name>/<TASK>` (beside the engine checkout, never under `/tmp`, which a Mac reboot wipes), with its `-logs` and `-browsers` directories next to it.
+- `project_prepare` re-attaches the branch (`git worktree prune`, then `worktree add <wt> <branch>`; a branch still checked out in a live worktree is refused) when the directory is gone but `eng/<id>` survives, instead of failing on `-b`.
+- `project_rebase` has no `cwd` and tells a missing worktree (exit 6) from a conflict (exit 1): exit 6 goes to `rebase_reattach` (the same command as `project_prepare`, `max_visits: 2`, then `project_rebase` again), never to `rebase_conflict`.
+- On exhaustion or error of `rebase_reattach` the route is `land_failed`, where the prompt names it by what is shown: stdout "worktree ... is missing", or exit 1/2 with git's `worktree add` refusal in stderr, never a `fix` round.
+- When the branch is gone too, `project_rebase` leaves with exit 7 (default route, `land_failed`): a missing branch is never made anew on the land route.
+- `cleanup` admits the new path and a legacy `/tmp/wf-<TASK>` of a session started before the move.
+- The bundled `batch-task` already placed its worktree beside the repo; only its reviewer's `review.md` (`/tmp/wf-batch-logs/<ID>/`, the one write a read-only reviewer is allowed) is in `/tmp`, and it is a transient file.
+- `src/worktree-survives-reboot.test.ts` pins it.
+
 ### The pool gate of the engine repo
 
-The engine repo has its own pool gate, `.claude/workflows/pool-gate.yaml` (tracked beside `engine-task.yaml`; `.gitignore` un-ignores it, so every `/tmp/wf-*` worktree has it).
+The engine repo has its own pool gate, `.claude/workflows/pool-gate.yaml` (tracked beside `engine-task.yaml`; `.gitignore` un-ignores it, so every engine-task worktree has it).
 
 **Where the hook looks**
 
 - The hook finds a `pool-gate.yaml` from the directory the command runs in up to the git root.
-- That directory is the call's cwd moved by its leading `cd <dir> &&` segments: a worker's call is `cd /tmp/wf-X && npx vitest run …` while the session's cwd is another project, whose own config would otherwise decide.
+- That directory is the call's cwd moved by its leading `cd <dir> &&` segments: a worker's call is `cd <worktree> && npx vitest run …` while the session's cwd is another project, whose own config would otherwise decide.
 - A target with no config keeps the call cwd's rules.
-- A target with one is judged by it for heavy routing, but the call cwd's project `deny` rules still refuse, so a worker's `cd /tmp/wf-X && git stash` meets the session project's deny.
+- A target with one is judged by it for heavy routing, but the call cwd's project `deny` rules still refuse, so a worker's `cd <worktree> && git stash` meets the session project's deny.
 - Without one, a worker's or reviewer's own `npx vitest run src/<file>.test.ts`, `vitest run --maxWorkers=1` or `npm run check` ran with no lease (load beside an idle pool).
 
 **What the rules lease**

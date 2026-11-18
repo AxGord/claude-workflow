@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse, stringify } from "yaml";
@@ -31,11 +31,11 @@ afterEach(() => {
 
 async function sandbox() {
   const TASK = `T-LANDCONF-${process.pid}-${++seq}`;
-  const WT = `/tmp/wf-${TASK}`;
-  dirs.push(WT, `${WT}-logs`);
-  const base = mkdtempSync(join(tmpdir(), "rv-landconf-"));
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "rv-landconf-")));
   dirs.push(base);
   const main = join(base, "main");
+  // engine-task keeps the worktree beside the repo, outside /tmp: <repo>/../.wt/<repo-name>/<TASK>.
+  const WT = join(base, ".wt", "main", TASK);
   mkdirSync(main);
   git(main, "init", "-q", "-b", "master");
   // The engine's own `git rebase` runs outside this file's -c flags: it needs an identity and no signing from the repo itself.

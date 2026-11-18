@@ -1,6 +1,6 @@
 name: engine-task
 extends: batch-task
-description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree /tmp/wf-<ID>, branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review_route [exec: a round with no code change since the reviewed commit skips `review`: MERGE → land, FIXES or a code-changing rebase_fix → review_verify] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → cleanup → done (says whether Claude needs a restart)."
+description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree <repo>/../.wt/<repo-name>/<ID> (outside /tmp: a reboot keeps it; a surviving branch whose directory is gone is re-attached), branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review_route [exec: a round with no code change since the reviewed commit skips `review`: MERGE → land, FIXES or a code-changing rebase_fix → review_verify] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → cleanup → done (says whether Claude needs a restart)."
 
 # Fable trial (2026-11-18): batch-task's table with every opus row on fable, one effort step lower (high -> medium, xhigh -> high).
 # Judged by the curator after about 10 fable lands; reverting = deleting this block (the inherited table returns).
@@ -34,18 +34,27 @@ states:
     station: false
     type: exec
     # stdout is the worktree path alone (→ context.wt); messages go to stderr.
-    command: |-
+    command: &prepare_cmd |-
       case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'" >&2; exit 2;; esac
       main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)") || exit 2
       branch=eng/$(printf %s "$TASK" | sed 's/^[Ee][Nn][Gg]-//' | tr '[:upper:]' '[:lower:]')
-      wt=/tmp/wf-$TASK
+      root=$(dirname "$main")/.wt/$(basename "$main")
+      wt=$root/$TASK
       if [ -d "$wt" ]; then
         echo "kept $wt ($(git -C "$wt" symbolic-ref --short HEAD) @ $(git -C "$wt" rev-parse --short HEAD))" >&2
+      elif git -C "$main" show-ref --verify --quiet "refs/heads/$branch"; then
+        # The directory is gone (a reboot, a sweep) but the branch and its commit survive: attach the branch again, never a new one.
+        # `prune` drops only the registrations whose directory is missing; a branch still checked out in a live worktree is refused by `add`.
+        mkdir -p "$root" || exit 1
+        git -C "$main" worktree prune
+        git -C "$main" worktree add "$wt" "$branch" >&2 || exit 1
+        echo "re-attached $wt to $branch @ $(git -C "$wt" rev-parse --short HEAD)" >&2
       else
+        mkdir -p "$root" || exit 1
         git -C "$main" worktree add "$wt" -b "$branch" master >&2 || exit 1
         echo "made $wt on $branch @ $(git -C "$wt" rev-parse --short HEAD)" >&2
       fi
-      [ -e "$wt/node_modules" ] || ln -s "$main/node_modules" "$wt/node_modules" || exit 1
+      [ -e "$wt/node_modules" ] || [ -L "$wt/node_modules" ] || ln -s "$main/node_modules" "$wt/node_modules" || exit 1
       printf %s "$wt"
     env:
       TASK: "{{context.task}}"
@@ -156,7 +165,8 @@ states:
     prompt: |-
       The worktree for {{context.task}} was not made (exit {{exit_code}}):
       {{stderr}}
-      A stale branch `eng/…` without its directory /tmp/wf-{{context.task}}: decide (delete it only if it holds
+      The branch `eng/…` exists and is checked out in another live worktree (a branch whose directory is gone is re-attached by
+      project_prepare itself): decide (delete it only if it holds
       nothing unmerged) and `retry`. Otherwise `queue_mark({file: "{{context.queue_file}}", id: "{{context.task}}",
       to: "released"})` (back to `[ ]`, nothing was made) → `release`, or `to: "failed"` with the reason as `note`
       → `close`.
@@ -529,18 +539,42 @@ states:
 
   project_rebase:
     type: exec
-    cwd: "{{context.wt}}"
+    # No `cwd`: a wiped worktree must reach this script (a missing cwd fails the spawn), where it is told apart from a conflict.
     command: |-
+      if [ ! -d "$WT" ]; then
+        # Only a surviving branch is re-attached: a gone branch must never become a new empty one on the land route.
+        git show-ref --verify --quiet "refs/heads/$BRANCH" || { echo "worktree $WT is missing AND branch $BRANCH is gone: nothing to re-attach"; exit 7; }
+        echo "worktree $WT is missing (wiped, e.g. by a reboot): the branch $BRANCH survives, re-attach it"; exit 6
+      fi
+      cd "$WT" || exit 2
       git rebase master >&2 || { git rebase --abort; echo "rebase of $BRANCH onto master conflicts: aborted"; exit 1; }
       echo "rebased $BRANCH onto master $(git rev-parse --short master)"
     env:
       BRANCH: "{{context.branch}}"
+      WT: "{{context.wt}}"
     timeout: 120000
     on_timeout: land_failed
     cases:
       "0": project_gate_rebased
       "1": rebase_conflict
+      "6": rebase_reattach
     default: land_failed
+
+  # The worktree directory is gone while its branch survives: project_prepare's own command re-attaches it (the shared anchor),
+  # then the rebase runs again. Bounded: a worktree that stays missing leaves for land_failed, where the parent decides.
+  rebase_reattach:
+    station: false
+    type: exec
+    command: *prepare_cmd
+    env:
+      TASK: "{{context.task}}"
+    max_visits: 2
+    on_exhausted: land_failed
+    timeout: 120000
+    context_set:
+      wt: "{{stdout}}"
+    on_success: project_rebase
+    on_error: land_failed
 
   # A conflicting rebase is the one land failure whose answer is always `rebase_fix`: this exec state routes it there
   # with no parent and no driver choice, twice per task. Its own max_visits is the bound: the third conflict follows
@@ -563,6 +597,10 @@ states:
       The land of {{context.task}} failed (exit {{exit_code}}):
       {{stdout}}
       {{stderr}}
+      - The worktree is missing and could not be re-attached, never a `fix` round (a worker has no worktree to fix in): stdout
+        says "worktree … is missing" (exit 6, after two re-attach rounds), or exit 1 / 2 with git's `worktree add` refusal in the
+        stderr above and no "conflicts" or build text. Re-attach by hand (`git worktree add <wt> {{context.branch}}`) and `retry`,
+        or `stop` and report it. Exit 7 ("branch … is gone"): the branch is lost; `close`, nothing to land.
       - 3 (the main checkout is not on master, or has uncommitted changes) → never stash or reset someone's
         work: tell the user and `retry` once it is clean, or `stop`.
       - 1 with "rebase of … onto master conflicts" (master moved under a reviewed branch): the workflow already sent
@@ -606,10 +644,12 @@ states:
   cleanup:
     station: false
     type: exec
-    # Exact paths of this task only: the worktree /tmp/wf-<ID>, its -browsers directory and its branch.
+    # Exact paths of this task only: the worktree <repo>/../.wt/<repo-name>/<ID> (or a legacy /tmp/wf-<ID> of a session started
+    # before the move), its -browsers directory and its branch.
     command: |-
       case "$TASK" in ''|*[!A-Za-z0-9._-]*) echo "refused task id: '$TASK'"; exit 2;; esac
-      case "$WT" in /tmp/wf-"$TASK"|/private/tmp/wf-"$TASK") ;; *) echo "refused worktree path: '$WT'"; exit 2;; esac
+      main=$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)") || exit 2
+      case "$WT" in "$(dirname "$main")/.wt/$(basename "$main")/$TASK"|/tmp/wf-"$TASK"|/private/tmp/wf-"$TASK") ;; *) echo "refused worktree path: '$WT'"; exit 2;; esac
       if [ -d "$WT" ]; then
         dirty=$(git -C "$WT" status --porcelain)
         [ -z "$dirty" ] || { echo "kept $WT: not clean"; echo "$dirty" | head -5; exit 1; }

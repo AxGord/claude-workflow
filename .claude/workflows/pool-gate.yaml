@@ -1,4 +1,4 @@
-# The engine repo's own pool gate (tracked, so every /tmp/wf-* worktree has it): a worker's or a
+# The engine repo's own pool gate (tracked, so every engine-task worktree has it): a worker's or a
 # reviewer's own test run is leased like the workflow's exec states. A command already under
 # `wf-run` (the exec states, a hand-written lease) or with WF_THREADS in its environment is never
 # wrapped again. Vitest's own default is one worker per cpu minus one, so every rule hands the

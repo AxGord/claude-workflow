@@ -129,4 +129,31 @@ describe("the cleanup exec", () => {
       rmSync(main, { recursive: true, force: true });
     }
   });
+
+  it("admits the worktree beside the repo (<repo>/../.wt/<repo-name>/<TASK>) and refuses any other path", () => {
+    const task = `BROWSERS-NEWPATH-${process.pid}`;
+    const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cl-new-")));
+    const main = path.join(base, "main");
+    const wt = path.join(base, ".wt", "main", task);
+    try {
+      mkdirSync(main);
+      git(main, "init", "-q", "-b", "master");
+      git(main, "commit", "-q", "--allow-empty", "-m", "base");
+      git(main, "worktree", "add", "-q", wt, "-b", "eng/x", "master");
+      const run = (w: string) =>
+        spawnSync("sh", ["-c", cleanup], {
+          cwd: main,
+          encoding: "utf8",
+          env: { ...process.env, TASK: task, WT: w, BRANCH: "eng/x" },
+        });
+      const refused = run(path.join(base, "elsewhere", task));
+      expect(refused.status).toBe(2);
+      expect(refused.stdout).toContain("refused worktree path");
+      const r = run(wt);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(existsSync(wt)).toBe(false);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });
