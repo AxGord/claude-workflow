@@ -216,9 +216,9 @@ describe("buildCost", () => {
       staged("x", { tokens: { total: 3_000_000, worker: 2_000_000, review: 500_000 } }),
     );
     expect(stages.map(s => [s.stage, s.model, s.tokens, s.usd])).toEqual([
-      ["worker", "opus", 2_000_000, 60],
-      ["review", "opus", 500_000, 15],
-      ["-", "opus", 500_000, 15],
+      ["worker", "opus", 2_000_000, 16],
+      ["review", "opus", 500_000, 4],
+      ["-", "opus", 500_000, 4],
     ]);
   });
 
@@ -277,8 +277,8 @@ describe("buildCost", () => {
       ["m", true],
       ["u", false],
     ]);
-    expect(r.totals).toMatchObject({ landed: 2, measured_landed: 1, usd_per_landed: 30 });
-    expect(r.trend[13]).toMatchObject({ measured_landed: 1, usd_per_landed: 30 });
+    expect(r.totals).toMatchObject({ landed: 2, measured_landed: 1, usd_per_landed: 8 });
+    expect(r.trend[13]).toMatchObject({ measured_landed: 1, usd_per_landed: 8 });
   });
 
   it("no visits is unknown, land_failed is not a landing, a line without a task is no pipeline", () => {

@@ -256,20 +256,6 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
     .join("\n");
 }
 
-/**
- * The price table: blended USD per million tokens by model family (the ledger holds a token count per task or role,
- * not an input/output split, so a price is one estimate over the usual mix: 75% input, 25% output, which is
- * $30 for Opus at $15/$75 and $16 for Fable 5.2 at $8/$40). The one owner of a price: the Cost tab
- * reads it here. Edit a price and `PRICES_UPDATED` together.
- */
-export const PRICES_USD_PER_MTOK: Readonly<Record<string, number>> = {
-  opus: 30,
-  sonnet: 6,
-  haiku: 2,
-  fable: 16,
-};
-export const PRICES_UPDATED = "2026-11-18";
-
 /** USD per million tokens, by model family, for each kind of usage a transcript turn reports. */
 export interface TurnRates {
   readonly input: number;
@@ -307,6 +293,21 @@ export const TURN_RATES_USD_PER_MTOK: Readonly<Record<string, TurnRates>> = {
   haiku: { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
   fable: { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
 };
+
+/**
+ * The price table: blended USD per million tokens by model family (the ledger holds a token count per task or role,
+ * not an input/output split, so a price is one estimate over the usual mix: 75% input, 25% output). It is derived
+ * from the bare family keys of `TURN_RATES_USD_PER_MTOK`, the one owner of a rate, so the two cannot drift
+ * (Opus 5.5 at $4/$20 blends to $8, Fable 5.2 at $8/$40 to $16). The Cost tab reads it here. Edit a rate and
+ * `PRICES_UPDATED` together.
+ */
+export const PRICES_USD_PER_MTOK: Readonly<Record<string, number>> = Object.fromEntries(
+  ["opus", "sonnet", "haiku", "fable"].map(f => [
+    f,
+    0.75 * TURN_RATES_USD_PER_MTOK[f].input + 0.25 * TURN_RATES_USD_PER_MTOK[f].output,
+  ]),
+);
+export const PRICES_UPDATED = "2026-11-18";
 
 /** The USD of one transcript turn priced by its own model; undefined when the model has no rate. */
 export function turnUsd(
@@ -515,7 +516,7 @@ export function buildCost(entries: readonly LedgerEntry[], from: string, to: str
       usd_per_mtok: PRICES_USD_PER_MTOK,
       updated: PRICES_UPDATED,
       source:
-        "src/calibration.ts PRICES_USD_PER_MTOK: blended USD per million tokens by model family",
+        "src/calibration.ts PRICES_USD_PER_MTOK: blended USD per million tokens by model family, 75% input / 25% output of TURN_RATES_USD_PER_MTOK",
     },
     tasks: inRange,
     totals: { ...totals, usd_per_landed: perLanded(totals.usd, totals.measured_landed) },

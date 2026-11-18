@@ -282,7 +282,7 @@ describe("GET /api/cost", () => {
       prices: { updated: string };
       trend: unknown[];
     };
-    expect(body.totals).toMatchObject({ landed: 1, usd: 6 });
+    expect(body.totals).toMatchObject({ landed: 1, usd: 4 });
     expect(body.prices.updated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(body.trend).toHaveLength(14);
     expect((await fetch(`${base}/api/cost?from=2026-11-09&to=2026-11-08`)).status).toBe(400);
