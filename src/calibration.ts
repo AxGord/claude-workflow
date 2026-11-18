@@ -292,17 +292,18 @@ export const TURN_RATES_USD_PER_MTOK: Readonly<Record<string, TurnRates>> = {
   "claude-opus-4-5": { input: 5, output: 25, cache_read: 0.5, cache_write: 6.25 },
   "claude-opus-4-1": { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 },
   "claude-opus-4-2": { input: 15, output: 75, cache_read: 1.5, cache_write: 18.75 },
-  "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   "claude-sonnet-5": { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
   "claude-sonnet-4": { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 },
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
   "claude-haiku-4-5": { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 },
+  "claude-fable-5-2": { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
   "claude-fable-5-1": { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
   "claude-fable-5": { input: 10, output: 50, cache_read: 1, cache_write: 12.5 },
   opus: { input: 4, output: 20, cache_read: 0.2, cache_write: 5 },
-  sonnet: { input: 2, output: 10, cache_read: 0.2, cache_write: 2.5 },
+  sonnet: { input: 2, output: 10, cache_read: 0.1, cache_write: 2.5 },
   haiku: { input: 0.1, output: 0.5, cache_read: 0.01, cache_write: 0.125 },
-  fable: { input: 10, output: 50, cache_read: 0.25, cache_write: 12.5 },
+  fable: { input: 8, output: 40, cache_read: 0.2, cache_write: 10 },
 };
 
 /** The USD of one transcript turn priced by its own model; undefined when the model has no rate. */

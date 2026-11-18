@@ -58,9 +58,9 @@ describe("turnUsd model-id rates", () => {
 
 describe("turnUsd fable cache reads", () => {
   const read = { input: 0, output: 0, cache_read: 1e6, cache_write_5m: 0, cache_write_1h: 0 };
-  it("claude-fable-5-1 reads at $0.25, claude-fable-5 at $1, the family at $0.25", () => {
+  it("claude-fable-5-1 reads at $0.25, claude-fable-5 at $1, the family (5.2) at $0.20", () => {
     expect(turnUsd("claude-fable-5-1", read)).toBeCloseTo(0.25, 5);
     expect(turnUsd("claude-fable-5", read)).toBeCloseTo(1, 5);
-    expect(turnUsd("claude-fable-9", read)).toBeCloseTo(0.25, 5);
+    expect(turnUsd("claude-fable-9", read)).toBeCloseTo(0.2, 5);
   });
 });

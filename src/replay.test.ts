@@ -519,8 +519,13 @@ describe("scripts/export-replay.mjs", () => {
       ],
       {
         cwd: ROOT,
-        // the default ledger and event log are the state directory's: never the real one
-        env: { ...process.env, WORKFLOW_DIR: path.join(dir, "global"), STATE_DIR: dir },
+        // the default ledger, event log and pool log are the state directory's and the pool dir's: never the real ones
+        env: {
+          ...process.env,
+          WORKFLOW_DIR: path.join(dir, "global"),
+          STATE_DIR: dir,
+          WF_POOL_DIR: path.join(dir, "pool"),
+        },
         encoding: "utf8",
       },
     );

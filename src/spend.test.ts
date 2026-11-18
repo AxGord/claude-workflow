@@ -73,8 +73,8 @@ describe("measureSpend", () => {
       ],
     });
     const s = measureSpend([sess("r", { agent_id: "a1" })], W[0], W[1], root)!;
-    // sonnet 5.5: 2 + 10 + 0.2 + 2.5 = 14.7; opus 5.5 output 20
-    expect(s.usd).toBeCloseTo(34.7, 6);
+    // sonnet 5.5: 2 + 10 + 0.1 + 2.5 = 14.6; opus 5.5 output 20
+    expect(s.usd).toBeCloseTo(34.6, 6);
     expect(s.agents).toBe(1);
     expect(s.output).toBe(2_000_000);
   });
@@ -153,8 +153,8 @@ describe("measureSpend", () => {
     const respawned = sess("r", { agent_id: "a2", linked_agents: ["a1", "a2"] });
     const s = measureSpend([respawned], W[0], W[1], root)!;
     // an independent sum over the same files, from the raw token counts and the rate list:
-    // sonnet 5.5 $2 in / $10 out / $0.2 read / $2.5 write; opus 5.5 $20 out
-    const independent = 1 * 2 + 1 * 10 + 1 * 0.2 + 1 * 2.5 + 1 * 10 + 2 * 20;
+    // sonnet 5.5 $2 in / $10 out / $0.1 read / $2.5 write; opus 5.5 $20 out
+    const independent = 1 * 2 + 1 * 10 + 1 * 0.1 + 1 * 2.5 + 1 * 10 + 2 * 20;
     expect(s.usd).toBeCloseTo(independent, 6);
     expect(s.agents).toBe(2);
     expect(s.unnamed).toBeUndefined();
