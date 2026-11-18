@@ -2,26 +2,26 @@ name: engine-task
 extends: batch-task
 description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree /tmp/wf-<ID>, branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review_route [exec: a round with no code change since the reviewed commit skips `review`: MERGE → land, FIXES or a code-changing rebase_fix → review_verify] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → cleanup → done (says whether Claude needs a restart)."
 
-# Fable trial (2026-11-18): batch-task's table with every opus row on fable at the same effort.
+# Fable trial (2026-11-18): batch-task's table with every opus row on fable, one effort step lower (high -> medium, xhigh -> high).
 # Judged by the curator after about 10 fable lands; reverting = deleting this block (the inherited table returns).
 model_table:
   stages:
     plan:
       - { upto: 3, model: sonnet, effort: high }
-      - { upto: 8, model: fable, effort: high }
-      - { upto: 10, model: fable, effort: xhigh }
+      - { upto: 8, model: fable, effort: medium }
+      - { upto: 10, model: fable, effort: high }
     execute:
       - { upto: 6, model: sonnet, effort: high }
-      - { upto: 8, model: fable, effort: high }
-      - { upto: 10, model: fable, effort: xhigh }
+      - { upto: 8, model: fable, effort: medium }
+      - { upto: 10, model: fable, effort: high }
     review:
-      - { upto: 8, model: fable, effort: high }
-      - { upto: 10, model: fable, effort: xhigh }
+      - { upto: 8, model: fable, effort: medium }
+      - { upto: 10, model: fable, effort: high }
     review_verify:
       - { upto: 10, model: sonnet, effort: high }
     fix:
       - { upto: 6, model: sonnet, effort: high }
-      - { upto: 10, model: fable, effort: high }
+      - { upto: 10, model: fable, effort: medium }
   escalate:
     work: 3
   review:
@@ -384,7 +384,7 @@ states:
       diff does not touch is an open item for a follow-up line, not a FIXES item. Run every command in the foreground.
       Last line MERGE or FIXES: and a numbered list." Then context_set `reviewed_sha` = HEAD of {{context.wt}} and handle
       its answer as below. (A reviewer that no longer answers → spawn a fresh one as on the first entry.)
-      First entry — spawn ONE reviewer: Agent, model fable, effort high, prompt:
+      First entry — spawn ONE reviewer: Agent, model fable, effort medium, prompt:
 
         Review engine slice {{context.task}} READ-ONLY: change no file, make no commit, call no workflow tool
         (mcp__plugin_workflow_wf__*). The brief is its line in {{context.queue_file}}; the change is HEAD of
