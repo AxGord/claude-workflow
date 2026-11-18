@@ -173,12 +173,16 @@ E) Write precise description for auto-invocation
 
 ### 5. ENRICH skill from observed error
 
-Triggered by reflection when Claude makes a verifiable mistake.
+Triggered by reflection when Claude makes a verifiable mistake or a user-corrected process pattern (state the rule and the tell; no code verification needed).
 
 1. Identify the error and the skill it belongs to
 2. Research the correct answer: code verification → web docs → web search
-3. Verify the correct answer by running code (if possible)
-4. Add ONLY the verified correction to the existing skill
+3. Verify the correct answer by running code (if possible). A factual gotcha
+   keeps this verified path unchanged; a user-corrected process pattern
+   ("read the current spec before blaming the backend") is a rule and its tell,
+   not a fact, and has nothing to run
+4. Add ONLY the verified correction to the existing skill (a process pattern:
+   the rule and the tell)
 5. Format: show the wrong thing and the right thing with exact values
 6. ABSTRACT the incident before writing: a universal/lang skill must carry
    NO project nouns or domain story details — rule + tell stay precise,

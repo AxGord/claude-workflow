@@ -31,6 +31,7 @@ states:
       | Factual error, gotcha | Skill (ENRICH) | "Fib(47) overflows Int32" |
       | Missing domain knowledge | New skill (CREATE) | No skill for gRPC |
       | Process/approach pattern | Skill (ENRICH) | "Always verify packages" |
+      | The user corrected my approach (not a project fact) | Skill (ENRICH) | "Read the current API spec before blaming the backend" |
       | Project-specific quirk | MEMORY.md | "Custom ORM, not EF" |
       | Project build/config | MEMORY.md | "Needs --legacy-peer-deps" |
       | Workflow friction, concrete fix | Workflow YAML (EVOLVE) | "state X always needs a manual build step → exec state" |
@@ -54,9 +55,29 @@ states:
     transitions:
       enrich_skill: load_skill_manager
       create_skill: load_skill_manager
-      update_memory: action
+      update_memory: home_check
       evolve_workflow: load_workflow_authoring
       suggest_improvements: suggest_improvements
+
+  home_check:
+    prompt: |
+      Before this lesson goes to project memory, one question. Answer it in
+      one line, no more:
+
+      Name the bundled skill this lesson would have prevented in a DIFFERENT
+      project, or `none`.
+
+      A lesson a user corrected in how you work (a check you skipped, an order
+      you got wrong) is usually a skill's rule even when the project it
+      happened in is not: memory holds only what is true of THIS project.
+
+      Choose transition:
+      - `skill` → a bundled skill would have prevented it elsewhere (ENRICH
+        that skill, as in `enrich_skill`)
+      - `none` → no skill fits: it is this project's own fact, write MEMORY.md
+    transitions:
+      skill: load_skill_manager
+      none: action
 
   load_skill_manager:
     skills:
@@ -138,11 +159,18 @@ states:
 
       Only suggest changes you're confident about — no speculative ideas.
 
-      Choose transition:
+      Then END YOUR TURN with the list and call no transition: the fix awaits
+      the user's answer, and a `done` in the same turn would close the
+      reflection before `evolve` can be chosen. Call the transition on the
+      user's next message. If there is no interactive user (a headless or
+      sub-agent run), do not wait: the list stays in your report, transition
+      `done`.
+
+      Choose transition (after the answer):
       - `evolve` → the user approved a workflow suggestion (or asked for the
         change) → apply it as a YAML diff
       - `more` → still have lessons to classify
-      - `done` → finished
+      - `done` → the user declined, or nothing is left to do
     transitions:
       evolve: load_workflow_authoring
       more: classify
