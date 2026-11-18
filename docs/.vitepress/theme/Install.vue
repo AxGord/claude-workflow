@@ -1,14 +1,24 @@
 <script setup lang="ts">
 // The install steps, right under the demo scene and above the features: the first thing a reader meets after seeing
 // the product. A component in the hero's after-slot (the page's markdown comes below the features).
+// The commands sit in the markup VitePress renders for a markdown code block (div.language-*, button.copy, span.lang,
+// pre), inside a `.vp-doc` wrapper that scopes the theme's code-block styles: the copy button's look, hover and focus
+// behaviour and its "Copied" feedback are the docs pages' own, and the click handler is the theme's (it copies the
+// pre's text), so nothing here styles or scripts the button.
 import { withBase } from "vitepress";
 </script>
 
 <template>
   <section class="install" aria-labelledby="install">
     <h2 id="install">Install</h2>
-    <pre><code>/plugin marketplace add https://github.com/anthropics/claude-plugins-community
-/plugin install workflow</code></pre>
+    <div class="vp-doc install-code">
+      <div class="language-text vp-adaptive-theme">
+        <button title="Copy Code" class="copy"></button>
+        <span class="lang">text</span>
+        <pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>/plugin marketplace add https://github.com/anthropics/claude-plugins-community</span></span>
+<span class="line"><span>/plugin install workflow</span></span></code></pre>
+      </div>
+    </div>
     <p>
       Then start a session: the plugin provisions its skills on first run.
       <a :href="withBase('/getting-started')">Get started</a> walks through the first workflow.
@@ -35,13 +45,10 @@ import { withBase } from "vitepress";
   font-weight: 600;
   letter-spacing: -0.02em;
 }
-.install pre {
+/* the theme gives a code block a 16px vertical margin, and -24px sideways on a phone: this block keeps the hero's edges */
+.install-code :deep(div[class*="language-"]) {
   margin: 0 0 12px;
-  padding: 16px 20px;
-  overflow-x: auto;
   border-radius: 8px;
-  background: var(--vp-code-block-bg);
-  font: 14px/1.7 var(--vp-font-family-mono);
 }
 .install p {
   margin: 0;
