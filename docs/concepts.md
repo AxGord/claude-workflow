@@ -71,60 +71,57 @@ The `coding` workflow, drawn by the dashboard's own renderer (click a state to r
 
 ## Bundled Skills
 
-Skills are reusable knowledge modules loaded by workflows via `Skill()`. The SessionStart hook copies them to `~/.claude/skills/` and keeps them current. Edit your local copy to change one: a copy you edited is never overwritten ([how updates and removal work](#updating-and-removing-the-skills)).
+Skills are reusable knowledge modules loaded by workflows via `Skill()`. The plugin ships 29 of them in two sets, and only the first is copied to your machine:
 
-**Methodology**
+- **The default set (14)**: universal, stack-free skills. The SessionStart hook copies them to `~/.claude/skills/` and keeps them current. Edit your local copy to change one: a copy you edited is never overwritten ([how updates and removal work](#updating-and-removing-the-skills)).
+- **The stack pack (15)**: skills for a language, a domain or a tool. They ship in the same plugin, in `templates/skills-stack/`, which the hook never copies from. Install one with `wf-skills add <name>…` (or all of them with `wf-skills add --all-stack`); from then on it is recorded in the manifest and updated and removed like a default skill. `coding-skill-selector` offers one when the task needs it and it is not installed ([Offers](#stack-skills-are-offered-never-installed-silently)).
+
+### The default set
 
 | Skill | Description |
 |-------|-------------|
+| `coding-skill-selector` | Select and load coding skills by file extensions and domains (a template: add your own mappings) |
 | `preferences` | Template for personal coding preferences (fill in your own) |
 | `architecture` | Simplicity-first architecture decisions |
 | `task-delegation` | When and how to delegate to subagents |
-| `debugging` | Debugging meta-patterns — what to do when fixes don't stick |
-| `coding-skill-selector` | Select and load coding skills by file extensions and domains |
+| `debugging` | Debugging meta-patterns: what to do when fixes don't stick |
 | `wf-yaml-authoring` | Reference for authoring workflow YAML: state types, skill gates, exec/fetch action states (not Claude Code's own `workflow-authoring`, which covers its native JS workflows) |
+| `browser-verify` | Browser-automation verification gotchas: stale captures, caches, headless limits |
+| `ci-github-actions` | GitHub Actions workflow gotchas |
+| `claude-code-config` | Claude Code configuration gotchas |
+| `mcp-setup` | MCP server setup and troubleshooting |
+| `debug-bridge-scaffold` | Meta-skill for creating debug bridges for new technologies |
+| `skill-manager` | Create, install, update, optimize skills |
+| `web-reading` | Fetch web content via subagents |
+| `cleanup` | Clean .claude directory data |
 
-**Languages**
+### The stack pack
 
 | Skill | Description |
 |-------|-------------|
 | `lang-haxe` | Haxe language gotchas (incl. macros, null safety, hxcpp) |
 | `lang-python` | Python language gotchas |
 | `lang-as3` | AS3 / AIR 51 language gotchas |
-
-**Domains**
-
-| Skill | Description |
-|-------|-------------|
+| `hxq` | When and how to use hxq for structural Haxe navigation |
+| `hxq-write` | The write side of hxq: mutation ops, patch, new, fmt, lint --fix |
 | `domain-yolo` | YOLO object detection model selection |
 | `domain-pixi` | Pixi.js v8 masking and graphics gotchas |
 | `domain-reid` | Person re-identification ML gotchas |
 | `domain-gamedev` | Game dev precision and physics gotchas |
 | `domain-pony` | Pony (Haxe cross-library) gotchas |
-| `domain-ui` | UI component architecture — ownership, state, events |
-
-**Platforms & Tooling**
-
-| Skill | Description |
-|-------|-------------|
+| `domain-ui` | UI component architecture: ownership, state, events |
 | `target-openfl-native` | OpenFL/hxcpp native target gotchas |
 | `build-cmake` | CMake build system gotchas |
-| `ci-github-actions` | GitHub Actions workflow gotchas |
 | `aws-lambda` | AWS Lambda .NET deployment gotchas |
-| `mcp-setup` | MCP server setup and troubleshooting |
-| `claude-code-config` | Claude Code configuration gotchas |
-| `hxq` | When and how to use hxq for structural Haxe navigation |
-| `browser-verify` | Browser-automation verification gotchas — stale captures, caches, headless limits |
-| `debug-bridge-scaffold` | Meta-skill for creating debug bridges for new technologies |
 | `ide-zed` | Zed IDE integration rules |
 
-**Utility**
+A workflow's `skills:` group names only default skills, or a stack skill as optional (`?name`: the gate says "load if available, skip if not found"), so a missing stack skill never blocks a gate.
 
-| Skill | Description |
-|-------|-------------|
-| `web-reading` | Fetch web content via subagents |
-| `skill-manager` | Create, install, update, optimize skills |
-| `cleanup` | Clean .claude directory data |
+### Stack skills are offered, never installed silently
+
+When `coding-skill-selector` maps a file extension or a domain to a stack skill that is shipped but not installed, it tells you once, with the exact command (`wf-skills add <name>`). You run it, or say yes and the agent does. A skill you deleted is not offered again.
+
+The state comes from `wf-skills list --json`: `available` is an offer, `deleted` is none. The SessionStart hook keeps a link to the command at `$STATE_DIR/skills/wf-skills` so an agent can run it.
 
 ### Updating and removing the skills
 
@@ -132,8 +129,9 @@ The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it
 
 - A copy whose files all equal what an engine release shipped is **unedited**, and is replaced when this release ships another version (files the new version drops go too).
 - A copy you edited is left alone and named once in the hook's output, with `wf-skills diff <name>`. It is named again only when a later release ships yet another version.
-- A skill you deleted stays deleted and is recorded as such; `wf-skills update <name>` brings it back.
-- The `lang-*` skills belong to `coding-skill-selector`: they are copied only while it is installed, and one you deleted stays deleted.
+- A skill you deleted stays deleted and is recorded as such; `wf-skills update <name>` or `wf-skills add <name>` brings it back.
+- A stack skill is never copied by a start. Once installed (by `wf-skills add`, or earlier by an older release) it is in the manifest, and updated, left alone when edited, and removed like any other.
+- Nothing is removed by a release that moves a skill from the default set into the stack pack: an installed copy stays and keeps being updated.
 - A skill directory that is a link is yours and never touched.
 - Copies made before the manifest existed are adopted: one equal to any version the repo ever shipped (`templates/skills-history.txt`, rebuilt by `npm run skills:history`) counts as unedited, any other as edited.
 - A plugin root that is not newer than the one that wrote a copy never takes it back to an older text (the cache and a marketplace directory can both hold the plugin).
@@ -142,7 +140,8 @@ The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it
 
 | Command | What it does |
 |---------|--------------|
-| `wf-skills list [--json]` | Each bundled skill: shipped, installed, and `current`, `outdated`, `edited`, `deleted` or not installed; changes nothing |
+| `wf-skills list [--json]` | Each bundled skill: shipped, installed, and `current`, `outdated`, `edited`, `deleted`, not installed or (a stack skill) `available`; changes nothing |
+| `wf-skills add <name>…` / `add --all-stack` | Install shipped skills by name (how a stack skill gets in); a skill already there is left as it is |
 | `wf-skills diff <name>` | Your copy against the version this release ships |
 | `wf-skills update <name>…` | Install the shipped version; an edited copy is saved to `$STATE_DIR/skill-backups` first |
 | `wf-skills remove [--state] [--dry-run]` | Remove every unedited engine copy and the manifest; see below |

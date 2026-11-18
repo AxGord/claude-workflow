@@ -77,4 +77,22 @@ Load coding skills for the languages/domains THIS TASK will touch.
 
 Call `Skill(name)` for EVERY matched skill.
 
+**Stack skills — offer, never install silently.** The skills for languages,
+domains and tools above (`lang-*`, `domain-*`, `hxq`, `hxq-write`,
+`target-openfl-native`, `build-cmake`, `aws-lambda`, `ide-zed`) ship with the
+workflow plugin but are NOT copied to the machine until asked for. When a rule
+above maps this task to one of them and it is not installed (the `Skill` call
+finds nothing), look at the state in `~/.claude/workflow-state/skills/wf-skills
+list --json` (`$STATE_DIR/skills/wf-skills` when STATE_DIR is set; the link is
+rewritten at every session start):
+- `"state": "available"` → tell the user ONCE in this conversation, in one
+  line: "Skill `<name>` is shipped but not installed; install it with
+  `wf-skills add <name>`" (give the full path of that link as the command), and
+  carry on without it. On a yes, run the command yourself and load the skill;
+  if `Skill` still does not find it, it loads from the next session.
+- `"state": "deleted"` → the user removed it: say nothing, never offer it again.
+- `"state"` other than those, or the name is not in the list → no offer; the
+  gap check below applies.
+Never run `wf-skills add` without the user's yes.
+
 **Gap check**: If files involve a language/domain/tool with no matching skill above, ask the user: "No skill for [X] — proceed without, or create one first?"

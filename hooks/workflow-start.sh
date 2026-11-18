@@ -5,7 +5,8 @@
 # --- 0. The bundled skills (templates/skills → ~/.claude/skills), provisioned by `wf-skills sync` ---
 # (src/skills.ts): a manifest in $STATE_DIR records what was copied; an UNEDITED copy is replaced when this
 # release ships a newer version, an edited one is left alone and named once (a note printed at the end of
-# this hook's output), a skill the user deleted stays deleted, and lang-* skills follow coding-skill-selector.
+# this hook's output), a skill the user deleted stays deleted. Only the DEFAULT set (templates/skills) is
+# copied: the stack pack (templates/skills-stack) is installed by `wf-skills add <name>`, never here.
 # Without node or the build the old rule applies: copy a skill whose directory is missing, nothing else.
 SKILLS_SRC="${CLAUDE_PLUGIN_ROOT}/templates/skills"
 SKILLS_DST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
@@ -32,12 +33,9 @@ if [ -f "$SKILLS_CLI" ] && command -v node >/dev/null 2>&1; then
   SKILLS_NOTE=$(STATE_DIR="$STATE_DIR" node "$SKILLS_CLI" sync --quiet 2>/dev/null)
 elif [ -d "$SKILLS_SRC" ]; then
   mkdir -p "$SKILLS_DST"
-  COPY_LANG=false
-  [ ! -d "$SKILLS_DST/coding-skill-selector" ] && COPY_LANG=true
   for skill_dir in "$SKILLS_SRC"/*/; do
     [ -d "$skill_dir" ] || continue
     skill_name=$(basename "$skill_dir")
-    if [ "$COPY_LANG" = false ] && [[ "$skill_name" == lang-* ]]; then continue; fi
     if [ ! -d "$SKILLS_DST/$skill_name" ]; then
       cp -r "$skill_dir" "$SKILLS_DST/$skill_name"
     fi
@@ -46,7 +44,16 @@ fi
 
 ZED_SUFFIX=""
 if [[ -n "$ZED_ENVIRONMENT" ]]; then
-  ZED_SUFFIX=" Then load skill ide-zed (Skill tool)."
+  # ide-zed is a stack skill: offered (once per session start) only while it is available; a deleted one is not offered again.
+  ZED_STATE=""
+  if [ -f "$SKILLS_CLI" ] && command -v node >/dev/null 2>&1; then
+    ZED_STATE=$(STATE_DIR="$STATE_DIR" node "$SKILLS_CLI" list --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(JSON.parse(s).find(r=>r.name==="ide-zed")?.state??"")}catch{}})' 2>/dev/null)
+  fi
+  case "$ZED_STATE" in
+    deleted) ;;
+    available) ZED_SUFFIX=" ide-zed is a stack skill, not installed: offer once \`${CLAUDE_PLUGIN_ROOT}/scripts/wf-skills add ide-zed\`, then load it (Skill tool) if the user agrees." ;;
+    *) ZED_SUFFIX=" Then load skill ide-zed (Skill tool)." ;;
+  esac
 fi
 
 STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"

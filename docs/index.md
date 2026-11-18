@@ -26,6 +26,10 @@ features:
     details: A queue file, a picker that admits lines by priority, overlap and dependencies, and a driver per task, with the model and effort chosen by difficulty.
     link: /queue
     linkText: Task queue
+  - title: A universal default, a stack pack on request
+    details: A new machine gets 14 universal skills; the 15 for a language, domain or tool (Haxe, Python, Pixi, CMake...) ship in the same plugin and are installed by name, offered when the task needs one.
+    link: /concepts#bundled-skills
+    linkText: Bundled skills
   - title: See what runs
     details: A live map of lanes and branches in the web dashboard, a plan pane in the terminal, and a status line.
     link: /dashboard

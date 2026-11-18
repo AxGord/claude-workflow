@@ -7,7 +7,9 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  CLI_LINK,
   MANIFEST_FILE,
+  addSkills,
   editedNote,
   hashTree,
   loadHistory,
@@ -16,6 +18,7 @@ import {
   readManifest,
   removeSkills,
   shippedSkills,
+  stackSkillNames,
   syncSkills,
   treeDigest,
   updateSkill,
@@ -44,8 +47,12 @@ describe("bundled skills: manifest, update, adoption, removal", () => {
     }
   }
 
-  /** A scratch plugin root shipping `skills` (name → files) as `version`, and a scratch HOME's skills and state dirs. */
-  function setup(skills: Record<string, Files>, version = "1.0.0") {
+  /** A scratch plugin root shipping `skills` (name → files) as `version` (and `stack`: the pack), and a scratch HOME's skills and state dirs. */
+  function setup(
+    skills: Record<string, Files>,
+    version = "1.0.0",
+    stack: Record<string, Files> = {},
+  ) {
     const base = tmp();
     const ctx: SkillsContext = {
       root: path.join(base, "plugin"),
@@ -53,11 +60,22 @@ describe("bundled skills: manifest, update, adoption, removal", () => {
       stateDir: path.join(base, "state"),
       version,
     };
-    const ship = (all: Record<string, Files>, v?: string): SkillsContext => {
-      fs.rmSync(path.join(ctx.root, "templates", "skills"), { recursive: true, force: true });
-      fs.mkdirSync(path.join(ctx.root, "templates", "skills"), { recursive: true });
-      for (const [name, files] of Object.entries(all))
-        put(path.join(ctx.root, "templates", "skills", name), files);
+    let pack = stack;
+    const ship = (
+      all: Record<string, Files>,
+      v?: string,
+      nextStack?: Record<string, Files>,
+    ): SkillsContext => {
+      pack = nextStack ?? pack;
+      for (const [set, skillsOf] of [
+        ["skills", all],
+        ["skills-stack", pack],
+      ] as const) {
+        fs.rmSync(path.join(ctx.root, "templates", set), { recursive: true, force: true });
+        fs.mkdirSync(path.join(ctx.root, "templates", set), { recursive: true });
+        for (const [name, files] of Object.entries(skillsOf))
+          put(path.join(ctx.root, "templates", set, name), files);
+      }
       return { ...ctx, version: v ?? ctx.version };
     };
     /** Record a version of a skill as shipped once (the history table). */
@@ -153,43 +171,119 @@ describe("bundled skills: manifest, update, adoption, removal", () => {
     expect(readManifest(ctx.stateDir)!.deleted).toEqual([]);
   });
 
-  it("lang-* skills are copied only with coding-skill-selector and a deleted one stays deleted", () => {
-    const skills = {
-      "coding-skill-selector": { "SKILL.md": "sel\n" },
-      "lang-x": { "SKILL.md": "x\n" },
-      "lang-y": { "SKILL.md": "y\n" },
-    };
-    const { ctx } = setup(skills);
-    syncSkills(ctx);
-    expect(has(ctx, "lang-x") && has(ctx, "lang-y")).toBe(true);
-    fs.rmSync(path.join(ctx.skillsDir, "lang-x"), { recursive: true });
-    syncSkills(ctx);
-    expect(has(ctx, "lang-x")).toBe(false);
-    expect(has(ctx, "lang-y")).toBe(true);
-    // the selector deleted too: nothing of the family comes back
-    fs.rmSync(path.join(ctx.skillsDir, "coding-skill-selector"), { recursive: true });
-    fs.rmSync(path.join(ctx.skillsDir, "lang-y"), { recursive: true });
-    syncSkills(ctx);
-    expect([...fs.readdirSync(ctx.skillsDir)]).toEqual([]);
-  });
+  describe("the stack pack", () => {
+    const STACK = { "lang-x": { "SKILL.md": "x v1\n" }, "domain-y": { "SKILL.md": "y v1\n" } };
 
-  it("a lang-* skill is not installed on a machine without the selector, and a user who has it gets a lang skill the release adds", () => {
-    const { ctx, ship } = setup({ "lang-x": { "SKILL.md": "x\n" } });
-    syncSkills(ctx);
-    expect(has(ctx, "lang-x")).toBe(false);
-    const withSelector = ship({
-      "coding-skill-selector": { "SKILL.md": "sel\n" },
-      "lang-x": { "SKILL.md": "x\n" },
+    it("a fresh start copies the default set only: a stack skill is available, recorded nowhere, offered by list", () => {
+      const { ctx } = setup(V1, "1.0.0", STACK);
+      const r = syncSkills(ctx)!;
+      expect(r.installed).toEqual(["a", "b"]);
+      expect(fs.readdirSync(ctx.skillsDir).sort()).toEqual(["a", "b"]);
+      expect(Object.keys(readManifest(ctx.stateDir)!.skills).sort()).toEqual(["a", "b"]);
+      const rows = planSkills(ctx, readManifest(ctx.stateDir));
+      expect(rows.filter(r => r.pack).map(r => `${r.name}:${r.state}`)).toEqual([
+        "domain-y:available",
+        "lang-x:available",
+      ]);
+      expect(syncSkills(ctx)!.installed).toEqual([]);
+      expect(has(ctx, "lang-x")).toBe(false);
     });
-    syncSkills(withSelector);
-    expect(has(withSelector, "lang-x")).toBe(true);
-    const more = ship({
-      "coding-skill-selector": { "SKILL.md": "sel\n" },
-      "lang-x": { "SKILL.md": "x\n" },
-      "lang-z": { "SKILL.md": "z\n" },
+
+    it("add installs a stack skill, the manifest knows it, and it is then updated and removed like a default skill", () => {
+      const { ctx, ship } = setup(V1, "1.0.0", STACK);
+      syncSkills(ctx);
+      expect(addSkills(ctx, ["lang-x"])).toEqual({ installed: ["lang-x"], present: [] });
+      expect(read(ctx, "lang-x")).toBe("x v1\n");
+      const m = readManifest(ctx.stateDir)!;
+      expect(m.skills["lang-x"].files).toEqual(hashTree(path.join(ctx.skillsDir, "lang-x")));
+      expect(has(ctx, "domain-y")).toBe(false);
+      const next = ship(V1, "1.1.0", { ...STACK, "lang-x": { "SKILL.md": "x v2\n" } });
+      expect(syncSkills(next)!.updated).toEqual(["lang-x"]);
+      expect(read(ctx, "lang-x")).toBe("x v2\n");
+      expect(planRemove(next).remove).toContain("lang-x");
+      removeSkills(next);
+      expect(fs.readdirSync(ctx.skillsDir)).toEqual([]);
     });
-    syncSkills(more);
-    expect(has(more, "lang-z")).toBe(true);
+
+    it("add --all-stack installs every stack skill and no default one; a skill already there is reported, not rewritten", () => {
+      const { ctx } = setup(V1, "1.0.0", STACK);
+      put(path.join(ctx.skillsDir, "lang-x"), { "SKILL.md": "mine\n" });
+      const r = addSkills(ctx, [], true);
+      expect(r).toEqual({ installed: ["domain-y"], present: ["lang-x"] });
+      expect(read(ctx, "lang-x")).toBe("mine\n");
+      expect(has(ctx, "a")).toBe(false);
+      expect([...stackSkillNames(ctx.root)].sort()).toEqual(["domain-y", "lang-x"]);
+    });
+
+    it("add refuses a name nothing ships, and installs nothing then", () => {
+      const { ctx } = setup(V1, "1.0.0", STACK);
+      expect(() => addSkills(ctx, ["lang-x", "nope"])).toThrow(/no bundled skill named nope/);
+      expect(has(ctx, "lang-x")).toBe(false);
+    });
+
+    it("an existing install keeps its stack skills: an unedited one is adopted and updated, an edited one stays", () => {
+      // what a user of the release before the split has: every skill copied, the stack ones among them
+      const { ctx, ship, remember } = setup({
+        ...V1,
+        "lang-x": STACK["lang-x"],
+        "domain-y": STACK["domain-y"],
+      });
+      syncSkills(ctx);
+      fs.writeFileSync(path.join(ctx.skillsDir, "domain-y", "SKILL.md"), "mine\n");
+      remember("lang-x", STACK["lang-x"]);
+      // the release now ships them in the pack, lang-x with new text
+      const next = ship(V1, "1.1.0", {
+        "lang-x": { "SKILL.md": "x v2\n" },
+        "domain-y": STACK["domain-y"],
+      });
+      const r = syncSkills(next)!;
+      expect(r.updated).toEqual(["lang-x"]);
+      expect(r.deleted).toEqual([]);
+      expect(read(ctx, "lang-x")).toBe("x v2\n");
+      expect(read(ctx, "domain-y")).toBe("mine\n");
+      expect(Object.keys(readManifest(ctx.stateDir)!.skills).sort()).toEqual([
+        "a",
+        "b",
+        "domain-y",
+        "lang-x",
+      ]);
+    });
+
+    it("a copy that predates the manifest and equals a shipped version is adopted as a stack skill, a missing one stays available", () => {
+      const { ctx } = setup(V1, "1.0.0", STACK);
+      put(path.join(ctx.skillsDir, "lang-x"), STACK["lang-x"]);
+      const r = syncSkills(ctx)!;
+      expect(r.adopted).toEqual(["lang-x"]);
+      expect(has(ctx, "domain-y")).toBe(false);
+      expect(readManifest(ctx.stateDir)!.deleted).toEqual([]);
+    });
+
+    it("a stack skill the user deleted is `deleted`, not `available`: it is not offered again, and add brings it back", () => {
+      const { ctx } = setup(V1, "1.0.0", STACK);
+      syncSkills(ctx);
+      addSkills(ctx, ["lang-x"]);
+      fs.rmSync(path.join(ctx.skillsDir, "lang-x"), { recursive: true });
+      expect(syncSkills(ctx)!.deleted).toEqual(["lang-x"]);
+      const state = (n: string) =>
+        planSkills(ctx, readManifest(ctx.stateDir)).find(r => r.name === n)?.state;
+      expect(state("lang-x")).toBe("deleted");
+      expect(state("domain-y")).toBe("available");
+      syncSkills(ctx);
+      expect(has(ctx, "lang-x")).toBe(false);
+      addSkills(ctx, ["lang-x"]);
+      expect(has(ctx, "lang-x")).toBe(true);
+      expect(readManifest(ctx.stateDir)!.deleted).toEqual([]);
+    });
+
+    it("a sync leaves a link to the plugin's wf-skills beside the manifest", () => {
+      const { ctx } = setup(V1, "1.0.0", STACK);
+      syncSkills(ctx);
+      expect(fs.readlinkSync(path.join(ctx.stateDir, CLI_LINK))).toBe(
+        path.join(ctx.root, "scripts", "wf-skills"),
+      );
+      syncSkills(ctx);
+      expect(fs.lstatSync(path.join(ctx.stateDir, CLI_LINK)).isSymbolicLink()).toBe(true);
+    });
   });
 
   describe("adoption of copies made before the manifest", () => {
@@ -221,17 +315,6 @@ describe("bundled skills: manifest, update, adoption, removal", () => {
       expect(r.installed).toEqual(["b"]);
       expect(fs.statSync(path.join(ctx.skillsDir, "a", "SKILL.md")).mtimeMs).toBe(before);
       expect(Object.keys(readManifest(ctx.stateDir)!.skills).sort()).toEqual(["a", "b"]);
-    });
-
-    it("a lang-* skill missing next to an installed selector counts as deleted, as the old hook treated it", () => {
-      const { ctx } = setup({
-        "coding-skill-selector": { "SKILL.md": "sel\n" },
-        "lang-x": { "SKILL.md": "x\n" },
-      });
-      put(path.join(ctx.skillsDir, "coding-skill-selector"), { "SKILL.md": "sel\n" });
-      syncSkills(ctx);
-      expect(has(ctx, "lang-x")).toBe(false);
-      expect(readManifest(ctx.stateDir)!.deleted).toEqual(["lang-x"]);
     });
   });
 
@@ -359,6 +442,48 @@ describe("bundled skills: manifest, update, adoption, removal", () => {
   });
 });
 
+describe("the real bundled sets", () => {
+  const DEFAULT = [
+    "architecture",
+    "browser-verify",
+    "ci-github-actions",
+    "claude-code-config",
+    "cleanup",
+    "coding-skill-selector",
+    "debug-bridge-scaffold",
+    "debugging",
+    "mcp-setup",
+    "preferences",
+    "skill-manager",
+    "task-delegation",
+    "web-reading",
+    "wf-yaml-authoring",
+  ];
+
+  it("a fresh start on a scratch HOME copies exactly the 14 universal skills, and the stack pack is the other 15", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-skills-real-"));
+    try {
+      const ctx: SkillsContext = {
+        root: REPO,
+        skillsDir: path.join(base, "skills"),
+        stateDir: path.join(base, "state"),
+        version: "9.9.9",
+      };
+      syncSkills(ctx);
+      expect(fs.readdirSync(ctx.skillsDir).sort()).toEqual(DEFAULT);
+      const stack = [...stackSkillNames(REPO)].sort();
+      expect(stack).toHaveLength(15);
+      expect(stack.filter(n => DEFAULT.includes(n))).toEqual([]);
+      expect(
+        planSkills(ctx, readManifest(ctx.stateDir)).filter(r => r.state === "available"),
+      ).toHaveLength(15);
+      expect(shippedSkills(REPO).size).toBe(29);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("the history table of shipped versions", () => {
   it("holds the version of every bundled skill this tree ships (run `npm run skills:history` after editing templates/skills)", () => {
     const history = loadHistory(REPO);
@@ -400,16 +525,21 @@ describe("the hook and wf-skills on a scratch HOME, built as installed", () => {
   });
 
   /** A plugin root (the built engine plus the given templates) and a scratch HOME beside it. */
-  function install(skills: Record<string, Files>) {
+  function install(skills: Record<string, Files>, stack: Record<string, Files> = {}) {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-skills-hook-"));
     dirs.push(base);
     const root = path.join(base, "plugin");
     fs.cpSync(BUILD, root, { recursive: true, verbatimSymlinks: true });
-    for (const [name, files] of Object.entries(skills)) {
-      for (const [rel, text] of Object.entries(files)) {
-        const f = path.join(root, "templates", "skills", name, rel);
-        fs.mkdirSync(path.dirname(f), { recursive: true });
-        fs.writeFileSync(f, text);
+    for (const [set, of] of [
+      ["skills", skills],
+      ["skills-stack", stack],
+    ] as const) {
+      for (const [name, files] of Object.entries(of)) {
+        for (const [rel, text] of Object.entries(files)) {
+          const f = path.join(root, "templates", set, name, rel);
+          fs.mkdirSync(path.dirname(f), { recursive: true });
+          fs.writeFileSync(f, text);
+        }
       }
     }
     const home = path.join(base, "home");
@@ -490,6 +620,75 @@ describe("the hook and wf-skills on a scratch HOME, built as installed", () => {
     expect(fs.existsSync(path.join(t.skills, "a", "SKILL.md"))).toBe(true);
   });
 
+  it("a fresh HOME gets exactly the default set from the hook; wf-skills add installs a stack skill, list offers the rest", () => {
+    const t = install(
+      { a: { "SKILL.md": "a\n" }, b: { "SKILL.md": "b\n" } },
+      { "lang-x": { "SKILL.md": "x\n" }, "domain-y": { "SKILL.md": "y\n" } },
+    );
+    t.hook();
+    expect(fs.readdirSync(t.skills).sort()).toEqual(["a", "b"]);
+    const states = (): Record<string, string> =>
+      Object.fromEntries(
+        (JSON.parse(t.cli("list", "--json").stdout) as { name: string; state: string }[]).map(r => [
+          r.name,
+          r.state,
+        ]),
+      );
+    expect(states()).toMatchObject({ "lang-x": "available", "domain-y": "available" });
+    const add = t.cli("add", "lang-x");
+    expect(add.status).toBe(0);
+    expect(add.stdout).toContain("installed lang-x");
+    expect(fs.readFileSync(path.join(t.skills, "lang-x", "SKILL.md"), "utf8")).toBe("x\n");
+    expect(fs.existsSync(path.join(t.skills, "domain-y"))).toBe(false);
+    expect(Object.keys(readManifest(t.env.STATE_DIR)?.skills ?? {}).sort()).toEqual([
+      "a",
+      "b",
+      "lang-x",
+    ]);
+    expect(states()).toMatchObject({ "lang-x": "current", "domain-y": "available" });
+    t.hook();
+    expect(fs.readdirSync(t.skills).sort()).toEqual(["a", "b", "lang-x"]);
+    expect(t.cli("add", "nope").status).toBe(2);
+    expect(t.cli("add").status).toBe(2);
+    expect(t.cli("add", "--all-stack").status).toBe(0);
+    expect(fs.readdirSync(t.skills).sort()).toEqual(["a", "b", "domain-y", "lang-x"]);
+    // the link the selector tells an agent to run
+    const viaLink = spawnSync(path.join(t.env.STATE_DIR, CLI_LINK), ["list", "--json"], {
+      env: t.env,
+      encoding: "utf8",
+    });
+    expect(viaLink.status).toBe(0);
+  });
+
+  it("the no-node fallback of the hook copies the default set and never the stack pack", () => {
+    const t = install({ a: { "SKILL.md": "a\n" } }, { "lang-x": { "SKILL.md": "x\n" } });
+    fs.rmSync(path.join(t.root, "build"), { recursive: true });
+    t.hook();
+    expect(fs.readdirSync(t.skills)).toEqual(["a"]);
+  });
+
+  it("in Zed the hook offers ide-zed only while it is available: plain load when installed, silence when the user deleted it", () => {
+    const t = install({ a: { "SKILL.md": "a\n" } }, { "ide-zed": { "SKILL.md": "z\n" } });
+    t.env.ZED_ENVIRONMENT = "1";
+    const offer = `${path.join(t.root, "scripts", "wf-skills")} add ide-zed`;
+    const out = t.hook();
+    expect(out).toContain(offer);
+    expect(fs.existsSync(path.join(t.skills, "ide-zed"))).toBe(false);
+    // the offer repeats while it stays available
+    expect(t.hook()).toContain(offer);
+
+    expect(t.cli("add", "ide-zed").status).toBe(0);
+    const installed = t.hook();
+    expect(installed).toContain("Then load skill ide-zed (Skill tool).");
+    expect(installed).not.toContain("wf-skills add");
+
+    fs.rmSync(path.join(t.skills, "ide-zed"), { recursive: true });
+    const deleted = t.hook();
+    expect(deleted).not.toContain("ide-zed");
+    expect(deleted).toBe("STOP. Call mcp__plugin_workflow_wf__start (no args) first.\n");
+    expect(t.hook()).not.toContain("ide-zed");
+  });
+
   it("wf-skills list, diff and update", () => {
     const t = install({ a: { "SKILL.md": "a\n" }, b: { "SKILL.md": "b\n" } });
     t.hook();
@@ -499,8 +698,8 @@ describe("the hook and wf-skills on a scratch HOME, built as installed", () => {
     expect(list).toMatch(/a +shipped +installed +edited/);
     expect(list).toMatch(/b +shipped +deleted by you/);
     expect(JSON.parse(t.cli("list", "--json").stdout)).toEqual([
-      { name: "a", shipped: true, installed: true, state: "edited" },
-      { name: "b", shipped: true, installed: false, state: "deleted" },
+      { name: "a", shipped: true, pack: false, installed: true, state: "edited" },
+      { name: "b", shipped: true, pack: false, installed: false, state: "deleted" },
     ]);
     const diff = t.cli("diff", "a").stdout;
     expect(diff).toContain("-mine");

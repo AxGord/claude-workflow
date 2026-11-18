@@ -289,9 +289,9 @@ Before finishing any skill operation:
 - [ ] If skill is nearly empty → maybe it's not needed
 - [ ] **selector domain mapping updated** (coding-skill-selector skill)
 - [ ] **Bundled twin updated**: if the skill also ships inside a plugin repo
-      (e.g. `mcp-workflow-engine/templates/skills/<name>/`), COPY the edited
+      (e.g. `mcp-workflow-engine/templates/skills/<name>/`, or `templates/skills-stack/<name>/` for a stack skill), COPY the edited
       file over the twin (`cp`, never re-type — hand-applied "same" edits
       drift by whitespace) and verify with the repo's
       `scripts/check-skill-sync.sh`. An intentionally-different twin
       (generic template vs personal copy) belongs in `.skillsyncignore`
-- [ ] **Shipped version recorded**: after any edit under `templates/skills/` of a plugin repo that ships a copy-provisioning hook, run its history script (`npm run skills:history` in `mcp-workflow-engine`) — a user's unedited older copy is recognised, and updated, only by the versions that table lists
+- [ ] **Shipped version recorded**: after any edit under `templates/skills/` or `templates/skills-stack/` of a plugin repo that ships a copy-provisioning hook, run its history script (`npm run skills:history` in `mcp-workflow-engine`) — a user's unedited older copy is recognised, and updated, only by the versions that table lists

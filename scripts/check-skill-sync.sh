@@ -1,5 +1,5 @@
 #!/bin/sh
-# Drift check: bundled templates/skills/* vs the live user skills
+# Drift check: bundled templates/skills/* and templates/skills-stack/* vs the live user skills
 # (~/.claude/skills/ or $CLAUDE_SKILLS_DIR). The live copy is the actively
 # enriched source of truth; the bundled copy is the shipped snapshot — a
 # same-named pair that differs means the snapshot went stale (or an edit
@@ -40,26 +40,33 @@ if [ $task_wt -eq 1 ]; then
     trap 'rm -rf "$master_tmp"' EXIT
 fi
 
-# 0 when live/<name> equals master's bundled copy (so the branch's bundled side is ahead).
+# 0 when live/<name> equals master's bundled copy (so the branch's bundled side is ahead). The skill may sit
+# in either set on master (a branch can move one between them), so both paths are tried.
 live_is_masters() {
     [ $task_wt -eq 1 ] || return 1
-    rm -rf "$master_tmp/x"; mkdir -p "$master_tmp/x" || return 1
-    git -C "$root" archive master "templates/skills/$1" 2>/dev/null | tar -x -C "$master_tmp/x" 2>/dev/null || return 1
-    [ -d "$master_tmp/x/templates/skills/$1" ] || return 1
-    diff -rq -x .DS_Store "$live/$1" "$master_tmp/x/templates/skills/$1" >/dev/null 2>&1
+    for set in skills skills-stack; do
+        rm -rf "$master_tmp/x"; mkdir -p "$master_tmp/x" || return 1
+        git -C "$root" archive master "templates/$set/$1" 2>/dev/null | tar -x -C "$master_tmp/x" 2>/dev/null || continue
+        [ -d "$master_tmp/x/templates/$set/$1" ] || continue
+        diff -rq -x .DS_Store "$live/$1" "$master_tmp/x/templates/$set/$1" >/dev/null 2>&1 && return 0
+    done
+    return 1
 }
 
 fail=0
-for dir in "$root/templates/skills"/*/; do
+for dir in "$root/templates/skills"/*/ "$root/templates/skills-stack"/*/; do
+    [ -d "$dir" ] || continue
     name=$(basename "$dir")
     [ -d "$live/$name" ] || continue
+    # the set the skill sits in: templates/skills or templates/skills-stack
+    bundled_rel="templates/$(basename "$(dirname "${dir%/}")")/$name"
     if [ -f "$ignore" ] && sed 's/[[:space:]]*$//' "$ignore" | grep -qxF -e "$name"; then
         # An ignored pair that became IDENTICAL means a blanket sync overwrote
         # the bundled template with the personal live copy — the listed
         # divergence silently vanished.
         if diff -rq -x .DS_Store "$live/$name" "$dir" >/dev/null 2>&1; then
             echo "DRIFT: $name — listed in .skillsyncignore but IDENTICAL to live"
-            echo "    the bundled copy must stay the generic template; restore it (git show HEAD:templates/skills/$name/...)"
+            echo "    the bundled copy must stay the generic template; restore it (git show HEAD:${bundled_rel}/...)"
             fail=1
         fi
         continue
@@ -71,6 +78,7 @@ for dir in "$root/templates/skills"/*/; do
         fi
         echo "DRIFT: $name"
         echo "$drift" | sed 's/^/    /'
+        echo "    take the live copy: rsync -a --delete --exclude .DS_Store \"$live/$name/\" \"$root/$bundled_rel/\""
         fail=1
     }
 done
@@ -79,7 +87,7 @@ if [ $fail -ne 0 ]; then
     echo ""
     echo "Bundled skill snapshots drifted from the live copies. The LIVE copy is"
     echo "the source of truth (it is what agents load at runtime); sync with:"
-    echo "    rsync -a --delete --exclude .DS_Store \"$live/<name>/\" \"$root/templates/skills/<name>/\""
+    echo "    rsync -a --delete --exclude .DS_Store \"$live/<name>/\" \"<the skill's bundled directory, printed with its DRIFT line>\""
     echo "WARNING: that overwrites the bundled side — if the edit was made on the"
     echo "BUNDLED copy, merge it into the live copy FIRST, then rsync."
     echo "Intentional divergence instead: add <name> to .skillsyncignore."

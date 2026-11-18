@@ -5,8 +5,10 @@
 // was copied, the version this release ships, or any version the repo ever shipped (`templates/skills-history.txt`,
 // built at release time, so an install from before the manifest is adopted without reading git). An unedited
 // copy is replaced when the release ships something else; an edited one is never touched, only named once.
-// A skill the user deleted stays deleted (recorded). `lang-*` skills belong to `coding-skill-selector`: they
-// are copied only while it is installed. Only node built-ins here: the hook runs this on every session start.
+// A skill the user deleted stays deleted (recorded). The release ships two sets: the DEFAULT set
+// (`templates/skills`, copied on every start) and the STACK pack (`templates/skills-stack`, language, domain and
+// tool skills), which the start hook never copies: `wf-skills add <name>` installs one, and from then on it is
+// recorded, updated and removed like a default skill. Only node built-ins here: the hook runs this on every session start.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -45,7 +47,11 @@ export const MANIFEST_FILE = path.join("skills", "manifest.json");
 const IGNORED_FILES = new Set([".DS_Store"]);
 /** A staging directory in the skills dir: a dot name, swept at the start of every sync. */
 const SCRATCH = ".wf-";
-const SELECTOR = "coding-skill-selector";
+/** Where each set lives under `<root>/templates`. */
+const DEFAULT_SET = "skills";
+const STACK_SET = "skills-stack";
+/** Beside the manifest: a link to the plugin's `scripts/wf-skills`, refreshed at every start, so an agent has a stable path to the command. */
+export const CLI_LINK = path.join("skills", "wf-skills");
 
 const sha256 = (data: Buffer | string): string =>
   crypto.createHash("sha256").update(data).digest("hex");
@@ -79,15 +85,30 @@ export function treeDigest(files: FileHashes): string {
   return sha256(lines.join(""));
 }
 
-/** The skills this release ships, by name. */
-export function shippedSkills(root: string): Map<string, FileHashes> {
-  const dir = path.join(root, "templates", "skills");
+function shippedSet(root: string, set: string): Map<string, FileHashes> {
+  const dir = path.join(root, "templates", set);
   const out = new Map<string, FileHashes>();
   if (!fs.existsSync(dir)) return out;
   for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
     if (ent.isDirectory()) out.set(ent.name, hashTree(path.join(dir, ent.name)));
   }
   return out;
+}
+
+/** The skills this release ships, by name: the default set and the stack pack. */
+export function shippedSkills(root: string): Map<string, FileHashes> {
+  return new Map([...shippedSet(root, DEFAULT_SET), ...shippedSet(root, STACK_SET)]);
+}
+
+/** The names of the stack pack: shipped, never copied by the start hook. */
+export function stackSkillNames(root: string): Set<string> {
+  return new Set(shippedSet(root, STACK_SET).keys());
+}
+
+/** The directory a shipped skill is copied from. */
+function sourceDir(root: string, name: string): string {
+  const stack = path.join(root, "templates", STACK_SET, name);
+  return fs.existsSync(stack) ? stack : path.join(root, "templates", DEFAULT_SET, name);
 }
 
 /** Every `<digest> <name>` line of the history file: the versions of each skill the repo ever shipped. */
@@ -169,8 +190,10 @@ export type SkillState =
   | "outdated"
   /** installed with the user's changes, or a link: never touched */
   | "edited"
-  /** not installed */
+  /** not installed (a default skill: the next start installs it) */
   | "missing"
+  /** a stack skill, not installed and not deleted by the user: `wf-skills add <name>` installs it */
+  | "available"
   /** the user removed it */
   | "deleted"
   /** installed, unedited, no longer shipped */
@@ -179,6 +202,8 @@ export type SkillState =
 export interface SkillRow {
   readonly name: string;
   readonly shipped: boolean;
+  /** Shipped in the stack pack: installed only by `wf-skills add`. */
+  readonly pack: boolean;
   readonly installed: boolean;
   readonly state: SkillState;
   /** What a sync does about it. */
@@ -186,8 +211,6 @@ export interface SkillRow {
   /** `edited` only: the installed files differ from what this release ships (a link never does). */
   readonly differs: boolean;
 }
-
-const isLang = (name: string): boolean => name.startsWith("lang-");
 
 /** What sits at `p`: nothing, a real directory, or anything else (a link, a stray file) — which is the user's. */
 function kindOf(p: string): "none" | "dir" | "other" {
@@ -200,18 +223,17 @@ function kindOf(p: string): "none" | "dir" | "other" {
 
 /**
  * What is there for every skill the release ships or the manifest knows. `manifest` null = none yet: copies
- * are adopted by the history table, and a missing `lang-*` next to an installed selector counts as deleted.
+ * are adopted by the history table. A stack skill that is not installed is only `available` (or `deleted`).
  */
 export function planSkills(ctx: SkillsContext, manifest: Manifest | null): SkillRow[] {
   const shipped = shippedSkills(ctx.root);
+  const stack = stackSkillNames(ctx.root);
   const history = loadHistory(ctx.root);
   const entries = manifest?.skills ?? {};
   const deleted = new Set(manifest?.deleted ?? []);
   const names = [...new Set([...shipped.keys(), ...Object.keys(entries)])].sort();
   const dir = (name: string): string => path.join(ctx.skillsDir, name);
   const present = (name: string): boolean => kindOf(dir(name)) !== "none";
-  const selectorKept =
-    present(SELECTOR) || (shipped.has(SELECTOR) && !deleted.has(SELECTOR) && !entries[SELECTOR]);
 
   return names.map((name): SkillRow => {
     const ship = shipped.get(name);
@@ -221,7 +243,15 @@ export function planSkills(ctx: SkillsContext, manifest: Manifest | null): Skill
       action: SkillRow["action"],
       installed: boolean,
       differs = false,
-    ): SkillRow => ({ name, shipped: ship !== undefined, installed, state, action, differs });
+    ): SkillRow => ({
+      name,
+      shipped: ship !== undefined,
+      pack: stack.has(name),
+      installed,
+      state,
+      action,
+      differs,
+    });
 
     if (present(name)) {
       if (kindOf(dir(name)) === "other") return row("edited", "none", true);
@@ -251,17 +281,13 @@ export function planSkills(ctx: SkillsContext, manifest: Manifest | null): Skill
     if (!ship) return row("missing", "forget", false);
     if (deleted.has(name)) return row("deleted", "none", false);
     if (entry) return row("deleted", "record-deleted", false);
-    if (isLang(name)) {
-      if (!selectorKept) return row("missing", "none", false);
-      if (manifest === null && present(SELECTOR)) return row("deleted", "record-deleted", false);
-    }
-    return row("missing", "install", false);
+    return stack.has(name) ? row("available", "none", false) : row("missing", "install", false);
   });
 }
 
 /** Copy `files` of `src` to `<skillsDir>/<name>` whole: staged beside it, then swapped in. */
 function install(ctx: SkillsContext, name: string, files: FileHashes): void {
-  const src = path.join(ctx.root, "templates", "skills", name);
+  const src = sourceDir(ctx.root, name);
   const dst = path.join(ctx.skillsDir, name);
   const stage = path.join(ctx.skillsDir, `${SCRATCH}new.${name}.${process.pid}`);
   const old = path.join(ctx.skillsDir, `${SCRATCH}old.${name}.${process.pid}`);
@@ -409,8 +435,26 @@ export function syncSkills(ctx: SkillsContext): SyncResult | null {
     }
 
     writeManifest(ctx.stateDir, { version: 1, skills, deleted: [...deleted].sort(), noticed });
+    refreshCliLink(ctx);
     return out;
   });
+}
+
+/** `<stateDir>/skills/wf-skills` → this root's `scripts/wf-skills`; a failure is not the start's to report. */
+function refreshCliLink(ctx: SkillsContext): void {
+  const link = path.join(ctx.stateDir, CLI_LINK);
+  const target = path.join(ctx.root, "scripts", "wf-skills");
+  try {
+    if (fs.readlinkSync(link) === target) return;
+  } catch {
+    // no link yet, or something else in its place: replaced below
+  }
+  try {
+    fs.rmSync(link, { force: true });
+    fs.symlinkSync(target, link);
+  } catch {
+    // the command is also reachable by its plugin path
+  }
 }
 
 /** The one-line note the hook prints for edited copies named for the first time. */
@@ -455,6 +499,58 @@ export function updateSkill(ctx: SkillsContext, name: string): string | null {
   });
   if (result === null) throw new Error("another process is syncing the skills; try again");
   return result.backup;
+}
+
+export interface AddResult {
+  readonly installed: readonly string[];
+  /** Already in the skills dir (an edited copy included): `update` is the way to change it. */
+  readonly present: readonly string[];
+}
+
+/**
+ * Install shipped skills by name (the way a stack skill gets in), or every stack skill with `allStack`. A
+ * skill the user had deleted comes back: asking for it by name is the answer to the deletion.
+ */
+export function addSkills(
+  ctx: SkillsContext,
+  names: readonly string[],
+  allStack = false,
+): AddResult {
+  const shipped = shippedSkills(ctx.root);
+  const wanted = allStack ? [...new Set([...stackSkillNames(ctx.root), ...names])].sort() : names;
+  for (const name of wanted) {
+    if (!shipped.has(name)) throw new Error(`no bundled skill named ${name} (wf-skills list)`);
+  }
+  const result = withSkillsLock(ctx.stateDir, true, () => {
+    if (fs.existsSync(ctx.skillsDir)) restoreInterrupted(ctx.skillsDir);
+    fs.mkdirSync(ctx.skillsDir, { recursive: true });
+    const had = readManifest(ctx.stateDir);
+    const rows = planSkills(ctx, had);
+    const skills: Record<string, ManifestEntry> = { ...(had?.skills ?? {}) };
+    const deleted = new Set(had?.deleted ?? []);
+    const out = { installed: [] as string[], present: [] as string[] };
+    for (const name of wanted) {
+      const files = shipped.get(name);
+      if (!files) continue;
+      if (rows.find(r => r.name === name)?.installed) {
+        out.present.push(name);
+        continue;
+      }
+      install(ctx, name, files);
+      skills[name] = { engine: ctx.version, files };
+      deleted.delete(name);
+      out.installed.push(name);
+    }
+    writeManifest(ctx.stateDir, {
+      version: 1,
+      skills,
+      deleted: [...deleted].sort(),
+      noticed: had?.noticed ?? {},
+    });
+    return out;
+  });
+  if (result === null) throw new Error("another process is syncing the skills; try again");
+  return result;
 }
 
 export interface RemovePlan {

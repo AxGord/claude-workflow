@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // wf-skills: the bundled skills the SessionStart hook copies into ~/.claude/skills (src/skills.ts).
-//   wf-skills list [--json]         every bundled skill and each one's state: shipped / installed / current, outdated, edited, deleted
+//   wf-skills list [--json]         every bundled skill and each one's state: shipped / installed / current, outdated, edited, deleted, available
+//   wf-skills add <name>… | --all-stack
+//                                   install shipped skills by name; the stack pack (language, domain and tool skills) is
+//                                   installed only this way, then kept current like the default set
 //   wf-skills diff <name>           your copy against the version this release ships (diff -ru)
 //   wf-skills update <name>…        force the shipped version; an edited copy is saved to <state dir>/skill-backups first
 //   wf-skills remove [--state] [--dry-run]
@@ -17,6 +20,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   MANIFEST_FILE,
+  addSkills,
   editedNote,
   engineVersion,
   planRemove,
@@ -34,7 +38,7 @@ import { resolvePoolDir } from "./pool.js";
 import { stateDir, workflowDirs } from "./workflow-dirs.js";
 
 const USAGE =
-  "usage: wf-skills list [--json] | diff <name> | update <name>… | remove [--state] [--dry-run] | sync [--quiet]";
+  "usage: wf-skills list [--json] | add <name>… | add --all-stack | diff <name> | update <name>… | remove [--state] [--dry-run] | sync [--quiet]";
 
 class UsageError extends Error {}
 
@@ -49,7 +53,8 @@ const LABEL: Record<SkillRow["state"], string> = {
   current: "current",
   outdated: "outdated (unedited: the next start updates it)",
   edited: "edited (kept as it is)",
-  missing: "not installed",
+  missing: "not installed (the next start installs it)",
+  available: "stack skill, not installed (wf-skills add <name>)",
   deleted: "deleted by you (stays deleted)",
   retired: "no longer shipped (unedited)",
 };
@@ -59,7 +64,13 @@ function list(ctx: SkillsContext, json: boolean): void {
   if (json) {
     out(
       JSON.stringify(
-        rows.map(({ name, shipped, installed, state }) => ({ name, shipped, installed, state })),
+        rows.map(({ name, shipped, pack, installed, state }) => ({
+          name,
+          shipped,
+          pack,
+          installed,
+          state,
+        })),
         null,
         2,
       ),
@@ -78,7 +89,7 @@ function list(ctx: SkillsContext, json: boolean): void {
   }
   const count = (s: SkillRow["state"]): number => rows.filter(r => r.state === s).length;
   out(
-    `${rows.length} skill(s) in ${ctx.skillsDir}: ${count("current")} current, ${count("outdated")} outdated, ${count("edited")} edited, ${count("deleted")} deleted, ${count("missing")} not installed`,
+    `${rows.length} skill(s) in ${ctx.skillsDir}: ${count("current")} current, ${count("outdated")} outdated, ${count("edited")} edited, ${count("deleted")} deleted, ${count("missing")} not installed, ${count("available")} stack skill(s) available`,
   );
   out(
     readManifest(ctx.stateDir)
@@ -168,6 +179,17 @@ function main(argv: readonly string[]): void {
     case "list":
       only(["--json"], 0);
       return list(ctx, flags.has("--json"));
+    case "add": {
+      only(["--all-stack"], flags.has("--all-stack") ? 0 : "some");
+      const r = addSkills(ctx, names, flags.has("--all-stack"));
+      for (const name of r.installed) out(`installed ${name}`);
+      for (const name of r.present) {
+        out(
+          `${name} is already in ${ctx.skillsDir} (wf-skills update ${name} takes the shipped version)`,
+        );
+      }
+      return;
+    }
     case "diff":
       only([], 1);
       return diff(ctx, names[0]);

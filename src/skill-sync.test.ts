@@ -86,6 +86,27 @@ describe("check-skill-sync.sh", () => {
     });
   });
 
+  it("a stack skill (templates/skills-stack) is checked against live like a default one", () => {
+    write(join(repo, "templates", "skills-stack", "s"), "s1\n");
+    write(join(live, "s"), "s1\n");
+    expect(run(repo).code).toBe(0);
+    write(join(repo, "templates", "skills-stack", "s"), "s2\n");
+    const r = run(repo);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("DRIFT: s");
+    // the way back names the set the skill sits in, not templates/skills
+    expect(r.out).toContain("templates/skills-stack/s/");
+    expect(r.out).not.toContain("templates/skills/s/");
+  });
+
+  it("a skill moved from the default set to the pack is not drift in a task worktree", () => {
+    const wt = join(tmp, "wt3");
+    git(repo, "worktree", "add", "-q", wt, "-b", "eng/move", "master");
+    mkdirSync(join(wt, "templates", "skills-stack"), { recursive: true });
+    git(wt, "mv", "templates/skills/a", "templates/skills-stack/a");
+    expect(run(wt).code).toBe(0);
+  });
+
   it("does not relax on a linked worktree of another branch name", () => {
     const wt = join(tmp, "wt2");
     git(repo, "worktree", "add", "-q", wt, "-b", "feature/x", "master");
@@ -129,6 +150,16 @@ describe("sync-live-skills.sh", () => {
     expect(r.out).not.toContain("skill: b");
     expect(read(join(live, "a"))).toBe("v2\n");
     expect(read(join(live, "b"))).toBe("b1\n");
+  });
+
+  it("syncs a skill moved into the stack pack with a change, from its new place, against its old pre-merge copy", () => {
+    mkdirSync(join(repo, "templates", "skills-stack"), { recursive: true });
+    git(repo, "mv", "templates/skills/b", "templates/skills-stack/b");
+    write(join(repo, "templates", "skills-stack", "b"), "b2\n");
+    commit();
+    const r = land();
+    expect(r.out).toContain("synced live skill: b");
+    expect(read(join(live, "b"))).toBe("b2\n");
   });
 
   it("skips a skill listed in .skillsyncignore", () => {

@@ -18,21 +18,30 @@ merged="$2"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/sync-live-skills.XXXXXX") || { echo "WARNING: sync-live-skills: no temp dir"; exit 0; }
 trap 'rm -rf "$tmp"' EXIT
 
-names=$(git -C "$root" diff --name-only "$before" "$merged" -- templates/skills | cut -d/ -f3 | sort -u)
+# A skill sits in templates/skills (the default set) or templates/skills-stack (the pack); a merge may move one.
+names=$(git -C "$root" diff --name-only "$before" "$merged" -- templates/skills templates/skills-stack | cut -d/ -f3 | sort -u)
 for name in $names; do
-    [ -d "$root/templates/skills/$name" ] || continue
+    src=""
+    for set in skills skills-stack; do
+        [ -d "$root/templates/$set/$name" ] && src="$root/templates/$set/$name"
+    done
+    [ -n "$src" ] || continue
     [ -d "$live/$name" ] || continue
     if [ -f "$root/.skillsyncignore" ] && sed 's/[[:space:]]*$//' "$root/.skillsyncignore" | grep -qxF -e "$name"; then
         continue
     fi
     old="$tmp/$name"
     mkdir -p "$old"
-    git -C "$root" archive "$before" "templates/skills/$name" 2>/dev/null | tar -x -C "$old" 2>/dev/null
-    if ! diff -rq -x .DS_Store "$live/$name" "$old/templates/skills/$name" >/dev/null 2>&1; then
-        echo "WARNING: live skill $name differs from the pre-merge bundled copy: left alone. To take the bundled copy: rsync -a -c --delete --exclude .DS_Store \"$root/templates/skills/$name/\" \"$live/$name/\"; to keep the live copy: add '$name' to $root/.skillsyncignore"
+    oldsrc=""
+    for set in skills skills-stack; do
+        git -C "$root" archive "$before" "templates/$set/$name" 2>/dev/null | tar -x -C "$old" 2>/dev/null
+        [ -d "$old/templates/$set/$name" ] && oldsrc="$old/templates/$set/$name"
+    done
+    if ! diff -rq -x .DS_Store "$live/$name" "$oldsrc" >/dev/null 2>&1; then
+        echo "WARNING: live skill $name differs from the pre-merge bundled copy: left alone. To take the bundled copy: rsync -a -c --delete --exclude .DS_Store \"$src/\" \"$live/$name/\"; to keep the live copy: add '$name' to $root/.skillsyncignore"
         continue
     fi
-    if rsync -a -c --delete --exclude .DS_Store "$root/templates/skills/$name/" "$live/$name/"; then
+    if rsync -a -c --delete --exclude .DS_Store "$src/" "$live/$name/"; then
         echo "synced live skill: $name"
     else
         echo "WARNING: live skill sync of $name failed"

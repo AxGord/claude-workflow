@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // templates/skills-history.txt: one `<digest> <skill>` line for every version of a bundled skill this repo
-// ever shipped (the digest of src/skills.ts `treeDigest`: file set + content). The SessionStart hook adopts a
+// ever shipped, in templates/skills or templates/skills-stack (the digest of src/skills.ts `treeDigest`: file set + content). The SessionStart hook adopts a
 // copy installed before the manifest existed by this table, so it never reads git at run time.
 //
-//   npm run skills:history        append the working tree's skills (run after every edit of templates/skills;
+//   npm run skills:history        append the working tree's skills (run after every edit of templates/skills or skills-stack;
 //                                 src/skills.test.ts fails while a shipped version is missing)
 //   node scripts/skills-history.mjs --from-git   also add every version of every commit of HEAD (the bootstrap)
 //
@@ -28,14 +28,17 @@ if (fs.existsSync(file)) {
   for (const l of fs.readFileSync(file, "utf8").split("\n")) if (/^[0-9a-f]{64} \S+$/.test(l)) lines.add(l);
 }
 
+const SETS = ["skills", "skills-stack"];
+
 function addDir(skillsDir) {
+  if (!fs.existsSync(skillsDir)) return;
   for (const ent of fs.readdirSync(skillsDir, { withFileTypes: true })) {
     if (ent.isDirectory()) lines.add(`${treeDigest(hashTree(path.join(skillsDir, ent.name)))} ${ent.name}`);
   }
 }
 
 if (process.argv.includes("--from-git")) {
-  const commits = execFileSync("git", ["log", "--format=%H", "--", "templates/skills"], {
+  const commits = execFileSync("git", ["log", "--format=%H", "--", ...SETS.map(d => `templates/${d}`)], {
     cwd: root,
     encoding: "utf8",
   })
@@ -46,19 +49,26 @@ if (process.argv.includes("--from-git")) {
     for (const c of commits) {
       fs.rmSync(tmp, { recursive: true, force: true });
       fs.mkdirSync(tmp);
-      const tar = execFileSync("git", ["archive", c, "templates/skills"], {
-        cwd: root,
-        maxBuffer: 1 << 28,
-      });
-      execFileSync("tar", ["-x", "-C", tmp], { input: tar });
-      const dir = path.join(tmp, "templates", "skills");
-      if (fs.existsSync(dir)) addDir(dir);
+      for (const set of SETS) {
+        // `git archive` refuses a path the commit does not have
+        const has = execFileSync("git", ["ls-tree", "--name-only", c, `templates/${set}`], {
+          cwd: root,
+          encoding: "utf8",
+        }).trim();
+        if (!has) continue;
+        const tar = execFileSync("git", ["archive", c, `templates/${set}`], {
+          cwd: root,
+          maxBuffer: 1 << 28,
+        });
+        execFileSync("tar", ["-x", "-C", tmp], { input: tar });
+        addDir(path.join(tmp, "templates", set));
+      }
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
-addDir(path.join(root, "templates", "skills"));
+for (const set of SETS) addDir(path.join(root, "templates", set));
 
 fs.writeFileSync(file, `${[...HEADER, ...[...lines].sort()].join("\n")}\n`);
 console.log(`${file}: ${lines.size} version(s)`);
