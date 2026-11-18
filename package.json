@@ -38,6 +38,7 @@
     "docs:preview": "npm run docs:build && vitepress preview docs",
     "docs:replay": "node scripts/export-replay.mjs",
     "docs:workflows": "node scripts/export-workflows.mjs",
+    "docs:use-case": "node scripts/export-use-case.mjs",
     "docs:record": "node scripts/record-scene.mjs",
     "docs:banner": "node scripts/render-banner.mjs",
     "video": "node video/render.mjs"

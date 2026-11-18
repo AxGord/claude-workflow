@@ -49,7 +49,10 @@ describe("the landing's replay runs the dashboard map's own code", () => {
     expect(DASH_CSS).toContain('"../../../dashboard/tokens.css?raw"');
     expect(DASH_CSS).toContain('"../../../dashboard/components.css?raw"');
     expect(DASH_CSS).toContain("@scope (.${DASH})");
-    expect(DASH_CSS).toContain(".replace(/^:root\\s*\\{/m, `.${DASH} {`)");
+    expect(DASH_CSS).toContain("scopedTokens(tokens, DASH)");
+    expect(read("docs/.vitepress/theme/dash-tokens.ts")).toContain(
+      ".replace(/^:root\\s*\\{/m, `.${cls} {`)",
+    );
   });
 
   it("the landing's stage follows the site's theme: map and pool strip wear the tokens, the terminal has its own light and dark palettes", () => {

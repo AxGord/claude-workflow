@@ -12,6 +12,7 @@ import { buildApp } from "./dashboard.js";
 import { Storage } from "./storage.js";
 import { graphModuleExpression } from "./test-helpers.js";
 import type { Loader } from "./loader.js";
+import * as dashTokens from "../docs/.vitepress/theme/dash-tokens.js";
 
 const DASH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "dashboard");
 const read = (name: string): string => fs.readFileSync(path.join(DASH, name), "utf8");
@@ -273,7 +274,11 @@ describe("the dashboard has one style", () => {
     let styled = "";
     vm.runInNewContext(code, {
       exports,
-      require: (id: string) => ({ default: id.endsWith("tokens.css?raw") ? TOKENS : COMPONENTS }),
+      // the rewrite the module shares with the site's config is the real one; the stylesheets are its inputs
+      require: (id: string) =>
+        id === "./dash-tokens"
+          ? dashTokens
+          : { default: id.endsWith("tokens.css?raw") ? TOKENS : COMPONENTS },
       document: {
         getElementById: () => null,
         createElement: () => ({

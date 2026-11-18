@@ -13,7 +13,7 @@ import {
 const HAVE_BROWSER = browserInstalled();
 
 /** The sidebar's pages: what the Docs list holds. */
-const PAGES = 9;
+const PAGES = 10;
 
 let site: BuiltSite | undefined;
 let browser: Browser;

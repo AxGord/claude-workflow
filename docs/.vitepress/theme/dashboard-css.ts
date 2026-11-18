@@ -1,5 +1,6 @@
 import tokens from "../../../dashboard/tokens.css?raw";
 import components from "../../../dashboard/components.css?raw";
+import { scopedTokens } from "./dash-tokens";
 
 /** The class of an element that wears the dashboard's look: its tokens are declared on it and its rules reach only what is inside. */
 export const DASH = "dash";
@@ -9,11 +10,7 @@ export const DASH = "dash";
 // system's colour preference have no say here: the demos follow VitePress's `html.dark` (its theme switch), so
 // the light set sits on `.dash` and the dark set on `html.dark .dash`.
 const STYLE_ID = "dashboard-css";
-const css = `${tokens
-  .replace(/@media \(prefers-color-scheme: dark\) \{[\s\S]*?\n\}\n/, "")
-  .replace(':root, :root[data-theme="light"]', `.${DASH}`)
-  .replace(':root[data-theme="dark"]', `html.dark .${DASH}`)
-  .replace(/^:root\s*\{/m, `.${DASH} {`)}\n@scope (.${DASH}) {\n${components}\n}`;
+const css = `${scopedTokens(tokens, DASH)}\n@scope (.${DASH}) {\n${components}\n}`;
 
 /** Puts the scoped stylesheet in the page's head, once. */
 export function useDashboardCss(): void {

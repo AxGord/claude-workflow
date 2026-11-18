@@ -1,0 +1,112 @@
+/* What the scenes of the use-case page share (docs/use-case-anyparse.md): one frame, the choice chips, the note and
+   caption under a scene, the model colours. Each scene's own drawing is in its component. Every colour is one of the
+   dashboard's tokens, which the page's head carries on `.dash-tokens` (theme/dash-tokens.ts); imported once by index.ts. */
+.uc-box {
+  container-type: inline-size;
+  margin: 24px 0;
+  padding: 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--panel-radius);
+  background: var(--panel);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+/* the page's prose rules (paragraph and list margins, a taller line) stop at the frame */
+.uc-box p {
+  margin: 0;
+  line-height: 1.5;
+}
+.uc-box ol,
+.uc-box ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.uc-box li + li {
+  margin-top: 0;
+}
+.uc-box button {
+  font-family: inherit;
+}
+.uc-box button:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+.uc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.uc-chip {
+  padding: 4px 11px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font: 12.5px/1.5 var(--vp-font-family-base);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background-color 0.15s;
+}
+.uc-chip:hover {
+  color: var(--text);
+  border-color: var(--text-4);
+}
+.uc-chip.on {
+  color: var(--text);
+  border-color: var(--model-sonnet);
+  background: color-mix(in srgb, var(--model-sonnet) 12%, transparent);
+}
+.uc-lead {
+  color: var(--text-4);
+  font: 700 10px/1.6 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.uc-box .uc-note {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--inset);
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.uc-note .uc-lead {
+  margin-right: 6px;
+}
+.uc-box .uc-cap {
+  margin-top: 16px;
+  color: var(--text-4);
+  font-size: 12px;
+}
+.uc-mono {
+  font-family: var(--mono);
+}
+/* model colours: the dashboard's; a model it has no name for takes one of its other tokens */
+.m-haiku {
+  --m: var(--model-haiku);
+}
+.m-sonnet {
+  --m: var(--model-sonnet);
+}
+.m-opus {
+  --m: var(--model-opus);
+}
+.m-fable {
+  --m: var(--slow);
+}
+.m-script {
+  --m: var(--model-script);
+}
+.uc-bars {
+  letter-spacing: -1px;
+  color: var(--m, var(--text-3));
+}
+.uc-model {
+  color: var(--m, var(--text-3));
+  font: 11px/1.6 var(--mono);
+  white-space: nowrap;
+}

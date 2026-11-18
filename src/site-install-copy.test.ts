@@ -68,7 +68,11 @@ describe.skipIf(!HAVE_BROWSER)("the install block's copy button", () => {
         expect(Number(await button.evaluate(e => getComputedStyle(e).opacity))).toBe(0);
         await page.locator(".install").scrollIntoViewIfNeeded();
         let focused = false;
-        for (let i = 0; i < 40 && !focused; i++) {
+        // as many presses as the page has places to stop at: a link added ahead of the block never outruns the walk
+        const stops = await page
+          .locator("a[href], button, input, select, textarea, [tabindex]")
+          .count();
+        for (let i = 0; i < stops && !focused; i++) {
           await page.keyboard.press("Tab");
           focused = await button.evaluate(e => e === document.activeElement);
         }

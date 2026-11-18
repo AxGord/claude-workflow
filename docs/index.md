@@ -38,6 +38,10 @@ features:
 - **Parallel heavy work chokes the machine.** Four agents each start a build and the laptop stops answering.
 - **No picture of what runs.** Several sessions, branches and reviews are in flight and the only view is scrollback.
 
+## In real use
+
+[anyparse](https://github.com/AxGord/anyparse), an open-source platform for parsers and formatters, is developed on this engine: a queue of small tasks, a scout that may rescore a task before any worker starts, review rounds, and a land under one lock. [See how one task goes from the queue to main](/use-case-anyparse), with the project's own numbers.
+
 ## What you see
 
 ### The workflows

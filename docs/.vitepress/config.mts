@@ -2,11 +2,21 @@ import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
 import { NAME } from "../../scripts/brand.mjs";
+import { DASH_TOKENS, scopedTokens } from "./theme/dash-tokens";
 
 /** The bundled workflows, counted from templates/ (the files the loader's bundled tier reads), for the hero's chip: never typed. */
 const bundledWorkflows = fs
   .readdirSync(fileURLToPath(new URL("../../templates", import.meta.url)))
   .filter(f => f.endsWith(".yaml")).length;
+
+/**
+ * The dashboard's tokens on `.dash-tokens`, in every page's head: a diagram rendered into the page's HTML at build time
+ * (the use-case page's) has its colours at the first paint, in both themes, with no stylesheet to wait for.
+ */
+const dashTokens = scopedTokens(
+  fs.readFileSync(fileURLToPath(new URL("../../dashboard/tokens.css", import.meta.url)), "utf8"),
+  DASH_TOKENS,
+);
 
 // A GitHub project page: https://axgord.github.io/claude-workflow/
 const SITE = "https://axgord.github.io/claude-workflow/";
@@ -31,6 +41,7 @@ export default defineConfig({
   // The brand's logo 2 as the tab icon (docs/public/favicon.svg, written by scripts/render-banner.mjs); `head` hrefs take the base by hand.
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/claude-workflow/favicon.svg" }],
+    ["style", { id: DASH_TOKENS }, dashTokens],
     // What a link to the site shows in a post: Open Graph (most networks and messengers) and the Twitter card; each page adds its own title, description and url in transformHead.
     meta("property", "og:type", "website"),
     meta("property", "og:site_name", NAME),
@@ -91,6 +102,7 @@ export default defineConfig({
           items: [
             { text: "Getting started", link: "/getting-started" },
             { text: "Concepts", link: "/concepts" },
+            { text: "Use case: anyparse", link: "/use-case-anyparse" },
             { text: "Workflow YAML", link: "/workflow-yaml" },
             { text: "Action states", link: "/action-states" },
             { text: "Thread pool", link: "/pool" },
@@ -109,6 +121,10 @@ export default defineConfig({
           { text: "Getting started", link: "/getting-started" },
           { text: "Concepts", link: "/concepts" },
         ],
+      },
+      {
+        text: "Use cases",
+        items: [{ text: "anyparse", link: "/use-case-anyparse" }],
       },
       {
         text: "Reference",
