@@ -382,39 +382,63 @@ suite:
   on_timeout: slow_machine
 ```
 
-The engine runs the command `count` times with `WF_SHARD=i/N` (1-based, `vitest`/`jest` `--shard`
-form), or once per non-empty line `items_command` prints with `WF_ITEM=<line>`
-(`fanout: { items_command: "ls test/suites", threads_each: 2 }`). Each instance takes its own lease of
-`threads_each` threads from the pool (`WF_THREADS`), so shards start as threads free up and the
-machine-wide budget holds; `max_parallel` caps the instances in flight (default: as many as the
-budget runs side by side, `budget / threads_each` — the rest wait outside the pool queue, so other
-sessions are not stuck behind the whole fan-out). Lines of `items_command` lose a trailing `\r`. `timeout` bounds
-each shard. The step exits 0 only if every shard does; otherwise with the failing shards' common exit
-code (all of them timed out → 124, which `on_timeout` routes), or 1 when they differ. `{{stdout}}` is
-the summary — `fanout: 3/4 ok, 1 failed (exit 1)` and each failed shard's output tail. Abort kills
-the running shards, withdraws the waiting ones and starts no more. History and ledger keep one
-`shards` entry per instance (`shard`, `exit_code`, `duration_ms`, `wait_ms`, `threads_granted`).
-`fanout` is a load error beside `background` or `resource`; a failing `items_command` fails the
-step without running a shard.
-Known limitation: a fan-out's leases take no `resource:` options — no `wait_timeout` (so no exit 75
-route), no `locks`, no step `priority` (the session level only).
+The engine runs the command in one of two forms:
+
+- `count` times with `WF_SHARD=i/N` (1-based, `vitest`/`jest` `--shard` form);
+- once per non-empty line `items_command` prints, with `WF_ITEM=<line>` (`fanout: { items_command: "ls test/suites", threads_each: 2 }`). Lines of `items_command` lose a trailing `\r`.
+
+Leases and limits:
+
+- Each instance takes its own lease of `threads_each` threads from the pool (`WF_THREADS`), so shards start as threads free up and the machine-wide budget holds.
+- `max_parallel` caps the instances in flight (default: as many as the budget runs side by side, `budget / threads_each`). The rest wait outside the pool queue, so other sessions are not stuck behind the whole fan-out.
+- `timeout` bounds each shard.
+
+The result:
+
+- The step exits 0 only if every shard does. Otherwise it exits with the failing shards' common exit code (all of them timed out → 124, which `on_timeout` routes), or 1 when they differ.
+- `{{stdout}}` is the summary: `fanout: 3/4 ok, 1 failed (exit 1)` and each failed shard's output tail.
+- Abort kills the running shards, withdraws the waiting ones and starts no more.
+- History and ledger keep one `shards` entry per instance (`shard`, `exit_code`, `duration_ms`, `wait_ms`, `threads_granted`).
+
+Refusals:
+
+- `fanout` is a load error beside `background` or `resource`.
+- A failing `items_command` fails the step without running a shard.
+
+Known limitation: a fan-out's leases take no `resource:` options — no `wait_timeout` (so no exit 75 route), no `locks`, no step `priority` (the session level only).
 
 ### Template variables
 
-All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited), `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`), `{{session_id}}` and `{{parent_session_id}}` (empty at the root), `{{stale_sessions}}` (one `STALE:` line per stale session below this one — § Stall detection — or `none`; computed only when a template names it). After action execution, result variables are also available:
+All prompts support `{{mustache}}` templates. Context values are available everywhere via `{{context.key}}`, as are:
+
+- `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited);
+- `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`);
+- `{{session_id}}` and `{{parent_session_id}}` (empty at the root);
+- `{{stale_sessions}}` (one `STALE:` line per stale session below this one — § Stall detection — or `none`; computed only when a template names it).
+
+After action execution, result variables are also available:
 
 | Source | Variables |
 |--------|-----------|
 | `exec` | `{{stdout}}`, `{{stderr}}`, `{{exit_code}}`, `{{pid}}` (background), `{{wait_ms}}` (`resource:`) |
 | `fetch` | `{{status}}`, `{{body}}`, `{{error}}` |
 
-They come from the session's last action result (`last_action_result` in the session JSON), so they are not limited to the action's own `success_prompt` / `error_prompt` / `context_set`: the state an action routes into renders them in its own `prompt`, later prompt states still see them, and the next action state reads them in its `command` / `env` — until that action replaces them. `context_set` a value to keep it past the next action.
+They come from the session's last action result (`last_action_result` in the session JSON), so they are not limited to the action's own `success_prompt` / `error_prompt` / `context_set`:
+
+- the state an action routes into renders them in its own `prompt`;
+- later prompt states still see them;
+- the next action state reads them in its `command` / `env` — until that action replaces them.
+
+`context_set` a value to keep it past the next action.
 
 Action states can be chained — `exec` → `exec` → `fetch` → `prompt` — up to 20 steps without agent involvement.
 
 ### `revisit_prompt` — per-visit data on a revisit
 
-On a revisit of a prompt state the engine sends only "Revisit #N — follow the instructions from your first visit". A state whose prompt carries per-visit data (for example the `{{stdout}}` of the exec before it) can set `revisit_prompt`, a template rendered with the same variables as `prompt`, shown on revisits instead of that line. Absent = the generic line. `status()` (and any forced full prompt) still returns the full `prompt`, and so does a state with `full_on_revisit: true` (it wins over `revisit_prompt`).
+On a revisit of a prompt state the engine sends only "Revisit #N — follow the instructions from your first visit". A state whose prompt carries per-visit data (for example the `{{stdout}}` of the exec before it) can set `revisit_prompt`, a template rendered with the same variables as `prompt`, shown on revisits instead of that line.
+
+- Absent = the generic line.
+- `status()` (and any forced full prompt) still returns the full `prompt`, and so does a state with `full_on_revisit: true` (it wins over `revisit_prompt`).
 
 ```yaml
 dispatch:
@@ -424,11 +448,24 @@ dispatch:
 
 ### Stations — the columns of the live workflow map
 
-`/api/workflows` returns per workflow `stations: [{name, script, terminal}]`: the states on the shortest route from `initial` to the success terminal, in order; `script` is an exec state. The route follows the happy moves (`transitions`, `on_success`, `on_complete`, `cases["0"]`; every move when the terminal is out of their reach). The success terminal is the farthest terminal whose `outcome` is not `fail`, or the one terminal with `station: true` (a mark on a failure terminal, or on several terminals, is ignored and the loader warns on stderr). A state's `station: false` leaves it out (an exec helper such as `prepare` or a `*_route`); `station: true` adds a reachable state that lies off the route, placed by its distance from `initial`. Computed in `src/stations.ts`.
+`/api/workflows` returns per workflow `stations: [{name, script, terminal}]`: the states on the shortest route from `initial` to the success terminal, in order; `script` is an exec state.
+
+- The route follows the happy moves (`transitions`, `on_success`, `on_complete`, `cases["0"]`; every move when the terminal is out of their reach).
+- The success terminal is the farthest terminal whose `outcome` is not `fail`, or the one terminal with `station: true` (a mark on a failure terminal, or on several terminals, is ignored and the loader warns on stderr).
+- A state's `station: false` leaves it out (an exec helper such as `prepare` or a `*_route`).
+- `station: true` adds a reachable state that lies off the route, placed by its distance from `initial`.
+
+Computed in `src/stations.ts`.
 
 ### Guards and the exhausted route
 
-`max_transitions` (per workflow, per stack frame, default 50) and a state's `max_visits` refuse a move past them with an error. A move that only closes the run is exempt from `max_transitions`: one into a terminal, or into a state no route leads back to that leads on to a terminal (batch's `stop` -> `report` -> `finish`), so a run at its cap can still end cleanly. Within 5% of the cap every status / transition reply carries a `WARNING:` line naming what to do. The bundled `batch` sets 100000 (a queue loop takes about 3 transitions per task). A state may instead name where a move past its `max_visits` goes:
+`max_transitions` (per workflow, per stack frame, default 50) and a state's `max_visits` refuse a move past them with an error.
+
+- A move that only closes the run is exempt from `max_transitions`: one into a terminal, or into a state no route leads back to that leads on to a terminal (batch's `stop` -> `report` -> `finish`), so a run at its cap can still end cleanly.
+- Within 5% of the cap every status / transition reply carries a `WARNING:` line naming what to do.
+- The bundled `batch` sets 100000 (a queue loop takes about 3 transitions per task).
+
+A state may instead name where a move past its `max_visits` goes:
 
 ```yaml
 fix:
@@ -438,18 +475,63 @@ fix:
   transitions: { retry: verify }
 ```
 
-The route applies to every move into the state — an agent `transition`, an action state's `on_success`/`on_error`/`cases`, a skill gate's auto-transition; a pop's `on_complete`/`on_fail` does not check `max_visits`. Chained routes are followed (an exhausted `escalate` with its own route goes on), a cycle is an error, and the history entry's `detail` names the exhausted states. A rerouted action move shows the routed-to state's own prompt, not the action's `success_prompt`/`error_prompt` (written for the default target); the result stays readable there as `{{stdout}}`/`{{exit_code}}`. `on_exhausted` without `max_visits`, or to an unknown state, fails the load. `{{visits.<state>}}` counts visits in the active frame, so the routed-to state can say how many tries ran.
+The route applies to every move into the state — an agent `transition`, an action state's `on_success`/`on_error`/`cases`, a skill gate's auto-transition; a pop's `on_complete`/`on_fail` does not check `max_visits`.
+
+- Chained routes are followed (an exhausted `escalate` with its own route goes on), a cycle is an error, and the history entry's `detail` names the exhausted states.
+- A rerouted action move shows the routed-to state's own prompt, not the action's `success_prompt`/`error_prompt` (written for the default target); the result stays readable there as `{{stdout}}`/`{{exit_code}}`.
+- `on_exhausted` without `max_visits`, or to an unknown state, fails the load.
+- `{{visits.<state>}}` counts visits in the active frame, so the routed-to state can say how many tries ran.
 
 ### Question states — `ask: parent`
 
-A state tagged `ask: parent` asks its parent session a question: entering it logs an `ask` event in the event log, leaving it an `answer` (the dashboard's live map draws the pair). A question from ANY state is asked through the context key `ask_parent` (a driver has no shell, so it is one `context_set`): the hand-back sets it to the reason, in the state the session stands in, and the pair is derived from the session alone — the question is OPEN while the key holds text and no move or end of the session came after the write that set it; the session's next move or end (the parent's own `transition` on the child: a regate, a close) or the key cleared to `""` (the driver, once the parent has answered) is the answer, `to` = the state it moved to (or the state it stays in). A stale key is ignored; the same text written again while the question is open is still one question, and a question asked after an answer is a new `context_set`. The bundled driver instructions (`agents/driver.md`, `templates/drivers/task-driver.md`) set it before a NEEDS-PARENT line and clear it on resume. Asked inside an `ask: parent` state it is that state's one question, with its text. The log is `GET /api/events?since=<run>:<seq>` and the SSE stream `/api/events/stream` (ids are `<run>:<seq>`; a position from another run — a server restart — restarts from 0). It covers only the server process that holds the dashboard port; other Claude Code servers write their own `events/run-*.jsonl` under the state dir, which the dashboard does not serve.
+A state tagged `ask: parent` asks its parent session a question: entering it logs an `ask` event in the event log, leaving it an `answer` (the dashboard's live map draws the pair).
+
+A question from ANY state is asked through the context key `ask_parent` (a driver has no shell, so it is one `context_set`). The hand-back sets it to the reason, in the state the session stands in, and the pair is derived from the session alone:
+
+- the question is OPEN while the key holds text and no move or end of the session came after the write that set it;
+- the answer is the session's next move or end (the parent's own `transition` on the child: a regate, a close), or the key cleared to `""` (the driver, once the parent has answered); `to` = the state it moved to (or the state it stays in).
+
+Details:
+
+- A stale key is ignored.
+- The same text written again while the question is open is still one question, and a question asked after an answer is a new `context_set`.
+- The bundled driver instructions (`agents/driver.md`, `templates/drivers/task-driver.md`) set it before a NEEDS-PARENT line and clear it on resume.
+- Asked inside an `ask: parent` state it is that state's one question, with its text.
+
+The log:
+
+- It is `GET /api/events?since=<run>:<seq>` and the SSE stream `/api/events/stream` (ids are `<run>:<seq>`; a position from another run — a server restart — restarts from 0).
+- It covers only the server process that holds the dashboard port. Other Claude Code servers write their own `events/run-*.jsonl` under the state dir, which the dashboard does not serve.
 
 ### Stall detection — `stale_after`
 
-A session whose state saw no engine call (no `transition`, `context_set`, … — any write) for longer than the state's `stale_after` seconds is **STALE**: its agent may be dead or stuck. Unset, the state's type decides: a prompt state 1800 s (its agent calls the engine as it works), an `exec` / `fetch` 3600 s, a heavy exec (`resource:` or `fanout:`) 14400 s — an exec's default is never below its own `timeout` x 4 (the most a pool wait stretches it) + 300 s, before which the timeout bounds it. `stale_after: 0` = never (a state that waits for the user); on a terminal or `sub_workflow` state it is a load error (never read). Never stale: an ended or suspended session (suspension is its own mark), a session with an active child (it waits for its children, each judged on its own), and a `resource:` / `fanout:` exec waiting for its pool lease (before its run began, or marked `pool_starved`) while the process that owns the session is alive — the pool's wait, reported as `POOL STARVED`; a dead owner's wait counts. The clock runs from the session's last write, or from the start of the state's run when that is later (`running_exec`, else `pending_action.run_at`, written when the step's first lease is granted — a `fanout:` has no `running_exec`), so a takeover, resume or `context_set` during a run resets it. A fetch or a light exec is timed from its last write.
+A session whose state saw no engine call (no `transition`, `context_set`, … — any write) for longer than the state's `stale_after` seconds is **STALE**: its agent may be dead or stuck.
+
+Unset, the state's type decides:
+
+- a prompt state 1800 s (its agent calls the engine as it works);
+- an `exec` / `fetch` 3600 s;
+- a heavy exec (`resource:` or `fanout:`) 14400 s.
+
+An exec's default is never below its own `timeout` x 4 (the most a pool wait stretches it) + 300 s, before which the timeout bounds it.
+
+`stale_after: 0` = never (a state that waits for the user). On a terminal or `sub_workflow` state it is a load error (never read).
+
+Never stale:
+
+- an ended or suspended session (suspension is its own mark);
+- a session with an active child (it waits for its children, each judged on its own);
+- a `resource:` / `fanout:` exec waiting for its pool lease (before its run began, or marked `pool_starved`) while the process that owns the session is alive — the pool's wait, reported as `POOL STARVED`; a dead owner's wait counts.
+
+The clock runs from the session's last write, or from the start of the state's run when that is later (`running_exec`, else `pending_action.run_at`, written when the step's first lease is granted — a `fanout:` has no `running_exec`). So a takeover, resume or `context_set` during a run resets it. A fetch or a light exec is timed from its last write.
+
+Where it shows:
 
 - `sessions` marks one `[STALE: no engine call for 47m (since …), past its state's stale_after 30m]`.
-- `status` of a session lists the STALE sessions below it on top (the session itself is its parent's `status` and `sessions`' to show) (`STALE: session <id> (<workflow @ state>, child of <parent>, agent <agent id>) — …`) with what to do once: SendMessage the agent; no answer → abort the session, or let a new agent continue it from `status` — the session holds the step, so a restart loses nothing. `transition` appends the same lines. A line the answer's prompt already renders (`{{stale_sessions}}`) is not repeated; a revisit's digest renders no prompt, so there they come back as the notice. A step run again (resume, an interrupted lease wait) drops its old `run_at`: its own first lease starts its clock.
+- `status` of a session lists the STALE sessions below it on top (the session itself is its parent's `status` and `sessions`' to show) (`STALE: session <id> (<workflow @ state>, child of <parent>, agent <agent id>) — …`) with what to do once: SendMessage the agent; no answer → abort the session, or let a new agent continue it from `status` — the session holds the step, so a restart loses nothing.
+  - `transition` appends the same lines.
+  - A line the answer's prompt already renders (`{{stale_sessions}}`) is not repeated; a revisit's digest renders no prompt, so there they come back as the notice.
+  - A step run again (resume, an interrupted lease wait) drops its old `run_at`: its own first lease starts its clock.
 - The bundled `batch` `collect` prompt lists the run's stale sessions (`{{stale_sessions}}`), so the dispatcher messages or restarts a stuck driver/worker; its `paused` state (waits for the user) is `stale_after: 0`.
 
 ```yaml
@@ -465,4 +547,70 @@ An unknown key in a workflow, a state, a `retry:`, `resource:`, `fanout:` or `mo
 
 ### Ledger
 
-Every session end (complete, fail, abort, cascade, expiry of a suspended session) appends one JSON line to `$STATE_DIR/ledger.jsonl`: ids (session / parent / root), workflow, outcome (`completed` / `failed` / `abandoned`), start/end time, transition count, the exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`), and `segs` (each stretch of a state as `{s, a, b, w?}` in epoch ms, `w` the pool waits flat: what the Timeline tab draws a pruned session from). A `resource:` exec also records `threads_granted` (absent when it got no lease), a `fanout:` exec its `shards`, and both `step_key` = `<project>|<workflow>|<state>` (project = the git root of the session cwd, every worktree of a repo mapping to its main one) — the raw data a model of step time against threads keys its runs by; the engine only records it. From the session's context it also records `difficulty`, `claim_difficulty` (the first one the table saw; `wf-calibration` counts a line off by >=2 from it in its `claim` column), `model`, `effort`, `escalations`, `review_model`, `review_effort`, `stages` (the `model` / `effort` each stage ran on: its row when a state reading `context.model_<stage>` was entered — or, in a prompt state, `context.model` / `context.effort` (execute) or `context.review_model` / `context.review_effort` (review); an exec's env does not count — first value wins — a later rescore does not replace it; only those rows, so a stage absent from the line did not run) and `tokens` (`tokens` → `total`, `tokens_<role>` → `<role>`, whole numbers only) when set — what a `model_table` is tuned from. It also records `spend`: the REAL cost of the task, summed at its end from the transcripts of every agent that worked on it (every agent `link_agent` ever linked to a session of the task — `agent_id` is only the latest, a respawned worker's predecessor is kept in `linked_agents` — any context key `agent_id_<stage>` or `<role>_agent` such as `recon_agent` / `worker_agent` / `reviewer_agent`, over the session and all its descendants; `spend.agents` counts them), each turn priced by its own model id at input, output, cache-read and cache-write rates (`TURN_RATES_USD_PER_MTOK` in `src/calibration.ts`, keyed by model id with a family fallback for an unknown id of a known family; the Anthropic list of 2026-11-18; a 1-hour cache write costs twice the input rate) — a turn counted once, only inside the task's start..end window. An agent whose transcript cannot be read, or whose model has no rate, leaves `usd` absent and its id in `spend.unmeasured`: the task is unmeasured, never $0. An agent nothing links or names (an unlinked decider, a respawned worker nobody linked) is counted in `spend.unnamed`: transcripts of the task's conversations active in its window, possibly a concurrent task's, so the figure is not presented as complete. `spend.by_agent` lists the same spend per agent and linked state, `{agent, state?, stage?, model?, usd?, input, output, cache_read, cache_write}`: `state` is the parent's active state at the agent's `link_agent` call and `stage` the first model-table stage that state spawns on (every call is recorded in the session's `agent_links`, under any parent, `driver:` or not); an agent linked again (a worker for a fix round) splits at each call's time, a call at a state that spawns no stage keeps the stage before it, an agent nothing linked has neither; `model` is the model that cost the most there, `usd` is absent for an agent that could not be read or priced, and the rows' `usd` sum to `spend.usd`. Appends follow the session files' lock discipline with the ledger's own lock file; the ledger is never pruned with old sessions. Each append also rewrites `$STATE_DIR/ledger-recent.jsonl`: the task and parent-spend lines that ended in the last 30 days, cut to the fields the plan pane reads (`task`, `workflow`, `started_at`, `ended_at`, `outcome`, `visits`, `difficulty`, `spend.usd`, `parent_spend` `{to, project, usd}`) and capped at 3 MiB, the oldest lines dropped first: the plan pane reads it (the plugin API rejects a read of a file over 4 MiB, which the never-pruned ledger outgrows), falling back to `ledger.jsonl` while it is absent. The Failed header's totals and each failed row's `$cost` are the exception: the dashboard's `GET /api/ledger-rows?tasks=<ids>` answers the cost rows of those lines from the whole `ledger.jsonl`. A task's line (a line with a `task`, of a session that knows its Claude conversation) also records `parent_spend` `{conversation, project, from, to, offset, usd, input, output, cache_read, cache_write}`: what the PARENT — the top-level Claude Code session that dispatches, not a sub-agent — spent in its own turns (`<projects>/<project>/<conversation>.jsonl`; `project` is that directory's name), priced by the same table as `spend`; the transcript is read from the byte `offset` the conversation's previous line recorded, so a task's end reads the new turns only. A conversation's lines tile its time: each starts just after the latest `to` the ledger holds for that conversation (the first at the session's start), so the sum of `parent_spend.usd` over any lines counts a turn once (the plan pane's Landed heading sums those that ended in its 14 days). The appends of ended sessions run one after the other. A transcript that cannot be read, a model with no rate or an empty stretch leaves the line without `parent_spend` and the next line covers the stretch; the turns after the last task end are in no line until the next one.
+Every session end appends one JSON line to `$STATE_DIR/ledger.jsonl`; this section lists what a line holds.
+
+A line is written at: complete, fail, abort, cascade, and expiry of a suspended session.
+
+**Always recorded**
+
+- ids: session, parent, root; the workflow;
+- `outcome`: `completed` / `failed` / `abandoned`;
+- start/end time; transition count;
+- exec durations by state and their pool waits (`wait_ms`, `wait_ms_total`);
+- `segs`: each stretch of a state as `{s, a, b, w?}` in epoch ms, `w` the pool waits flat. The Timeline tab draws a pruned session from it.
+
+**Resource and fan-out execs**
+
+- a `resource:` exec records `threads_granted` (absent when it got no lease);
+- a `fanout:` exec records its `shards`;
+- both record `step_key` = `<project>|<workflow>|<state>`, where project is the git root of the session cwd (every worktree of a repo maps to its main one). This is the raw data a model of step time against threads keys its runs by; the engine only records it.
+
+**From the session's context, when set** (what a `model_table` is tuned from)
+
+- `difficulty`; `claim_difficulty` (the first one the table saw; `wf-calibration` counts a line off by >=2 from it in its `claim` column);
+- `model`, `effort`, `escalations`, `review_model`, `review_effort`;
+- `stages`: the `model` / `effort` each stage ran on.
+  - A row is taken when a state reading `context.model_<stage>` was entered, or, in a prompt state, from `context.model` / `context.effort` (execute) or `context.review_model` / `context.review_effort` (review).
+  - An exec's env does not count. First value wins; a later rescore does not replace it.
+  - Only those rows exist, so a stage absent from the line did not run;
+- `tokens`: `tokens` → `total`, `tokens_<role>` → `<role>`; whole numbers only.
+
+**`spend`: the REAL cost of the task**
+
+Summed at the task's end from the transcripts of every agent that worked on it, over the session and all its descendants. Agents counted:
+
+- every agent `link_agent` ever linked to a session of the task (`agent_id` is only the latest; a respawned worker's predecessor is kept in `linked_agents`);
+- any context key `agent_id_<stage>` or `<role>_agent`, such as `recon_agent` / `worker_agent` / `reviewer_agent`.
+
+`spend.agents` counts them. Each turn is priced by its own model id at input, output, cache-read and cache-write rates:
+
+- the table is `TURN_RATES_USD_PER_MTOK` in `src/calibration.ts`, keyed by model id with a family fallback for an unknown id of a known family;
+- the rates are the Anthropic list of 2026-11-18; a 1-hour cache write costs twice the input rate.
+
+A turn is counted once, only inside the task's start..end window.
+
+- An agent whose transcript cannot be read, or whose model has no rate, leaves `usd` absent and its id in `spend.unmeasured`. The task is unmeasured, never $0.
+- An agent nothing links or names (an unlinked decider, a respawned worker nobody linked) is counted in `spend.unnamed`: transcripts of the task's conversations active in its window, possibly a concurrent task's, so the figure is not presented as complete.
+
+`spend.by_agent` lists the same spend per agent and linked state: `{agent, state?, stage?, model?, usd?, input, output, cache_read, cache_write}`.
+
+- `state` is the parent's active state at the agent's `link_agent` call; `stage` is the first model-table stage that state spawns on. Every call is recorded in the session's `agent_links`, under any parent, `driver:` or not.
+- An agent linked again (a worker for a fix round) splits at each call's time. A call at a state that spawns no stage keeps the stage before it. An agent nothing linked has neither.
+- `model` is the model that cost the most there; `usd` is absent for an agent that could not be read or priced. The rows' `usd` sum to `spend.usd`.
+
+**`parent_spend`**
+
+A task's line (a line with a `task`, of a session that knows its Claude conversation) also records `parent_spend` `{conversation, project, from, to, offset, usd, input, output, cache_read, cache_write}`: what the PARENT (the top-level Claude Code session that dispatches, not a sub-agent) spent in its own turns.
+
+- Source: `<projects>/<project>/<conversation>.jsonl`; `project` is that directory's name. Priced by the same table as `spend`.
+- The transcript is read from the byte `offset` the conversation's previous line recorded, so a task's end reads the new turns only.
+- A conversation's lines tile its time: each starts just after the latest `to` the ledger holds for that conversation (the first at the session's start). So the sum of `parent_spend.usd` over any lines counts a turn once (the plan pane's Landed heading sums those that ended in its 14 days).
+- The appends of ended sessions run one after the other.
+- A transcript that cannot be read, a model with no rate or an empty stretch leaves the line without `parent_spend`, and the next line covers the stretch. The turns after the last task end are in no line until the next one.
+
+**Files and locking**
+
+- Appends follow the session files' lock discipline with the ledger's own lock file. The ledger is never pruned with old sessions.
+- Each append also rewrites `$STATE_DIR/ledger-recent.jsonl`: the task and parent-spend lines that ended in the last 30 days, cut to the fields the plan pane reads (`task`, `workflow`, `started_at`, `ended_at`, `outcome`, `visits`, `difficulty`, `spend.usd`, `parent_spend` `{to, project, usd}`), capped at 3 MiB, the oldest lines dropped first.
+- The plan pane reads it (the plugin API rejects a read of a file over 4 MiB, which the never-pruned ledger outgrows), falling back to `ledger.jsonl` while it is absent.
+- Exception: the Failed header's totals and each failed row's `$cost`. The dashboard's `GET /api/ledger-rows?tasks=<ids>` answers the cost rows of those lines from the whole `ledger.jsonl`.
