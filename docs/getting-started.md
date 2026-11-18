@@ -64,6 +64,10 @@ claude --plugin-dir ./
 
 Supported marketplace sources: the **npm package** (`claude-mcp-workflow`) and a **local directory**. A marketplace entry that points at the git repository (git URL as a plugin source) is **not** supported — `build/` is gitignored, so a git-sourced install has no compiled MCP server to run. (Cloning for development works — see above — because you run `npm run build` yourself.)
 
+### Uninstall
+
+Run `wf-skills remove` (`scripts/wf-skills` of the plugin), then `/plugin uninstall workflow`. The plugin copies its skills into `~/.claude/skills/` and keeps state in `~/.claude/workflow-state/` and `~/.claude/workflow-pool/`; an uninstall alone removes none of them. `wf-skills remove` takes out the skill copies you did not edit, `--state` the two state directories, `--dry-run` shows what it would do. Details: [Updating and removing the skills](/concepts#updating-and-removing-the-skills).
+
 ## Recommended CLAUDE.md Snippet
 
 The engine only helps when the agent actually starts a workflow. Add this to your `~/.claude/CLAUDE.md`, once; after it every conversation begins inside the engine, with nothing for you to type:

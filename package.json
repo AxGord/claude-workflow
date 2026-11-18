@@ -15,6 +15,7 @@
     "wf-run": "build/wf-run.js",
     "wf-queue": "build/queue-cli.js",
     "wf-trust": "build/trust-cli.js",
+    "wf-skills": "build/skills-cli.js",
     "wf-calibration": "build/calibration-cli.js"
   },
   "scripts": {
@@ -23,6 +24,7 @@
     "start": "node build/index.js",
     "test": "vitest run",
     "lint": "node scripts/lint-new.mjs",
+    "skills:history": "npm run build && node scripts/skills-history.mjs",
     "lint:baseline": "node scripts/lint-new.mjs --update-baseline",
     "format:check": "biome format",
     "scan": "ast-grep scan --error",

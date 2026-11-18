@@ -2,12 +2,35 @@
 # SessionStart hook: detect context (new session / plan resume / context clear)
 # and instruct agent accordingly.
 
-# --- 0. Ensure base skills exist ---
-# lang-* skills are dependencies of coding-skill-selector — only copied together with it.
-# If user deletes a lang-* skill, it stays deleted until coding-skill-selector is also removed.
+# --- 0. The bundled skills (templates/skills → ~/.claude/skills), provisioned by `wf-skills sync` ---
+# (src/skills.ts): a manifest in $STATE_DIR records what was copied; an UNEDITED copy is replaced when this
+# release ships a newer version, an edited one is left alone and named once (a note printed at the end of
+# this hook's output), a skill the user deleted stays deleted, and lang-* skills follow coding-skill-selector.
+# Without node or the build the old rule applies: copy a skill whose directory is missing, nothing else.
 SKILLS_SRC="${CLAUDE_PLUGIN_ROOT}/templates/skills"
-SKILLS_DST="$HOME/.claude/skills"
-if [ -d "$SKILLS_SRC" ]; then
+SKILLS_DST="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+SKILLS_CLI="${CLAUDE_PLUGIN_ROOT}/build/skills-cli.js"
+STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
+SKILLS_NOTE=""
+trap '[ -n "$SKILLS_NOTE" ] && printf "%s\n" "$SKILLS_NOTE"' EXIT
+
+# --- 0b. Migrate: the engine's YAML authoring skill was once installed as `workflow-authoring`,
+# a name Claude Code's own bundled skill uses — a personal skill of that name replaces it. Move an
+# earlier install's copy out of the skills dir (into $STATE_DIR/skill-backups, never deleted: a live
+# copy may have been enriched) so the native one is visible again. Only the engine's copy moves: it is
+# recognised by the description an engine release shipped, and only when the directory holds nothing
+# but its SKILL.md (a Finder .DS_Store aside); a user's own skill of that name (any other description,
+# or extra files) stays.
+OLD_COPY="$SKILLS_DST/workflow-authoring"
+if [ -f "$OLD_COPY/SKILL.md" ] && [ "$(ls -A "$OLD_COPY" | grep -vx '.DS_Store' | wc -l | tr -d ' ')" = "1" ] \
+  && sed -n '1,6p' "$OLD_COPY/SKILL.md" | grep -qE '^description: Reference for (authoring workflow YAML|creating workflows with exec/fetch action states)'; then
+  BACKUP="$STATE_DIR/skill-backups/workflow-authoring.$(date +%s).$$"
+  mkdir -p "$STATE_DIR/skill-backups" && mv "$OLD_COPY" "$BACKUP"
+fi
+
+if [ -f "$SKILLS_CLI" ] && command -v node >/dev/null 2>&1; then
+  SKILLS_NOTE=$(STATE_DIR="$STATE_DIR" node "$SKILLS_CLI" sync --quiet 2>/dev/null)
+elif [ -d "$SKILLS_SRC" ]; then
   mkdir -p "$SKILLS_DST"
   COPY_LANG=false
   [ ! -d "$SKILLS_DST/coding-skill-selector" ] && COPY_LANG=true
@@ -19,21 +42,6 @@ if [ -d "$SKILLS_SRC" ]; then
       cp -r "$skill_dir" "$SKILLS_DST/$skill_name"
     fi
   done
-fi
-
-# --- 0b. Migrate: the engine's YAML authoring skill was once installed as `workflow-authoring`,
-# a name Claude Code's own bundled skill uses — a personal skill of that name replaces it. Move an
-# earlier install's copy out of the skills dir (into $STATE_DIR/skill-backups, never deleted: a live
-# copy may have been enriched) so the native one is visible again. Only the engine's copy moves: it is
-# recognised by the description an engine release shipped, and only when the directory holds nothing
-# but its SKILL.md (a Finder .DS_Store aside); a user's own skill of that name (any other description,
-# or extra files) stays.
-STATE_DIR="${STATE_DIR:-$HOME/.claude/workflow-state}"
-OLD_COPY="$SKILLS_DST/workflow-authoring"
-if [ -f "$OLD_COPY/SKILL.md" ] && [ "$(ls -A "$OLD_COPY" | grep -vx '.DS_Store' | wc -l | tr -d ' ')" = "1" ] \
-  && sed -n '1,6p' "$OLD_COPY/SKILL.md" | grep -qE '^description: Reference for (authoring workflow YAML|creating workflows with exec/fetch action states)'; then
-  BACKUP="$STATE_DIR/skill-backups/workflow-authoring.$(date +%s).$$"
-  mkdir -p "$STATE_DIR/skill-backups" && mv "$OLD_COPY" "$BACKUP"
 fi
 
 ZED_SUFFIX=""

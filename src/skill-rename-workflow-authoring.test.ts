@@ -30,6 +30,8 @@ describe("bundled skill name must not shadow Claude Code's native /workflow-auth
         STATE_DIR: path.join(root, "state"),
         CLAUDE_CONFIG_DIR: path.join(root, "config"),
         CLAUDE_PLUGIN_ROOT: ROOT,
+        // the hook and the skills CLI resolve the skills dir from this: never the developer's own
+        CLAUDE_SKILLS_DIR: "",
       },
       encoding: "utf8",
     });

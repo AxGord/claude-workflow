@@ -37,7 +37,7 @@ Agent                       Engine                          Storage
 5. Sub-workflows form a stack: a state with `sub_workflow:` pushes a nested workflow (max depth 10) and the engine pops it when it completes
 6. Snapshot isolation: workflow definitions are frozen at session start, so a hot-reload never changes a running session
 7. Runtime overlays: `modify` adds, changes or removes states and transitions of one session without touching the YAML files
-8. The SessionStart hook auto-provisions missing skills and injects the workflow context
+8. The SessionStart hook provisions the bundled skills, keeps unedited copies current and injects the workflow context
 
 ## Bundled Workflows
 
@@ -71,7 +71,7 @@ The `coding` workflow, drawn by the dashboard's own renderer (click a state to r
 
 ## Bundled Skills
 
-Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-provisioned to `~/.claude/skills/` on first run if missing. Edit your local copy to override the bundled version — the hook never overwrites existing files.
+Skills are reusable knowledge modules loaded by workflows via `Skill()`. The SessionStart hook copies them to `~/.claude/skills/` and keeps them current. Edit your local copy to change one: a copy you edited is never overwritten ([how updates and removal work](#updating-and-removing-the-skills)).
 
 **Methodology**
 
@@ -125,6 +125,41 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-pr
 | `web-reading` | Fetch web content via subagents |
 | `skill-manager` | Create, install, update, optimize skills |
 | `cleanup` | Clean .claude directory data |
+
+### Updating and removing the skills
+
+The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it copied, the skill, the path, the sha256 as shipped and the engine version that shipped it. On every start:
+
+- A copy whose files all equal what an engine release shipped is **unedited**, and is replaced when this release ships another version (files the new version drops go too).
+- A copy you edited is left alone and named once in the hook's output, with `wf-skills diff <name>`. It is named again only when a later release ships yet another version.
+- A skill you deleted stays deleted and is recorded as such; `wf-skills update <name>` brings it back.
+- The `lang-*` skills belong to `coding-skill-selector`: they are copied only while it is installed, and one you deleted stays deleted.
+- A skill directory that is a link is yours and never touched.
+- Copies made before the manifest existed are adopted: one equal to any version the repo ever shipped (`templates/skills-history.txt`, rebuilt by `npm run skills:history`) counts as unedited, any other as edited.
+- A plugin root that is not newer than the one that wrote a copy never takes it back to an older text (the cache and a marketplace directory can both hold the plugin).
+
+`wf-skills` (`scripts/wf-skills` of the plugin, also a `wf-skills` bin of the npm package):
+
+| Command | What it does |
+|---------|--------------|
+| `wf-skills list [--json]` | Each bundled skill: shipped, installed, and `current`, `outdated`, `edited`, `deleted` or not installed; changes nothing |
+| `wf-skills diff <name>` | Your copy against the version this release ships |
+| `wf-skills update <name>…` | Install the shipped version; an edited copy is saved to `$STATE_DIR/skill-backups` first |
+| `wf-skills remove [--state] [--dry-run]` | Remove every unedited engine copy and the manifest; see below |
+
+**Uninstalling.** Removing the plugin deletes none of what it made. Four places stay:
+
+- the skill copies in `~/.claude/skills/`;
+- `~/.claude/workflow-state/` (`STATE_DIR`): sessions, the ledger, skill backups and the manifest;
+- `~/.claude/workflow-pool/` (`WF_POOL_DIR`): the pool state, its log and usage;
+- `~/.claude/workflows/` (`WORKFLOW_DIR`): the engine creates it at its first start; `--state` removes it only while it is empty, so your own workflows are safe.
+
+Run `wf-skills remove` **before** `/plugin uninstall`: the command lives in the plugin, and a session started in between copies the skills again.
+
+- It removes every unedited copy and the manifest, and never touches an edited copy or a skill the engine did not ship.
+- `--dry-run` prints what it would do and changes nothing.
+- The state and pool directories hold your ledger, so they stay unless you add `--state`.
+- `--state` names them and removes them (end every Claude Code session first), the workflow directory too when it is empty.
 
 ## MCP Tools
 

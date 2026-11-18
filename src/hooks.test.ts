@@ -11,7 +11,7 @@ const HOOKS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "
 function runHook(script: string, env: Record<string, string>, payload: object = {}): string {
   const r = spawnSync("bash", [path.join(HOOKS, script)], {
     input: JSON.stringify(payload) + "\n",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...env, CLAUDE_SKILLS_DIR: "" },
     encoding: "utf8",
   });
   if (r.status !== 0) throw new Error(`${script} exited ${r.status}: ${r.stderr}`);

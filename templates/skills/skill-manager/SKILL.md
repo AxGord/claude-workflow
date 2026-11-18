@@ -294,3 +294,4 @@ Before finishing any skill operation:
       drift by whitespace) and verify with the repo's
       `scripts/check-skill-sync.sh`. An intentionally-different twin
       (generic template vs personal copy) belongs in `.skillsyncignore`
+- [ ] **Shipped version recorded**: after any edit under `templates/skills/` of a plugin repo that ships a copy-provisioning hook, run its history script (`npm run skills:history` in `mcp-workflow-engine`) — a user's unedited older copy is recognised, and updated, only by the versions that table lists

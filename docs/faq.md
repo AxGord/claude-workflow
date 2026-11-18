@@ -9,6 +9,10 @@ description: Troubleshooting
 
 Session JSON files live in `~/.claude/workflow-state/` (`STATE_DIR`); the foreground output and exit codes of `exec` states are under its `exec/` directory. See [Configuration](/getting-started#configuration).
 
+## What does an uninstall leave behind?
+
+The skill copies in `~/.claude/skills/`, `~/.claude/workflow-state/` and `~/.claude/workflow-pool/`. Run `wf-skills remove` before `/plugin uninstall`, with `--state` to include the two state directories. See [Concepts](/concepts#updating-and-removing-the-skills).
+
 ## The dashboard does not open
 
 It binds `127.0.0.1:3100` by default (`DASHBOARD_HOST`, `DASHBOARD_PORT`). Another process on that port, or a second Claude Code instance, may hold it; set `DASHBOARD_PORT` and restart Claude Code. The page is described in [Dashboard and plan pane](/dashboard).

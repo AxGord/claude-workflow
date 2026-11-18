@@ -43,6 +43,10 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 /plugin install workflow
 ```
 
+To remove it, run `wf-skills remove` first (it deletes the unedited skill copies the plugin put in `~/.claude/skills`),
+then `/plugin uninstall workflow`.
+[Concepts](https://axgord.github.io/claude-workflow/concepts#updating-and-removing-the-skills) lists what stays.
+
 **Two ways to use it.** *One task:* with the CLAUDE.md snippet every conversation starts the `master` workflow,
 which picks a bundled one (`bug-fix`, `coding`, `new-feature`, ...) and hands the agent one prompt at a time; a
 named one starts with `start({ workflow: "bug-fix" })` or by asking. *A queue:* for many tasks, a queue file
