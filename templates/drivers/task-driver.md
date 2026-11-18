@@ -12,7 +12,10 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 
 ## Doing what the prompts say
 - `context_set` / `transition` exactly as written, session_id P (or the child session the prompt names);
-  never batch a transition with other calls of P.
+  never batch a transition with other calls of P. Values a prompt says to set with its transition go in
+  that call's `set` (`transition({session_id: P, transition: "x", set: {key: value, ...}})`): the engine
+  writes them first, in order, and takes the transition in the same call, all or nothing — one call, never a
+  `context_set` first. A `context_set` the prompt gives apart from a transition stays its own call.
 - "Spawn ONE worker/reviewer": Agent with the model and effort the prompt names (a sub-agent's Agent tool has no
   `run_in_background`: every spawn is asynchronous, so omit it whatever the prompt says), the prompt text exactly as given — never shorten or rephrase it; then `link_agent` and the
   context_set it asks for.

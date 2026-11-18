@@ -170,7 +170,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `list` | List all available workflow definitions | — |
 | `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd`, `priority`, `context`, `reply`, `force` |
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
-| `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition`, `caller_session_id`, `force` + `reason` |
+| `transition` | Advance to next state (auto push/pop sub-workflows); `set` writes context keys first, in the same call | `session_id`, `transition`, `set`, `caller_session_id`, `force` + `reason` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
 | `modify` | Runtime overlay — add/change/remove states and transitions (an `exec`/`fetch` state is refused) | `session_id`, `add_state`, `add_transition` |
 | `create` | Create new workflow definition (saves YAML; an `exec`/`fetch` state is refused) | `name`, `definition`, `scope` |
@@ -197,5 +197,10 @@ Notes on the tools above:
 - `start`, `force: "<reason>"`: a second root. Without `parent_session_id`, a start in a process that already has an active root is refused, naming the root by workflow and state, never its id. A sub-agent never gets a root.
 - `start`: a workflow with `driver:` ends the answer with the driver's Agent call.
 - `transition`: a call with a `caller_session_id` outside the caller's subtree is refused unless `force: true` with a `reason`. A `transition` naming no `caller_session_id` is not judged (the engine's own prompts step other sessions without one, and a step ends no one); the guard stops an agent that names itself.
+- `transition`, `set`: `{key: value, ...}` written to the context BEFORE the move, in the given order, in the same call and the same write. The entered state's exec, prompt and templates see the keys, so a `context_set` + `transition` pair is one request. A numeric-looking key sorts first, as in any JS object.
+  - Each key is written as `context_set` writes it: a `difficulty` outside 1..10 under a `model_table` is refused, and the table derives its keys.
+  - All or nothing. A refused key, a transition not available, the max-transitions refusal or a session waiting for its children writes none of it, and the error says which. A session whose orphaned exec the call adopts writes none either: the transition is not taken.
+  - History and the event log get one `context_set` line per key (detail = the key), each before the `transition` line: what the same calls one by one leave, so no reader changes. Only the event log's `rescore` and `queue` events, derived from the context diff of one write, follow the `transition` event of that call instead of preceding it. Put `ask_parent` in a plain `context_set`: the move answers it.
+  - The reply starts with `Context set: <keys>.`. `context_set` has no value size limit, so `set` has none. `context_set` itself is unchanged, and a call without `set` behaves as before.
 - `abort`: its active descendants end with it; the cascade is logged to stderr with the caller and the session count. Refused for a root or a session with active descendants unless `caller_session_id` is the target or an ancestor of it, or `force: true` with a `reason`.
 - `link_agent`: every agent linked stays on the session (`linked_agents`). Every call is recorded with its time, the parent's state and that state's stage (`agent_links`) for the ledger's spend, in total and per agent and stage (`spend.by_agent`).

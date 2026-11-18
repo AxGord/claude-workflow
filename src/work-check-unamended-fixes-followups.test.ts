@@ -120,7 +120,7 @@ describe("batch-task work_check: unamended after FIXES", () => {
   it("the driver prompts record reviewed_sha and review_text, and a fix round never checks on entering", () => {
     const text = readFileSync(join(here, "templates/batch-task.yaml"), "utf8");
     expect(text).toContain("context_set `reviewed_sha` = the sha of the worker's latest DONE");
-    expect(text).toContain("context_set `review_text` = its one-line handback verbatim");
+    expect(text).toContain("`set: {review_text: <its one-line handback");
     expect(text).toContain("never `check` on entering this state");
   });
 });

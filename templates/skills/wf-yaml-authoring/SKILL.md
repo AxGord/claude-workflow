@@ -195,7 +195,7 @@ Cases overrides on_success/on_error when both are present.
 Available in ALL prompts (not just action states):
 - `{{context.cwd}}` — the session's working directory (`start`'s `cwd`, else the server's)
 - `{{session_id}}`, `{{parent_session_id}}` (empty at the root)
-- `{{context.<key>}}` — any context value set via context_set
+- `{{context.<key>}}` — any context value set via context_set, or by `transition`'s `set: {key: value, ...}` (written first, in the same call, all or nothing with the move: an agent's `context_set` + `transition` pair is one request, and the entered exec/prompt sees the keys)
 - `{{visits.<state>}}` — visit count of `<state>` in the ACTIVE stack frame (empty if never visited) — route on "did the fix loop run?" without an agent turn
 - `{{root_workflow}}` — workflow at the stack root (`subagent` = running as a spawned sub-agent)
 - `{{stale_sessions}}` — one `STALE:` line per stale session below this one, or `none` (computed only when a template names it; also in `success_prompt` / `error_prompt` / `context_set`) — bundled `batch` `collect` lists the run's stuck agents with it; a `status` whose prompt renders it shows no second copy on top

@@ -602,12 +602,18 @@ export function registerTools(
     "transition",
     {
       description:
-        "Transition to the next state in the active workflow. If the new state has a sub_workflow, it auto-pushes. If terminal, it auto-pops to parent. A context_set this transition (or the state it leads to) depends on must have RETURNED first: never send them in the same parallel tool batch, which has no ordering guarantee.",
+        "Transition to the next state in the active workflow. If the new state has a sub_workflow, it auto-pushes. If terminal, it auto-pops to parent. `set` = {key: value, ...} written to the context FIRST, in order, then the transition is taken, in one call (a key this transition or the state it leads to reads: pass it here, not in a context_set sent in the same parallel batch, which has no ordering guarantee). All or nothing: a refused key or a refused transition writes none of them. A context_set that is not in `set` must have RETURNED first.",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
           session_id: z.string().optional().describe("Session identifier"),
           transition: z.string().describe("Name of the transition to take"),
+          set: z
+            .record(z.unknown())
+            .optional()
+            .describe(
+              "Context keys to write before the transition, in the given order, each as context_set would; all or nothing with the transition",
+            ),
           actor: z.string().optional().describe("Identity of the agent performing this action"),
           force: z.boolean().optional().describe(FORCE_DESCRIPTION),
           reason: z.string().optional().describe(REASON_DESCRIPTION),
@@ -634,14 +640,16 @@ export function registerTools(
           const adopted = how
             ? await withProgress(progress, () => engine.adoptOrphanedExec(sid))
             : null;
+          const setKeys = Object.keys(args.set ?? {});
           if (adopted) {
-            const text = `${warning ? warning + "\n\n" : ""}${formatAdopted(adopted, how)}\n\nTransition "${args.transition}" was NOT taken — the session moved on; choose from the state above.`;
+            const text = `${warning ? warning + "\n\n" : ""}${formatAdopted(adopted, how)}\n\nTransition "${args.transition}" was NOT taken${setKeys.length > 0 ? ` and its \`set\` keys were NOT written` : ""} — the session moved on; choose from the state above.`;
             return { content: [{ type: "text", text }], isError: true };
           }
           const status = await withProgress(progress, () =>
-            engine.transition(sid, args.transition, args.actor),
+            engine.transition(sid, args.transition, args.actor, args.set),
           );
-          const body = formatStatus(status);
+          const setLine = setKeys.length > 0 ? `Context set: ${setKeys.join(", ")}.\n\n` : "";
+          const body = setLine + formatStatus(status);
           const notices = [...starvationLines(storage, sid), ...unshownStale(engine, sid, body)];
           const text =
             (warning ? warning + "\n\n" : "") +
@@ -662,7 +670,7 @@ export function registerTools(
     "context_set",
     {
       description:
-        "Save key-value data in the session context for later use. When a following transition reads the key, wait for this call to return before calling transition (separate message, not the same parallel batch).",
+        "Save key-value data in the session context for later use. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({

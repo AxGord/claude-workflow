@@ -400,18 +400,29 @@ export class Engine {
     });
   }
 
+  /**
+   * Take a transition. `set` = context keys written first, in order, each as `setContext` would
+   * (own history line, `model_table` derivation), in the SAME write as the move: the entered
+   * state sees them, and a refused key or a refused move writes none of it.
+   */
   public async transition(
     sessionId: string,
     transitionName: string,
     actor?: string,
+    set?: Readonly<Record<string, unknown>>,
   ): Promise<StatusResult> {
-    const session = this._storage.read(sessionId);
+    let session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
     if (session.stack.length === 0)
       throw new Error(`Session "${sessionId}" has no active workflow`);
+    const keys = Object.entries(set ?? {});
 
     // Session is waiting for children to complete — try to resolve
     if (session.pending_pop) {
+      if (keys.length > 0)
+        throw new Error(
+          "`set` cannot ride a transition of a session waiting for its children: nothing was written; use context_set",
+        );
       const result = await this.retryPendingPop(sessionId);
       if (result) return result;
       throw new Error(this._formatChildrenBlockError(sessionId));
@@ -443,6 +454,8 @@ export class Engine {
           ` — only a move that closes the run is accepted now`,
       );
     }
+
+    for (const [key, value] of keys) session = this._withKey(session, key, value, actor);
 
     const now = new Date().toISOString();
 
@@ -1015,6 +1028,23 @@ export class Engine {
   ): Promise<string | undefined> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
+    const updated = this._withKey(session, key, value, actor);
+
+    await this._storage.write(sessionId, updated);
+    const last = updated.history[updated.history.length - 1];
+    return last.event === "model" ? last.detail : undefined;
+  }
+
+  /**
+   * `session` with one context key written: its `context_set` history line, and what its
+   * `model_table` derives from it. Pure — nothing is stored; a refused key throws.
+   */
+  private _withKey(
+    session: SessionState,
+    key: string,
+    value: unknown,
+    actor?: string,
+  ): SessionState {
     if (
       key === MODEL_KEYS.difficulty &&
       parseDifficulty(value) === null &&
@@ -1023,20 +1053,18 @@ export class Engine {
       throw new Error(`${difficultyError(value)} (the workflow's model_table maps it)`);
 
     const now = new Date().toISOString();
-    const set: SessionState = {
-      ...session,
-      context: { ...session.context, [key]: value },
-      updated_at: now,
-      history: [
-        ...session.history,
-        { frame: session.active_frame, event: "context_set", at: now, actor, detail: key },
-      ],
-    };
-    const updated = this._withModel(set, new Set([key]));
-
-    await this._storage.write(sessionId, updated);
-    const last = updated.history[updated.history.length - 1];
-    return updated === set || last.event !== "model" ? undefined : last.detail;
+    return this._withModel(
+      {
+        ...session,
+        context: { ...session.context, [key]: value },
+        updated_at: now,
+        history: [
+          ...session.history,
+          { frame: session.active_frame, event: "context_set", at: now, actor, detail: key },
+        ],
+      },
+      new Set([key]),
+    );
   }
 
   /** The `model_table` the session runs under — the nearest frame's workflow down the stack that declares one — and that frame's visits. */
