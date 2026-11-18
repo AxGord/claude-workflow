@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTestLoader, createFixtureDir, cleanupDir } from "./test-helpers.js";
+import { createTestLoader, createFixtureDir, cleanupDir, trustStoreFor } from "./test-helpers.js";
 import { Loader } from "./loader.js";
 
 describe("Loader", () => {
@@ -411,7 +411,12 @@ describe("Loader: extends", () => {
       dirs.push(d);
       return d;
     };
-    return new Loader(tier(bundled), tier(global), project ? tier(project) : null);
+    const projectDir = project ? tier(project) : null;
+    // the user ran `wf-trust` on the project: its files' exec states load
+    const approved = projectDir
+      ? fs.readdirSync(projectDir).map(f => path.join(projectDir, f))
+      : [];
+    return new Loader(tier(bundled), tier(global), projectDir, trustStoreFor(...approved));
   };
   const BASE = {
     description: "base flow",

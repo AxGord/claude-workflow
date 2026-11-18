@@ -137,8 +137,8 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
 | `transition` | Advance to next state (auto push/pop sub-workflows). A call with a `caller_session_id` outside the caller's subtree is refused unless `force: true` with a `reason`; a `transition` naming no `caller_session_id` is not judged (the engine's own prompts step other sessions without one, and a step ends no one); the guard stops an agent that names itself | `session_id`, `transition`, `caller_session_id`, `force` + `reason` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
-| `modify` | Runtime overlay — add/change/remove states and transitions | `session_id`, `add_state`, `add_transition` |
-| `create` | Create new workflow definition (saves YAML) | `name`, `definition`, `scope` |
+| `modify` | Runtime overlay — add/change/remove states and transitions (an `exec`/`fetch` state is refused) | `session_id`, `add_state`, `add_transition` |
+| `create` | Create new workflow definition (saves YAML; an `exec`/`fetch` state is refused) | `name`, `definition`, `scope` |
 | `delete` | Delete a workflow definition | `name`, `scope` |
 | `abort` | Abort workflow, pop all stack frames (its active descendants end with it; the cascade is logged to stderr with the caller and the session count). Refused for a root or a session with active descendants unless `caller_session_id` is the target or an ancestor of it, or `force: true` with a `reason` | `session_id`, `caller_session_id`, `force`, `reason` |
 | `sessions` | List all sessions (active first); `[STALE: …]` marks one whose state saw no engine call past its `stale_after` | `all` |

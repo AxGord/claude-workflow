@@ -8,7 +8,7 @@ import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { Storage } from "./storage.js";
 import { cliLoader, cliReport } from "./session-cli.js";
-import { cleanupDir } from "./test-helpers.js";
+import { cleanupDir, trustStoreFor } from "./test-helpers.js";
 import { workflowDirs, workflowLoader } from "./workflow-dirs.js";
 
 const TASK = {
@@ -33,17 +33,26 @@ function mkdtemp(): string {
   return d;
 }
 /** A project with `.claude/workflows/<name>.yaml` per workflow, and an empty global dir. */
-function project(workflows: Record<string, object>): { cwd: string; global: string } {
+function project(workflows: Record<string, object>): {
+  cwd: string;
+  global: string;
+  state: string;
+} {
   const cwd = mkdtemp();
   const dir = path.join(cwd, ".claude", "workflows");
   fs.mkdirSync(dir, { recursive: true });
   for (const [name, def] of Object.entries(workflows))
     fs.writeFileSync(path.join(dir, `${name}.yaml`), YAML.stringify({ name, ...def }));
-  return { cwd, global: mkdtemp() };
+  // the user ran `wf-trust` on the project: the files' exec states are approved in the state dir
+  const state = mkdtemp();
+  const store = trustStoreFor(...fs.readdirSync(dir).map(f => path.join(dir, f)));
+  fs.copyFileSync(store.file!, path.join(state, "trusted-workflows.json"));
+  return { cwd, global: mkdtemp(), state };
 }
-function inProject(p: { cwd: string; global: string }): void {
+function inProject(p: { cwd: string; global: string; state: string }): void {
   vi.spyOn(process, "cwd").mockReturnValue(p.cwd);
   vi.stubEnv("WORKFLOW_DIR", p.global);
+  vi.stubEnv("STATE_DIR", p.state);
 }
 
 afterEach(() => {

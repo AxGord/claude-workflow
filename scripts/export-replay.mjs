@@ -122,13 +122,16 @@ async function main() {
   const { assertReplayClean, buildReplay, renderReplay } = await load("replay.js");
   const { workflowDirs } = await load("workflow-dirs.js");
   const { Loader } = await load("loader.js");
+  const { TrustStore } = await load("trust.js");
   const { computeStations } = await load("stations.js");
   const { resolvePoolDir, RESERVED_CORES } = await load("pool.js");
   const { readQueue } = await load("queue.js");
   const { captureReplayQueue } = await load("replay-queue.js");
 
   const dirs = workflowDirs(process.env, projectDir);
-  const loader = new Loader(dirs.bundled, dirs.global, dirs.project);
+  // the loaders only DESCRIBE the workflows (their stations): nothing they load runs, so no approval gates them
+  const describe = TrustStore.describeOnly();
+  const loader = new Loader(dirs.bundled, dirs.global, dirs.project, describe);
   const workflows = {};
   const entry = wf => ({
     stations: computeStations(wf),
@@ -139,7 +142,7 @@ async function main() {
     workflows[name] = entry(wf);
   }
   for (const extra of (args.workflows ?? "").split(",").filter(d => d !== "")) {
-    for (const [name, wf] of new Loader(dirs.bundled, dirs.global, path.resolve(extra)).getAll()) {
+    for (const [name, wf] of new Loader(dirs.bundled, dirs.global, path.resolve(extra), describe).getAll()) {
       if (Object.hasOwn(workflows, name)) continue;
       workflows[name] = entry(wf);
     }

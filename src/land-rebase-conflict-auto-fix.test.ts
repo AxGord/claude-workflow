@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { Loader } from "./loader.js";
-import { InMemoryStorage } from "./test-helpers.js";
+import { InMemoryStorage, trustStoreFor } from "./test-helpers.js";
 
 // ENG-LAND-REBASE-CONFLICT-AUTO-FIX: in engine-task, a land whose `git rebase master` conflicts (project_rebase exit 1)
 // goes to land_failed and waits for the parent, which only relays the answer `rebase_fix`. The workflow must route that
@@ -69,7 +69,12 @@ async function sandbox() {
   const project = join(base, "project-workflows");
   mkdirSync(project);
   writeFileSync(join(project, "engine-task.yaml"), stringify(def));
-  const loader = new Loader(join(root, "templates"), join(base, "global"), project);
+  const loader = new Loader(
+    join(root, "templates"),
+    join(base, "global"),
+    project,
+    trustStoreFor(join(project, "engine-task.yaml")),
+  );
 
   const engine = new Engine(new InMemoryStorage(), loader, new Executor());
   const first = await engine.start("engine-task", undefined, undefined, main, undefined, {

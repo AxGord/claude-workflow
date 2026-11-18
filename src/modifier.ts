@@ -6,6 +6,7 @@ import { WorkflowDefinitionSchema } from "./types.js";
 import type { Storage } from "./storage.js";
 import type { Loader } from "./loader.js";
 import type { Engine } from "./engine.js";
+import { actionStateNames, actionStateRefusal } from "./trust.js";
 
 export interface ModifyInput {
   readonly add_state?: { readonly name: string } & Partial<StateDefinition>;
@@ -53,10 +54,8 @@ export class Modifier {
 
     if (changes.add_state) {
       const { name, ...stateDef } = changes.add_state;
-      const isAction = stateDef.type === "exec" || stateDef.type === "fetch";
-      if (isAction && stateDef.sub_workflow) {
-        throw new Error(`State "${name}": action state cannot have sub_workflow`);
-      }
+      if (stateDef.type === "exec" || stateDef.type === "fetch")
+        throw new Error(actionStateRefusal(`State "${name}"`));
       const addStates = { ...(updated.add_states ?? {}), [name]: stateDef as StateDefinition };
       (updated as Record<string, unknown>).add_states = addStates;
       messages.push(`Added state "${name}"`);
@@ -113,6 +112,9 @@ export class Modifier {
 
     // Validate
     const validated = WorkflowDefinitionSchema.parse(full);
+    const actions = actionStateNames(validated.states);
+    if (actions.length > 0)
+      throw new Error(actionStateRefusal(`Workflow "${name}" (state ${actions.join(", ")})`));
 
     // Check states consistency
     const stateNames = new Set(Object.keys(validated.states));

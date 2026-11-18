@@ -311,8 +311,9 @@ function formatAdopted(status: StatusResult, how: "exec" | "rerun" | undefined):
 // it, plan mode (and every subagent spawned under it) prompts on each call and
 // ignores allow rules. These tools write only the engine's own session files —
 // EXCEPT that start/transition entering an exec/fetch state runs that state's
-// command/request, so a user or project workflow's exec states run unprompted
-// under plan mode too. modify/create/delete/abort stay unannotated so they
+// command/request, so a user's or an approved project workflow's exec states run
+// unprompted under plan mode too (a project file's exec states load only after the
+// user's `wf-trust`; modify and create refuse exec/fetch states outright). modify/create/delete/abort stay unannotated so they
 // keep their confirmation.
 const ENGINE_STATE_ONLY = { readOnlyHint: true } as const;
 
@@ -413,10 +414,16 @@ export function registerTools(
     },
     async () => {
       const workflows = loader.getAll();
+      const untrusted = loader.untrustedNote();
       if (workflows.size === 0) {
         return {
           content: [
-            { type: "text", text: "No workflows found. Add YAML files to .claude/workflows/" },
+            {
+              type: "text",
+              text:
+                "No workflows found. Add YAML files to .claude/workflows/" +
+                (untrusted ? `\n${untrusted}` : ""),
+            },
           ],
         };
       }
@@ -431,7 +438,7 @@ export function registerTools(
         content: [
           {
             type: "text",
-            text: `=== AVAILABLE WORKFLOWS ===\n${lines.join("\n")}`,
+            text: `=== AVAILABLE WORKFLOWS ===\n${lines.join("\n")}${untrusted ? `\n\n${untrusted}` : ""}`,
           },
         ],
       };
@@ -489,8 +496,11 @@ export function registerTools(
           // No forceFullPrompt here: a digest_on_repeat initial state (master
           // route) digests on repeat start() calls in the same process — the
           // main ceremony saving. status() still always returns the full text.
+          // a project file of the SAME name was left out (the bundled one runs instead): say so
+          const shadowed = engine.untrustedNote(args.workflow ?? "master", args.cwd);
           const text =
-            args.reply === "id"
+            (shadowed ? `NOTE: ${shadowed}\n\n` : "") +
+            (args.reply === "id"
               ? `SESSION: ${status.sessionId} @ ${status.currentStateName}` +
                 (status.driverCall ? `\n\n${status.driverCall}` : "")
               : formatStatus(status, { showSessionId: true }) +
@@ -500,7 +510,7 @@ export function registerTools(
                 "- On tool errors: stop and investigate before continuing.\n" +
                 '- To advance: transition({ transition: "<name>" })\n' +
                 "---" +
-                (status.driverCall ? `\n\n${status.driverCall}` : "");
+                (status.driverCall ? `\n\n${status.driverCall}` : ""));
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {
@@ -693,7 +703,7 @@ export function registerTools(
     "modify",
     {
       description:
-        "Add/change/remove states and transitions in the current session's workflow (overlay, does not modify YAML).",
+        "Add/change/remove states and transitions in the current session's workflow (overlay, does not modify YAML). An exec or fetch state is refused: those come only from a workflow file the user approved with `wf-trust`.",
       inputSchema: z
         .object({
           session_id: z.string().optional().describe("Session identifier"),
@@ -749,7 +759,8 @@ export function registerTools(
   server.registerTool(
     "create",
     {
-      description: "Create a new workflow definition (saves as YAML for reuse).",
+      description:
+        "Create a new workflow definition (saves as YAML for reuse). A definition with an exec or fetch state is refused: write that file yourself and have the user approve it with `wf-trust`.",
       inputSchema: z
         .object({
           name: z.string().min(1).describe("Workflow name"),

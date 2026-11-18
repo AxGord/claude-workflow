@@ -52,6 +52,7 @@ import { currentStep, linkedAgentLines, type IsRoute } from "./agent-link.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
 import { secondRootRefusal } from "./session-scope.js";
+import { actionStateRefusal } from "./trust.js";
 import { activeParents, staleNote, staleness, type Staleness } from "./stale.js";
 
 /** Template vars with an action's result laid over them; the lazy getters (`stale_sessions`) carried along. */
@@ -295,7 +296,10 @@ export class Engine {
     } while (this._storage.read(sessionId));
     const workflows = this._workflowsAt(cwd);
     const wf = workflows.get(workflowName);
-    if (!wf) throw new Error(`Workflow "${workflowName}" not found`);
+    if (!wf) {
+      const note = this.untrustedNote(workflowName, cwd);
+      throw new Error(`Workflow "${workflowName}" not found${note ? `. ${note}` : ""}`);
+    }
 
     // explicit > the parent's > the project's settings file > normal; read before anything is recorded
     const parent = parentSessionId ? this._storage.read(parentSessionId) : null;
@@ -2066,6 +2070,18 @@ export class Engine {
     return own ? this._overlay(own) : this._loader.getAll();
   }
 
+  /**
+   * Why the project's own file of `workflow` (or any project file, with no name) is not what a session
+   * runs: it declares exec/fetch states the user has not approved. Empty when nothing was left out.
+   */
+  public untrustedNote(workflow: string | undefined, cwd: string | undefined): string {
+    const own = this._projectLoaderAt(cwd);
+    return [this._loader, ...(own ? [own] : [])]
+      .map(l => l.untrustedNote(workflow))
+      .filter(n => n !== "")
+      .join(" ");
+  }
+
   private _overlay(own: Loader): Map<string, WorkflowDefinition> {
     const all = this._loader.getAll();
     for (const [name, wf] of own.projectWorkflows()) all.set(name, wf);
@@ -2092,7 +2108,7 @@ export class Engine {
     // Check added states first (they may not exist in base YAML)
     const overrides = session.overrides[workflowName];
     if (overrides?.add_states?.[stateName]) {
-      return overrides.add_states[stateName];
+      return Engine._noActionFromOverlay(stateName, overrides.add_states[stateName]);
     }
 
     const wf = this._getWorkflow(session.session_id, workflowName);
@@ -2109,8 +2125,36 @@ export class Engine {
       return this._applyTransitionOverrides(base, workflowName, stateName, overrides);
     }
 
-    const merged = { ...base, ...mods };
+    const merged = Engine._noActionFromOverlay(stateName, { ...base, ...mods }, base);
     return this._applyTransitionOverrides(merged, workflowName, stateName, overrides);
+  }
+
+  /**
+   * A session's overlay (`modify`) never brings an exec/fetch state, nor changes what one runs, whatever
+   * its stored file says: the command would run with no one's approval. A state the workflow itself
+   * defines as an action state (`base`) keeps what it runs; its routing may still be overlaid.
+   */
+  private static _noActionFromOverlay(
+    stateName: string,
+    state: StateDefinition,
+    base?: StateDefinition,
+  ): StateDefinition {
+    if (state.type !== "exec" && state.type !== "fetch") return state;
+    const runs = (d: StateDefinition | undefined): string =>
+      JSON.stringify([
+        d?.type,
+        d?.command,
+        d?.cwd,
+        d?.env,
+        d?.fanout,
+        d?.url,
+        d?.method,
+        d?.headers,
+        d?.body,
+      ]);
+    if (base === undefined || runs(state) !== runs(base))
+      throw new Error(actionStateRefusal(`State "${stateName}"`));
+    return state;
   }
 
   private _applyTransitionOverrides(

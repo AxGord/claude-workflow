@@ -9,7 +9,7 @@ import { Executor } from "./executor.js";
 import { Pool } from "./pool.js";
 import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
-import { InMemoryStorage } from "./test-helpers.js";
+import { InMemoryStorage, trustStoreFor } from "./test-helpers.js";
 import type { StateDefinition } from "./types.js";
 
 // Runs the bundled templates' routing exec states as the engine would and
@@ -343,7 +343,12 @@ describe("extension points (project_build / project_test / project_gate)", () =>
           },
         }),
       );
-      const loader = new Loader(TEMPLATES, mk(), project);
+      const loader = new Loader(
+        TEMPLATES,
+        mk(),
+        project,
+        trustStoreFor(path.join(project, "testing.yaml")),
+      );
       return new Engine(new InMemoryStorage(), loader, new Executor());
     };
     const toUnitTests = async (engine: Engine, context: Record<string, string>) => {

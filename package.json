@@ -14,6 +14,7 @@
   "bin": {
     "wf-run": "build/wf-run.js",
     "wf-queue": "build/queue-cli.js",
+    "wf-trust": "build/trust-cli.js",
     "wf-calibration": "build/calibration-cli.js"
   },
   "scripts": {

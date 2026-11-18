@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -8,10 +7,9 @@ import { Executor } from "./executor.js";
 import { Modifier } from "./modifier.js";
 import { registerTools, setContextEpochFile } from "./tools.js";
 import { createDashboard } from "./dashboard.js";
-import { resolveDir, workflowLoader } from "./workflow-dirs.js";
+import { stateDir, workflowLoader } from "./workflow-dirs.js";
 
-const home = os.homedir();
-const STATE_DIR = resolveDir("STATE_DIR", path.join(home, ".claude", "workflow-state"));
+const STATE_DIR = stateDir();
 const DASHBOARD_PORT = parseInt(process.env["DASHBOARD_PORT"] ?? "3100", 10);
 
 // Last-resort net: one stray rejection or throw in a callback must not take the

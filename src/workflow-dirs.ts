@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Loader } from "./loader.js";
+import { TrustStore } from "./trust.js";
 
 /** An env override (absolute, or relative to `cwd`) or the absolute default. */
 export function resolveDir(
@@ -45,8 +46,13 @@ export function workflowDirs(
   };
 }
 
-/** The Loader every process of the engine builds: bundled, global, project. */
+/** The state directory (`STATE_DIR`): the sessions, the ledger and the trust store live there. */
+export function stateDir(env: NodeJS.ProcessEnv = process.env): string {
+  return resolveDir("STATE_DIR", path.join(os.homedir(), ".claude", "workflow-state"), env);
+}
+
+/** The Loader every process of the engine builds: bundled, global, project (its exec/fetch gated by the trust store). */
 export function workflowLoader(): Loader {
   const dirs = workflowDirs();
-  return new Loader(dirs.bundled, dirs.global, dirs.project);
+  return new Loader(dirs.bundled, dirs.global, dirs.project, TrustStore.inStateDir(stateDir()));
 }

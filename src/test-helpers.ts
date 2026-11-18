@@ -6,6 +6,7 @@ import { EventLog } from "./event-log.js";
 import { Loader } from "./loader.js";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
+import { TrustStore, hashContent } from "./trust.js";
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -101,6 +102,15 @@ export function createTestEngine(workflows: Record<string, object>): {
   const executor = new Executor();
   const engine = new Engine(storage, loader, executor);
   return { engine, storage, loader, executor };
+}
+
+/** A trust store in its own temp file that approves each of `files` as it is now (a project file with exec states loads only then). */
+export function trustStoreFor(...files: string[]): TrustStore {
+  const store = new TrustStore(
+    path.join(fs.mkdtempSync(path.join(os.tmpdir(), "wf-trust-")), "trusted-workflows.json"),
+  );
+  for (const f of files) store.add(hashContent(fs.readFileSync(f)), f);
+  return store;
 }
 
 export function cleanupDir(dir: string): void {

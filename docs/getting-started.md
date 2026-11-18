@@ -219,16 +219,27 @@ Auto-allow the workflow tools so the agent is not interrupted with a permission 
       "mcp__plugin_workflow_wf__status",
       "mcp__plugin_workflow_wf__transition",
       "mcp__plugin_workflow_wf__context_set",
-      "mcp__plugin_workflow_wf__modify",
-      "mcp__plugin_workflow_wf__create",
-      "mcp__plugin_workflow_wf__delete",
       "mcp__plugin_workflow_wf__sessions"
     ]
   }
 }
 ```
 
+`modify`, `create` and `delete` are deliberately **not** allowlisted either: they change what the engine runs (`delete` removes a workflow file, `create` writes one, `modify` rewrites a live session's graph), so each keeps its confirmation prompt. The engine adds its own guard on top: neither `modify` nor `create` accepts an `exec` or `fetch` state at all, so an agent cannot get a shell command or an HTTP request run through the engine, whatever the permission rules say.
+
 `abort` is deliberately **not** allowlisted: sub-agents inherit permissions, and an auto-allowed `abort` would let a sub-agent silently kill its parent's session. Keep it behind a manual prompt. The engine adds its own guard: an `abort` of a root, or of a session with active descendants, is refused unless the call names `caller_session_id` (its own session, an ancestor of the target) or passes `force: true` with a `reason`.
+
+## Trusting project workflows
+
+An `exec` state runs a shell command as you the moment a session enters it, so a workflow file that comes with a project (a cloned repository's `.claude/workflows/`) does not run its `exec` and `fetch` states until you approve that exact file. A project file with such states is left out of the load (a bundled workflow of the same name, `master` for one, runs instead; `list` and `start` name the file and say how to approve it). Approve it in a terminal, yourself:
+
+```sh
+wf-trust /path/to/project        # shows each command, asks, records the file's sha256 on a typed "yes"
+wf-trust --list                  # what is approved
+wf-trust --revoke <hash prefix>  # withdraw one
+```
+
+`wf-trust` is `scripts/wf-trust` of the plugin (also a `wf-trust` bin of the npm package). It refuses to run without a terminal, so an agent cannot approve for you; no MCP tool of the engine can. The approval is the file's content hash in `$STATE_DIR/trusted-workflows.json` (default `~/.claude/workflow-state/`): a running server picks it up on its next read, a file you edit afterwards needs approval again, and an identical copy of an approved file (a worktree) is approved too. A session already running keeps the approved definition it started with. Bundled templates, your own `~/.claude/workflows/` and a project file with prompt states only are not gated.
 
 ## Heavy commands share one thread pool
 

@@ -19,6 +19,7 @@ import {
 import { stationWarnings } from "./stations.js";
 import { driverRefError } from "./driver.js";
 import { modelTableErrors } from "./model-table.js";
+import { TrustStore, actionStateNames, hashContent, trustHint } from "./trust.js";
 
 /** A parsed workflow file of one load tier (bundled, global, project). */
 interface TierEntry {
@@ -27,6 +28,13 @@ interface TierEntry {
 }
 
 type Tier = Map<string, TierEntry>;
+
+/** A project workflow file left out of the load: it declares exec/fetch states the user has not approved. */
+export interface UntrustedFile {
+  readonly name: string;
+  readonly file: string;
+  readonly hash: string;
+}
 
 function editDistance(a: string, b: string): number {
   let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
@@ -91,28 +99,63 @@ export class Loader {
   private _workflows: Map<string, WorkflowDefinition> = new Map();
   /** The names whose loaded definition is the project tier's own file. */
   private _projectNames: ReadonlySet<string> = new Set();
+  private _untrusted: readonly UntrustedFile[] = [];
+  private readonly _trust: TrustStore;
+  private _trustStamp = "none";
   private _globalWatcher: fs.FSWatcher | null = null;
   private _projectWatcher: fs.FSWatcher | null = null;
 
-  constructor(bundledDir: string | null, globalDir: string, projectDir: string | null) {
+  /** `trust`: the approvals gating the project tier's exec/fetch states; none given, nothing is approved. */
+  constructor(
+    bundledDir: string | null,
+    globalDir: string,
+    projectDir: string | null,
+    trust: TrustStore = new TrustStore(null),
+  ) {
     this._bundledDir = bundledDir;
     this._globalDir = globalDir;
     this._projectDir = projectDir;
+    this._trust = trust;
     fs.mkdirSync(this._globalDir, { recursive: true });
     if (this._projectDir) fs.mkdirSync(this._projectDir, { recursive: true });
     this._loadAll();
   }
 
   public get(name: string): WorkflowDefinition | undefined {
+    this._syncTrust();
     return this._workflows.get(name);
   }
 
   public getAll(): Map<string, WorkflowDefinition> {
+    this._syncTrust();
     return new Map(this._workflows);
   }
 
   public names(): string[] {
+    this._syncTrust();
     return Array.from(this._workflows.keys());
+  }
+
+  /** The project files the last load left out for want of the user's approval of their exec/fetch states. */
+  public untrusted(): readonly UntrustedFile[] {
+    this._syncTrust();
+    return this._untrusted;
+  }
+
+  /** What to tell the agent about the project files left out (empty when none, or none named by `only`). */
+  public untrustedNote(only?: string): string {
+    const left = this.untrusted().filter(u => only === undefined || u.name === only);
+    if (left.length === 0 || !this._projectDir) return "";
+    const project = path.dirname(path.dirname(this._projectDir));
+    return (
+      `Not loaded: ${left.map(u => `"${u.name}" (${path.basename(u.file)})`).join(", ")}: the project file declares exec/fetch states ` +
+      `the user has not approved (or changed since). Ask the USER to ${trustHint(project)}.`
+    );
+  }
+
+  /** An approval written by `wf-trust` (or a revoked one) takes effect on the next read, without a restart. */
+  private _syncTrust(): void {
+    if (this._trust.stamp() !== this._trustStamp) this._loadAll();
   }
 
   /** The project tier's directory (`<project>/.claude/workflows`), null when there is none. */
@@ -139,7 +182,7 @@ export class Loader {
    * session started in that project sees. Loaded once, not watched.
    */
   public forProject(projectDir: string): Loader {
-    return new Loader(this._bundledDir, this._globalDir, projectDir);
+    return new Loader(this._bundledDir, this._globalDir, projectDir, this._trust);
   }
 
   /** Directory where create saves new YAML files */
@@ -214,12 +257,14 @@ export class Loader {
     // Template text may have changed — digest_on_repeat states must deliver
     // their (possibly new) full prompt once more before digesting again.
     resetDeliveredPrompts();
+    this._trustStamp = this._trust.stamp();
+    const untrusted: UntrustedFile[] = [];
 
     // Bundled (read-only defaults) → global → project: a later tier overrides by name.
     const tiers: Tier[] = [];
     if (this._bundledDir) tiers.push(this._loadDir(this._bundledDir));
     tiers.push(this._loadDir(this._globalDir));
-    if (this._projectDir) tiers.push(this._loadDir(this._projectDir));
+    if (this._projectDir) tiers.push(this._loadDir(this._projectDir, untrusted));
 
     const next = new Map<string, WorkflowDefinition>();
     const own = new Set<string>();
@@ -253,6 +298,7 @@ export class Loader {
     }
     this._workflows = next;
     this._projectNames = own;
+    this._untrusted = untrusted;
   }
 
   /** The highest tier at or below `maxTier` that defines `name`. */
@@ -311,7 +357,8 @@ export class Loader {
     };
   }
 
-  private _loadDir(dir: string): Tier {
+  /** `untrusted` given: the project tier, whose files may run exec/fetch states only once approved. */
+  private _loadDir(dir: string, untrusted?: UntrustedFile[]): Tier {
     const tier: Tier = new Map();
     if (!fs.existsSync(dir)) return tier;
 
@@ -326,6 +373,16 @@ export class Loader {
         if (!checked.success) {
           console.error(`Failed to load workflow:\n${describeSchemaError(fp, checked.error)}`);
           continue;
+        }
+        if (untrusted && actionStateNames(checked.data.states).length > 0) {
+          const hash = hashContent(raw);
+          if (!this._trust.has(hash)) {
+            untrusted.push({ name: checked.data.name, file: fp, hash });
+            console.error(
+              `Not loaded: ${fp} declares exec/fetch states the user has not approved; ${trustHint(path.dirname(path.dirname(dir)))}`,
+            );
+            continue;
+          }
         }
         tier.set(checked.data.name, { def: checked.data, file: fp });
       } catch (err) {

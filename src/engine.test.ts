@@ -13,8 +13,10 @@ import {
   cleanupDir,
   SIMPLE_WORKFLOW,
   MULTI_STATE_WORKFLOW,
+  trustStoreFor,
 } from "./test-helpers.js";
 import { Loader } from "./loader.js";
+import { hashContent } from "./trust.js";
 import type { ActionResult } from "./types.js";
 import { KEEP_TERMINAL_SESSIONS } from "./types.js";
 
@@ -1382,11 +1384,20 @@ describe("Engine: a session started in another project", () => {
     roots.push(src);
     fs.cpSync(src, dir, { recursive: true });
   }
+  /** Every project workflow file below was approved by the user's `wf-trust`. */
+  const approved = trustStoreFor();
   /** A git project (a `.git` dir) under a fresh temp root, with `workflows` in its `.claude/workflows/`. */
   function project(name: string, workflows?: Record<string, object>): string {
     const proj = path.join(tmpDir(), name);
     fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
-    if (workflows) writeWorkflows(path.join(proj, ".claude", "workflows"), workflows);
+    if (workflows) {
+      const dir = path.join(proj, ".claude", "workflows");
+      writeWorkflows(dir, workflows);
+      for (const f of fs.readdirSync(dir)) {
+        const file = path.join(dir, f);
+        approved.add(hashContent(fs.readFileSync(file)), file);
+      }
+    }
     return proj;
   }
   const flow = (prompt: string) => ({
@@ -1401,7 +1412,12 @@ describe("Engine: a session started in another project", () => {
       "server-only": flow("SERVER-ONLY"),
       shared: flow("SERVER"),
     });
-    const loader = new Loader(null, global, path.join(serverProject, ".claude", "workflows"));
+    const loader = new Loader(
+      null,
+      global,
+      path.join(serverProject, ".claude", "workflows"),
+      approved,
+    );
     const storage = new InMemoryStorage();
     return { loader, storage, engine: new Engine(storage, loader, new Executor()) };
   }
