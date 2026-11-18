@@ -231,15 +231,31 @@ Auto-allow the workflow tools so the agent is not interrupted with a permission 
 
 ## Trusting project workflows
 
-An `exec` state runs a shell command as you the moment a session enters it, so a workflow file that comes with a project (a cloned repository's `.claude/workflows/`) does not run its `exec` and `fetch` states until you approve that exact file. A project file with such states is left out of the load (a bundled workflow of the same name, `master` for one, runs instead; `list` and `start` name the file and say how to approve it). Approve it in a terminal, yourself:
+An `exec` state runs a shell command as you the moment a session enters it, so a workflow file that comes with a project (a cloned repository's `.claude/workflows/`) runs its `exec` and `fetch` states only in a project you trust. The engine does not ask you again: it takes the answer you already gave Claude Code. After you accept Claude Code's "trust this folder" question for a project, Claude Code itself runs that project's hooks (`.claude/settings.json`) as shell commands, so the project's workflows add nothing an attacker would not already have.
+
+What you have to do:
+
+- **Bundled workflows, your own `~/.claude/workflows/`, a project file with prompt states only:** nothing.
+- **A folder you already trusted in Claude Code:** nothing. An edited workflow file keeps working; no approval after an edit.
+- **A fresh clone:** open the folder in Claude Code and accept its trust question. A running engine notices the answer on its next read.
+- **A folder Claude Code never asked about** (headless `claude -p`, say): approve the project directory once yourself, in a terminal.
 
 ```sh
-wf-trust /path/to/project        # shows each command, asks, records the file's sha256 on a typed "yes"
-wf-trust --list                  # what is approved
-wf-trust --revoke <hash prefix>  # withdraw one
+wf-trust /path/to/project        # shows each command, asks, trusts the project directory on a typed "yes"
+wf-trust /path/to/project/.claude/workflows/deploy.yaml   # one file's exact content (its sha256) instead
+wf-trust --list                  # what is approved (projects and files)
+wf-trust --revoke <project dir | hash prefix>   # withdraw one
 ```
 
-`wf-trust` is `scripts/wf-trust` of the plugin (also a `wf-trust` bin of the npm package). It refuses to run without a terminal, so an agent cannot approve for you; no MCP tool of the engine can. The approval is the file's content hash in `$STATE_DIR/trusted-workflows.json` (default `~/.claude/workflow-state/`): a running server picks it up on its next read, a file you edit afterwards needs approval again, and an identical copy of an approved file (a worktree) is approved too. A session already running keeps the approved definition it started with. Bundled templates, your own `~/.claude/workflows/` and a project file with prompt states only are not gated.
+Until a project is trusted its file with exec/fetch states is left out of the load (a bundled workflow of the same name, `master` for one, runs instead), and `list` and `start` say so in one sentence naming the project and both ways to fix it.
+
+How the engine reads Claude Code's answer: the flag `projects[<project path>].hasTrustDialogAccepted` in Claude Code's user config, `$CLAUDE_CONFIG_DIR/.claude.json` (default `~/.claude.json`). It reads that one flag and never writes the file. A trusted folder covers the folders below it up to the git root of their repository; a worktree counts as its main checkout, but only when its `.git` pointer and the main checkout's record of it agree (a cloned repository cannot borrow another project's trust by naming its `.git`), and `wf-trust` in a worktree records the main checkout; the home directory's answer holds for one session only, so it covers nothing. A missing file, entry or flag, an unreadable or malformed file, or `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` all mean "not trusted", and then `wf-trust` is the way. The flag is an internal record of Claude Code, not a documented interface: if a Claude Code release renames it, the engine falls back to `wf-trust` instead of trusting anything.
+
+`wf-trust` is `scripts/wf-trust` of the plugin (also a `wf-trust` bin of the npm package). It refuses to run without a terminal, so an agent cannot approve for you; no MCP tool of the engine can. Its record is `$STATE_DIR/trusted-workflows.json` (default `~/.claude/workflow-state/`): a running server picks it up on its next read, and per-file approvals of an earlier version keep working. A session already running keeps the definition it started with.
+
+**Strict mode.** For those who want to approve each file's exact content regardless of the folder answer, set `WF_TRUST_STRICT=1` in the environment of the server. Then neither Claude Code's trust nor a project approval counts: a file loads only after `wf-trust` approved its sha256 (`wf-trust <project>` records each file's hash), and an edited file asks again.
+
+`modify` and `create` refuse `exec` and `fetch` states in every mode: an agent cannot get a command run through the engine.
 
 ## Heavy commands share one thread pool
 
@@ -251,6 +267,7 @@ Builds and test suites from every session on the machine go through one thread p
 |----------|---------|---------|
 | `WORKFLOW_DIR` | `~/.claude/workflows/` | Global workflow YAML directory |
 | `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence (also `exec/`: foreground exec output and exit codes) |
+| `WF_TRUST_STRICT` | off | `1`: a project file's exec/fetch states load only after `wf-trust` approved that file's exact content; Claude Code's folder trust and project approvals no longer count ([Trusting project workflows](#trusting-project-workflows)) |
 | `WF_SUSPENDED_TTL_DAYS` | `7` | A suspended session nobody resumed for this long is abandoned at server start |
 | `DASHBOARD_PORT` | `3100` | Web dashboard HTTP port |
 | `DASHBOARD_HOST` | `127.0.0.1` | Web dashboard bind address |

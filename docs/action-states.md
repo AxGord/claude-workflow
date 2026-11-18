@@ -64,9 +64,9 @@ run_tests:
   error_prompt: "Tests failed (exit {{exit_code}}):\n{{stderr}}"
 ```
 
-An `exec` or `fetch` state comes only from a workflow FILE: `modify` and `create` refuse one, and a project file (`.claude/workflows/`) that declares one loads only once the user approved its content with `wf-trust` (an unapproved or since-edited file is left out; `list` and a failed `start` say how to approve).
+An `exec` or `fetch` state comes only from a workflow FILE: `modify` and `create` refuse one, and a project file (`.claude/workflows/`) that declares one loads only in a trusted project: a folder you trusted in Claude Code (the engine reads that answer), or a project you approved once with `wf-trust` (an untrusted project's file is left out; `list` and a failed `start` say how to trust it).
 
-A restarted server that finds an approved file edited since does not run the edited state either: the session meets the tier below, or a missing workflow, and `transition` errors. See [Trusting project workflows](/getting-started#trusting-project-workflows).
+With `WF_TRUST_STRICT=1` each file's exact content must be approved instead, so an edited file asks again; a restarted server that finds an approved file edited since does not run the edited state either: the session meets the tier below, or a missing workflow, and `transition` errors. See [Trusting project workflows](/getting-started#trusting-project-workflows).
 
 An exec without `cwd:` runs in the session's cwd (`start`'s `cwd`, else the server's); a relative `cwd:` resolves against it.
 

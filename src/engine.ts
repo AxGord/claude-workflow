@@ -2072,7 +2072,7 @@ export class Engine {
 
   /**
    * Why the project's own file of `workflow` (or any project file, with no name) is not what a session
-   * runs: it declares exec/fetch states the user has not approved. Empty when nothing was left out.
+   * runs: it declares exec/fetch states and its project is not trusted. Empty when nothing was left out.
    */
   public untrustedNote(workflow: string | undefined, cwd: string | undefined): string {
     const own = this._projectLoaderAt(cwd);

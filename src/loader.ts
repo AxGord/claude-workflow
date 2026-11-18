@@ -19,7 +19,13 @@ import {
 import { stationWarnings } from "./stations.js";
 import { driverRefError } from "./driver.js";
 import { modelTableErrors } from "./model-table.js";
-import { TrustStore, actionStateNames, hashContent, trustHint } from "./trust.js";
+import {
+  TrustStore,
+  actionStateNames,
+  hashContent,
+  projectOfWorkflowsDir,
+  untrustedReason,
+} from "./trust.js";
 
 /** A parsed workflow file of one load tier (bundled, global, project). */
 interface TierEntry {
@@ -29,7 +35,7 @@ interface TierEntry {
 
 type Tier = Map<string, TierEntry>;
 
-/** A project workflow file left out of the load: it declares exec/fetch states the user has not approved. */
+/** A project workflow file left out of the load: it declares exec/fetch states and its project is not trusted. */
 export interface UntrustedFile {
   readonly name: string;
   readonly file: string;
@@ -102,10 +108,11 @@ export class Loader {
   private _untrusted: readonly UntrustedFile[] = [];
   private readonly _trust: TrustStore;
   private _trustStamp = "none";
+  private _claudeStamp = "none";
   private _globalWatcher: fs.FSWatcher | null = null;
   private _projectWatcher: fs.FSWatcher | null = null;
 
-  /** `trust`: the approvals gating the project tier's exec/fetch states; none given, nothing is approved. */
+  /** `trust`: what gates the project tier's exec/fetch states (approvals, Claude Code's folder trust); none given, nothing is approved. */
   constructor(
     bundledDir: string | null,
     globalDir: string,
@@ -146,16 +153,24 @@ export class Loader {
   public untrustedNote(only?: string): string {
     const left = this.untrusted().filter(u => only === undefined || u.name === only);
     if (left.length === 0 || !this._projectDir) return "";
-    const project = path.dirname(path.dirname(this._projectDir));
     return (
-      `Not loaded: ${left.map(u => `"${u.name}" (${path.basename(u.file)})`).join(", ")}: the project file declares exec/fetch states ` +
-      `the user has not approved (or changed since). Ask the USER to ${trustHint(project)}.`
+      `Not loaded: ${left.map(u => `"${u.name}" (${path.basename(u.file)})`).join(", ")} declare${left.length === 1 ? "s" : ""} exec/fetch states, and ` +
+      untrustedReason(projectOfWorkflowsDir(this._projectDir), this._trust)
     );
   }
 
-  /** An approval written by `wf-trust` (or a revoked one) takes effect on the next read, without a restart. */
+  /** An approval written by `wf-trust` (or a revoked one) takes effect on the next read, without a restart; so does a trust answer given in Claude Code. */
   private _syncTrust(): void {
-    if (this._trust.stamp() !== this._trustStamp) this._loadAll();
+    if (this._trust.stamp() !== this._trustStamp) {
+      this._loadAll();
+      return;
+    }
+    // Claude Code rewrites its config constantly: reload only when it now trusts what was left out.
+    const claude = this._trust.claudeStamp();
+    if (this._untrusted.length === 0 || claude === this._claudeStamp || !this._projectDir) return;
+    this._claudeStamp = claude;
+    const root = projectOfWorkflowsDir(this._projectDir);
+    if (this._untrusted.some(u => this._trust.allows(root, u.hash))) this._loadAll();
   }
 
   /** The project tier's directory (`<project>/.claude/workflows`), null when there is none. */
@@ -258,6 +273,7 @@ export class Loader {
     // their (possibly new) full prompt once more before digesting again.
     resetDeliveredPrompts();
     this._trustStamp = this._trust.stamp();
+    this._claudeStamp = this._trust.claudeStamp();
     const untrusted: UntrustedFile[] = [];
 
     // Bundled (read-only defaults) → global → project: a later tier overrides by name.
@@ -376,10 +392,11 @@ export class Loader {
         }
         if (untrusted && actionStateNames(checked.data.states).length > 0) {
           const hash = hashContent(raw);
-          if (!this._trust.has(hash)) {
+          const root = projectOfWorkflowsDir(dir);
+          if (!this._trust.allows(root, hash)) {
             untrusted.push({ name: checked.data.name, file: fp, hash });
             console.error(
-              `Not loaded: ${fp} declares exec/fetch states the user has not approved; ${trustHint(path.dirname(path.dirname(dir)))}`,
+              `Not loaded: ${fp} declares exec/fetch states, and ${untrustedReason(root, this._trust)}`,
             );
             continue;
           }

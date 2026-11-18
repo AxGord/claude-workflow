@@ -49,7 +49,11 @@ function tiers(opts: {
   const global = write(path.join(root, "global"), opts.global);
   const projectRoot = path.join(root, "proj");
   const project = write(path.join(projectRoot, ".claude", "workflows"), opts.project);
-  const store = new TrustStore(path.join(root, "state", "trusted-workflows.json"));
+  // strict: these tests pin the per-file (sha256) approval, which strict mode keeps; the project-level
+  // trust is pinned in trust-claude-folder.test.ts
+  const store = new TrustStore(path.join(root, "state", "trusted-workflows.json"), {
+    strict: true,
+  });
   return { root, bundled, global, project, projectRoot, store };
 }
 

@@ -312,8 +312,8 @@ function formatAdopted(status: StatusResult, how: "exec" | "rerun" | undefined):
 // ignores allow rules. These tools write only the engine's own session files —
 // EXCEPT that start/transition entering an exec/fetch state runs that state's
 // command/request, so a user's or an approved project workflow's exec states run
-// unprompted under plan mode too (a project file's exec states load only after the
-// user's `wf-trust`; modify and create refuse exec/fetch states outright). modify/create/delete/abort stay unannotated so they
+// unprompted under plan mode too (a project file's exec states load only in a project
+// the user trusted (Claude Code's folder trust, or `wf-trust`); modify and create refuse exec/fetch states outright). modify/create/delete/abort stay unannotated so they
 // keep their confirmation.
 const ENGINE_STATE_ONLY = { readOnlyHint: true } as const;
 
@@ -703,7 +703,7 @@ export function registerTools(
     "modify",
     {
       description:
-        "Add/change/remove states and transitions in the current session's workflow (overlay, does not modify YAML). An exec or fetch state is refused: those come only from a workflow file the user approved with `wf-trust`.",
+        "Add/change/remove states and transitions in the current session's workflow (overlay, does not modify YAML). An exec or fetch state is refused: those come only from a workflow file of a project the user trusted (Claude Code's folder trust, or `wf-trust`).",
       inputSchema: z
         .object({
           session_id: z.string().optional().describe("Session identifier"),
@@ -760,7 +760,7 @@ export function registerTools(
     "create",
     {
       description:
-        "Create a new workflow definition (saves as YAML for reuse). A definition with an exec or fetch state is refused: write that file yourself and have the user approve it with `wf-trust`.",
+        "Create a new workflow definition (saves as YAML for reuse). A definition with an exec or fetch state is refused: write that file yourself in a project the user trusted (Claude Code's folder trust, or `wf-trust`).",
       inputSchema: z
         .object({
           name: z.string().min(1).describe("Workflow name"),

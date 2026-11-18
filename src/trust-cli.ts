@@ -1,10 +1,14 @@
 #!/usr/bin/env node
-// wf-trust: the USER's approval of the exec/fetch states a project's own workflow files declare.
-//   wf-trust <project | .claude/workflows | file.yaml>   show every command, ask in the terminal, record the files' hashes
-//   wf-trust --list                                      the approved files
-//   wf-trust --revoke <hash prefix>                      withdraw one approval
+// wf-trust: the USER's fallback approval of a project whose folder Claude Code has no trust record for
+// (a folder never opened interactively, as under headless `claude -p`): without one, its own workflow
+// files' exec/fetch states do not load. A folder trusted in Claude Code needs none of this.
+//   wf-trust <project | .claude/workflows>   show every command, ask in the terminal, trust the project directory
+//   wf-trust <file.yaml>                     the same for one file's exact content (its sha256)
+//   wf-trust --list                          the approved projects and files
+//   wf-trust --revoke <project dir | hash prefix>   withdraw one approval
 // Approval needs a terminal on stdin and stdout and a typed "yes": an agent's Bash has none, and no
-// MCP tool of the engine can approve. A file edited afterwards hashes differently and is asked again.
+// MCP tool of the engine can approve. With WF_TRUST_STRICT set, a project target approves per-file
+// hashes too, and a file edited afterwards is asked again.
 // Exit: 0 done / nothing to approve · 2 usage or error · 3 no terminal, nothing approved.
 import readline from "node:readline/promises";
 import { TrustStore } from "./trust.js";

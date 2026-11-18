@@ -47,7 +47,7 @@ Workflows load from three sources in ascending priority — later tiers override
 
 A project workflow named `coding` overrides the bundled `coding` template. Same-name global workflows sit in between.
 
-A project file that declares an `exec` or `fetch` state loads only after the user approved its exact content with `wf-trust <project>` (see [Trusting project workflows](/getting-started#trusting-project-workflows)); until then it is left out and the tier below answers by name. Bundled and global files are not gated.
+A project file that declares an `exec` or `fetch` state loads only in a trusted project: a folder you trusted in Claude Code, or one approved with `wf-trust <project>` (see [Trusting project workflows](/getting-started#trusting-project-workflows)); until then it is left out and the tier below answers by name. Bundled and global files are not gated.
 
 The project tier is the server's cwd. A session started with `start({ cwd })` in ANOTHER project that has
 its own `.claude/workflows/` (a worktree counts as its main checkout; the home dir, whose
