@@ -292,4 +292,37 @@ describe("the README is a landing page, the reference lives on the site", () => 
       expect(concepts, t).toContain(t);
     expect(read("README.md")).not.toContain("read-only-gate");
   });
+
+  it("docs/queue.md keeps the anchor README links and has no unbroken text wall", () => {
+    expect(read("README.md")).toContain("queue#agent-types");
+    expect(headings("docs/queue.md")).toContain("#### Agent types");
+    // A block is consecutive prose lines; a list item, heading, table row, code fence or the front matter ends one.
+    const words: number[] = [];
+    let fence = false;
+    let cur = 0;
+    const flush = (): void => {
+      if (cur > 0) words.push(cur);
+      cur = 0;
+    };
+    const lines = read("docs/queue.md").split("\n");
+    const front = lines[0] === "---" ? lines.indexOf("---", 1) + 1 : 0;
+    for (const line of lines.slice(front)) {
+      if (line.startsWith("```")) {
+        flush();
+        fence = !fence;
+      } else if (
+        fence ||
+        line.startsWith("#") ||
+        line.trimStart().startsWith("|") ||
+        line.trim() === ""
+      )
+        flush();
+      else {
+        if (/^\s*([-*]|\d+\.) /.test(line)) flush();
+        cur += line.trim().split(/\s+/).length;
+      }
+    }
+    flush();
+    expect(Math.max(...words), "longest unbroken block, in words").toBeLessThan(120);
+  });
 });
