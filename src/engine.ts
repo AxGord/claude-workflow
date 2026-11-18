@@ -15,6 +15,7 @@ import type {
   DetachedRun,
   RunningExec,
   PendingAction,
+  Dispatcher,
   Driver,
   AgentStep,
   AgentLink,
@@ -47,7 +48,16 @@ import {
   stagesSpawned,
 } from "./model-table.js";
 import { render } from "./template.js";
-import { DRIVER_CALL_KEY, renderDriverCall, resolveDriverRef } from "./driver.js";
+import {
+  DISPATCHER_AFTER_KEY,
+  DISPATCHER_CALL_KEY,
+  DRIVER_CALL_KEY,
+  SPAWN_DEPTH_ENV,
+  dispatcherOn,
+  renderDispatcherCall,
+  renderDriverCall,
+  resolveDriverRef,
+} from "./driver.js";
 import { currentStep, linkedAgentLines, type IsRoute } from "./agent-link.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
@@ -96,7 +106,10 @@ export interface StatusResult {
   readonly capWarning?: string;
   /** `revisit_prompt` of the state, rendered with the same variables as `prompt`. */
   readonly revisitPrompt?: string;
-  /** `start` of a workflow with a `driver:` — the Agent call that spawns it (src/driver.ts). */
+  /**
+   * `start` of a workflow with a `driver:` — the Agent call that spawns it (src/driver.ts); under a
+   * `dispatcher:` in force, the dispatcher's call: at `start`, and on the reply that leaves its `after` state.
+   */
   readonly driverCall?: string;
 }
 
@@ -303,6 +316,22 @@ export class Engine {
 
     // explicit > the parent's > the project's settings file > normal; read before anything is recorded
     const parent = parentSessionId ? this._storage.read(parentSessionId) : null;
+    // Under a dispatcher agent a task is never started twice: its memory of a dispatch is not the truth.
+    const task = initial.task;
+    if (parent && task && typeof parent.context[DISPATCHER_CALL_KEY] === "string") {
+      const twin = this._storage
+        .readAll()
+        .find(
+          s =>
+            s.parent_session_id === parentSessionId &&
+            s.stack.length > 0 &&
+            s.context.task === task,
+        );
+      if (twin)
+        throw new Error(
+          `task "${task}" already runs under ${parentSessionId} as session ${twin.session_id} (${twin.agent_id ? `agent ${twin.agent_id}` : "no agent linked"}): start no second one — its driver's call is status({ session_id: "${twin.session_id}", key: "${DRIVER_CALL_KEY}" })`,
+        );
+    }
     const level =
       priority ??
       parent?.priority ??
@@ -358,6 +387,11 @@ export class Engine {
       );
     const modelled = this._withModel(created, new Set(Object.keys(initial)));
     // Kept in the context: a dispatcher after a restart or compaction re-spawns the driver from it.
+    // The opt-in is read once, here: the key's presence is what later calls go by.
+    const dispatcherCall =
+      wf.dispatcher && dispatcherOn(wf.dispatcher)
+        ? this._dispatcherCall(modelled, wf.dispatcher)
+        : undefined;
     const session = wf.driver
       ? {
           ...modelled,
@@ -366,12 +400,31 @@ export class Engine {
             [DRIVER_CALL_KEY]: this._driverCall(modelled, wf.driver, parent),
           },
         }
-      : modelled;
+      : dispatcherCall !== undefined
+        ? {
+            ...modelled,
+            context: {
+              ...modelled.context,
+              [DISPATCHER_CALL_KEY]: dispatcherCall,
+              ...(wf.dispatcher?.after ? { [DISPATCHER_AFTER_KEY]: wf.dispatcher.after } : {}),
+            },
+          }
+        : modelled;
 
     await this._storage.write(sessionId, session);
 
-    // Check if initial state is a skill gate, sub_workflow, or action
-    const initialState = this._resolveState(session, workflowName, wf.initial);
+    const status = await this._enterInitial(session, workflowName, wf.initial);
+    if (dispatcherCall !== undefined) return { ...status, driverCall: dispatcherCall };
+    return wf.driver ? { ...status, driverCall: String(session.context[DRIVER_CALL_KEY]) } : status;
+  }
+
+  /** The first status of a new session: its initial state may be a skill gate, a sub-workflow or an action. */
+  private async _enterInitial(
+    session: SessionState,
+    workflowName: string,
+    initial: string,
+  ): Promise<StatusResult> {
+    const initialState = this._resolveState(session, workflowName, initial);
     if (this._isSkillGate(initialState)) {
       return this._handleSkillGate(session, initialState!, []);
     }
@@ -381,9 +434,38 @@ export class Engine {
     if (this._isActionState(initialState)) {
       return this._executeActionState(session, initialState!, []);
     }
+    return this._buildStatus(session, []);
+  }
 
-    const status = this._buildStatus(session, []);
-    return wf.driver ? { ...status, driverCall: String(session.context[DRIVER_CALL_KEY]) } : status;
+  /** The Agent call that spawns a `dispatcher:` workflow's dispatcher on this new session. */
+  private _dispatcherCall(session: SessionState, dispatcher: Dispatcher): string {
+    const instructions = resolveDriverRef(dispatcher.prompt_ref, String(session.context.cwd));
+    return renderDispatcherCall({
+      dispatcher,
+      sessionId: session.session_id,
+      instructions,
+      instructionsExist: fs.existsSync(instructions),
+      spawnDepth: process.env[SPAWN_DEPTH_ENV],
+    });
+  }
+
+  /**
+   * The dispatcher's call when this call's moves left the `after` state of the session's
+   * `dispatcher:` (the main conversation's last own state): the reply repeats the block there.
+   */
+  private _dispatcherCallLeaving(sessionId: string, movesBefore: number): string | undefined {
+    const s = this._storage.read(sessionId);
+    const call = s?.context[DISPATCHER_CALL_KEY];
+    if (!s || typeof call !== "string" || call === "" || s.stack.length === 0) return undefined;
+    let after: string | undefined;
+    try {
+      after = this._getWorkflow(s.session_id, s.stack[0].workflow).dispatcher?.after;
+    } catch {
+      return undefined;
+    }
+    if (after === undefined) return undefined;
+    const left = s.history.slice(movesBefore).some(h => h.frame === 0 && h.from === after);
+    return left ? call : undefined;
   }
 
   /** The Agent call that spawns a `driver:` workflow's driver on this new session. */
@@ -408,6 +490,18 @@ export class Engine {
    * state sees them, and a refused key or a refused move writes none of it.
    */
   public async transition(
+    sessionId: string,
+    transitionName: string,
+    actor?: string,
+    set?: Readonly<Record<string, unknown>>,
+  ): Promise<StatusResult> {
+    const movesBefore = this._storage.read(sessionId)?.history.length ?? 0;
+    const status = await this._transition(sessionId, transitionName, actor, set);
+    const call = this._dispatcherCallLeaving(sessionId, movesBefore);
+    return call === undefined ? status : { ...status, driverCall: call };
+  }
+
+  private async _transition(
     sessionId: string,
     transitionName: string,
     actor?: string,

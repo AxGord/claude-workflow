@@ -60,7 +60,7 @@ Agent                       Engine                          Storage
 | `file-code` | Per-file coding — spawned by coding/bug-fix for each file |
 | `file-review` | Per-file deep review — spawned by code-review for each file |
 | `lint-review` | Trivial-diff review — engine-run lint, act on findings, one intent re-read |
-| `batch` | Long-running task queue: the engine admits lines into the window (`after:` / `touches:` / `owner:` / pause), one `batch-task` child per task, one fresh-eyes review of the combined diff |
+| `batch` | Long-running task queue: the engine admits lines into the window (`after:` / `touches:` / `owner:` / pause), one `batch-task` child per task, one fresh-eyes review of the combined diff; opt-in `WF_DISPATCHER`: a dispatcher agent launches the tasks |
 | `batch-task` | One queued task, run by a haiku driver (`driver:`): difficulty → model/effort (`model_table`) → worktree → worker → reviewer chosen by the diff → merge + `land_test` under the repo's land lock → mark done → cleanup |
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
@@ -195,6 +195,8 @@ Notes on the tools above:
 - `start`, `reply: "id"`: answer only `SESSION: <id> @ <state>`, no prompt or rules.
 - `start`, `force: "<reason>"`: a second root. Without `parent_session_id`, a start in a process that already has an active root is refused, naming the root by workflow and state, never its id. A sub-agent never gets a root.
 - `start`: a workflow with `driver:` ends the answer with the driver's Agent call.
+- `start`: a workflow with `dispatcher:` whose opt-in variable is set (bundled `batch`: `WF_DISPATCHER`) ends the answer with the dispatcher's Agent call. The `transition` reply that leaves its `after` state repeats it. Unset, the answer is unchanged. See [the dispatcher agent](/queue#the-dispatcher-agent-dispatcher-opt-in).
+- `start` under a session a dispatcher agent drives: a second start of a `context.task` that already runs there is refused, naming the running session.
 - `transition`: a call with a `caller_session_id` outside the caller's subtree is refused unless `force: true` with a `reason`. A `transition` naming no `caller_session_id` is not judged (the engine's own prompts step other sessions without one, and a step ends no one); the guard stops an agent that names itself.
 - `transition`, `set`: `{key: value, ...}` written to the context BEFORE the move, in the given order, in the same call and the same write. The entered state's exec, prompt and templates see the keys, so a `context_set` + `transition` pair is one request. A numeric-looking key sorts first, as in any JS object.
   - Each key is written as `context_set` writes it: a `difficulty` outside 1..10 under a `model_table` is refused, and the table derives its keys.

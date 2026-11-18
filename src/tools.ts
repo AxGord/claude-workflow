@@ -186,7 +186,7 @@ const CALLER_DESCRIPTION =
   "Your own session id. Only that session and the sessions it started may be touched; any other target is refused unless force: true with a reason. Without it, aborting a root or a session with active descendants is refused";
 
 const START_REPLY_DESCRIPTION =
-  "Reply shape. \"id\": answer `SESSION: <id> @ <state>` only (plus a driver workflow's DRIVER block), without the state's prompt and the rules; the session's own agent reads the prompt with status. For a parent that starts a child only to pass the id on.";
+  "Reply shape. \"id\": answer `SESSION: <id> @ <state>` only (plus the DRIVER block of a `driver:` workflow, or of a `dispatcher:` one whose opt-in is set), without the state's prompt and the rules; the session's own agent reads the prompt with status. For a parent that starts a child only to pass the id on.";
 
 /** One context value whole, as status({ key }) returns it: a string as is, anything else as JSON. */
 export function formatContextValue(context: Record<string, unknown>, key: string): string {
@@ -655,7 +655,8 @@ export function registerTools(
           const text =
             (warning ? warning + "\n\n" : "") +
             body +
-            (notices.length > 0 ? `\n\n${notices.join("\n")}` : "");
+            (notices.length > 0 ? `\n\n${notices.join("\n")}` : "") +
+            (status.driverCall ? `\n\n${status.driverCall}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {

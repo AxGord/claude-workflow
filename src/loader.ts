@@ -368,6 +368,7 @@ export class Loader {
       max_transitions: own.max_transitions ?? base.max_transitions,
       model_table: own.model_table ?? base.model_table,
       driver: own.driver ?? base.driver,
+      dispatcher: own.dispatcher ?? base.dispatcher,
       map: own.map ?? base.map,
       states: { ...base.states, ...own.states },
     };
@@ -429,6 +430,16 @@ export class Loader {
         errors.push(
           `driver: the initial state "${wf.initial}" must be a prompt state (start answers with the driver's call there)`,
         );
+    }
+
+    if (wf.dispatcher) {
+      const refError = driverRefError(wf.dispatcher);
+      if (refError) errors.push(refError.replace(/^driver\./, "dispatcher."));
+      if (wf.driver)
+        errors.push("dispatcher: a workflow declares `driver:` or `dispatcher:`, not both");
+      const after = wf.dispatcher.after;
+      if (after !== undefined && !stateNames.has(after))
+        errors.push(`dispatcher.after: state "${after}" does not exist`);
     }
 
     for (const [name, state] of Object.entries(wf.states)) {

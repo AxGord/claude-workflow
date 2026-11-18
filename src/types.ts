@@ -138,7 +138,31 @@ export const DriverObjectSchema = z
   })
   .strict();
 
+/**
+ * A dispatching workflow's `dispatcher:` — the cheap agent that drives the DISPATCHER session itself
+ * (admission, task starts, driver spawns, slot bookkeeping) for the main conversation. Opt-in:
+ * `env` = the environment variable that turns it on (absent = always on); off, the workflow is as if
+ * it declared none. `after` = the state the main conversation still drives itself (building the
+ * queue); the reply that leaves it repeats the block. `prompt_ref` / `agent_type` as in `driver:`
+ * (default type `workflow:dispatcher`). Unlike `driver:` it changes nothing but `start`'s answer:
+ * no `agent_step`, no one-agent-per-visit reading of the session's children.
+ */
+export const DispatcherObjectSchema = z
+  .object({
+    model: z.string().min(1),
+    effort: EffortSchema,
+    prompt_ref: z.string().min(1),
+    agent_type: z.string().min(1).optional(),
+    env: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an environment variable name")
+      .optional(),
+    after: z.string().min(1).optional(),
+  })
+  .strict();
+
 export type Driver = z.infer<typeof DriverObjectSchema>;
+export type Dispatcher = z.infer<typeof DispatcherObjectSchema>;
 
 // Single source of truth for state fields. Tool schemas derive from this.
 // To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
@@ -237,6 +261,7 @@ export const WorkflowDefinitionSchema = z
     max_transitions: z.number().int().positive().optional().default(50),
     model_table: ModelTableObjectSchema.optional(),
     driver: DriverObjectSchema.optional(),
+    dispatcher: DispatcherObjectSchema.optional(),
     // Live map: `false` keeps a root session of this workflow with no children (a conversation, not a task) off the map
     map: z.boolean().optional(),
     states: z.record(StateDefinitionSchema),
@@ -248,7 +273,7 @@ export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 /**
  * A workflow YAML file as written. With `extends: <workflow>` it is a heir:
  * the base's states plus its own (a state of the same name replaces the
- * base's whole), and `initial` / `max_transitions` / `description` / `model_table` / `driver` from the
+ * base's whole), and `initial` / `max_transitions` / `description` / `model_table` / `driver` / `dispatcher` from the
  * heir where it sets them. Without `extends`, `initial` and `states` are required.
  */
 export const WorkflowFileObjectSchema = z
@@ -260,6 +285,7 @@ export const WorkflowFileObjectSchema = z
     max_transitions: z.number().int().positive().optional(),
     model_table: ModelTableObjectSchema.optional(),
     driver: DriverObjectSchema.optional(),
+    dispatcher: DispatcherObjectSchema.optional(),
     map: z.boolean().optional(),
     states: z.record(StateDefinitionSchema).optional(),
   })

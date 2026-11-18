@@ -414,13 +414,68 @@ driver:
 - Bookkeeping is an exec: `mark_done` sets the task done with the landed sha as a note. When the queue header names `record_file:` (relative = beside the queue; the value is taken whole — no `# comment`), it also appends one line from the context: `- <date> <ID> landed <sha> | difficulty: … | model: …/… | review: …/… | rounds: N | tokens: worker=… review=… | report: <log dir>/report.md`.
 - Bundled `batch`: `dispatch` starts each task with its context and spawns the DRIVER block as given. `collect` routes on the drivers' one-line answers (a worker or reviewer under a driver is the driver's; after a restart an orphaned line is relayed to that P's driver). A task workflow without `driver:` is still driven by the dispatcher itself.
 
+#### The dispatcher agent (`dispatcher:`, opt-in)
+
+By default the main conversation runs the dispatching session itself: every `start`, driver spawn, `link_agent`, `tasks` update and `slot_free`, in its own long context. With the opt-in a cheap agent does that, and the main conversation gets only what needs a decision.
+
+```yaml
+# bundled batch.yaml; a heir (`extends: batch`) inherits it
+dispatcher:
+  model: haiku
+  effort: medium
+  prompt_ref: dispatch-driver       # shipped templates/drivers/dispatch-driver.md; else a path, as in driver:
+  env: WF_DISPATCHER                # the opt-in variable; no `env` = always on
+  after: plan_queue                 # the main conversation still drives the states up to this one
+  # agent_type: workflow:dispatcher # the default
+```
+
+**Turning it on**
+
+- Set `WF_DISPATCHER=1` in the environment Claude Code starts in, e.g. the `env` block of `~/.claude/settings.json` or of the project's `.claude/settings.json`. Empty, `0`, `false`, `off` and `no` are off.
+- It is an environment variable and not a queue header key for two reasons: `start` answers before any queue file is known, and the nesting depth below is set in the same place.
+- Depth: main → dispatcher → task driver → worker → the worker's helper is four levels below the main conversation. Claude Code allows one less by default, so set `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4` beside it. The DRIVER block says what the engine process sees in that variable.
+- Off, nothing changes: the workflow is as if it had no `dispatcher:`, and `start` answers byte for byte as before.
+
+**What the engine does when it is on**
+
+- `start` of the workflow ends its answer with a DRIVER block for the dispatcher: the Agent call, the `link_agent`, the three things the agent hands back, the depth line.
+- The `transition` reply that leaves the `after` state repeats the block, also through an exec chain. The main conversation builds the queue, then spawns the agent instead of acting on the `dispatch` prompt.
+- The block is kept in the session's context as `dispatcher_call`; a fresh dispatcher is spawned from `status({session_id, key: "dispatcher_call"})`.
+- A second `start` of a `context.task` that already runs under that session is refused and names the running session, so a dispatcher that repeats a `dispatch` after a restart starts nothing twice.
+- After a Claude restart the SessionStart pickup names the dispatcher's `SendMessage` instead of the task sessions of its `tasks` key and what runs below them. A sub-session `tasks` does not name is still listed for the main conversation. Before the session has left `after` with no agent linked, the pickup is unchanged.
+- Unlike `driver:` it records no `agent_step` and changes no wake rule of the session's children. A workflow declares `driver:` or `dispatcher:`, not both; an unknown `after` state fails the load.
+
+**What the agent does** (`templates/drivers/dispatch-driver.md`)
+
+- `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`.
+- `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`. It absorbs `WAITING` lines and notifications, and relays a stray worker or reviewer line to that task's driver.
+- A driver that ended with no last line is pinged once, then re-spawned from the task session's `driver_call`.
+- It decides nothing and has no `abort`, `delete`, `queue_mark`, `queue_edit` or `queue_add`.
+
+**What reaches the main conversation**, each as one hand-back while the agent keeps running:
+
+| Hand-back | When | The main conversation's answer |
+|---|---|---|
+| a driver's `NEEDS-PARENT …` line, verbatim | a task needs a decision | `SendMessage` to the dispatcher, starting `task=<ID>:`; it relays to that driver |
+| `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, default 5) | judge each line as the `collect` prompt says for a landed task |
+| `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
+
+- The lessons are copied, never judged or turned into queue lines by the agent. The last block handed is also in the context key `lessons_handed`.
+- A worker's, reviewer's or driver's line that reaches the main conversation is sent verbatim to the dispatcher.
+- Rotation: from its 4×N-th land on, the `LESSONS` line ends `rotate=due`. The main conversation may then spawn a fresh dispatcher from `dispatcher_call` and send the old one `RETIRE new=<agent id>`; the old one only relays its drivers' late lines.
+
+Not verified by a live run yet: where a task driver's report goes while the dispatcher has handed back, a spawn at the fourth level, and a `SendMessage` between two dispatchers.
+
 #### Agent types
 
-The plugin ships three subagent types in `agents/`:
+The plugin ships four subagent types in `agents/`:
 
 - `workflow:driver` (haiku/medium).
   - It follows the task-driver rules: probe a WAITING agent once on a later wake (after the hand-back, before the notification), and answer a notice that an agent waits on its own background work with the WAITING line only, while the shipped worker, recon and reviewer prompts make an agent wait in foreground calls and never end a turn with live background work.
   - Of the workflow tools it has only `start`, `status`, `transition`, `context_set`, `link_agent`, `queue_mark` and `queue_edit`, so a driver cannot `abort`, `delete`, `create` or `modify` a session.
+- `workflow:dispatcher` (haiku/medium), spawned only under the opt-in above.
+  - Of the workflow tools it has only `start`, `status`, `transition`, `context_set` and `link_agent`, so it cannot `abort` or `delete` a session, nor mark, edit or add a queue line.
+  - Its rules are one file, `templates/drivers/dispatch-driver.md`, which its spawn prompt names.
 - `workflow:recon` (sonnet/medium) and `workflow:reviewer` (opus/high), both read-only: no Edit tool, a Write tool limited by a PreToolUse(Write) hook to the task report directory. That is an absolute path in scratch space with a `<task>.log` / `<task>-logs` directory in it, outside any git work tree, no `..`; a write inside the worktree is refused.
 
 #### The read-only Bash gate

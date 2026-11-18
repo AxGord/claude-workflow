@@ -3,6 +3,21 @@ description: "Long-running batch orchestration — a queue file of tasks; the en
 initial: load_skills
 max_transitions: 100000
 
+# Opt-in: with the environment variable WF_DISPATCHER set (anything but empty / 0 / false / off / no) in the
+# Claude Code process, `start` of this workflow answers with a DRIVER block for a cheap dispatcher agent
+# (`workflow:dispatcher`) that drives `dispatch` and `collect` from the moment the session leaves `plan_queue`;
+# the main conversation then gets only the task drivers' NEEDS-PARENT lines, a LESSONS block per
+# `lessons_every` lands (a queue header key, default 5) and a HANDOVER at a state the agent does not drive.
+# Unset, nothing here applies: the main conversation dispatches as the prompts below say. An environment
+# variable, not a queue header key: `start` answers before a queue file is known, and the nesting depth the
+# agent needs (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4) is set in the same place. A heir inherits the block.
+dispatcher:
+  model: haiku
+  effort: medium
+  prompt_ref: dispatch-driver
+  env: WF_DISPATCHER
+  after: plan_queue
+
 # A project's heir (`extends: batch`) usually overrides `plan_queue` with an exec that names its fixed
 # queue and its own task workflow (context_set `queue_file`, `task_workflow`); the per-task steps a
 # project owns (`project_prepare`, `project_land`) live in `batch-task`.

@@ -6,6 +6,7 @@ import type { SessionState } from "./types.js";
 import { isPidAlive } from "./process.js";
 import { Executor } from "./executor.js";
 import { currentStep, listedStanding, type IsRoute } from "./agent-link.js";
+import { DISPATCHER_AFTER_KEY, DISPATCHER_CALL_KEY } from "./driver.js";
 
 export const RESUME_TOOL = "mcp__plugin_workflow_wf__resume";
 export const STATUS_TOOL = "mcp__plugin_workflow_wf__status";
@@ -197,6 +198,49 @@ export function earlierVisitNote(
   }
   if (standing === "current" || standing === "spawned") return undefined;
   return `linked at its parent's ${now.state} visit ${s.agent_step.visit}, the parent is now at visit ${now.visit}: an earlier visit's agent — not woken; ${abortHint(s, parent)} once it is not needed`;
+}
+
+/**
+ * Whether a dispatcher agent has the root: `dispatcher_call` in its context AND an agent linked to it or
+ * the root past the state the conversation drives itself (`dispatcher_after`; none = from the start).
+ * Before that the conversation still drives the root, and nothing here applies.
+ */
+export function dispatcherHolds(root: SessionState): boolean {
+  const block = root.context[DISPATCHER_CALL_KEY];
+  if (typeof block !== "string" || block === "") return false;
+  if (root.agent_id) return true;
+  const after = root.context[DISPATCHER_AFTER_KEY];
+  if (typeof after !== "string" || after === "") return true;
+  return root.history.some(h => h.frame === 0 && h.from === after);
+}
+
+/** The task sessions a dispatcher's `tasks` key names (`ID=P driver=<agent>` entries): the P ids. */
+export function dispatcherTaskSessions(root: SessionState): Set<string> {
+  const tasks = root.context.tasks;
+  const ids = new Set<string>();
+  if (typeof tasks !== "string") return ids;
+  for (const m of tasks.matchAll(/(?:^|\s)[^\s=]+=([0-9a-f]{8})(?=\s|$)/g)) ids.add(m[1]);
+  return ids;
+}
+
+/**
+ * A picked-up root a dispatcher agent holds (`dispatcherHolds`): the lines that tell the conversation
+ * to wake that agent only — it wakes the `below` task sessions of its `tasks` key. Empty for any other root.
+ */
+export function dispatcherWakeLines(root: SessionState, indent: string, below: number): string[] {
+  if (!dispatcherHolds(root)) return [];
+  const id = root.session_id;
+  const head = `${indent}DISPATCHER — a dispatcher agent drives ${id}: wake ONLY it; the ${below} session(s) of its \`tasks\` key and below them are its to wake, never yours:`;
+  if (!root.agent_id)
+    return [
+      head,
+      `${indent}  no agent linked — spawn it from ${STATUS_TOOL}({ session_id: '${id}', key: '${DISPATCHER_CALL_KEY}' }), link_agent it, then SendMessage it "restarted: wake the task drivers"`,
+    ];
+  return [
+    head,
+    `${indent}  SendMessage({ to: "${root.agent_id}", message: "Continue — the run was restarted: call ${STATUS_TOOL}({ session_id: '${id}' }) — NOT start(), NOT resume() — then wake each task driver of its \`tasks\` key as your instructions' § After a restart say." })`,
+    `${indent}  that SendMessage fails → spawn a fresh one from ${STATUS_TOOL}({ session_id: '${id}', key: '${DISPATCHER_CALL_KEY}' }), link_agent it, and send it the same message`,
+  ];
 }
 
 /**
