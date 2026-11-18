@@ -82,7 +82,7 @@ describe("docs: getting started teaches use before authoring", () => {
 
   it("the agent path names the skill and the tool that saves, and its quoted file is YAML with the quoted states", () => {
     const text = read(GETTING_STARTED);
-    expect(text).toContain("`workflow-authoring`");
+    expect(text).toContain("`wf-yaml-authoring`");
     expect(text).toContain("`create`");
     const doc = YAML.parse(yamlBlock(GETTING_STARTED, "name: release")) as {
       initial: string;
@@ -109,15 +109,15 @@ describe("docs: the two-mode summary is mirrored", () => {
     expect(readme).toBe(summary("docs/concepts.md"));
     expect(readme).toContain("`master`");
     expect(readme).toContain("`batch`");
-    expect(readme).toContain("`workflow-authoring`");
+    expect(readme).toContain("`wf-yaml-authoring`");
     const concepts = read("docs/concepts.md");
     expect(concepts.indexOf("**Two ways to use it.**")).toBeLessThan(
       concepts.indexOf("## The vocabulary"),
     );
   });
 
-  it("the bundled workflow-authoring skill says how to answer a request for a workflow", () => {
-    const skill = read("templates/skills/workflow-authoring/SKILL.md");
+  it("the bundled wf-yaml-authoring skill says how to answer a request for a workflow", () => {
+    const skill = read("templates/skills/wf-yaml-authoring/SKILL.md");
     expect(skill).toContain("### When a user asks for a workflow");
     expect(skill).toContain('create({ name, scope: "project", definition })');
   });

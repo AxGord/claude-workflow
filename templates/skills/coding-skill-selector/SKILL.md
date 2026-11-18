@@ -62,7 +62,7 @@ Load coding skills for the languages/domains THIS TASK will touch.
    - AWS Lambda / .NET deploy → `Skill("aws-lambda")`
    - MCP server setup / .mcp.json / MCP troubleshooting → `Skill("mcp-setup")`
    - Claude Code settings.json / hooks / permissions / plugin config → `Skill("claude-code-config")`
-   - Workflow YAML in templates/ or .claude/workflows/ → `Skill("workflow-authoring")`
+   - Workflow YAML in templates/ or .claude/workflows/ → `Skill("wf-yaml-authoring")`
    - Setting up / tuning a project linter, or a new project with no lint
      config → `Skill("lint-setup")` (skip if not installed; it loads the
      user's `preferences-lint` lists itself — neither loads for normal

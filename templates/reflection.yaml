@@ -66,7 +66,7 @@ states:
 
   load_workflow_authoring:
     skills:
-      - workflow-authoring
+      - wf-yaml-authoring
     transitions:
       continue: evolve_workflow
 
@@ -87,7 +87,7 @@ states:
       2. **Propose the diff to the user first** (2-4 lines: which state/transition
          changes and why). Process is policy — apply after the user agrees, or
          when they already asked for the change.
-      3. **Edit and validate**: follow the workflow-authoring skill (state types,
+      3. **Edit and validate**: follow the wf-yaml-authoring skill (state types,
          both routes on action states, terminal/outcome semantics). Re-check the
          YAML parses and every transition target exists.
       4. The engine hot-reloads the file automatically. Running sessions keep

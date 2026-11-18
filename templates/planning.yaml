@@ -135,7 +135,7 @@ states:
       The task is operational/dynamic — create the execution workflow directly.
       The workflow IS the plan.
 
-      **First**: call `Skill("workflow-authoring")` for exec/fetch state reference.
+      **First**: call `Skill("wf-yaml-authoring")` for exec/fetch state reference.
 
       **Plan mode**: if system prompt says "Plan mode is active" — you're already in it,
       do NOT call EnterPlanMode. Otherwise call `EnterPlanMode`.

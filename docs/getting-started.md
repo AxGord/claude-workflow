@@ -127,11 +127,11 @@ A project with its own procedure can have its own workflow. There are two paths.
 
 ### Ask the agent
 
-The agent loads the bundled `workflow-authoring` skill (the reference for the YAML format) and writes the file. Say what the process is, in your words:
+The agent loads the bundled `wf-yaml-authoring` skill (the reference for the YAML format) and writes the file. Say what the process is, in your words:
 
 > Make me a workflow for releasing my small npm library: run the tests, bump the version, build, then ask me before publishing. Save it for this project.
 
-What this produced in a scratch project (the engine built from this repository; the skill was the project's own `.claude/skills/workflow-authoring`): the agent loaded `workflow-authoring`, tried to write `.claude/workflows/release.yaml` with the Write tool (denied: the run was headless), and saved it with the engine's `create` tool (`scope: "project"`), which answered `Workflow "release" created at <project>/.claude/workflows/release.yaml`. The file has 14 states; its start and the confirmation step:
+What this produced in a scratch project (the engine built from this repository; the skill was the project's own `.claude/skills/workflow-authoring`, the name the bundled skill had then; it is now `wf-yaml-authoring`): the agent loaded `workflow-authoring`, tried to write `.claude/workflows/release.yaml` with the Write tool (denied: the run was headless), and saved it with the engine's `create` tool (`scope: "project"`), which answered `Workflow "release" created at <project>/.claude/workflows/release.yaml`. The file has 14 states; its start and the confirmation step:
 
 ```yaml
 name: release

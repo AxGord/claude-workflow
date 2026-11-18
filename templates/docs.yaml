@@ -16,7 +16,7 @@ states:
 
       1. Set `context_set("doc_kind", <kind>)` to the STRICTEST kind present:
          - `workflow` — a workflow YAML (templates/, ~/.claude/workflows/,
-           .claude/workflows/). Load `Skill("workflow-authoring")` first if it
+           .claude/workflows/). Load `Skill("wf-yaml-authoring")` first if it
            is not loaded.
          - `knowledge` — SKILL.md, CLAUDE.md, memory: durable instructions every
            future session obeys. Every rule you write must be sourced from THIS
@@ -42,7 +42,7 @@ states:
         - a BUNDLED template (the plugin's `templates/`): make sure the edit sits
           in the dir the RUNNING server loads from (`ps -axo command | grep
           build/index.js` shows the path — a plugin cache copy may be dead
-          weight), then trigger the reload per workflow-authoring;
+          weight), then trigger the reload per wf-yaml-authoring;
         - a user/project workflow (`~/.claude/workflows/`, `.claude/workflows/`):
           those dirs are fs.watch'ed — no trigger needed.
         Then confirm with `list` that the workflow is present with the expected

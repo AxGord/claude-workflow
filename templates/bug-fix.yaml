@@ -3,7 +3,7 @@ description: "Standard bug fix workflow"
 initial: classify
 max_transitions: 50
 
-# `difficulty` (1..10; rubric: workflow-authoring skill) is optional: set at start or at the plan state
+# `difficulty` (1..10; rubric: wf-yaml-authoring skill) is optional: set at start or at the plan state
 # (`think` / `diagnose`), the engine writes `model_<stage>` / `effort_<stage>` and the agent prompts
 # spawn with them; without one those keys are empty and each prompt's prose rule applies.
 model_table:

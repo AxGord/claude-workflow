@@ -1,5 +1,5 @@
 ---
-name: workflow-authoring
+name: wf-yaml-authoring
 description: Reference for authoring workflow YAML — state types, skill gates, exec/fetch action states, terminals, routing, and engine gotchas
 ---
 

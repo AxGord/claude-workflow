@@ -5,7 +5,7 @@ description: Workflows, states, sessions, transitions, child sessions, bundled w
 
 # Concepts
 
-**Two ways to use it.** *One task:* with the CLAUDE.md snippet every conversation starts the `master` workflow, which picks a bundled one (`bug-fix`, `coding`, `new-feature`, ...) and hands the agent one prompt at a time; a named one starts with `start({ workflow: "bug-fix" })` or by asking. *A queue:* for many tasks, a queue file plus the `batch` workflow runs one task workflow per line, several at once, each under a driver agent. A workflow of your own comes from asking the agent (it loads the bundled `workflow-authoring` skill) or from writing the YAML by hand. Step by step: [Getting started](/getting-started).
+**Two ways to use it.** *One task:* with the CLAUDE.md snippet every conversation starts the `master` workflow, which picks a bundled one (`bug-fix`, `coding`, `new-feature`, ...) and hands the agent one prompt at a time; a named one starts with `start({ workflow: "bug-fix" })` or by asking. *A queue:* for many tasks, a queue file plus the `batch` workflow runs one task workflow per line, several at once, each under a driver agent. A workflow of your own comes from asking the agent (it loads the bundled `wf-yaml-authoring` skill) or from writing the YAML by hand. Step by step: [Getting started](/getting-started).
 
 ## The vocabulary
 
@@ -82,7 +82,7 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. Auto-pr
 | `task-delegation` | When and how to delegate to subagents |
 | `debugging` | Debugging meta-patterns — what to do when fixes don't stick |
 | `coding-skill-selector` | Select and load coding skills by file extensions and domains |
-| `workflow-authoring` | Reference for creating workflows with exec/fetch action states |
+| `wf-yaml-authoring` | Reference for authoring workflow YAML: state types, skill gates, exec/fetch action states (not Claude Code's own `workflow-authoring`, which covers its native JS workflows) |
 
 **Languages**
 
