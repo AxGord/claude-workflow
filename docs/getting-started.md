@@ -88,7 +88,13 @@ To pick the workflow yourself, name it: ask "run the bug-fix workflow on this", 
 
 ## Mode 2 — a queue of tasks
 
-When there are many independent tasks, write them to a queue instead of working one by one. A queue is a YAML file, `.claude/batch/<name>.yaml`; the bundled `batch` workflow (master routes a "do all of these" message to it, or ask for it by name) admits lines into a window, starts one `batch-task` session per line, each run by a cheap driver agent that has a worker and a reviewer do the work in a worktree and lands the result, and re-picks every time a slot frees.
+When there are many independent tasks, write them to a queue instead of working one by one. A queue is a YAML file, `.claude/batch/<name>.yaml`.
+
+The bundled `batch` workflow (master routes a "do all of these" message to it, or ask for it by name):
+
+- admits lines into a window;
+- starts one `batch-task` session per line, each run by a cheap driver agent that has a worker and a reviewer do the work in a worktree and lands the result;
+- re-picks every time a slot frees.
 
 A minimal queue (add the lines by asking the agent, which calls `queue_add`, or with `wf-queue --queue demo --add '<YAML mapping>'`; the first add creates the file):
 
@@ -117,7 +123,13 @@ tasks:
       Add a test for the empty password.
 ```
 
-The engine also writes `added`, `base` and `text_hash` on every line it adds. `wf-queue --queue demo --dry-run --explain` shows what a pick would do without starting anything; on this file it printed `T1` and `T2` as admitted, `T3: window full` (with `batch_size: 5` it reads `T3: after: T1 (pending)`), and the summary `batch_size 2, running 0, pending 3, admitted 2 (dry run)`. To run it, ask the agent to run the queue (`start({ workflow: "batch" })`); its `plan_queue` step resumes a queue that has pending lines. Everything else — priorities, `owner:`, the model table, drivers, the plan pane's Plan tab — is in [Task queue and dispatch](/queue).
+The engine also writes `added`, `base` and `text_hash` on every line it adds. `wf-queue --queue demo --dry-run --explain` shows what a pick would do without starting anything; on this file it printed:
+
+- `T1` and `T2` as admitted;
+- `T3: window full` (with `batch_size: 5` it reads `T3: after: T1 (pending)`);
+- the summary `batch_size 2, running 0, pending 3, admitted 2 (dry run)`.
+
+To run it, ask the agent to run the queue (`start({ workflow: "batch" })`); its `plan_queue` step resumes a queue that has pending lines. Everything else — priorities, `owner:`, the model table, drivers, the plan pane's Plan tab — is in [Task queue and dispatch](/queue).
 
 Checked for this page: the add and the dry-run pick above. Not re-run: a whole dispatch (worktrees, drivers, land), which [Task queue and dispatch](/queue) describes.
 
@@ -131,7 +143,13 @@ The agent loads the bundled `wf-yaml-authoring` skill (the reference for the YAM
 
 > Make me a workflow for releasing my small npm library: run the tests, bump the version, build, then ask me before publishing. Save it for this project.
 
-What this produced in a scratch project (the engine built from this repository; the skill was the project's own `.claude/skills/workflow-authoring`, the name the bundled skill had then; it is now `wf-yaml-authoring`): the agent loaded `workflow-authoring`, tried to write `.claude/workflows/release.yaml` with the Write tool (denied: the run was headless), and saved it with the engine's `create` tool (`scope: "project"`), which answered `Workflow "release" created at <project>/.claude/workflows/release.yaml`. The file has 14 states; its start and the confirmation step:
+What this produced in a scratch project (the engine built from this repository; the skill was the project's own `.claude/skills/workflow-authoring`, the name the bundled skill had then; it is now `wf-yaml-authoring`):
+
+1. The agent loaded `workflow-authoring`.
+2. It tried to write `.claude/workflows/release.yaml` with the Write tool (denied: the run was headless).
+3. It saved the file with the engine's `create` tool (`scope: "project"`), which answered `Workflow "release" created at <project>/.claude/workflows/release.yaml`.
+
+The file has 14 states; its start and the confirmation step:
 
 ```yaml
 name: release
@@ -171,7 +189,11 @@ states:
   # ... publish_failed, cancelled, published, finish and failed ...
 ```
 
-The engine's own loader accepted it (a `Loader` over the bundled templates plus that directory: 22 workflows, `release` among the project's own), and a later `start()` in the same project listed it in `master`'s routing prompt (`Available workflows: - release — Release the npm library: ...`). Not checked: running `release` itself (its `npm` steps need a real package), and what an interactive session shows when the Write tool asks for permission. Read what the agent wrote before you rely on it: the agent's own summary said the build runs after `npm version`, so a failed build leaves the bump commit and tag in place.
+The engine's own loader accepted it (a `Loader` over the bundled templates plus that directory: 22 workflows, `release` among the project's own), and a later `start()` in the same project listed it in `master`'s routing prompt (`Available workflows: - release — Release the npm library: ...`).
+
+Not checked: running `release` itself (its `npm` steps need a real package), and what an interactive session shows when the Write tool asks for permission.
+
+Read what the agent wrote before you rely on it: the agent's own summary said the build runs after `npm version`, so a failed build leaves the bump commit and tag in place.
 
 ### Write the YAML by hand
 
@@ -231,7 +253,9 @@ Auto-allow the workflow tools so the agent is not interrupted with a permission 
 
 ## Trusting project workflows
 
-An `exec` state runs a shell command as you the moment a session enters it, so a workflow file that comes with a project (a cloned repository's `.claude/workflows/`) runs its `exec` and `fetch` states only in a project you trust. The engine does not ask you again: it takes the answer you already gave Claude Code. After you accept Claude Code's "trust this folder" question for a project, Claude Code itself runs that project's hooks (`.claude/settings.json`) as shell commands, so the project's workflows add nothing an attacker would not already have.
+An `exec` state runs a shell command as you the moment a session enters it, so a workflow file that comes with a project (a cloned repository's `.claude/workflows/`) runs its `exec` and `fetch` states only in a project you trust.
+
+The engine does not ask you again: it takes the answer you already gave Claude Code. After you accept Claude Code's "trust this folder" question for a project, Claude Code itself runs that project's hooks (`.claude/settings.json`) as shell commands, so the project's workflows add nothing an attacker would not already have.
 
 What you have to do:
 
@@ -249,7 +273,14 @@ wf-trust --revoke <project dir | hash prefix>   # withdraw one
 
 Until a project is trusted its file with exec/fetch states is left out of the load (a bundled workflow of the same name, `master` for one, runs instead), and `list` and `start` say so in one sentence naming the project and both ways to fix it.
 
-How the engine reads Claude Code's answer: the flag `projects[<project path>].hasTrustDialogAccepted` in Claude Code's user config, `$CLAUDE_CONFIG_DIR/.claude.json` (default `~/.claude.json`). It reads that one flag and never writes the file. A trusted folder covers the folders below it up to the git root of their repository; a worktree counts as its main checkout, but only when its `.git` pointer and the main checkout's record of it agree (a cloned repository cannot borrow another project's trust by naming its `.git`), and `wf-trust` in a worktree records the main checkout; the home directory's answer holds for one session only, so it covers nothing. A missing file, entry or flag, an unreadable or malformed file, or `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` all mean "not trusted", and then `wf-trust` is the way. The flag is an internal record of Claude Code, not a documented interface: if a Claude Code release renames it, the engine falls back to `wf-trust` instead of trusting anything.
+How the engine reads Claude Code's answer:
+
+- The flag `projects[<project path>].hasTrustDialogAccepted` in Claude Code's user config, `$CLAUDE_CONFIG_DIR/.claude.json` (default `~/.claude.json`). It reads that one flag and never writes the file.
+- A trusted folder covers the folders below it up to the git root of their repository.
+- A worktree counts as its main checkout, but only when its `.git` pointer and the main checkout's record of it agree (a cloned repository cannot borrow another project's trust by naming its `.git`), and `wf-trust` in a worktree records the main checkout.
+- The home directory's answer holds for one session only, so it covers nothing.
+- A missing file, entry or flag, an unreadable or malformed file, or `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` all mean "not trusted", and then `wf-trust` is the way.
+- The flag is an internal record of Claude Code, not a documented interface: if a Claude Code release renames it, the engine falls back to `wf-trust` instead of trusting anything.
 
 `wf-trust` is `scripts/wf-trust` of the plugin (also a `wf-trust` bin of the npm package). It refuses to run without a terminal, so an agent cannot approve for you; no MCP tool of the engine can. Its record is `$STATE_DIR/trusted-workflows.json` (default `~/.claude/workflow-state/`): a running server picks it up on its next read, and per-file approvals of an earlier version keep working. A session already running keeps the definition it started with.
 
@@ -259,7 +290,13 @@ How the engine reads Claude Code's answer: the flag `projects[<project path>].ha
 
 ## Heavy commands share one thread pool
 
-Builds and test suites from every session on the machine go through one thread pool, so several agents working at once queue for threads instead of choking the machine: `wf-run -- <command>` takes a lease first, an `exec` state asks with `resource:`, and a project can mark commands for the pool gate so an agent's own heavy Bash call goes through it too. Nothing to set up; the budget defaults to the performance cores minus two. [Thread pool](/pool) shows a real recorded window of it, live, and explains leases, priority, locks and backfill in plain language.
+Builds and test suites from every session on the machine go through one thread pool, so several agents working at once queue for threads instead of choking the machine:
+
+- `wf-run -- <command>` takes a lease first;
+- an `exec` state asks with `resource:`;
+- a project can mark commands for the pool gate so an agent's own heavy Bash call goes through it too.
+
+Nothing to set up; the budget defaults to the performance cores minus two. [Thread pool](/pool) shows a real recorded window of it, live, and explains leases, priority, locks and backfill in plain language.
 
 ## Configuration
 

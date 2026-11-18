@@ -5,17 +5,25 @@ description: Why parallel agents queue instead of choking the machine, and how l
 
 # Thread pool
 
-Four agents each start a build, and the laptop stops answering. The pool is the fix: every heavy command, from every session, every project and every Claude Code config on the machine, asks one shared pool for threads first. When the pool has them, the command starts. When it has not, the command waits in a queue, in order, and starts the moment threads are free. The machine stays usable and nothing is lost, because a waiting command is a patient one.
+Four agents each start a build, and the laptop stops answering. The pool is the fix: every heavy command, from every session, every project and every Claude Code config on the machine, asks one shared pool for threads first.
+
+When the pool has them, the command starts. When it has not, the command waits in a queue, in order, and starts the moment threads are free. The machine stays usable and nothing is lost, because a waiting command is a patient one.
 
 The reference text (every flag, every rule of admission) is in [Action states](/action-states#heavy-work-—-the-machine-wide-thread-pool). This page is the picture.
 
 ## Watch it
 
-Below is the pool of a real window of hours, recorded by the pool's own log while the open-source anyparse project ran several pipelines at once. The strip is the whole window: threads held against the budget (the dashed line), and the amber band along the top is the number of commands that were waiting. The panel under it is the Pool tab of the plan pane, drawn by the mod's own code at the cursor. Press play, or drag the slider.
+Below is the pool of a real window of hours, recorded by the pool's own log while the open-source anyparse project ran several pipelines at once.
+
+The strip is the whole window: threads held against the budget (the dashed line), and the amber band along the top is the number of commands that were waiting. The panel under it is the Pool tab of the plan pane, drawn by the mod's own code at the cursor. Press play, or drag the slider.
 
 <PoolDemo />
 
-The log samples a pool once a minute while it has a lease or a waiter, and not at all while it is empty, so a flat stretch with nothing in it is an idle pool. A sample lists no holders: the log names a lease only on an `overrun:`, `underuse:` or `backfill:` line, and a name appears on the sample after that line, only when it is a slice or session of the replayed project. Every other lease is one row, "leases the log does not name (this project or another)", because a sample cannot say whose threads they are. The log keeps no priority and no age for a lease, so the rows here show none; the live tab shows both.
+The log samples a pool once a minute while it has a lease or a waiter, and not at all while it is empty, so a flat stretch with nothing in it is an idle pool.
+
+A sample lists no holders: the log names a lease only on an `overrun:`, `underuse:` or `backfill:` line, and a name appears on the sample after that line, only when it is a slice or session of the replayed project. Every other lease is one row, "leases the log does not name (this project or another)", because a sample cannot say whose threads they are.
+
+The log keeps no priority and no age for a lease, so the rows here show none; the live tab shows both.
 
 ## How it works
 
@@ -54,7 +62,11 @@ The log samples a pool once a minute while it has a lease or a waiter, and not a
 
 **Overrun.** A lease counts threads, but a command can run more processes than that. The pool reads the process table and flags a lease whose tree runs well above its threads as OVERRUN (`OVERRUN ~12` in the tab), and counts what the tree runs as the lease's own load, never as foreign load.
 
-**Underuse.** The other way round is just as visible: a lease asks for threads the caller says it will use. A lease whose tree runs at least half its threads (and at least one cpu) below them for 30 seconds is logged as UNDERUSE in `pool.log` and marked `(UNDERUSE)` in `wf-run --status`, `pool_status` and the dashboard's Pool tab (an `UNDERUSE ~N` plaque). `wf-run --status` and `pool_status` also show what every measured lease runs against what it holds (`holds 4 threads, runs ~3`); the dashboard shows `runs` only in the OVERRUN and UNDERUSE plaques. The pool only reports it: the size of a lease is its caller's declaration, and the caller fixes it. `wf-run --usage` adds up the leases that ended, per label, so a project can right-size its own callers.
+**Underuse.** The other way round is just as visible: a lease asks for threads the caller says it will use. A lease whose tree runs at least half its threads (and at least one cpu) below them for 30 seconds is logged as UNDERUSE in `pool.log` and marked `(UNDERUSE)` in `wf-run --status`, `pool_status` and the dashboard's Pool tab (an `UNDERUSE ~N` plaque).
+
+- `wf-run --status` and `pool_status` also show what every measured lease runs against what it holds (`holds 4 threads, runs ~3`); the dashboard shows `runs` only in the OVERRUN and UNDERUSE plaques.
+- The pool only reports it: the size of a lease is its caller's declaration, and the caller fixes it.
+- `wf-run --usage` adds up the leases that ended, per label, so a project can right-size its own callers.
 
 ## Using it
 

@@ -49,11 +49,16 @@ A project workflow named `coding` overrides the bundled `coding` template. Same-
 
 A project file that declares an `exec` or `fetch` state loads only in a trusted project: a folder you trusted in Claude Code, or one approved with `wf-trust <project>` (see [Trusting project workflows](/getting-started#trusting-project-workflows)); until then it is left out and the tier below answers by name. Bundled and global files are not gated.
 
-The project tier is the server's cwd. A session started with `start({ cwd })` in ANOTHER project that has
-its own `.claude/workflows/` (a worktree counts as its main checkout; the home dir, whose
-`.claude/workflows` is the global tier, is none) sees the workflows that project defines itself laid by
-name over the server's — a name only the server has is still found: a dispatcher in one repo can run a task by the
-procedure another repo defines (a queue line's `repo:` + `workflow:`).
+The project tier is the server's cwd.
+
+A session started with `start({ cwd })` in ANOTHER project that has
+its own `.claude/workflows/` sees the workflows that project defines itself laid by
+name over the server's.
+
+- A worktree counts as its main checkout; the home dir, whose
+  `.claude/workflows` is the global tier, is none.
+- A name only the server has is still found: a dispatcher in one repo can run a task by the
+  procedure another repo defines (a queue line's `repo:` + `workflow:`).
 
 The SessionStart hook's CLI (`build/session-cli.js`) builds its loader from the same owner (`src/workflow-dirs.ts`) as the server, so a resumed session's routing steps are judged against the same three tiers, the cwd's project tier included.
 
@@ -79,11 +84,16 @@ states:
 
 The definition is the base's, with the heir's states laid over it by name (a same-named state is
 replaced whole, not merged key by key; new states are added). `initial`, `max_transitions` and
-`description` come from the heir where it sets them. A heir extending its OWN name inherits that
-name from the tiers below its file (project `coding` → global, else bundled `coding`); another name
-resolves like any workflow name (the top tier). Chains work; a cycle, a missing base, or `extends`
-of its own name with nothing below fail the load. Reference checks (initial, transitions, routes)
-run on the merged result. Without `extends`, `initial` and `states` are required.
+`description` come from the heir where it sets them.
+
+- A heir extending its OWN name inherits that
+  name from the tiers below its file (project `coding` → global, else bundled `coding`); another name
+  resolves like any workflow name (the top tier).
+- Chains work; a cycle, a missing base, or `extends`
+  of its own name with nothing below fail the load.
+- Reference checks (initial, transitions, routes)
+  run on the merged result.
+- Without `extends`, `initial` and `states` are required.
 
 **Extension points.** The bundled workflows expose the steps a project usually wants to own as
 states with contract names; bundled, each keeps the old behaviour (the agent does it, or nothing):
@@ -95,7 +105,7 @@ states with contract names; bundled, each keeps the old behaviour (the agent doe
 | `project_gate` | `testing` | exec `true` — no gate | `on_success: done`, `on_error: failed` (the caller's fix round) |
 | `project_build` | `bug-fix` | prompt: build the fixed app before the visual check | `on_success: verify_visual`, `on_error: write_fix` |
 | `project_prepare` | `batch-task` | exec: `git worktree add <repo>/../.wt/<repo-name>/<ID> -b batch/<ID>`; stdout = the path alone | `on_success: work`, `on_error: prepare_failed` |
-| `project_land` | `batch-task` | exec under the lock `{{context.cwd}}-land`: `git merge --no-ff` + the queue's `land_test:` (red → the merge is taken back with `reset --keep`; unsafe → exit 4, nothing touched) | `cases: {"0": mark_done}`, `default: land_failed`, `on_timeout: land_timeout` (an exec: retry twice (`max_visits: 2`, each visit re-runs `project_land`) when the branch is unmerged and the tree clean, else `stop_state`) |
+| `project_land` | `batch-task` | exec under the lock `{{context.cwd}}-land`: `git merge --no-ff` + the queue's `land_test:` (red → the merge is taken back with `reset --keep`; unsafe → exit 4, nothing touched) | `cases: {"0": mark_done}`, `default: land_failed`, `on_timeout: land_timeout` (an exec: retry twice when the branch is unmerged and the tree clean, else `stop_state`; `max_visits: 2`, each visit re-runs `project_land`) |
 
 `coding` and `bug-fix` verify through `testing`, so one heir of `testing` serves both. Give every
 heavy step `on_timeout:` and a state of its own for it.

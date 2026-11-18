@@ -133,22 +133,34 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list` | List all available workflow definitions | — |
-| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd` (absolute existing dir — a sub-agent's worktree), `priority` (`low`/`normal`/`high`/`urgent`; default: the parent's level, else `normal`), `context` (string map the session starts with; not `cwd`), `reply: "id"` (answer only `SESSION: <id> @ <state>`, no prompt or rules), `force: "<reason>"` (a second root; without `parent_session_id` a start in a process that already has an active root is refused, naming the root by workflow and state, never its id — a sub-agent never gets a root) — a workflow with `driver:` ends the answer with the driver's Agent call |
+| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd`, `priority`, `context`, `reply`, `force` |
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
-| `transition` | Advance to next state (auto push/pop sub-workflows). A call with a `caller_session_id` outside the caller's subtree is refused unless `force: true` with a `reason`; a `transition` naming no `caller_session_id` is not judged (the engine's own prompts step other sessions without one, and a step ends no one); the guard stops an agent that names itself | `session_id`, `transition`, `caller_session_id`, `force` + `reason` |
+| `transition` | Advance to next state (auto push/pop sub-workflows) | `session_id`, `transition`, `caller_session_id`, `force` + `reason` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
 | `modify` | Runtime overlay — add/change/remove states and transitions (an `exec`/`fetch` state is refused) | `session_id`, `add_state`, `add_transition` |
 | `create` | Create new workflow definition (saves YAML; an `exec`/`fetch` state is refused) | `name`, `definition`, `scope` |
 | `delete` | Delete a workflow definition | `name`, `scope` |
-| `abort` | Abort workflow, pop all stack frames (its active descendants end with it; the cascade is logged to stderr with the caller and the session count). Refused for a root or a session with active descendants unless `caller_session_id` is the target or an ancestor of it, or `force: true` with a `reason` | `session_id`, `caller_session_id`, `force`, `reason` |
+| `abort` | Abort workflow, pop all stack frames | `session_id`, `caller_session_id`, `force`, `reason` |
 | `sessions` | List all sessions (active first); `[STALE: …]` marks one whose state saw no engine call past its `stale_after` | `all` |
 | `set_priority` | Set the priority level of a session and its descendants; re-rank their waiting pool entries (no preemption) | `session_id`, `level` |
 | `pool_status` | The machine-wide pool: one line per lease and waiter (as `wf-run --status`) | — |
 | `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
-| `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale); every agent linked stays on the session (`linked_agents`) and every call is recorded with its time, the parent's state and that state's stage (`agent_links`) for the ledger's spend, in total and per agent and stage (`spend.by_agent`) | `session_id`, `agent_id` |
+| `link_agent` | Record the Agent-tool id of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale) | `session_id`, `agent_id` |
 | `queue_next` | Admit the next tasks of a YAML task queue and set them running (§ Task queue) | `queue`, `file`, `dry_run`, `explain` |
 | `queue_mark` | Move one task's status (`running` / `done` / `failed` / `released` / `promoted` / `shelved`; `retry` restarts a failed task) | `queue`, `file`, `id`, `to`, `note`, `retry`, `force` |
 | `queue_add` | Add a task (pending or backlog) to a queue, checked as a pick reads it | `queue`, `file`, `task`, `after_id`, `before_id` |
 | `queue_edit` | Set / remove a task's fields, append a note to its `notes:` | `queue`, `file`, `id`, `set`, `append_note`, `from` |
 | `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason, and/or its `archive_after_days`, `exclusive_hold` | `queue`, `file`, `batch_size`, `reason`, `archive_after_days`, `exclusive_hold` |
+
+Notes on the tools above:
+
+- `start`, `cwd`: an absolute existing dir — a sub-agent's worktree.
+- `start`, `priority`: `low` / `normal` / `high` / `urgent`; default: the parent's level, else `normal`.
+- `start`, `context`: a string map the session starts with; not `cwd`.
+- `start`, `reply: "id"`: answer only `SESSION: <id> @ <state>`, no prompt or rules.
+- `start`, `force: "<reason>"`: a second root. Without `parent_session_id`, a start in a process that already has an active root is refused, naming the root by workflow and state, never its id. A sub-agent never gets a root.
+- `start`: a workflow with `driver:` ends the answer with the driver's Agent call.
+- `transition`: a call with a `caller_session_id` outside the caller's subtree is refused unless `force: true` with a `reason`. A `transition` naming no `caller_session_id` is not judged (the engine's own prompts step other sessions without one, and a step ends no one); the guard stops an agent that names itself.
+- `abort`: its active descendants end with it; the cascade is logged to stderr with the caller and the session count. Refused for a root or a session with active descendants unless `caller_session_id` is the target or an ancestor of it, or `force: true` with a `reason`.
+- `link_agent`: every agent linked stays on the session (`linked_agents`). Every call is recorded with its time, the parent's state and that state's stage (`agent_links`) for the ledger's spend, in total and per agent and stage (`spend.by_agent`).
