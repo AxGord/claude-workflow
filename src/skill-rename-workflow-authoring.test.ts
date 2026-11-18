@@ -44,16 +44,17 @@ describe("bundled skill name must not shadow Claude Code's native /workflow-auth
   });
 
   it("start removes an earlier install's copy of the engine skill, so the native one is visible again", () => {
-    // The copy an earlier install made: the engine's SKILL.md as shipped before the rename.
-    const engineSkill = spawnSync(
-      "git",
-      [
-        "show",
-        "a654cb5674044c64f6f5abb70e8c29e39f5c34ce:templates/skills/workflow-authoring/SKILL.md",
-      ],
-      { cwd: ROOT, encoding: "utf8" },
-    ).stdout;
+    // The copy an earlier install made: the engine's SKILL.md as shipped before the rename, kept as a
+    // fixture (byte for byte) because CI checks out with depth 1 and a test must not need the history.
+    const engineSkill = fs.readFileSync(
+      path.join(ROOT, "src", "fixtures", "workflow-authoring-skill-before-rename.md"),
+      "utf8",
+    );
     expect(engineSkill).toContain("name: workflow-authoring");
+    // the same test the hook applies to recognise the engine's copy (hooks/workflow-start.sh, step 0b)
+    expect(engineSkill.split("\n").slice(0, 6).join("\n")).toMatch(
+      /^description: Reference for (authoring workflow YAML|creating workflows with exec\/fetch action states)/m,
+    );
     const skills = runStart(s => {
       fs.mkdirSync(path.join(s, "workflow-authoring"));
       fs.writeFileSync(path.join(s, "workflow-authoring", "SKILL.md"), engineSkill);

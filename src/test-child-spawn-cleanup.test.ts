@@ -41,7 +41,12 @@ describe("tests that spawn a child vitest clean up after themselves", () => {
   });
 
   it("every test that spawns a child vitest goes through spawnChild with a timeout", () => {
-    for (const file of ["test-child-vitest", "test-git-no-sign", "ci-browser-red"]) {
+    for (const file of [
+      "test-child-vitest",
+      "test-git-no-sign",
+      "ci-browser-red",
+      "ci-shallow-clone-tests",
+    ]) {
       const text = fs.readFileSync(path.join(ROOT, "src", `${file}.test.ts`), "utf8");
       expect([file, /\bspawnSync\(/.test(text)]).toEqual([file, false]);
       expect([file, /spawnChild\([^;]*?timeout: \d[\d_]*/s.test(text)]).toEqual([file, true]);
