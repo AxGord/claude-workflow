@@ -258,15 +258,17 @@ export function formatCalibration(rows: readonly CalibrationRow[], findings: boo
 
 /**
  * The price table: blended USD per million tokens by model family (the ledger holds a token count per task or role,
- * not an input/output split, so a price is one estimate over the usual mix). The one owner of a price: the Cost tab
+ * not an input/output split, so a price is one estimate over the usual mix: 75% input, 25% output, which is
+ * $30 for Opus at $15/$75 and $16 for Fable 5.2 at $8/$40). The one owner of a price: the Cost tab
  * reads it here. Edit a price and `PRICES_UPDATED` together.
  */
 export const PRICES_USD_PER_MTOK: Readonly<Record<string, number>> = {
   opus: 30,
   sonnet: 6,
   haiku: 2,
+  fable: 16,
 };
-export const PRICES_UPDATED = "2026-11-09";
+export const PRICES_UPDATED = "2026-11-18";
 
 /** USD per million tokens, by model family, for each kind of usage a transcript turn reports. */
 export interface TurnRates {
@@ -280,7 +282,7 @@ export interface TurnRates {
  * Keyed by model id; a key also matches any id containing it, the longest key wins, so a dated id
  * takes its model's rate and a bare family key (`opus`) is the fallback for an unknown id of that
  * family (priced as the family's newest). Source: Anthropic list prices, claude-api skill table
- * cached 2026-10-06. A 1-hour cache write costs twice the input rate. Haiku 5.5 prompts over 100K
+ * cached 2026-11-18. A 1-hour cache write costs twice the input rate. Haiku 5.5 prompts over 100K
  * tokens cost $0.50 / $2.50: not modelled, so such a turn is under-priced.
  */
 export const TURN_RATES_USD_PER_MTOK: Readonly<Record<string, TurnRates>> = {
