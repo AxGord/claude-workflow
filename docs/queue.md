@@ -351,7 +351,7 @@ driver:
   - the prompt filled with the session id, `context.task`, `context.queue_file` — the session's own, else its parent's — and the instructions' path;
   - then the `link_agent` to make.
 - A missing instructions file is named there as a WARNING; a bare name that is no shipped driver fails the load. A heir inherits `driver:` unless it sets its own whole.
-- `start({ …, context: { task, queue_file, difficulty } })` starts the session with those context keys (`difficulty` goes through the `model_table`, outside 1..10 refused; `cwd` / `claude_code_pid` are the engine's), so the dispatcher spends no calls on the claim's bookkeeping.
+- `start({ …, context: { task, queue_file, difficulty } })` starts the session with those context keys (`difficulty` goes through the `model_table`, outside 1..10 refused; `cwd` / `claude_code_pid` / `project` / `project_root` are the engine's: refused), so the dispatcher spends no calls on the claim's bookkeeping.
 - `start({ …, reply: "id" })` answers `SESSION: <id> @ <state>` and nothing else (a `driver:` workflow's DRIVER block still follows).
   - The state's prompt and the workflow rules are left out, for a parent that starts a child only to hand its id on; the child's own agent reads the prompt with `status`.
   - Without `reply` the answer is the full prompt as before. Only the value `id` exists.

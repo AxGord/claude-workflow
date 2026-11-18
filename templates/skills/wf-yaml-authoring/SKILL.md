@@ -195,6 +195,7 @@ Cases overrides on_success/on_error when both are present.
 Available in ALL prompts (not just action states):
 - `{{context.cwd}}` — the session's working directory (`start`'s `cwd`, else the server's)
 - `{{session_id}}`, `{{parent_session_id}}` (empty at the root)
+- `{{project_root}}` — the main checkout of the session's cwd (a linked worktree maps to its main worktree; no repo = the cwd), fixed at `start`: spell a path under the repo (queue file, `lib/` script) with it, not `{{context.cwd}}`, which is a batch task's worktree. A server started before this variable existed renders it empty
 - `{{context.<key>}}` — any context value set via context_set, or by `transition`'s `set: {key: value, ...}` (written first, in the same call, all or nothing with the move: an agent's `context_set` + `transition` pair is one request, and the entered exec/prompt sees the keys)
 - `{{visits.<state>}}` — visit count of `<state>` in the ACTIVE stack frame (empty if never visited) — route on "did the fix loop run?" without an agent turn
 - `{{root_workflow}}` — workflow at the stack root (`subagent` = running as a spawned sub-agent)
@@ -220,7 +221,7 @@ Exec env always includes `WF_PLUGIN_ROOT` — the plugin root (dir holding
 `templates/` and `scripts/`), resolved from the engine's own module location.
 Reference bundled scripts as `command: "sh \"$WF_PLUGIN_ROOT/scripts/foo.sh\""`
 — portable across install paths, no per-machine setup. A state's own `env:`
-key of the same name overrides it. It also carries `WF_SESSION_ID`,
+key of the same name overrides it. It also carries `WF_PROJECT_ROOT` (= `{{project_root}}`), `WF_SESSION_ID`,
 `WF_PARENT_SESSION_ID` (empty at the root), `WF_ROOT_SESSION_ID`,
 `WF_PRIORITY` / `WF_PRIORITY_LEVEL` (the session level, below) and
 `AGENT_CONTEXT` (tokens of the last turn of the agent linked to the session:

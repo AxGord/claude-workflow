@@ -276,7 +276,7 @@ export class Engine {
     if (priority !== undefined) PriorityLevelSchema.parse(priority);
     const initial = initialContext ?? {};
     for (const key of Object.keys(initial))
-      if (key === "cwd" || key === "claude_code_pid" || key === "project")
+      if (key === "cwd" || key === "claude_code_pid" || key === "project" || key === "project_root")
         throw new Error(`start context: "${key}" is the engine's (pass cwd as its own argument)`);
 
     // A parentless start while this process holds an active root is refused: the old idempotent
@@ -342,6 +342,8 @@ export class Engine {
         cwd: cwd ?? process.cwd(),
         // resolved while the worktree exists: a removed one can no longer be mapped to its checkout
         project: projectNameOf(cwd ?? process.cwd()),
+        // `{{project_root}}` / WF_PROJECT_ROOT, fixed here for the same reason
+        project_root: projectRoot(cwd ?? process.cwd()),
       },
       global_state_visits: { [globalKey]: 1 },
       ...(claudeSessionId ? { claude_session_id: claudeSessionId } : {}),
@@ -1290,6 +1292,14 @@ export class Engine {
       context: session.context,
       visits: session.stack[session.active_frame].state_visits,
       root_workflow: session.stack[0].workflow,
+      // the main checkout of the session's cwd, as `start` resolved it; a session
+      // stored before the key existed maps its cwd now (a removed worktree then falls back)
+      project_root:
+        typeof session.context.project_root === "string"
+          ? session.context.project_root
+          : projectRoot(
+              typeof session.context.cwd === "string" ? session.context.cwd : process.cwd(),
+            ),
     };
     // read only by a template that names it: it walks the session's sub-tree
     Object.defineProperty(vars, "stale_sessions", {

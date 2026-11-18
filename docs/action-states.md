@@ -72,7 +72,7 @@ An exec without `cwd:` runs in the session's cwd (`start`'s `cwd`, else the serv
 
 Its env carries:
 
-- `WF_PLUGIN_ROOT`, `WF_SESSION_ID`, `WF_PARENT_SESSION_ID` (empty at the root), `WF_ROOT_SESSION_ID`,
+- `WF_PLUGIN_ROOT`, `WF_PROJECT_ROOT` (the session's `{{project_root}}`, below), `WF_SESSION_ID`, `WF_PARENT_SESSION_ID` (empty at the root), `WF_ROOT_SESSION_ID`,
 - `WF_PRIORITY` / `WF_PRIORITY_LEVEL` (the session's priority, below),
 - `AGENT_CONTEXT`: the context size in tokens — input + cache read + cache write — of the last assistant turn of the agent `link_agent` recorded for the session, read from its transcript when the exec spawns. It is empty when no agent is linked or its transcript cannot be read, so a `{{...}}`-free `[ "${AGENT_CONTEXT:-0}" -gt 250000 ]` routes a hand-off to a fresh agent,
 - plus `WF_THREADS` under a `resource:` lease with threads (below).
@@ -414,6 +414,7 @@ All prompts support `{{mustache}}` templates. Context values are available every
 - `{{visits.<state>}}` (visit count in the active stack frame; empty if never visited);
 - `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`);
 - `{{session_id}}` and `{{parent_session_id}}` (empty at the root);
+- `{{project_root}}` (the main checkout of the session's cwd: a linked worktree gives its main worktree, a cwd outside a repo gives the cwd; fixed when the session starts, so a worktree removed mid-run still renders it; a session started before it existed maps its cwd at each render; also the exec env `WF_PROJECT_ROOT`; only sessions of a restarted server render it);
 - `{{stale_sessions}}` (one `STALE:` line per stale session below this one — § Stall detection — or `none`; computed only when a template names it).
 
 After action execution, result variables are also available:

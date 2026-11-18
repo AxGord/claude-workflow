@@ -832,6 +832,100 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
     expect(storage.read(sessionId)!.context.project).toBe("repo");
   });
 
+  const ROOT_WORKFLOW = {
+    initial: "probe",
+    states: {
+      probe: {
+        type: "exec",
+        command: 'printf %s "$WF_PROJECT_ROOT|$P"',
+        env: { P: "{{project_root}}" },
+        on_success: "show",
+        on_error: "show",
+        success_prompt: "{{stdout}}|{{project_root}}",
+      },
+      show: { prompt: "show", transitions: { done: "end" } },
+      end: { terminal: true, outcome: "complete" },
+    },
+  };
+
+  it("{{project_root}} and WF_PROJECT_ROOT: a linked worktree renders its main checkout, in a prompt and an exec's env", async () => {
+    setup({ root: ROOT_WORKFLOW });
+    const root = tmpDir();
+    const main = path.join(root, "repo");
+    const wt = path.join(root, "wf-SLICE");
+    fs.mkdirSync(path.join(main, ".git", "worktrees", "wf-SLICE"), { recursive: true });
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${main}/.git/worktrees/wf-SLICE\n`);
+    const r = await engine.start("root", undefined, undefined, wt);
+    expect(r.prompt.trim()).toBe(`${main}|${main}|${main}`);
+  });
+
+  it("{{project_root}}: a cwd outside a repo renders the cwd", async () => {
+    setup({ root: ROOT_WORKFLOW });
+    const bare = tmpDir();
+    const r = await engine.start("root", undefined, undefined, bare);
+    expect(r.prompt.trim()).toBe(`${bare}|${bare}|${bare}`);
+  });
+
+  it("{{project_root}} is fixed at start: a removed worktree still renders its main checkout", async () => {
+    setup({
+      gone: {
+        initial: "wait",
+        states: {
+          wait: { prompt: "wait", transitions: { next: "probe" } },
+          probe: {
+            type: "exec",
+            command: 'printf %s "$WF_PROJECT_ROOT"',
+            cwd: "{{project_root}}",
+            on_success: "show",
+            on_error: "show",
+            success_prompt: "{{stdout}}|{{project_root}}",
+          },
+          show: { prompt: "show", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const root = tmpDir();
+    const main = path.join(root, "repo");
+    const wt = path.join(root, "wf-SLICE");
+    fs.mkdirSync(path.join(main, ".git", "worktrees", "wf-SLICE"), { recursive: true });
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${main}/.git/worktrees/wf-SLICE\n`);
+    const { sessionId } = await engine.start("gone", undefined, undefined, wt);
+    fs.rmSync(wt, { recursive: true });
+    const r = await engine.transition(sessionId, "next");
+    expect(r.prompt.trim()).toBe(`${main}|${main}`);
+  });
+
+  it("start refuses an initial project_root: it is the engine's, like cwd and project", async () => {
+    setup({ root: ROOT_WORKFLOW });
+    await expect(
+      engine.start("root", undefined, undefined, undefined, undefined, {
+        project_root: "/elsewhere",
+      }),
+    ).rejects.toThrow('"project_root" is the engine\'s');
+  });
+
+  it("a session stored without project_root maps its cwd when it renders", async () => {
+    setup({
+      old: {
+        initial: "wait",
+        states: {
+          wait: { prompt: "root={{project_root}}", transitions: { next: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const bare = tmpDir();
+    const { sessionId } = await engine.start("old", undefined, undefined, bare);
+    const stored = storage.read(sessionId)!;
+    const context = { ...stored.context };
+    delete context.project_root;
+    await storage.write(sessionId, { ...stored, context });
+    expect(engine.getStatus(sessionId).prompt).toBe(`root=${bare}`);
+  });
+
   it("start cwd: a relative state cwd resolves against the session's cwd", async () => {
     setup({
       rel: {

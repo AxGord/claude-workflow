@@ -600,7 +600,8 @@ export class Executor {
   }
 
   /**
-   * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT, the
+   * Spawn env for exec states: process env + injected WF_PLUGIN_ROOT,
+   * WF_PROJECT_ROOT (the session's `{{project_root}}`, when its vars carry one), the
    * session ids (WF_SESSION_ID, WF_PARENT_SESSION_ID — empty at the root,
    * WF_ROOT_SESSION_ID, WF_PRIORITY = the session level's priority plus the
    * step's, WF_PRIORITY_LEVEL = that level) and, under a lease with threads,
@@ -608,7 +609,7 @@ export class Executor {
    * context tokens of the session's linked agent's last turn; empty when none
    * is linked or its transcript is unreadable) — overridable by
    * the state's own rendered env: entries. An inherited WF_THREADS /
-   * WF_PRIORITY / WF_PRIORITY_LEVEL / WF_SHARD / WF_ITEM / AGENT_CONTEXT is
+   * WF_PROJECT_ROOT / WF_PRIORITY / WF_PRIORITY_LEVEL / WF_SHARD / WF_ITEM / AGENT_CONTEXT is
    * dropped: they describe this exec's own session, lease and shard only.
    * Single source for both foreground and background spawns so the injection
    * contract can't drift.
@@ -641,9 +642,11 @@ export class Executor {
       ...base
     } = process.env;
     delete base.AGENT_CONTEXT;
+    delete base.WF_PROJECT_ROOT;
     return {
       ...base,
       WF_PLUGIN_ROOT: PLUGIN_ROOT,
+      ...(typeof vars.project_root === "string" ? { WF_PROJECT_ROOT: vars.project_root } : {}),
       ...ids,
       ...leased,
       ...envVars,
