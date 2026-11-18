@@ -51,17 +51,21 @@ tasks:
 
 **Task keys**
 
-`id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
+`id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, exclusive,
 breaking, parked, ended, restored, added, base, text_hash, text, notes`.
 
+- `sweep` is the command a line runs over a whole tree (a lint rule's `--fix` over many files): one non-empty line, e.g. `sweep: hxq lint --rule r --fix src test`.
+  - It is data for the project's workflow: the engine gives it no meaning, so it implies no `exclusive` and the pick ignores it. `queue_next` prints it as `| sweep: <command>` on the admitted line; `GET /api/queue` carries it as `sweep`.
+  - A value that is empty or spans lines is refused with the key named; `""` / null removes it.
+  - It is part of the brief a recon reads, so an edit that changes it rewrites `base` and `text_hash` like one of `touches`.
 - `ended` (`YYYY-MM-DD`) is the day `queue_mark` moved the line to `done` or `failed`. It is written there, removed by a retry or any move out of those, and read-only for `queue_add` / `queue_edit`.
 - `restored` (`YYYY-MM-DD`) is the day `wf-queue --restore` brought a done / failed line back from the archive. It is written there, removed with `ended` by any move out of done / failed, and read-only like `ended`. The archive counts the line's age from the later of the two.
 - `added` (an ISO time) is when `queue_add` / `wf-queue --add` wrote the line. It is never rewritten by an edit or a mark, refused as input, and absent on an older line. The replay export hides the line before it.
 - `base` and `text_hash` say where the line was written:
   - `base` is the commit HEAD of the line's repo (`repo:`, else the queue's project; left out when that is not a git repo);
-  - `text_hash` is the first 12 hex digits of the sha256 of its text, touches and owner;
+  - `text_hash` is the first 12 hex digits of the sha256 of its text, touches, owner and sweep (a line without `sweep:` hashes as before the key existed);
   - both are written by `queue_add` / `wf-queue --add`;
-  - both are rewritten (at the HEAD of that moment) by `queue_edit` / `--edit` only when the edit changes text, touches or owner or sets `repo:` to another repo, never by a mark or any other edit;
+  - both are rewritten (at the HEAD of that moment) by `queue_edit` / `--edit` only when the edit changes text, touches, owner or sweep or sets `repo:` to another repo, never by a mark or any other edit;
   - both are refused as input;
   - a line written before has neither: unknown, and stays valid; an older reader ignores them as unknown keys;
   - this `base` is the line's, not the header's `base:` list of repos.
@@ -134,7 +138,7 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
 - `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task, and/or a note appended to `notes:`.
   - `""`/null removes a field; a set field keeps its place, a new one goes in key order; `after`/`touches` take a list or a comma-separated string; `text` is written as a block scalar.
   - The fields are checked as `queue_add` checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused, while a line written before the rule stays editable. The status stays `queue_mark`'s.
-  - An edit of `text`, `touches` or `owner` that changes the brief, or of `repo` to another value, rewrites `base` (at the HEAD of the line's repo then) and `text_hash`; any other edit leaves them.
+  - An edit of `text`, `touches`, `owner` or `sweep` that changes the brief, or of `repo` to another value, rewrites `base` (at the HEAD of the line's repo then) and `text_hash`; any other edit leaves them.
 - `queue_header({ queue?, file?, batch_size?, reason?, archive_after_days?, exclusive_hold? })` — header keys, under the lock:
   - the window: `batch_size: N` with `reason:` (`0` pauses; the two go together);
   - and/or `archive_after_days: N` (a whole number ≥ 1; `null` removes the key);

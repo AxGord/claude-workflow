@@ -2,7 +2,7 @@
 // `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`,
 // `archive_after_days: N` (a pick first archives the done / failed lines that ended over N days ago)
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
-// `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, exclusive,
+// `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, exclusive,
 // breaking, parked, ended, restored, added, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
@@ -69,6 +69,7 @@ export const TASK_KEYS = [
   "after",
   "touches",
   "owner",
+  "sweep",
   "exclusive",
   "breaking",
   "parked",
@@ -170,6 +171,8 @@ export interface AdmittedTask {
   readonly kind: Kind;
   /** The task's `priority:` when set (`normal` = absent): the picker admits higher first. */
   readonly priority?: Priority;
+  /** The task's `sweep:` when set: the command a sweep line runs over its tree. Data for the project's workflow; the pick gives it no meaning. */
+  readonly sweep?: string;
   readonly text: string;
 }
 
@@ -257,6 +260,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "repo",
     "workflow",
     "owner",
+    "sweep",
     "after",
     "touches",
     "ended",
@@ -413,6 +417,12 @@ function ownerOf(line: QueueLine): string | null {
   if (v === undefined) return null;
   const o = stripParens(v).trim().replace(/\s+/g, " ");
   return o === "" || o === "—" ? null : o;
+}
+
+/** The line's `sweep:` command, trimmed; null when absent or blank. Carried as data: no pick rule reads it. */
+function sweepOf(line: QueueLine): string | null {
+  const v = line.meta.sweep?.trim();
+  return v === undefined || v === "" ? null : v;
 }
 
 /** `exclusive:` with any value but an empty one or `—`: the line overlaps every other line. */
@@ -793,6 +803,7 @@ export function planPick(
       const difficulty = difficultyOf(l) ?? undefined;
       const priority = priorityOf(l);
       const kind = kindOf(l) ?? "feature";
+      const sweep = sweepOf(l) ?? undefined;
       admitted.push({
         id: l.id,
         model: l.meta.model ?? "opus",
@@ -802,6 +813,7 @@ export function planPick(
         ...(difficulty !== undefined ? { difficulty } : {}),
         kind,
         ...(priority !== null && priority !== "normal" ? { priority } : {}),
+        ...(sweep !== undefined ? { sweep } : {}),
         text: l.text,
       });
       taken.push(l);
@@ -850,6 +862,8 @@ export interface QueueLineView {
   readonly exclusive: boolean;
   readonly paused: boolean;
   readonly owner?: string;
+  /** The line's `sweep:` command, when it has one. */
+  readonly sweep?: string;
   readonly touches?: string;
   readonly notes: number;
   /** The date of the task's last note (a land writes one), when it has one. */
@@ -862,9 +876,9 @@ export interface QueueLineView {
   readonly restored?: string;
   /** The ISO time `queue_add` / `wf-queue --add` wrote the line; absent on a line from before the record. */
   readonly added?: string;
-  /** HEAD of the line's repo when its text, touches, owner or repo was last written (`queue_add` / `queue_edit`); absent on an older line or outside git. */
+  /** HEAD of the line's repo when its text, touches, owner, sweep or repo was last written (`queue_add` / `queue_edit`); absent on an older line or outside git. */
   readonly base?: string;
-  /** The short hash of that text, touches and owner (`lineTextHash`); absent on an older line. */
+  /** The short hash of that text, touches, owner and sweep (`lineTextHash`); absent on an older line. */
   readonly textHash?: string;
   readonly text: string;
   /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
@@ -948,6 +962,7 @@ export function describeQueue(queue: Queue): {
       ...(l.meta.model !== undefined ? { model: l.meta.model } : {}),
       ...(l.meta.after !== undefined ? { after: l.meta.after } : {}),
       ...(l.meta.owner !== undefined ? { owner: l.meta.owner } : {}),
+      ...(l.meta.sweep !== undefined ? { sweep: l.meta.sweep } : {}),
       ...(l.meta.touches !== undefined ? { touches: l.meta.touches } : {}),
       exclusive: exclusiveOf(l),
       paused: l.paused,
@@ -1484,19 +1499,19 @@ export function today(now: Date = new Date()): string {
 }
 
 /**
- * The short hash of what a recon reads of a line: its text, touches and owner (`\n`-joined, touches
- * as the picker reads the list). Equal hashes = the brief is the one the line was written with.
+ * The short hash of what a recon reads of a line: its text, touches, owner and, when it has one, its
+ * sweep command (`\n`-joined, touches as the picker reads the list; a line without `sweep:` hashes as it did
+ * before the key existed). Equal hashes = the brief is the one the line was written with.
  */
-export function textHashOf(text: string, touches: string, owner: string): string {
-  return createHash("sha256")
-    .update([text.trim(), touches.trim(), owner.trim()].join("\n"))
-    .digest("hex")
-    .slice(0, 12);
+export function textHashOf(text: string, touches: string, owner: string, sweep = ""): string {
+  const parts = [text.trim(), touches.trim(), owner.trim()];
+  if (sweep.trim() !== "") parts.push(sweep.trim());
+  return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 12);
 }
 
 /** `textHashOf` for a parsed line. */
 export const lineTextHash = (line: QueueLine): string =>
-  textHashOf(line.text, line.meta.touches ?? "", line.meta.owner ?? "");
+  textHashOf(line.text, line.meta.touches ?? "", line.meta.owner ?? "", line.meta.sweep ?? "");
 
 /** `textHashOf` for a task node. */
 function nodeTextHash(node: YAMLMap): string {
@@ -1504,9 +1519,10 @@ function nodeTextHash(node: YAMLMap): string {
     text?: unknown;
     touches?: unknown;
     owner?: unknown;
+    sweep?: unknown;
   };
   const list = Array.isArray(o.touches) ? o.touches.map(str).join(", ") : str(o.touches ?? "");
-  return textHashOf(str(o.text ?? ""), list, str(o.owner ?? ""));
+  return textHashOf(str(o.text ?? ""), list, str(o.owner ?? ""), str(o.sweep ?? ""));
 }
 
 /** HEAD of the git repo `repo`, or null (no such directory, not a repo, no commit). */
@@ -1520,7 +1536,7 @@ function headOf(repo: string | null): string | null {
 }
 
 /**
- * Records where a line was written: `text_hash` of the node's text, touches and owner, and `base`,
+ * Records where a line was written: `text_hash` of the node's text, touches, owner and sweep, and `base`,
  * HEAD of the node's repo (left out, or dropped, when that repo is not git).
  */
 function stampBase(e: Editable, node: YAMLMap): void {
@@ -1698,7 +1714,7 @@ function afterCycle(queue: Queue, id: string): string[] | null {
  * Checks the fields `keys` of `line` (every field when `keys` is undefined) as a pick would read
  * them in `queue` (which holds the task): `after:` names only tasks of the queue and closes no
  * cycle, `workflow:` is one word, `repo:` resolves, `difficulty:` is 1..10,
- * `kind:` and `priority:` are one of theirs.
+ * `kind:` and `priority:` are one of theirs, `sweep:` is one non-empty line.
  */
 function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>): void {
   const has = (k: string): boolean =>
@@ -1722,6 +1738,8 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
     throw new QueueError(
       `${line.id}: priority: "${line.meta.priority}" is not one of ${PRIORITIES.join(", ")}`,
     );
+  if (has("sweep") && (sweepOf(line) === null || /[\n\r]/.test(line.meta.sweep ?? "")))
+    throw new QueueError(`${line.id}: sweep: is one non-empty line (the command)`);
 }
 
 /** Splits a list given as one string on its top-level commas (a `(…)` keeps its commas). */
