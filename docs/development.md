@@ -151,6 +151,7 @@ The rules lease every vitest form (`npx`, `npm exec`, `node_modules/.bin`, bare)
 | `src/pool-usage.ts` | What each lease held against what its tree ran: the meter, `usage.jsonl`, `wf-run --usage`'s per-label table |
 | `src/queue.ts` | Task queue files: parse, admission (`after:` / `touches:` / `owner:` / pause), `[.]` marks under the queue's lock |
 | `src/queue-cli.ts` | The `wf-queue` CLI over `queue.ts` (exec form of `queue_next` / `queue_mark`) |
+| `src/lessons-file.ts` | `wf-queue --lessons`: a landed task's lesson records as queue lines (unverified → backlog, arm-rot-on-base → pending) or triage-file rows, rerun-safe |
 | `src/process.ts` | Process-group kill and pid liveness |
 | `src/stale.ts` | Stall detection: a state's `stale_after` (type defaults) and whether a session is STALE |
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |

@@ -145,11 +145,17 @@ the tests by hand; start or transition any session other than P and the worker/r
 prompts tell you to start; read whole diffs, digests or transcripts.
 
 ## Lessons (for the parent)
-Before the last line, collect up to two `lessons` for the parent to act on, COPIED (not judged) from the
-agents' own files: report.md / handoff.md "Follow-up not done", "Tool defect found", "Open" items;
-review.md "Notes (non-blocking)". One short phrase each, with the file it came from. None → `lessons=none`.
-Read only those sections, never the whole files: `sed -n '/^## <heading>/,/^## /p' <file>` prints one
-section's items; skip a section whose body is `none`.
+Two kinds, never mixed.
+- **Records** (a worker's or reviewer's `lessons=<JSON>` on its answer line, or its `LESSONS: <JSON>` line): copy the JSON
+  verbatim into the `set` of the transition the prompt names (`lessons` on the worker's `check`, `review_lessons` on the
+  review's verdict transition), never edited, never summarised; no such text → leave the key out. A script after the land
+  files them (queue lines, a triage file) and the `done` prompt gives you its line: the LANDED line's `lessons=` field is
+  that line's `filed N, triage M` verbatim (`lessons=not run` when it is empty). Read no file for it.
+- **Prose follow-ups**, for a `CLOSED` line (no land, so nothing was filed): collect up to two `lessons` for the parent to
+  act on, COPIED (not judged) from the agents' own files: report.md / handoff.md "Follow-up not done", "Tool defect found",
+  "Open" items; review.md "Notes (non-blocking)". One short phrase each, with the file it came from. None → `lessons=none`.
+  Read only those sections, never the whole files: `sed -n '/^## <heading>/,/^## /p' <file>` prints one
+  section's items; skip a section whose body is `none`.
 
 ## Resumed after your last line
 If your last line was NEEDS-PARENT and this message answers it, your FIRST call is
@@ -163,7 +169,7 @@ waiting again. Tokens come from that agent's later notification, else 0. If `sta
 ended, reply with your last line again.
 
 ## Last message
-ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=<phrase (file)>; <phrase (file)>|none`,
+ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=filed <N>, triage <M>` (the `done` prompt's line, verbatim; `lessons=not run` when it has none; a flow whose `done` prompt names no such line: `lessons=<phrase (file)>; <phrase (file)>|none`),
 `CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released`), or the NEEDS-PARENT line.
 When a decider answered `DECIDED`, the line gains a last field ` decided=<file>` (the decisions.md path).
 

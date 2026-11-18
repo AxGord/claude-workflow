@@ -1,6 +1,6 @@
 name: engine-task
 extends: batch-task
-description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree <repo>/../.wt/<repo-name>/<ID> (outside /tmp: a reboot keeps it; a surviving branch whose directory is gone is re-attached), branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review_route [exec: a round with no code change since the reviewed commit skips `review`: MERGE → land, FIXES or a code-changing rebase_fix → review_verify] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → cleanup → done (says whether Claude needs a restart)."
+description: "One slice of the workflow engine itself (a line of this repo's .claude/batch/queue.md, or a line with `workflow: engine-task` in another project's queue): claim → project_prepare [exec: worktree <repo>/../.wt/<repo-name>/<ID> (outside /tmp: a reboot keeps it; a surviving branch whose directory is gone is re-attached), branch eng/<id>, node_modules linked] → work (one worker agent, no workflow tools) → project_gate [exec: npm run check under the pool] → review_route [exec: a round with no code change since the reviewed commit skips `review`: MERGE → land, FIXES or a code-changing rebase_fix → review_verify] → review (one read-only reviewer: MERGE / FIXES) → project_land [exec: ff-merge into master + npm run build; master moved → rebase + gate again] → mark_done → lessons_file (the agents' lesson records → queue lines / triage rows, never fails the land) → cleanup → done (says whether Claude needs a restart)."
 
 # Fable trial (2026-11-18): batch-task's table with every opus row on fable, one effort step lower (high -> medium, xhigh -> high).
 # Judged by the curator after about 10 fable lands; reverting = deleting this block (the inherited table returns).
@@ -195,7 +195,7 @@ states:
         checkout {{context.cwd}}, ~/.claude/workflow-state, the live pool, the installed hooks, nor any project's
         live workflows or queues. No `git stash`, no `pkill -f`, no push. Check the on-disk state first — work
         already applied is reconciled, not done twice. Report: what changed and why, the check's result, what is
-        left open. Never run `playwright install` (or `npx playwright install`) as is: it replaces browsers in the machine-wide
+        left open. Lessons, only when you have one that deserves its own queue line: put ONE line `LESSONS: <compact one-line JSON>` in your final message = {"lessons":[{"id":"UPPER-CASE-ID","kind":"<kind>","touches":["a file that exists in the repo","a path (new)"],"repro":"one line that shows it","text":"the brief"}]}; kind: unverified (not reproduced on a real tree; filed by script as a backlog line, priority low), arm-rot-on-base (a check you waived or routed around; filed pending, priority high), reproduced-on-real-tree, loss, process (those go to the dispatcher's triage file, read in a batch); touches: 1-8 files, never a directory or a glob; no private names. On a fix round repeat the records you still stand by. What is not a lesson stays in your report. Never run `playwright install` (or `npx playwright install`) as is: it replaces browsers in the machine-wide
         ~/Library/Caches/ms-playwright in place, which every parallel slice's gate launches from. A browser the tests
         need and the shared cache lacks: `PLAYWRIGHT_BROWSERS_PATH={{context.wt}}-browsers npx playwright install <browser>`, and
         run the tests with that same variable set; never write the shared cache. A script of yours that launches a browser
@@ -210,7 +210,7 @@ states:
       A later visit (a fix round) — the worker has NOT seen the cause yet: SendMessage `{{context.worker_agent}}` with it
       verbatim (the gate's output, the review's FIXES list, or the land's failure) BEFORE anything else; it amends its
       ONE commit. Never `check` on entering this state: the tree is still the one that was reviewed or failed.
-      Then END your turn on this task. Only the worker's DONE for THIS round → `check` (the engine reads the tree; you
+      Then END your turn on this task. Only the worker's DONE for THIS round → `check`, with `set: {lessons: <the JSON of the `LESSONS:` line of its final message, verbatim; leave the key out when it has none>}` (the engine reads the tree; you
       have no Bash; a check on the unamended reviewed commit is refused); the worker is stuck, or the work is wrong and
       another round would not help → `blocked`.
     transitions:
@@ -341,7 +341,7 @@ states:
       HEAD` lists only the files above); check that the amendment answers YOUR FIXES list, no more. kind rebase: master moved,
       the rebase conflicted and the worker resolved it; check ONLY the resolution with the range-diff named above (both sides
       kept, nothing of your reviewed change lost). Run every command in the foreground. Last line MERGE or FIXES: and a
-      numbered list." Then context_set `reviewed_sha` = HEAD of {{context.wt}}, `review_text` = its final message verbatim, and
+      numbered list." Then context_set `reviewed_sha` = HEAD of {{context.wt}}, `review_text` = its final message verbatim, `review_lessons` (the JSON of its `LESSONS:` line; leave out when none), and
       `filed` (as `review` does).
     transitions:
       filed: review_filed
@@ -406,11 +406,11 @@ states:
         a CLAUDE.md row the change makes stale is never a FIXES item: before the verdict line, one line per row,
         `CLAUDE.md: <file:line> → <exact new text>` (the parent edits it); no live state touched; a hook that returns updatedInput without permissionDecision "allow" makes auto mode
         refuse the call — a FIXES item; on a security or allow-list line, a bypass outside the families the line names
-        is an open item for a follow-up line, not a FIXES item. Waits: every command you run is in the FOREGROUND with the longest Bash timeout (600000), never with `run_in_background`. The read-only gate refuses a redirect, `$( )` and `sleep`, so you cannot detach a command or loop on a marker: a command that would outlast one call (a full suite, a lease wait) you do not run; name it in your verdict as unverified, with the command. Never start a Monitor for a command you wait for. When the harness moves a foreground call to the background at its timeout, TaskStop it, or wait on it in FOREGROUND calls (the until chain on its log), before any end of turn. Never end your turn while anything you started is alive, mid-run as well as at your last line: TaskStop it first. After you have delivered your last line, answer ONLY a harness `[handback-send-enforce]` prompt with the plain-text line `DELIVERED {{context.task}}` (never SendMessage to main, never the report again); a `Driver ping` that asks for your line gets the line. Last line, on a line of its own with nothing else on it — the verdict: `MERGE` or `FIXES:` and a numbered list.{{context.repro_review_note}}
+        is an open item for a follow-up line, not a FIXES item. Waits: every command you run is in the FOREGROUND with the longest Bash timeout (600000), never with `run_in_background`. The read-only gate refuses a redirect, `$( )` and `sleep`, so you cannot detach a command or loop on a marker: a command that would outlast one call (a full suite, a lease wait) you do not run; name it in your verdict as unverified, with the command. Never start a Monitor for a command you wait for. When the harness moves a foreground call to the background at its timeout, TaskStop it, or wait on it in FOREGROUND calls (the until chain on its log), before any end of turn. Never end your turn while anything you started is alive, mid-run as well as at your last line: TaskStop it first. After you have delivered your last line, answer ONLY a harness `[handback-send-enforce]` prompt with the plain-text line `DELIVERED {{context.task}}` (never SendMessage to main, never the report again); a `Driver ping` that asks for your line gets the line. Lessons of your own, only when you have one: ONE line `LESSONS: <compact one-line JSON>` just before the verdict line, the worker's form and kinds ({"lessons":[{"id","kind","touches","repro","text"}]}); never the worker's own items. Last line, on a line of its own with nothing else on it — the verdict: `MERGE` or `FIXES:` and a numbered list.{{context.repro_review_note}}
 
       After spawning: context_set `reviewer_agent` = its id and `reviewed_sha` = HEAD of {{context.wt}}.
 
-      On the reviewer's answer: context_set `review_text` = its final message verbatim, then `filed` (the engine
+      On the reviewer's answer: ONE `transition` `filed` with `set: {review_text: <its final message verbatim>, review_lessons: <the JSON of its `LESSONS:` line, verbatim; leave the key out when none>}` (the engine
       files it under the queue's backups/slice-logs/<task>/ and routes MERGE → land, FIXES → work; on FIXES the list
       goes to the worker as its fix round, verbatim). Re-entered
       after a rebase onto a moved master with the reviewed change unchanged (`git -C {{context.wt}} range-diff
@@ -689,5 +689,6 @@ states:
     prompt: |-
       Engine slice {{context.task}} landed and cleaned:
       {{context.land_out}}
+      Its lesson records are filed: the LANDED line's `lessons=` field is `{{context.lessons_out}}` verbatim (empty: `lessons=not run`).
       Tell the user its restart line as is. Its slot is free — in the dispatcher session
       {{parent_session_id}} transition `slot_free`.

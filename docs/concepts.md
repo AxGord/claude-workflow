@@ -61,7 +61,7 @@ Agent                       Engine                          Storage
 | `file-review` | Per-file deep review — spawned by code-review for each file |
 | `lint-review` | Trivial-diff review — engine-run lint, act on findings, one intent re-read |
 | `batch` | Long-running task queue: the engine admits lines into the window (`after:` / `touches:` / `owner:` / pause), one `batch-task` child per task, one fresh-eyes review of the combined diff; opt-in `WF_DISPATCHER`: a dispatcher agent launches the tasks |
-| `batch-task` | One queued task, run by a haiku driver (`driver:`): difficulty → model/effort (`model_table`) → worktree → worker → reviewer chosen by the diff → merge + `land_test` under the repo's land lock → mark done → cleanup |
+| `batch-task` | One queued task, run by a haiku driver (`driver:`): difficulty → model/effort (`model_table`) → worktree → worker → reviewer chosen by the diff → merge + `land_test` under the repo's land lock → mark done → lessons filed → cleanup |
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 

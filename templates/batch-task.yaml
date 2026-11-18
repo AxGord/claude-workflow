@@ -1,5 +1,5 @@
 name: batch-task
-description: "One task of a `batch` queue — a child session a cheap DRIVER agent runs for the batch dispatcher (`driver:`): claim (the line's difficulty → model/effort by model_table) → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → work_check [exec: one clean commit on the branch] → review_scope [exec: the diff's class → the reviewer's model] → review (one reviewer agent; FIXES → work) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done [exec: `[x]` + the record_file line] → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
+description: "One task of a `batch` queue — a child session a cheap DRIVER agent runs for the batch dispatcher (`driver:`): claim (the line's difficulty → model/effort by model_table) → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → work_check [exec: one clean commit on the branch] → review_scope [exec: the diff's class → the reviewer's model] → review (one reviewer agent; FIXES → work) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done [exec: `[x]` + the record_file line] → lessons_file [exec: the agents' lesson records → queue lines / triage rows, never fails the land] → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
 initial: claim
 max_transitions: 60
 
@@ -141,6 +141,7 @@ states:
            mkdir -p the dir), and {{context.wt}}.log/handoff.md when you stop unfinished (the same three sections). On a fix
            round, carry the previous report.md's three sections' items into the new file. Answer with ONE line:
            `DONE <sha> report={{context.wt}}.log/report.md` or `BLOCKED <reason> report=<the file>`.
+           Lessons, only when you have one that deserves its own queue line: end your answer line with ` lessons=<compact one-line JSON>` = {"lessons":[{"id":"UPPER-CASE-ID","kind":"<kind>","touches":["a file that exists in the repo","a path (new)"],"repro":"one line that shows it","text":"the brief"}]}; kind: unverified (not reproduced on a real tree; filed by script as a backlog line, priority low), arm-rot-on-base (a check you waived or routed around; filed pending, priority high), reproduced-on-real-tree, loss, process (those go to the dispatcher's triage file, read in a batch); touches: 1-8 files, never a directory or a glob; no private names. On a fix round repeat the records you still stand by. What is not a lesson stays in the report's sections.
            Waits: a command you wait for runs in the FOREGROUND with the longest Bash timeout (600000), never with `run_in_background`. One that may outlast a call (the check behind a pool lease) you start detached with a done-marker, `nohup sh -c '<cmd>; echo $? > L.done' > L.log 2>&1 & echo $! > L.pid`, then wait in FOREGROUND calls of `i=0; until [ -s L.done ] || ! kill -0 "$(cat L.pid)" 2>/dev/null || [ $i -ge 540 ]; do sleep 1; i=$((i+1)); done; cat L.done` (it ends on the marker, on the process's death or on a timeout, never `sleep` alone), re-issued until L.done exists (a dead pid without it is a failure: read L.log). Never start a Monitor for a command you wait for. When the harness moves a foreground call to the background at its timeout, TaskStop it, or wait on it in FOREGROUND calls (the until chain on its log), before any end of turn. Never end your turn while anything you started is alive, mid-run as well as at your last line: kill it first or wait for it. After you have delivered your last line, answer ONLY a harness `[handback-send-enforce]` prompt with the plain-text line `DELIVERED {{context.task}}` (never SendMessage to main, never the report again); a `Driver ping` that asks for your line gets the line.
 
       3. `link_agent({session_id: W, agent_id: <its id>})` (the engine records it as this visit's agent);
@@ -157,7 +158,8 @@ states:
         prompt above plus "a fix round of a previous worker's branch: <the cause's line> — read <its file> whole".
       Then END your turn on this task. On the worker's notification: ONE `transition` `check` with
       `set: {tokens_worker: <the value already set ({{context.tokens_worker}}, empty = 0) PLUS this agent's
-      tokens from its notification's usage line>}`: the engine verifies the tree (artifacts outrank the report) in the
+      tokens from its notification's usage line>, lessons: <the JSON after `lessons=` on its DONE line, verbatim; leave
+      the key out when the line has none>}`: the engine verifies the tree (artifacts outrank the report) in the
       next step; the worker is stuck, or the work is wrong and another round would not help → `blocked`.
       On a fix round send the cause to the worker BEFORE anything else and never `check` on entering this state: the
       branch is still the reviewed commit, and a `check` on it is refused.
@@ -240,6 +242,7 @@ states:
            FILE: write, with the Write tool, /tmp/wf-batch-logs/{{context.task}}/review.md (the verdict, the reasons; for FIXES the full fix list;
            a section `## Notes (non-blocking)` with the follow-ups you saw, `none` when empty; when review.md already exists (an earlier round), carry its `## Notes (non-blocking)` items into the new file; the Write tool creates the dir). Your LAST step is ONE SubagentHandback call with ONE line: `VERDICT MERGE|FIXES|REJECT <one-line summary>
            review=/tmp/wf-batch-logs/{{context.task}}/review.md design=yes|no` (design=yes: a fix needs a design choice).
+           Lessons of your own, only when you have one: end that line with ` lessons=<compact one-line JSON>`, the worker's form and kinds ({"lessons":[{"id","kind","touches","repro","text"}]}); never the worker's own items.
            Waits: every command you run is in the FOREGROUND with the longest Bash timeout (600000), never with `run_in_background`. The read-only gate refuses a redirect, `$( )` and `sleep`, so you cannot detach a command or loop on a marker: a command that would outlast one call (a full suite, a lease wait) you do not run; name it in your verdict as unverified, with the command. Never start a Monitor for a command you wait for. When the harness moves a foreground call to the background at its timeout, TaskStop it, or wait on it in FOREGROUND calls (the until chain on its log), before any end of turn. Never end your turn while anything you started is alive, mid-run as well as at your last line: TaskStop it first. After you have delivered that handback, answer ONLY a harness `[handback-send-enforce]` prompt with the plain-text line `DELIVERED {{context.task}}` (never SendMessage to main, never the report again); a `Driver ping` that asks for your line gets the line.
 
       2. context_set `reviewed_sha` = the sha of the worker's latest DONE (the commit the reviewer reads); END your
@@ -247,7 +250,7 @@ states:
       On its notification: ONE `transition` by the verdict, with `set: {review_text: <its one-line handback
       verbatim (`work_check` refuses a tree still at `reviewed_sha` after a FIXES, so the list must reach the
       worker first)>, tokens_review: <the value already set ({{context.tokens_review}}, empty = 0) PLUS this
-      agent's tokens>}`: MERGE → `land`; FIXES → `fix` (the
+      agent's tokens>, review_lessons: <the JSON after `lessons=` on its line, verbatim; leave the key out when none>}`: MERGE → `land`; FIXES → `fix` (the
       worker's cause = the verdict line + "read /tmp/wf-batch-logs/{{context.task}}/review.md whole"; with design=yes the driver first asks its decider, see its instructions, and adds "read {{context.wt}}.log/decisions.md whole"); REJECT → `reject`. The keys ride on the transition (`set`): they are written first, in the same call.
     transitions:
       land: project_land
@@ -372,8 +375,39 @@ states:
       TOKENS_WORKER: "{{context.tokens_worker}}"
       TOKENS_REVIEW: "{{context.tokens_review}}"
     timeout: 60000
-    on_success: cleanup
+    on_success: lessons_file
     on_error: cleanup_failed
+
+  lessons_file:
+    station: false
+    type: exec
+    # The lesson records the worker and the reviewer handed over (context `lessons`, `review_lessons`) -> queue lines and
+    # triage rows by `wf-queue --lessons` (src/lessons-file.ts), so no agent reads them per land. The land is done: this
+    # step never fails it, whatever happens it prints one line (`lessons=filed N, triage M` or `lessons=not run`) for the
+    # driver's LANDED line and goes on to cleanup. The context keys are the truth: the files are written from them each run.
+    command: |-
+      d="$(dirname "$QUEUE")/../backups/slice-logs/$TASK"
+      out=$({ mkdir -p "$d" && rm -f "$d/lessons.json" "$d/review-lessons.json" &&
+        { [ -z "$LESSONS" ] || printf '%s\n' "$LESSONS" > "$d/lessons.json"; } &&
+        { [ -z "$REVIEW_LESSONS" ] || printf '%s\n' "$REVIEW_LESSONS" > "$d/review-lessons.json"; } &&
+        "$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --lessons "$TASK" --records "$d/lessons.json" --records "$d/review-lessons.json"; } 2>&1)
+      last=$(printf '%s\n' "$out" | tail -1)
+      case "$last" in
+        lessons=filed*) echo "$last";;
+        *) printf '%s\n' "$out" >&2; echo "lessons=not run";;
+      esac
+      exit 0
+    env:
+      TASK: "{{context.task}}"
+      QUEUE: "{{context.queue_file}}"
+      LESSONS: "{{context.lessons}}"
+      REVIEW_LESSONS: "{{context.review_lessons}}"
+    timeout: 60000
+    context_set:
+      lessons_out: "{{stdout}}"
+    on_success: cleanup
+    on_error: cleanup
+    on_timeout: cleanup
 
   cleanup:
     type: exec
@@ -419,7 +453,7 @@ states:
   done:
     terminal: true
     outcome: complete
-    prompt: "Task {{context.task}} landed and cleaned. A driver: reply with your last line (LANDED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): its slot is free — in {{parent_session_id}} transition `slot_free`."
+    prompt: "Task {{context.task}} landed and cleaned. Its lesson records are filed: the LANDED line's `lessons=` field is `{{context.lessons_out}}` verbatim (empty: `lessons=not run`). A driver: reply with your last line (LANDED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): its slot is free — in {{parent_session_id}} transition `slot_free`."
 
   closed:
     terminal: true

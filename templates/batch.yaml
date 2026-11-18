@@ -211,8 +211,14 @@ states:
       {{stderr}}
 
       Woken by a DRIVER's one line (the task's bookkeeping — done, the record line — is already done):
-      - `LANDED <sha> task=<ID> …` / `CLOSED task=<ID> …` → the task session ended: route below. Their `lessons=<phrase (file)>; …|none` tail is
-        the agents' own follow-ups, copied: turn each into a `queue_add` line, a memory note, or nothing.
+      - `LANDED <sha> task=<ID> …` / `CLOSED task=<ID> …` → the task session ended: route below. A `lessons=filed N, triage M` tail
+        (or `lessons=not run`) means the task's lesson records were already filed by `wf-queue --lessons` (unverified → a backlog line,
+        arm-rot-on-base → a pending one): read nothing for them. The rows it sent to the triage file (the header's `lessons_triage:`, else
+        `../backups/slice-logs/lessons-triage.txt` beside the queue; a `triage_file=<path>` on the line names it) are read in a batch,
+        every `lessons_every` lands and before a curator run, never per land: `wf-queue <queue> --lessons-take [--triage <path>]`
+        prints the file and empties it under the lock a land's append takes (never empty it by hand); each row → a `queue_add` line,
+        a memory note, or nothing. Any other
+        `lessons=<phrase (file)>; …|none` tail is the agents' own follow-ups, copied: turn each into a `queue_add` line, a memory note, or nothing.
         A trailing `decided=<file>` means a decider answered design choices without you: audit that file
         (`## <choice>` / `decision:` / `why:` blocks) and overrule a wrong one with a `queue_add` line.
       - `NEEDS-PARENT task=<ID> session=<P> reason=… see=<file>` → read only the named file. A design choice

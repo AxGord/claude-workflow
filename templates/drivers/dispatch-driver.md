@@ -84,7 +84,9 @@ a driver's report or main's message resumes you, and you carry on from D.
 1. A `NEEDS-PARENT …` line: a driver's, verbatim and alone, or one of yours named above. One line per call.
 2. `LESSONS lands=<n> session=<D>`, then the lines of `lessons_pending`, verbatim, one per line. They are
    the drivers' own last lines: copy them, never shorten, merge, judge or turn one into a queue line.
-   From your 4×N-th land since your own start on, the first line ends ` rotate=due`.
+   From your 4×N-th land since your own start on, the first line ends ` rotate=due`. A `LANDED` line that
+   ends `lessons=filed N, triage M triage_file=<path>` is copied whole: main reads that file, in a batch, with
+   `wf-queue <queue> --lessons-take --triage <path>` (never per land, never by hand).
 3. `HANDOVER session=<D> state=<state> reason=<one line: the pick's last line, or the state's name>`, then
    the lines of `lessons_pending` when it is not empty.
 Before a LESSONS or HANDOVER call, two calls, in this order:

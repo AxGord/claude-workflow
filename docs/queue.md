@@ -173,7 +173,9 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - `--batch-size <N> --reason T`;
   - `--header-set archive_after_days=N|exclusive_hold=yes|no [--reason T]` (`archive_after_days=` / `exclusive_hold=` removes the key; another key is refused; the reason is echoed, not written);
   - `--archive --older-than <days> [--include-unended] [--dry-run]`;
-  - `--restore <ID>` (an archived line back into the queue).
+  - `--restore <ID>` (an archived line back into the queue);
+  - `--lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME]` (a landed task's lesson records as queue lines and triage rows; see "Lesson records");
+  - `--lessons-take [--triage FILE]` (prints the triage file and empties it under the lock).
 
 **Converting the old Markdown queue**
 
@@ -378,7 +380,8 @@ driver:
     - a BLOCKED worker;
     - a failed land;
     - any open choice;
-  - finish with `LANDED <sha> task=… tokens worker=… review=… rounds=… lessons=<phrase (file)>; …|none` (or `CLOSED … lessons=…`): up to two follow-ups COPIED, not judged, from the agents' files; a decided choice appends ` decided=<file>` for the dispatcher to audit.
+  - finish with `LANDED <sha> task=… tokens worker=… review=… rounds=… lessons=filed N, triage M` (the `lessons_file` step's line, verbatim; `lessons=not run` when it has none) or `CLOSED … lessons=<phrase (file)>; …|none` (up to two follow-ups COPIED, not judged, from the agents' files); a decided choice appends ` decided=<file>` for the dispatcher to audit;
+  - copy a worker's or reviewer's lesson records verbatim into the `set` of the transition that follows its answer (see "Lesson records").
 
 **Agents' output files**
 
@@ -390,8 +393,33 @@ driver:
   - `report.md` / `handoff.md`: `## Follow-up not done`, `## Tool defect found`, `## Open`;
   - `review.md`: `## Notes (non-blocking)`;
   - a fix round or a later review carries the previous file's items forward.
-- Bundled `batch` `collect` turns each lesson into a queue line, a memory note or nothing.
+- Bundled `batch` `collect` turns each prose lesson of a `CLOSED` line into a queue line, a memory note or nothing; a `LANDED` line's records are filed by the script (see "Lesson records").
+- Records (`lessons=<JSON>` on an answer line) are the other lesson channel, below; the sections above are the prose a `CLOSED` line still copies.
 - The rendered call is also kept in P's context as `driver_call`: after a restart or compaction `status({session_id: P, key: "driver_call"})` re-spawns the driver (bundled `batch` `collect` says so).
+
+**Lesson records**
+
+A landed task's lessons are filed by a script, not read by the dispatcher on every land.
+
+- The worker and the reviewer of `batch-task` (and of the engine's own `engine-task`) may end their answer with records. In `batch-task` the one-line answer gains ` lessons=<one-line JSON>`. In `engine-task` the final message gains a line `LESSONS: <JSON>` (the reviewer's goes just before the verdict line). The shape is `{"lessons":[{"id","kind","touches","repro","text"}]}`.
+- The driver copies each JSON verbatim into the `set` of the transition that follows the answer: `lessons` on the worker's `check`, `review_lessons` on the review's verdict transition. A round that sends records replaces the key; one that sends none leaves it.
+- After the land, the `lessons_file` exec (between `mark_done` and `cleanup`, `station: false`) writes the two keys to `<queue dir>/../backups/slice-logs/<ID>/lessons.json` and `review-lessons.json`, then runs `wf-queue <queue> --lessons <ID> --records <both>`. The context keys are the truth: the files are rewritten from them each run.
+- What each `kind` becomes:
+  - `unverified`: a `backlog` line, priority `low`;
+  - `arm-rot-on-base`: a `pending` line, priority `high`, difficulty 4;
+  - `reproduced-on-real-tree`, `loss`, `process`: a row of the triage file.
+- A filed line carries the `repo:` and `workflow:` of the task it came from. Its text is the record's text and a `Repro:` line.
+- A record the script cannot file is never an error: it becomes a triage row that names the reason. The reasons:
+  - a `kind` that is none of the five; an `id` outside `[A-Za-z0-9._-]+`; an empty `text` or `repro`;
+  - `touches` empty, over 8 entries, a glob, a `..` or absolute path, a directory, or a file the task's repo lacks and that is not marked `path (new)` (the check runs against that repo);
+  - an id a queue line or the archive already holds;
+  - a duplicate of an open line: the same brief of 30+ characters, or the same files and a shared backticked name;
+  - a refusal of the queue itself, such as a workflow name it rejects.
+- The triage file is the flag `--triage`, else the header key `lessons_triage:` (relative = beside the queue), else `<queue dir>/../backups/slice-logs/lessons-triage.txt`. It holds a block `== <ID>` per task, one row per record: `id [kind] reason :: text :: repro :: touches`. The dispatcher reads it in a batch, every `lessons_every` lands and before a curator run, with `wf-queue <queue> --lessons-take [--triage FILE]`: it prints the file and empties it under the lock a land's append takes, so a row appended meanwhile is neither lost nor read twice. Never empty it by hand.
+- The command prints `lessons=filed N, triage M` (plus `, already K` on a rerun, plus ` triage_file=<path>` when M > 0, so the `LANDED` line that reaches the main conversation names the file) and exits 0 whatever the records hold; 2 is a usage error or an unreadable queue. A missing or empty record file is no records. An unparseable one is one triage row with its text.
+- A rerun files nothing twice: a record whose id is already a line with the same text counts as `already`, and a triage row the task's block already holds is not added again.
+- The step never fails a land. Any failure (the command, an unwritable directory, a timeout) prints `lessons=not run` and `cleanup` runs. A task that does not land (`CLOSED`) files nothing: its follow-ups stay prose in the driver's line.
+- What stays with a project: a list of private names to scrub from a record before it is filed, and any check against its own tree beyond `touches:`. It runs `wf-queue --lessons` from its own `lessons_file` override, or checks the filed lines afterwards.
 
 **`link_agent` under a driver parent**
 
@@ -461,6 +489,7 @@ dispatcher:
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
 
 - The lessons are copied, never judged or turned into queue lines by the agent. The last block handed is also in the context key `lessons_handed`.
+- A `LANDED` line that ends `lessons=filed N, triage M` needs no reading: its records are already filed. Only the triage file's rows are judged, in a batch; the line names the file (`triage_file=<path>`) when M > 0.
 - A worker's, reviewer's or driver's line that reaches the main conversation is sent verbatim to the dispatcher.
 - Rotation: from its 4×N-th land on, the `LESSONS` line ends `rotate=due`. The main conversation may then spawn a fresh dispatcher from `dispatcher_call` and send the old one `RETIRE new=<agent id>`; the old one only relays its drivers' late lines.
 

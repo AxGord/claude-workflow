@@ -30,7 +30,7 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 - **State machines in YAML** — states, transitions, prompts, nested sub-workflows ([Workflow YAML][yaml])
 - **Action states** — `exec` runs a command, `fetch` an HTTP request, routed by exit code ([Action states][action])
 - **Thread pool** — heavy builds and tests, agents' own included, share one machine-wide budget ([Thread pool][pool])
-- **Task queue** — a picker, a cheap driver agent per task, the model set by difficulty ([Queue][queue])
+- **Task queue** — a picker, a cheap driver per task, model by difficulty, lessons filed by script ([Queue][queue])
 - **Subagent types** — driver, opt-in dispatcher (`WF_DISPATCHER`), read-only recon and reviewer ([Agent types][agents])
 - **21 bundled workflows**, **29 bundled skills** (14 by default, 15 on request) ([Concepts][concepts])
 - **Survives a restart** — sessions are suspended, not lost; `claude --resume` continues them ([Restart][restart])

@@ -673,7 +673,7 @@ export function resolveRepo(queue: Queue, line: QueueLine): string | null {
 }
 
 /** `resolveRepo` for a `repo:` value (undefined = the queue's project). */
-function repoNamed(queue: Queue, repo: string | undefined): string | null {
+export function repoNamed(queue: Queue, repo: string | undefined): string | null {
   const own = projectRoot(path.dirname(queue.file));
   const v = repo?.trim();
   if (!v || v === "-" || v === "—") return own;
