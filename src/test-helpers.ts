@@ -206,3 +206,50 @@ export function spawnChild(
     );
   return r;
 }
+
+/** Words of a text, split on whitespace. */
+export const docWords = (text: string): number => text.trim().split(/\s+/).filter(Boolean).length;
+
+export interface DocScan {
+  /** Each block of consecutive prose lines, joined by a space. */
+  blocks: string[];
+  /** Each table cell. */
+  cells: string[];
+}
+
+/**
+ * The one scanner of a docs page's prose shape. A blank line, a list item, a heading, a table
+ * row, a code fence, an inline svg or the front matter ends a block; fences, svg and front
+ * matter hold no block; each table row's cells go to `cells`.
+ */
+export function scanDoc(md: string): DocScan {
+  const lines = md.split("\n");
+  const out: DocScan = { blocks: [], cells: [] };
+  let fence = false;
+  let svg = false;
+  let cur: string[] = [];
+  const flush = (): void => {
+    if (cur.length > 0) out.blocks.push(cur.join(" "));
+    cur = [];
+  };
+  const front = lines[0] === "---" ? lines.indexOf("---", 1) + 1 : 0;
+  for (const line of lines.slice(front)) {
+    if (line.trimStart().startsWith("```")) {
+      flush();
+      fence = !fence;
+    } else if (fence) flush();
+    else if (line.startsWith("<svg") || svg) {
+      flush();
+      svg = !line.includes("</svg>");
+    } else if (line.trimStart().startsWith("|")) {
+      flush();
+      out.cells.push(...line.split(/(?<!\\)\|/).slice(1, -1));
+    } else if (line.startsWith("#") || line.trim() === "") flush();
+    else {
+      if (/^\s*([-*]|\d+\.) /.test(line)) flush();
+      cur.push(line.trim());
+    }
+  }
+  flush();
+  return out;
+}

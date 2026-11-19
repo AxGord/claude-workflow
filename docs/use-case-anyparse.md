@@ -19,7 +19,9 @@ The queue is one YAML file. A line is a task small enough to be tested, reviewed
 
 ## The pick admits what can run together
 
-The dispatcher keeps a window of lines running at once. Whenever a slot is free the engine's pick walks the queue by priority, then in file order, and admits a line only when everything it waits for is done and it shares no file with a line that runs. Nobody decides by hand what may run in parallel: the lines' own fields do. Each admitted line gets its own worktree, its own pipeline session, and a cheap driver agent that moves that session from step to step.
+The dispatcher keeps a window of lines running at once. Whenever a slot is free the engine's pick walks the queue by priority, then in file order, and admits a line only when everything it waits for is done and it shares no file with a line that runs. Nobody decides by hand what may run in parallel: the lines' own fields do.
+
+Each admitted line gets its own worktree, its own pipeline session, and a cheap driver agent that moves that session from step to step.
 
 <UseCasePick />
 
@@ -27,7 +29,9 @@ The dispatcher keeps a window of lines running at once. Whenever a slot is free 
 
 A line's difficulty is a guess, made by whoever wrote the line, without the code in front of them. It still decides a lot. Every stage of the pipeline takes its model and effort from one table by that number. And from a threshold up, a read-only recon reads the code before any worker starts.
 
-The recon is the cheap first reader. It checks the premises the line stands on and scores the work by the project's anchors, and its score replaces the line's: the engine rewrites every stage's row, so the expensive agents run on what the work is, not on what the line said. A score at the top of the scale is not run at all: the recon proposes the smaller lines to cut it into. A premise that does not hold closes the line before a worker has spent anything.
+The recon is the cheap first reader. It checks the premises the line stands on and scores the work by the project's anchors, and its score replaces the line's: the engine rewrites every stage's row, so the expensive agents run on what the work is, not on what the line said.
+
+A score at the top of the scale is not run at all: the recon proposes the smaller lines to cut it into. A premise that does not hold closes the line before a worker has spent anything.
 
 Pick a scenario, or set the two numbers yourself.
 
@@ -37,7 +41,9 @@ Three things to notice. Below the recon's threshold there is no scout: the plan 
 
 ## Worker, gate, review rounds, land
 
-The worker owns its change up to a green gate. The gate is a script, so a red row costs the worker another try and nobody else's attention. Every line is then reviewed by a fresh agent that only reads. A FIXES verdict sends its list back to the worker that wrote the change, and the same reviewer then checks the fix alone. The land is one at a time: the branch is merged into a candidate tree, judged by the full battery, and main moves only when that is green.
+The worker owns its change up to a green gate. The gate is a script, so a red row costs the worker another try and nobody else's attention.
+
+Every line is then reviewed by a fresh agent that only reads. A FIXES verdict sends its list back to the worker that wrote the change, and the same reviewer then checks the fix alone. The land is one at a time: the branch is merged into a candidate tree, judged by the full battery, and main moves only when that is green.
 
 Choose how the review goes, and tap a step to read what happens in it.
 

@@ -24,6 +24,8 @@ How the measures count:
 - A sentence runs to a full stop followed by a capital letter or a backtick; a colon or a semicolon does not end it. A code span counts as one word. A sentence has fewer than 60 words.
 - A parenthesis is nested two deep when a `(` opens inside another that is still open; code spans are skipped.
 
+One test, `src/docs-prose-blocks.test.ts`, scans every page of `docs/` for the block and cell measures; the few blocks allowed past 80 words are listed in it with the reason.
+
 
 ## Commands
 
