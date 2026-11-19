@@ -33,6 +33,10 @@ The pool gate only wraps the commands a project marks heavy in `.claude/workflow
 
 Definitions are frozen at session start (snapshot isolation); hot-reload affects new sessions only. A file that fails to reload is not applied: `list` shows it under `BROKEN (did not load)` with the reason, and when a bundled template fails to reload (e.g. this server is too old to read it) the previous bundled set keeps serving until Claude Code restarts. See [Workflow YAML](/workflow-yaml).
 
+## Claude Code asked me about a write to `trusted-workflows.json` or `~/.claude/workflows/`
+
+An agent tried to write the exec-consent record or a workflow into the global workflows directory. A workflow there runs its `exec` states without a consent step, so the plugin's PreToolUse hook (`hooks/trust-write-gate.sh`) makes it a question to you. Confirm only what you asked for; approve a project yourself with `wf-trust <project>` in a terminal. What the guard covers and does not: [Trusting project workflows](/getting-started#what-consent-does-and-does-not-protect-against).
+
 ## A project install from a git URL does not run
 
 `build/` is gitignored, so a git-sourced plugin has no compiled MCP server. Install from the community catalog, npm or a local checkout; see [Getting started](/getting-started#install-channels).

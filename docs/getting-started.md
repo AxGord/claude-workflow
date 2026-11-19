@@ -305,6 +305,31 @@ How the engine reads Claude Code's answer:
 
 `modify` and `create` refuse `exec` and `fetch` states in every mode: an agent cannot get a command run through the engine.
 
+### What consent does and does not protect against
+
+Consent protects against a workflow that **arrives** with a project you have not trusted: a cloned repository's `.claude/workflows/`. It is not a sandbox around your own agent. What your agent may run is the business of Claude Code's permissions, and note that an `exec` state is run by the engine's server, not by Claude Code, so Claude Code does not prompt for its command: the files that decide what runs are the ones to watch.
+
+Two of them are guarded. The plugin's PreToolUse hook (`hooks/trust-write-gate.sh`) answers `ask` when an agent's `Write`, `Edit`, `MultiEdit` or `NotebookEdit`, or a Bash command, writes
+
+- the trust record `$STATE_DIR/trusted-workflows.json` (the reason names the file and `wf-trust`), or
+- a file in the global workflows directory (`~/.claude/workflows/`, or `$WORKFLOW_DIR`): a workflow there runs its `exec` states without a consent step.
+
+Reading either stays free (`Read`, `cat`, `ls`, `cp` out of the directory), with one exception below, and `wf-trust` run by you in a terminal is not a tool call, so it is not asked. The paths come from the same `STATE_DIR` and `WORKFLOW_DIR` the engine reads.
+
+In a Bash command the hook catches:
+
+- a redirect onto the path, spaced or glued to a word (`echo hi>file`);
+- `cp`, `install`, `ln` or `rsync` with it as the destination;
+- `mv`, `rm`, `tee`, `touch`, `truncate`, `dd of=` or `sed -i` with it as an operand;
+- an interpreter's inline code (`node -e`, `python -c`, `awk`) that names it, and the body of `sh -c`;
+- a relative path after a `cd` or `pushd` to a literal directory, and a command behind `then`, `do`, `!` or `{`.
+
+The interpreter rule asks even when the code only reads the file (`awk '{print}' file`, `node -e` with `readFileSync`): the hook cannot tell. A heredoc body counts only when a shell or an interpreter reads it.
+
+It is a speed bump for a confused agent, not a barrier. Not caught: a path built at run time (a variable the hook cannot see, a glob, a split string, a `cd` to such a path), a script file that writes it, a move of a parent directory. In a permission mode that never asks, what happens to an `ask` is Claude Code's decision; do not rely on the hook there.
+
+One known limit is not closed: an agent's Bash can satisfy `wf-trust`'s terminal check through a program that fakes a terminal (`echo yes | script -q /dev/null wf-trust <project>`). It needs a Bash command your permission mode already lets the agent run, and a hook cannot enumerate every wrapper that fakes a terminal.
+
 ## Heavy commands share one thread pool
 
 Builds and test suites from every session on the machine go through one thread pool, so several agents working at once queue for threads instead of choking the machine:
