@@ -800,7 +800,7 @@ function renderCost(c) {
   const rows = c.tasks.map(k => `<tr><td>${escapeHtml(k.task)}</td><td>${ui.plaque(k.outcome, k.outcome === 'landed' ? 'st-done' : k.outcome === 'failed' ? 'st-stop' : 'st-wait')}</td><td class="mono">${k.rounds}</td><td class="mono">${k.measured ? Math.round(k.tokens) : 'n/a'}</td><td class="mono">${k.measured ? usd(k.usd) : 'n/a'}</td><td class="cost-stages">${stages(k)}</td></tr>`).join('');
   const table = c.tasks.length === 0 ? ui.empty('no finished task in the range', true)
     : `<div class="pool-scroll"><table class="pool-table"><thead><tr><th>task</th><th>outcome</th><th>rounds</th><th>tokens</th><th>usd</th><th>by stage and model</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-  const prices = Object.entries(c.prices.usd_per_mtok).map(([m, p]) => `${escapeHtml(m)} $${p}`).join(', ');
+  const prices = Object.entries(c.prices.usd_per_mtok).map(([m, p]) => `${escapeHtml(m)} $${+p.toFixed(4)}`).join(', ');
   const note = `<div class="pool-note">Per landed counts landed tasks that recorded tokens; <i>n/a</i> = no tokens recorded, <i>unknown</i> = no visits recorded. Prices (blended USD per million tokens): ${prices}; updated ${escapeHtml(c.prices.updated)}; source: ${escapeHtml(c.prices.source)}.</div>`;
   return range + head + trend + table + note;
 }

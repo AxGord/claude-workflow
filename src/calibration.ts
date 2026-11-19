@@ -303,7 +303,8 @@ export const TURN_RATES_USD_PER_MTOK: Readonly<Record<string, TurnRates>> = {
  * The price table: blended USD per million tokens by model family (the ledger holds a token count per task or role,
  * not an input/output split, so a price is one estimate over the usual mix: 75% input, 25% output). It is derived
  * from the bare family keys of `TURN_RATES_USD_PER_MTOK`, the one owner of a rate, so the two cannot drift
- * (Opus 5.5 at $4/$20 blends to $8, Fable 5.2 at $8/$40 to $16). The Cost tab reads it here. Edit a rate and
+ * (Opus 5.5 at $4/$20 blends to $8, Fable 5.2 at $8/$40 to $16). The Cost tab lists it; a stage's estimate goes by
+ * `priceOf` (the row's full model id), this table being the family blends. Edit a rate and
  * `PRICES_UPDATED` together.
  */
 export const PRICES_USD_PER_MTOK: Readonly<Record<string, number>> = Object.fromEntries(
@@ -313,6 +314,15 @@ export const PRICES_USD_PER_MTOK: Readonly<Record<string, number>> = Object.from
   ]),
 );
 export const PRICES_UPDATED = "2026-11-18";
+
+/** The rates of a model id: the longest key of `TURN_RATES_USD_PER_MTOK` the id contains; undefined when none. */
+function ratesOf(model: string): TurnRates | undefined {
+  const m = model.toLowerCase();
+  const key = Object.keys(TURN_RATES_USD_PER_MTOK)
+    .filter(k => m.includes(k))
+    .sort((x, y) => y.length - x.length)[0];
+  return key === undefined ? undefined : TURN_RATES_USD_PER_MTOK[key];
+}
 
 /** The USD of one transcript turn priced by its own model; undefined when the model has no rate. */
 export function turnUsd(
@@ -325,12 +335,8 @@ export function turnUsd(
     readonly cache_write_1h: number;
   },
 ): number | undefined {
-  const m = model.toLowerCase();
-  const key = Object.keys(TURN_RATES_USD_PER_MTOK)
-    .filter(k => m.includes(k))
-    .sort((x, y) => y.length - x.length)[0];
-  if (key === undefined) return undefined;
-  const r = TURN_RATES_USD_PER_MTOK[key];
+  const r = ratesOf(model);
+  if (r === undefined) return undefined;
   return (
     (u.input * r.input +
       u.output * r.output +
@@ -341,11 +347,14 @@ export function turnUsd(
   );
 }
 
-/** The price of a model name (`claude-opus-4`, `sonnet`): the first family its name contains; undefined when none. */
+/**
+ * The blended price of a model id (75% input, 25% output) by the same longest-key match `turnUsd` uses: an older id
+ * of a family (`claude-opus-4-1`) takes its own rate, a bare family name (`sonnet`) or an unknown id of a family
+ * takes the family's; undefined when no key matches.
+ */
 export function priceOf(model: string): number | undefined {
-  const m = model.toLowerCase();
-  const family = Object.keys(PRICES_USD_PER_MTOK).find(k => m.includes(k));
-  return family === undefined ? undefined : PRICES_USD_PER_MTOK[family];
+  const r = ratesOf(model);
+  return r === undefined ? undefined : 0.75 * r.input + 0.25 * r.output;
 }
 
 export interface CostStage {

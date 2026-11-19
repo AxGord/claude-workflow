@@ -1080,6 +1080,25 @@ describe("every view renders with the shared components", () => {
     expect(PAGE).toContain("/api/cost");
   });
 
+  it("cost: the price note rounds a blend that is inexact in binary", () => {
+    const c = {
+      from: "2026-11-08",
+      to: "2026-11-08",
+      prices: {
+        usd_per_mtok: { opus: 0.75 * 1.3 + 0.25 * 5.7 },
+        updated: "2026-11-08",
+        source: "src/calibration.ts",
+      },
+      tasks: [],
+      totals: { tasks: 0, landed: 0, measured_landed: 0, tokens: 0, usd: 0, usd_per_landed: null },
+      trend: [],
+    };
+    expect(c.prices.usd_per_mtok.opus.toString()).toBe("2.4000000000000004");
+    const html = loadPage().run(`renderCost(${JSON.stringify(c)})`) as string;
+    expect(html).toContain("opus $2.4;");
+    expect(html).not.toMatch(/\d\.\d{6,}/);
+  });
+
   it("plan: an overlaps reason that names a ready line says it is only admitted ahead", () => {
     const q = {
       ...QUEUE,

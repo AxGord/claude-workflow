@@ -239,6 +239,7 @@ The views:
   - A task's tokens and USD are its ledger `spend` when it has one (one `spend` row, the transcripts' real figure; a `spend` with unmeasured agents makes the task unmeasured), else the old estimate from `tokens*` at the blended price.
   - The tab states its price table and the date it was updated: `PRICES_USD_PER_MTOK` / `PRICES_UPDATED` in `src/calibration.ts`.
   - The table is blended USD per million tokens by model family: opus, sonnet, haiku, fable. It is derived as 75% input + 25% output of the bare family keys of `TURN_RATES_USD_PER_MTOK`, so a rate edit moves both; edit the rates and `PRICES_UPDATED` together.
+  - A stage's estimate blends by its model's full id, through the same longest-key match as the per-turn price: a stage on `claude-opus-4-1` is priced at that id's blend, the family blend being the fallback for an unknown id. The note prints each blend rounded to four decimals.
   - `GET /api/cost?from=YYYY-MM-DD&to=YYYY-MM-DD` answers it (`buildCost`).
 - **Workflow list** — all loaded workflows with state counts
 - **Session detail** — state history, stack depth, context data
