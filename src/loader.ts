@@ -35,6 +35,24 @@ interface TierEntry {
 
 type Tier = Map<string, TierEntry>;
 
+/** A workflow file that did not load (or whose reload was refused), with the loader's reason. */
+export interface BrokenFile {
+  readonly name: string;
+  readonly file: string;
+  readonly reason: string;
+  /** The bundled template's last good copy is still served: only the new text was refused. */
+  readonly stale: boolean;
+}
+
+/** The bundled tier as a server read it: handed to a project loader so it never re-reads the live checkout. */
+interface BundledTier {
+  readonly tier: Tier;
+  readonly broken: readonly BrokenFile[];
+}
+
+const OLDER_SERVER =
+  "this server is older than the template (it does not know that key): restart Claude Code to load the engine that came with it";
+
 /** A project workflow file left out of the load: it declares exec/fetch states and its project is not trusted. */
 export interface UntrustedFile {
   readonly name: string;
@@ -106,6 +124,10 @@ export class Loader {
   /** The names whose loaded definition is the project tier's own file. */
   private _projectNames: ReadonlySet<string> = new Set();
   private _untrusted: readonly UntrustedFile[] = [];
+  private _broken: readonly BrokenFile[] = [];
+  /** The bundled tier of the last load; a file that fails the next read keeps its entry here. */
+  private _bundled: BundledTier = { tier: new Map(), broken: [] };
+  private readonly _inherited: BundledTier | null;
   private readonly _trust: TrustStore;
   private _trustStamp = "none";
   private _claudeStamp = "none";
@@ -118,7 +140,9 @@ export class Loader {
     globalDir: string,
     projectDir: string | null,
     trust: TrustStore = new TrustStore(null),
+    inherited: BundledTier | null = null,
   ) {
+    this._inherited = inherited;
     this._bundledDir = bundledDir;
     this._globalDir = globalDir;
     this._projectDir = projectDir;
@@ -147,6 +171,20 @@ export class Loader {
   public untrusted(): readonly UntrustedFile[] {
     this._syncTrust();
     return this._untrusted;
+  }
+
+  /** The files the last load could not read (or refused to reload), each with the loader's reason. */
+  public broken(): readonly BrokenFile[] {
+    this._syncTrust();
+    return this._broken;
+  }
+
+  /** What to tell the agent about the files that failed to load (empty when none, or none named by `only`). */
+  public brokenNote(only?: string): string {
+    return this.broken()
+      .filter(b => only === undefined || b.name === only)
+      .map(b => `${b.file}: ${b.reason}${b.stale ? " (the last good copy keeps serving)" : ""}`)
+      .join("\n");
   }
 
   /** What to tell the agent about the project files left out (empty when none, or none named by `only`). */
@@ -194,10 +232,11 @@ export class Loader {
 
   /**
    * The same bundled and global tiers under another project's existing workflow directory: what a
-   * session started in that project sees. Loaded once, not watched.
+   * session started in that project sees. Loaded once, not watched; the bundled tier is this
+   * loader's own, not a second read of a checkout that may have moved under a running server.
    */
   public forProject(projectDir: string): Loader {
-    return new Loader(this._bundledDir, this._globalDir, projectDir, this._trust);
+    return new Loader(this._bundledDir, this._globalDir, projectDir, this._trust, this._bundled);
   }
 
   /** Directory where create saves new YAML files */
@@ -275,12 +314,23 @@ export class Loader {
     this._trustStamp = this._trust.stamp();
     this._claudeStamp = this._trust.claudeStamp();
     const untrusted: UntrustedFile[] = [];
+    const failures: BrokenFile[] = [];
 
     // Bundled (read-only defaults) → global → project: a later tier overrides by name.
+    // The bundled files ship with the engine's checkout, so a failing one is the checkout moving
+    // under this server: its last good copy stays and a session never loses its template.
     const tiers: Tier[] = [];
-    if (this._bundledDir) tiers.push(this._loadDir(this._bundledDir));
-    tiers.push(this._loadDir(this._globalDir));
-    if (this._projectDir) tiers.push(this._loadDir(this._projectDir, untrusted));
+    if (this._inherited) {
+      this._bundled = this._inherited;
+      tiers.push(this._inherited.tier);
+      failures.push(...this._inherited.broken);
+    } else if (this._bundledDir) {
+      this._bundled = this._loadBundled(this._bundledDir, this._bundled);
+      tiers.push(this._bundled.tier);
+      failures.push(...this._bundled.broken);
+    }
+    tiers.push(this._loadDir(this._globalDir, failures));
+    if (this._projectDir) tiers.push(this._loadDir(this._projectDir, failures, untrusted));
 
     const next = new Map<string, WorkflowDefinition>();
     const own = new Set<string>();
@@ -307,14 +357,35 @@ export class Loader {
             break;
           }
           console.error(`Validation errors in ${found.entry.file}: ${errors.join("; ")}`);
+          if (!failures.some(f => f.file === found.entry.file))
+            failures.push({
+              name,
+              file: found.entry.file,
+              reason: errors.join("; "),
+              stale: false,
+            });
         } catch (err) {
-          console.error(`Failed to load workflow ${found.entry.file}: ${(err as Error).message}`);
+          const message = (err as Error).message;
+          console.error(`Failed to load workflow ${found.entry.file}: ${message}`);
+          // an heir whose parent failed to load says so, not only that the parent is missing
+          const base = /^extends "([^"]+)"/.exec(message)?.[1];
+          const baseFailure = failures.find(f => f.name === base && !f.stale);
+          if (!failures.some(f => f.file === found.entry.file))
+            failures.push({
+              name,
+              file: found.entry.file,
+              reason: baseFailure
+                ? `${message}; "${base}" failed to load: ${baseFailure.file}: ${baseFailure.reason}`
+                : message,
+              stale: false,
+            });
         }
       }
     }
     this._workflows = next;
     this._projectNames = own;
     this._untrusted = untrusted;
+    this._broken = failures;
   }
 
   /** The highest tier at or below `maxTier` that defines `name`. */
@@ -374,10 +445,46 @@ export class Loader {
     };
   }
 
-  /** `untrusted` given: the project tier, whose files may run exec/fetch states only once approved. */
-  private _loadDir(dir: string, untrusted?: UntrustedFile[]): Tier {
+  /**
+   * The bundled files are read as one set: they ship together with the checkout, so a file that
+   * fails to load or to merge (its own schema, an `extends` chain, validation) means the checkout
+   * moved under this server. The whole previous set then keeps serving, marked stale, and a heir
+   * re-read from the moved checkout is never paired with a parent of the other version.
+   */
+  private _loadBundled(dir: string, last: BundledTier): BundledTier {
+    const broken: BrokenFile[] = [];
+    const tier = this._loadDir(dir, broken, undefined, true);
+    for (const [name, entry] of tier) {
+      try {
+        const errors = this._validate(
+          WorkflowDefinitionSchema.parse(Loader._resolve([tier], name, 0, [])),
+        );
+        if (errors.length > 0)
+          broken.push({ name, file: entry.file, reason: errors.join("; "), stale: false });
+      } catch (err) {
+        broken.push({ name, file: entry.file, reason: (err as Error).message, stale: false });
+      }
+    }
+    if (broken.length === 0 || last.tier.size === 0) return { tier, broken };
+    return { tier: last.tier, broken: broken.map(b => ({ ...b, stale: true })) };
+  }
+
+  /**
+   * `failures` collects the files that did not load. `untrusted` given: the project tier, whose
+   * files may run exec/fetch states only once approved. `bundled`: the bundled tier, whose
+   * unknown key means the server is older than the template.
+   */
+  private _loadDir(
+    dir: string,
+    failures: BrokenFile[],
+    untrusted?: UntrustedFile[],
+    bundled = false,
+  ): Tier {
     const tier: Tier = new Map();
     if (!fs.existsSync(dir)) return tier;
+    const fail = (fp: string, name: string, reason: string): void => {
+      failures.push({ name, file: fp, reason, stale: false });
+    };
 
     const files = fs.readdirSync(dir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
 
@@ -386,9 +493,18 @@ export class Loader {
       try {
         const raw = fs.readFileSync(fp, "utf-8");
         const parsed = YAML.parse(raw);
+        const declared = (parsed as { name?: unknown } | null)?.name;
+        const fallbackName = typeof declared === "string" ? declared : file.replace(/\.ya?ml$/, "");
         const checked = WorkflowFileSchema.safeParse(parsed);
         if (!checked.success) {
-          console.error(`Failed to load workflow:\n${describeSchemaError(fp, checked.error)}`);
+          const described = describeSchemaError(fp, checked.error);
+          console.error(`Failed to load workflow:\n${described}`);
+          const newer = bundled && checked.error.issues.some(i => i.code === "unrecognized_keys");
+          fail(
+            fp,
+            fallbackName,
+            described.replaceAll(`${fp}: `, "") + (newer ? `; ${OLDER_SERVER}` : ""),
+          );
           continue;
         }
         if (untrusted && actionStateNames(checked.data.states).length > 0) {
@@ -405,6 +521,7 @@ export class Loader {
         tier.set(checked.data.name, { def: checked.data, file: fp });
       } catch (err) {
         console.error(`Failed to load workflow ${fp}:`, err);
+        fail(fp, file.replace(/\.ya?ml$/, ""), (err as Error).message);
       }
     }
     return tier;

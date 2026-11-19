@@ -31,7 +31,7 @@ The pool gate only wraps the commands a project marks heavy in `.claude/workflow
 
 ## I edited a workflow and a running session did not change
 
-Definitions are frozen at session start (snapshot isolation); hot-reload affects new sessions only. See [Workflow YAML](/workflow-yaml).
+Definitions are frozen at session start (snapshot isolation); hot-reload affects new sessions only. A file that fails to reload is not applied: `list` shows it under `BROKEN (did not load)` with the reason, and when a bundled template fails to reload (e.g. this server is too old to read it) the previous bundled set keeps serving until Claude Code restarts. See [Workflow YAML](/workflow-yaml).
 
 ## A project install from a git URL does not run
 

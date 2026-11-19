@@ -311,6 +311,8 @@ export class Engine {
     const wf = workflows.get(workflowName);
     if (!wf) {
       const note = this.untrustedNote(workflowName, cwd);
+      const broken = this.brokenNote(workflowName, cwd);
+      if (broken) throw new Error(`Workflow "${workflowName}" failed to load: ${broken}`);
       throw new Error(`Workflow "${workflowName}" not found${note ? `. ${note}` : ""}`);
     }
 
@@ -2188,7 +2190,13 @@ export class Engine {
       if (own) this._snapshots.set(sessionId, (snapshot = this._overlay(own)));
     }
     const wf = snapshot?.get(name) ?? this._loader.get(name);
-    if (!wf) throw new Error(`Workflow "${name}" not found`);
+    if (!wf) {
+      const session = this._storage.read(sessionId);
+      const broken = this.brokenNote(name, session ? Engine._cwdOf(session) : undefined);
+      throw new Error(
+        broken ? `Workflow "${name}" failed to load: ${broken}` : `Workflow "${name}" not found`,
+      );
+    }
     return wf;
   }
 
@@ -2212,6 +2220,15 @@ export class Engine {
       .map(l => l.untrustedNote(workflow))
       .filter(n => n !== "")
       .join(" ");
+  }
+
+  /** The load failures of the files that define `workflow` (every failed file with no name), the loader's own reason each. */
+  public brokenNote(workflow: string | undefined, cwd: string | undefined): string {
+    const own = this._projectLoaderAt(cwd);
+    const lines = [this._loader, ...(own ? [own] : [])].flatMap(l =>
+      l.brokenNote(workflow).split("\n"),
+    );
+    return [...new Set(lines.filter(n => n !== ""))].join("\n");
   }
 
   private _overlay(own: Loader): Map<string, WorkflowDefinition> {

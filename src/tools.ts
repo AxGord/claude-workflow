@@ -415,7 +415,20 @@ export function registerTools(
     },
     async () => {
       const workflows = loader.getAll();
-      const untrusted = loader.untrustedNote();
+      const broken = loader.broken();
+      const untrusted = [
+        loader.untrustedNote(),
+        broken.length > 0
+          ? `BROKEN (did not load):\n${broken
+              .map(
+                b =>
+                  `  ${b.name}: ${b.file}: ${b.reason}${b.stale ? " (the last good copy keeps serving)" : ""}`,
+              )
+              .join("\n")}`
+          : "",
+      ]
+        .filter(n => n !== "")
+        .join("\n\n");
       if (workflows.size === 0) {
         return {
           content: [

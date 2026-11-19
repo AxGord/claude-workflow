@@ -35,9 +35,10 @@ Agent                       Engine                          Storage
 3. Every mutation is atomically persisted to JSON (temp file + rename + lockfile)
 4. Dashboard visualizes sessions and workflow graphs at `localhost:3100`
 5. Sub-workflows form a stack: a state with `sub_workflow:` pushes a nested workflow (max depth 10) and the engine pops it when it completes
-6. Snapshot isolation: workflow definitions are frozen at session start, so a hot-reload never changes a running session
-7. Runtime overlays: `modify` adds, changes or removes states and transitions of one session without touching the YAML files
-8. The SessionStart hook provisions the bundled skills, keeps unedited copies current and injects the workflow context
+6. Snapshot isolation: workflow definitions are frozen at session start in the server that started it, so a hot-reload never changes a running session
+7. When any bundled template fails to reload (schema, `extends` or validation) the whole previous bundled set keeps serving and `list` shows the failure with its reason; a workflow that failed to load is never reported as `not found`
+8. Runtime overlays: `modify` adds, changes or removes states and transitions of one session without touching the YAML files
+9. The SessionStart hook provisions the bundled skills, keeps unedited copies current and injects the workflow context
 
 ## Bundled Workflows
 
@@ -188,7 +189,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
-| `list` | List all available workflow definitions | — |
+| `list` | List all available workflow definitions; a file that failed to load is listed under `BROKEN (did not load)` with the loader's reason | — |
 | `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd`, `priority`, `context`, `reply`, `force` |
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
 | `transition` | Advance to next state (auto push/pop sub-workflows); `set` writes context keys first, in the same call | `session_id`, `transition`, `set`, `caller_session_id`, `force` + `reason` |
