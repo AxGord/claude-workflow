@@ -45,7 +45,8 @@ npm run check:ci # the suite as CI runs it (scripts/check-ci.sh): env -i, an emp
                  # LANG=C — plus CI's package.json / plugin.json version check
 npm run smoke:fresh   # what a new user gets (scripts/smoke-fresh-install.sh): a fresh clone of HEAD, npm ci, build, the SessionStart hook,
                       # the MCP server over stdio, the dashboard, wf-run, wf-queue and the docs' commands in a temp HOME; one PASS/FAIL
-                      # line per step, exit 1 on a FAIL; needs the registry (~1 min cold); compares the real ~/.claude before and after
+                      # line per step, exit 1 on a FAIL; needs the registry (~1 min cold); compares the real ~/.claude before and after;
+                      # the unit tests stub its install and build steps (SMOKE_INSTALL_CMD, SMOKE_BUILD_CMD), a real run never sets them
 npm run lint     # typescript-eslint (type-checked); fails only on findings absent from eslint-baseline.json
 npm run lint:baseline  # re-record eslint-baseline.json (after fixing findings, to ratchet down)
 npm run format:check   # biome format check (formatter only; part of check)

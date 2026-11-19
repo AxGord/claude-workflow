@@ -6,7 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 // ENG-RELEASE-FRESH-INSTALL-SMOKE: scripts/smoke-fresh-install.sh is the one run of what a new user gets. Its
 // own contract (exits, cleanup, the real-home comparison) is pinned here on a tiny fixture repository whose
-// `build` script is the test's, so nothing needs the registry; the real run is `npm run smoke:fresh`.
+// install and build steps are the test's (the script's SMOKE_INSTALL_CMD / SMOKE_BUILD_CMD hook), so nothing needs
+// the registry or a real build that a loaded host may abort (ENG-SMOKE-TEST-BUILD-ABORT-UNDER-LOAD); the real run
+// is `npm run smoke:fresh`.
 const ROOT = path.resolve(import.meta.dirname, "..");
 const SCRIPT = path.join(ROOT, "scripts", "smoke-fresh-install.sh");
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
@@ -26,9 +28,10 @@ interface Fixture {
   readonly repo: string;
   readonly home: string;
   readonly tmpdir: string;
+  readonly build: string;
 }
 
-/** A committed repository with no dependency and a `build` command (given the fake real HOME), a fake real HOME holding a `.claude`. */
+/** A committed repository, the command the build step runs (given the fake real HOME: the hook, not npm), a fake real HOME holding a `.claude`. */
 function fixture(build: string | ((home: string) => string)): Fixture {
   const base = tmp();
   const repo = path.join(base, "repo");
@@ -37,21 +40,7 @@ function fixture(build: string | ((home: string) => string)): Fixture {
   for (const d of [repo, path.join(home, ".claude"), tmpdir]) fs.mkdirSync(d, { recursive: true });
   fs.writeFileSync(
     path.join(repo, "package.json"),
-    JSON.stringify({
-      name: "fx",
-      version: "1.0.0",
-      scripts: { build: typeof build === "string" ? build : build(home) },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(repo, "package-lock.json"),
-    JSON.stringify({
-      name: "fx",
-      version: "1.0.0",
-      lockfileVersion: 3,
-      requires: true,
-      packages: { "": { name: "fx", version: "1.0.0" } },
-    }),
+    JSON.stringify({ name: "fx", version: "1.0.0" }),
   );
   const git = (...args: string[]): void => {
     const r = spawnSync(
@@ -72,13 +61,15 @@ function fixture(build: string | ((home: string) => string)): Fixture {
   git("init", "-q");
   git("add", ".");
   git("commit", "-q", "-m", "fixture");
-  return { repo, home, tmpdir };
+  return { repo, home, tmpdir, build: typeof build === "string" ? build : build(home) };
 }
 
 const env = (f: Fixture): NodeJS.ProcessEnv => ({
   PATH: process.env["PATH"] ?? "",
   HOME: f.home,
   TMPDIR: f.tmpdir,
+  SMOKE_INSTALL_CMD: "true",
+  SMOKE_BUILD_CMD: f.build,
 });
 
 function run(f: Fixture, ...args: string[]): { status: number | null; out: string } {
@@ -115,7 +106,7 @@ describe("smoke:fresh", () => {
     const f = fixture("exit 3");
     const r = run(f);
     expect(r.status, r.out).toBe(1);
-    expect(r.out).toMatch(/^FAIL {2}build: npm run build exited 3/m);
+    expect(r.out).toMatch(/^FAIL {2}build: SMOKE_BUILD_CMD exited 3/m);
     expect(r.out).toMatch(/^PASS {2}isolation: /m);
     expect(r.out).toMatch(/1 failed/);
     expect(fs.readdirSync(f.tmpdir)).toEqual([]);
@@ -154,7 +145,8 @@ describe("smoke:fresh", () => {
     "Ctrl-C (SIGINT) mid-step kills the step's whole process group, removes the temp dir and exits 130 (started by %s)",
     async shell => {
       const marker = `31.${Date.now() % 100000}${shell.length}`;
-      const f = fixture(`sleep ${marker}`);
+      const started = path.join(tmp(), "started");
+      const f = fixture(`: > ${started}; sleep ${marker}`);
       const child = spawn(shell, [SCRIPT, "--source", f.repo], {
         env: env(f),
         stdio: ["ignore", "pipe", "pipe"],
@@ -162,25 +154,38 @@ describe("smoke:fresh", () => {
       let out = "";
       child.stdout.on("data", (d: Buffer) => (out += String(d)));
       child.stderr.on("data", (d: Buffer) => (out += String(d)));
-      const done = new Promise<number | null>(resolve => child.on("exit", code => resolve(code)));
-      const started = Date.now();
-      const sleeping = (): boolean =>
-        spawnSync("ps", ["-eo", "command"], { encoding: "utf8" }).stdout.includes(
-          `sleep ${marker}`,
-        );
-      while (!sleeping() && Date.now() - started < 40_000)
-        await new Promise(r => setTimeout(r, 200));
-      expect(sleeping(), out).toBe(true);
+      let exited = false;
+      const done = new Promise<number | null>(resolve =>
+        child.on("exit", code => {
+          exited = true;
+          resolve(code);
+        }),
+      );
+      // the step announces itself by a file: no `ps` poll that a starved host can miss
+      const t0 = Date.now();
+      while (!fs.existsSync(started) && !exited && Date.now() - t0 < 40_000)
+        await new Promise(r => setTimeout(r, 50));
+      expect(fs.existsSync(started), `no step was running to interrupt:\n${out}`).toBe(true);
       child.kill("SIGINT");
       const code = await done;
       await new Promise(r => setTimeout(r, 300));
       expect(code, out).toBe(130);
       expect(out).toContain("interrupted");
-      expect(sleeping(), "the build's sleep outlived the run").toBe(false);
+      const alive = spawnSync("ps", ["-eo", "command"], { encoding: "utf8" }).stdout.includes(
+        `sleep ${marker}`,
+      );
+      expect(alive, "the build's sleep outlived the run").toBe(false);
       expect(fs.readdirSync(f.tmpdir)).toEqual([]);
     },
     60_000,
   );
+
+  it("documents its test hook in the header and in the development page", () => {
+    for (const name of ["SMOKE_INSTALL_CMD", "SMOKE_BUILD_CMD"]) {
+      expect(read("scripts/smoke-fresh-install.sh").split("\n\n")[0], name).toContain(name);
+      expect(read("docs/development.md"), name).toContain(name);
+    }
+  });
 
   it("names every step it runs in its header", () => {
     const text = read("scripts/smoke-fresh-install.sh");

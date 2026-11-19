@@ -48,7 +48,13 @@
 # is running (every step is its own group: `set -m`, so npm's children and the MCP server die with it), on a
 # FAIL exit, on Ctrl-C and on a signal alike. A step that cannot be killed gets KILL after a second.
 #
-# Env: SMOKE_STEP_TIMEOUT (seconds per step, default 600).
+# TEST HOOK (unit tests only, src/smoke-fresh-install*.test.ts). SMOKE_INSTALL_CMD and SMOKE_BUILD_CMD replace the
+# command of the install and the build step (a shell string, run by `bash -c` in the clone, under `fresh`): the
+# script's own contract (exits, the step's process group, cleanup, isolation) is then pinned without a registry or
+# a real build, whose outcome under a loaded host is not the script's. A stubbed build is not required to leave
+# build/index.js, and the step's PASS/FAIL line names the variable. The real run never sets them.
+#
+# Env: SMOKE_STEP_TIMEOUT (seconds per step, default 600); SMOKE_INSTALL_CMD, SMOKE_BUILD_CMD (the test hook above).
 
 # Bash, always: the per-step process group needs job control, which a dash `sh` without a tty (Ubuntu CI) lacks.
 [ -n "$BASH_VERSION" ] || exec bash "$0" "$@"
@@ -218,14 +224,26 @@ pass clone "HEAD $(echo "$head" | cut -c1-9) of $SRC"
 
 # --- install, build ---------------------------------------------------------------------------------------
 t0=$(date +%s)
-runlog "$LOGS/install.log" in_dir "$CLONE" npm ci
-[ "$RC" -eq 0 ] || stop install "npm ci exited $RC" "$LOGS/install.log"
-pass install "npm ci in $(($(date +%s) - t0))s, $(find "$CLONE/node_modules" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ') top-level packages"
+if [ -n "$SMOKE_INSTALL_CMD" ]; then
+  runlog "$LOGS/install.log" in_dir "$CLONE" bash -c "$SMOKE_INSTALL_CMD"
+  [ "$RC" -eq 0 ] || stop install "SMOKE_INSTALL_CMD exited $RC" "$LOGS/install.log"
+  pass install "SMOKE_INSTALL_CMD (a test hook) in $(($(date +%s) - t0))s"
+else
+  runlog "$LOGS/install.log" in_dir "$CLONE" npm ci
+  [ "$RC" -eq 0 ] || stop install "npm ci exited $RC" "$LOGS/install.log"
+  pass install "npm ci in $(($(date +%s) - t0))s, $(find "$CLONE/node_modules" -maxdepth 1 -mindepth 1 -type d | wc -l | tr -d ' ') top-level packages"
+fi
 t0=$(date +%s)
-runlog "$LOGS/build.log" in_dir "$CLONE" npm run build
-[ "$RC" -eq 0 ] || stop build "npm run build exited $RC" "$LOGS/build.log"
-[ -f "$CLONE/build/index.js" ] || stop build "no build/index.js after npm run build" "$LOGS/build.log"
-pass build "npm run build in $(($(date +%s) - t0))s"
+if [ -n "$SMOKE_BUILD_CMD" ]; then
+  runlog "$LOGS/build.log" in_dir "$CLONE" bash -c "$SMOKE_BUILD_CMD"
+  [ "$RC" -eq 0 ] || stop build "SMOKE_BUILD_CMD exited $RC" "$LOGS/build.log"
+  pass build "SMOKE_BUILD_CMD (a test hook) in $(($(date +%s) - t0))s"
+else
+  runlog "$LOGS/build.log" in_dir "$CLONE" npm run build
+  [ "$RC" -eq 0 ] || stop build "npm run build exited $RC" "$LOGS/build.log"
+  [ -f "$CLONE/build/index.js" ] || stop build "no build/index.js after npm run build" "$LOGS/build.log"
+  pass build "npm run build in $(($(date +%s) - t0))s"
+fi
 
 driver=$here/smoke-fresh-mcp.mjs
 # steps of the node driver: `STEP name PASS|FAIL reason` lines become ours
