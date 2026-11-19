@@ -7,6 +7,8 @@ description: Install the plugin, then use it two ways (one task, or a queue) and
 
 ## Quick Start
 
+**Prerequisites.** Claude Code, Node.js, and `jq` on your `PATH` (`brew install jq`, `apt install jq`). The SessionStart and SessionEnd hooks parse their input with `jq`. Without it the start hook still tells the agent to call `start`, but adds a notice that it skipped the plan resume, the resume pickup and the conversation stamp (so a later `claude --resume` cannot find the conversation's sessions), and the SessionEnd hook cannot suspend its sessions.
+
 **A git-sourced install has no server yet.** The community catalog and `--marketplace AxGord/claude-workflow` copy the repository's files without `build/` (it is gitignored), and Claude Code installs the dependencies with install scripts off. So `node build/index.js` has no file and the MCP server does not start (`Cannot find module '.../build/index.js'`, seen with `claude plugin install` in a scratch config). Until a built release is published there, install from a local checkout you built, or from the npm package.
 
 ### From Community Plugins (recommended)

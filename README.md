@@ -38,6 +38,10 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 
 ## Install
 
+**Prerequisites:** Claude Code, Node.js, and [`jq`](https://jqlang.github.io/jq/) on your `PATH` (`brew install jq`,
+`apt install jq`). The session hooks read their input with `jq`; without it the start hook prints a one-line notice
+and skips the plan resume, the resume pickup and the conversation stamp.
+
 ```bash
 /plugin marketplace add https://github.com/anthropics/claude-plugins-community
 /plugin install workflow

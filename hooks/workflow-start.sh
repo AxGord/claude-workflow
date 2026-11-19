@@ -74,8 +74,13 @@ for marker in "$STATE_DIR"/context-epoch-* "$STATE_DIR"/claude-session-*; do
   kill -0 "$marker_pid" 2>/dev/null || rm -f "$marker"
 done
 
-# Everything below requires jq — without it, still emit the fresh-start prompt.
-command -v jq >/dev/null 2>&1 || { echo "STOP. Call mcp__plugin_workflow_wf__start (no args) first.$ZED_SUFFIX"; exit 0; }
+# Everything below requires jq — without it, still emit the fresh-start prompt,
+# and say what is skipped so the missing tool is visible, not silent.
+command -v jq >/dev/null 2>&1 || {
+  echo "STOP. Call mcp__plugin_workflow_wf__start (no args) first.$ZED_SUFFIX"
+  echo "Note: jq is not installed, so this hook skipped its plan resume, its resume pickup and the conversation stamp (a later claude --resume will not find this conversation's sessions). Install jq (brew install jq, apt install jq) to get them back."
+  exit 0
+}
 
 read -t 1 -r INPUT
 SOURCE=$(echo "$INPUT" | jq -r '.source // empty')
