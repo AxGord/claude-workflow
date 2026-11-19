@@ -694,19 +694,46 @@ describe("Pool", () => {
 
   it("a waiter queued past starve_after is marked starved, logged once, and its wait line says so", async () => {
     const dir = poolDir({ budget: 10, load_threshold: 0, starve_after: 0.2 });
-    const pool = new Pool(dir, fakeProbes());
+    // the waiter's first pass stalls past starve_after, as a pass does on a loaded host: the first
+    // line is read at the waiter's arrival, never at whatever time the stalled pass ended
+    let stall = false;
+    const probes = fakeProbes();
+    const pool = new Pool(dir, {
+      ...probes,
+      loadavg: () => {
+        if (stall) {
+          stall = false;
+          for (const end = Date.now() + 300; Date.now() < end; );
+        }
+        return 0;
+      },
+    });
     const holder = await pool.acquire({ threads: 1, locks: ["sim"], label: "sim holder" });
+    stall = true;
     const lines: string[] = [];
+    const ac = new AbortController();
+    const logFile = path.join(dir, "pool.log");
+    // the wait ends on the event it asserts: a STARVED line whose starvation the pool has logged;
+    // the timeout is only a ceiling
     const r = await pool.acquire(
       { threads: 1, locks: ["sim"], label: "starving" },
       {
-        waitTimeoutMs: 700,
+        waitTimeoutMs: 30_000,
         pollMs: 50,
         progressMs: 100,
-        onProgress: (self, view) => lines.push(describeWait(self, view)),
+        signal: ac.signal,
+        onProgress: (self, view) => {
+          lines.push(describeWait(self, view, lines.length === 0 ? self.arrived : Date.now()));
+          if (
+            lines.at(-1)!.includes("STARVED") &&
+            fs.existsSync(logFile) &&
+            fs.readFileSync(logFile, "utf8").includes("starved:")
+          )
+            ac.abort();
+        },
       },
     );
-    expect(r.status).toBe("timeout");
+    expect(r.status).toBe("aborted");
     expect(lines[0]).not.toMatch(/STARVED/);
     expect(lines.at(-1)).toMatch(
       /lock sim held by sim holder — STARVED: queued \d+s \(starve_after 0s\)$/,

@@ -153,7 +153,10 @@ describe("exec timeout and the pool wait of its command", () => {
     const [first, second] = result.shards!;
     expect(first.exit_code).toBe(124);
     expect(second.exit_code).toBe(124);
-    expect(Math.min(first.wait_ms, second.wait_ms)).toBeLessThan(200);
+    // the shard that got its lease at once waited a fraction of the other's, whatever the host's speed
+    const [short, long] = [first.wait_ms, second.wait_ms].sort((a, b) => a - b);
+    expect(long).toBeGreaterThanOrEqual(800);
+    expect(short).toBeLessThan(long / 2);
   });
 
   it("an adopted run starts from the pool wait its first server counted", async () => {

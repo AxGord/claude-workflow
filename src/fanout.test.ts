@@ -407,13 +407,14 @@ describe("Engine: fanout history and on_timeout", () => {
   });
 
   it("on_timeout routes an exec killed by its timeout apart from an ordinary failure", async () => {
-    const flow = (command: string) => ({
+    // only the sleeping flow is meant to time out; the two others get a ceiling a slow host never reaches
+    const flow = (command: string, timeout = 60_000) => ({
       initial: "gate",
       states: {
         gate: {
           type: "exec",
           command,
-          timeout: 200,
+          timeout,
           on_success: "ok",
           on_error: "fix",
           on_timeout: "slow",
@@ -424,7 +425,7 @@ describe("Engine: fanout history and on_timeout", () => {
       },
     });
     const { engine, storage } = engineWith({
-      slowGate: flow("sleep 5"),
+      slowGate: flow("sleep 5", 200),
       badGate: flow("exit 1"),
       okGate: flow("true"),
     });

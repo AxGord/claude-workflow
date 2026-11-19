@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "./dashboard.js";
 import { Pool, systemProbes } from "./pool.js";
 import { Storage } from "./storage.js";
@@ -242,11 +242,13 @@ describe("GET /api/pool?counts=1", () => {
     servers.push(server);
     await new Promise(r => server.once("listening", r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const started = Date.now();
+    // the full read waits out a measuring window (`measuredStatus`); the counts read never enters it
+    const measured = vi.spyOn(pool, "measuredStatus");
+    const plain = vi.spyOn(pool, "status");
     const body = (await (await fetch(`${base}/api/pool?counts=1`)).json()) as object;
     expect(body).toEqual({ budget: 5, held: 3 });
-    // the full read waits out a measuring window; the counts read does not
-    expect(Date.now() - started).toBeLessThan(400);
+    expect(measured).not.toHaveBeenCalled();
+    expect(plain).toHaveBeenCalledTimes(1);
     await held.lease.release();
   });
 });

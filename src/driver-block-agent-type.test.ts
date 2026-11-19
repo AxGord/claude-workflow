@@ -117,10 +117,14 @@ describe("batch-task under the shell-less workflow:driver", () => {
     const repo = path.join(root, "proj");
     fs.mkdirSync(repo);
     const git = (cwd: string, ...a: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], {
-        cwd,
-        encoding: "utf8",
-      }).trim();
+      execFileSync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a],
+        {
+          cwd,
+          encoding: "utf8",
+        },
+      ).trim();
     git(repo, "init", "-q", "-b", "main");
     fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
     git(repo, "add", ".");

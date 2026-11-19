@@ -43,6 +43,8 @@ describe("tests that spawn a child vitest clean up after themselves", () => {
   it("every test that spawns a child vitest goes through spawnChild with a timeout", () => {
     for (const file of [
       "test-child-vitest",
+      "test-child-vitest-chain",
+      "release-flaky-dashboard-counts-slow-host",
       "test-git-no-sign",
       "ci-browser-red",
       "ci-shallow-clone-tests",
