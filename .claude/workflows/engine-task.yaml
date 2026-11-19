@@ -368,6 +368,41 @@ states:
       "0": project_land
     default: gate_failed
 
+  regate_gate:
+    type: exec
+    # The parent's `regate` from `blocked`: the gate of project_gate on the branch as it stands (a red test outside the task's
+    # diff, the fix visits spent). Green goes where any green gate goes (review_route: a review visit or the land); red
+    # returns to `blocked` through `regate_red`; a third visit follows `on_exhausted` back to `blocked` and runs nothing.
+    max_visits: 2
+    on_exhausted: blocked
+    cwd: "{{context.wt}}"
+    command: |-
+      n=$(git rev-list --count master..HEAD) || exit 2
+      [ "$n" = 1 ] || { echo "refused: $n commits over master, expected one"; exit 3; }
+      dirty=$(git status --porcelain)
+      [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
+      log=$(mktemp); "$CHECK" >"$log" 2>&1; rc=$?
+      if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
+      grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
+      echo "gate green: $(git log --oneline -1)"
+    timeout: 1800000
+    env: { CHECK: "{{context.cwd}}/scripts/check-leased.sh" }
+    max_output: 16384
+    on_timeout: regate_red
+    cases:
+      "0": review_route
+    default: regate_red
+
+  regate_red:
+    prompt: |-
+      The gate of {{context.task}}, run again on the unchanged branch, is red (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      Transition `blocked` at once: the parent reads this output there. A driver names it in its NEEDS-PARENT line:
+      `reason=regate red`, `see=<the last red line above>`.
+    transitions:
+      blocked: blocked
+
   gate_failed:
     prompt: |-
       The gate of {{context.task}} failed (exit {{exit_code}}):
@@ -678,10 +713,15 @@ states:
       user; then transition it (`stop` when the next lines depend on it).
       On the parent's message that the work is committed and green and it has amended the branch itself (the one
       missing edit, e.g. a CLAUDE.md row): no queue_mark, transition `parent_edited` (the gate runs, then the land).
+      On the parent's message `regate` (the gate went red on a test OUTSIDE the task's diff, the parent names that test,
+      and the branch is unchanged and committed): no queue_mark, transition `regate`. The gate runs again on the branch as
+      it stands: green goes on as after any green gate (a review visit, then the land), red returns here with its output.
+      `regate` is taken at most twice; a third only returns here, and then `parent_edited`, `close` or `stop` is the way on.
     transitions:
       close: closed
       stop: stopped
       parent_edited: project_gate_rebased
+      regate: regate_gate
 
   done:
     terminal: true

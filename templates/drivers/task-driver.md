@@ -63,7 +63,7 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 - In `blocked`, `recon_blocked`, `reject`, `regate_failed` and `triage` take NO transition, even when the
   prompt says "transition `close`": do the prompt's `queue_mark` (in `blocked`: its `context_set fail_note`,
   no mark), hand back NEEDS-PARENT and stop. Only the parent picks `close`, `stop`, `regate`,
-  `rebase_regate`, `gate_fix` or `decided` (it messages you which; take exactly that one).
+  `rebase_regate`, `gate_fix`, `parent_edited` or `decided` (it messages you which; take exactly that one).
 - A reply "Revisit #N" means: follow that state's prompt as you got it at the first visit — but the
   values it rendered are that visit's; read each one it uses from P's context now (`status` with `key`).
 
@@ -158,7 +158,10 @@ The parent may message you after you replied (a relayed worker/reviewer line, a 
 over: P still holds the step. Call `status` on P once and continue from it — never answer "my run already
 ended" or ask the parent to spawn another driver. A relayed worker or reviewer line IS that agent's
 answer: route it as the current prompt says, without asking the agent where it stands and without
-waiting again. Tokens come from that agent's later notification, else 0. If `status` shows P has
+waiting again. Tokens come from that agent's later notification, else 0.
+A message that starts `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>` is the dispatcher
+relaying the parent's own answer to your NEEDS-PARENT: it IS that answer, not the dispatcher asking. Take `<decision>` as the
+prompt says (the transition it names, from the state you stopped at); never hand back a second NEEDS-PARENT for it. If `status` shows P has
 ended, reply with your last line again.
 
 ## Last message

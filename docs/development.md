@@ -80,6 +80,13 @@ The engine's own slice workflow is a tracked file: `.claude/workflows/engine-tas
 - A `rebase_fix` after MERGE whose resolution changed code (HEAD's parent is no longer the reviewed commit's) goes to `review_verify` too, naming the range-diff of the two patches; any other code change enters `review` as before.
 - `src/review-visits-verify-only-fix.test.ts` pins it.
 
+**A blocked task whose gate went red outside its diff**
+
+- `blocked` of `engine-task` offers `regate` besides `close`, `stop` and `parent_edited`: the parent names a red test outside the task's diff, and the gate runs again on the unchanged branch (`regate_gate`, the command of `project_gate`).
+- Green goes where any green gate goes (`review_route`: a review visit or the land). Red goes through `regate_red`, which shows the output, back to `blocked`.
+- `regate_gate` has `max_visits: 2` with `on_exhausted: blocked`: a third `regate` runs nothing, and `parent_edited`, `close` or `stop` is the way on.
+- `src/task-blocked-regate-route.test.ts` pins it, with the relay form of the dispatcher (`dispatch-driver.md`, `task-driver.md`, `agents/driver.md`).
+
 **A browser in a worker's tree**
 
 The worker prompt forbids a bare `playwright install` (it replaces browsers in the machine-wide `~/Library/Caches/ms-playwright`, which every parallel slice's gate launches from) and prescribes this command, with the tests run under the same variable:

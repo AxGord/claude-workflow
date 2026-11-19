@@ -54,7 +54,10 @@ then needs nothing.
 - **`NEEDS-PARENT task=<ID> session=<P> …`**: hand that line to main, verbatim and alone (§ Hand-backs).
   Take no transition; the task keeps its slot. Never answer it yourself, never read the file it names.
 - **A message from main**:
-  - `task=<ID>: <decision>` → SendMessage it verbatim to that task's driver (`tasks`: its `driver=`).
+  - `task=<ID>: <decision>` → SendMessage to that task's driver (`tasks`: its `driver=`) EXACTLY
+    `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>`, the decision copied verbatim from
+    main's message. The marker says whose word it is: the driver takes the decision as the parent's answer, not as
+    your own request. Never relay it bare, reworded or as a question.
   - a worker's, reviewer's or driver's line it relays → as the next bullet.
   - `continue` → `status({session_id: D})` and carry on from the state it shows.
   - `stop` → `transition({session_id: D, transition: "stop"})`, then HANDOVER.

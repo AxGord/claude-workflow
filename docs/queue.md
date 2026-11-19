@@ -501,6 +501,7 @@ dispatcher:
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
 
+- The dispatcher relays the main conversation's `task=<ID>: <decision>` to the driver as `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>`. The driver takes a decision in that form as the parent's own answer to its NEEDS-PARENT (a bare relay was once read as the dispatcher asking, and answered with a second NEEDS-PARENT).
 - The lessons are copied, never judged or turned into queue lines by the agent. The last block handed is also in the context key `lessons_handed`.
 - A `LANDED` line that ends `lessons=filed N, triage M` needs no reading: its records are already filed. Only the triage file's rows are judged, in a batch; the line names the file (`triage_file=<path>`) when M > 0.
 - A worker's, reviewer's or driver's line that reaches the main conversation is sent verbatim to the dispatcher.

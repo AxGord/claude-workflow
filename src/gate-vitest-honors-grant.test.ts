@@ -69,7 +69,7 @@ describe("the grant reaches every step of the check", () => {
     expect(pkg.scripts["check:tests"]).toBe("vitest run && npm run test:pane && npm run check:ci");
   });
 
-  it.each(["project_gate", "project_gate_rebased"])(
+  it.each(["project_gate", "project_gate_rebased", "regate_gate"])(
     "%s runs the leased check and holds no lease of its own",
     name => {
       const state = states[name];
