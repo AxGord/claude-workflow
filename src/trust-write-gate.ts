@@ -19,7 +19,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { basename, splitSegments, type Segment } from "./pool-gate.js";
-import { TRUST_FILE } from "./trust.js";
+import { TRUST_FILE, wfTrustCommand } from "./trust.js";
 import { stateDir, workflowDirs } from "./workflow-dirs.js";
 
 export interface TrustWritePayload {
@@ -320,7 +320,7 @@ export function guardedPlaces(env: NodeJS.ProcessEnv, cwd: string): Guarded {
 
 const REASON: Readonly<Record<Place, (file: string) => string>> = {
   trust: file =>
-    `an agent's write to ${file}, the record exec consent rests on (\`wf-trust\` maintains it); confirm only if you asked for it, and approve a project yourself with \`wf-trust\` in a terminal`,
+    `an agent's write to ${file}, the record exec consent rests on (\`wf-trust\` maintains it); confirm only if you asked for it, and approve a project yourself with \`${wfTrustCommand()} <project>\` in a terminal`,
   global: file =>
     `an agent's write into the global workflows directory (${file}): a workflow there runs its exec states without a consent step; confirm only if you asked for it`,
 };

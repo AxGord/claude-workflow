@@ -282,9 +282,11 @@ What you have to do:
 - **A folder you already trusted in Claude Code:** nothing. An edited workflow file keeps working; no approval after an edit.
 - **A fresh clone:** open the folder in Claude Code and accept its trust question. A running engine notices the answer on its next read.
 - **A folder Claude Code never asked about** (headless `claude -p`, say): approve the project directory once yourself, in a terminal.
+  The engine prints that command (in `list`, `start` and the refusal) with the full path of the script: `<plugin dir>/scripts/wf-trust <project>`.
+  A plugin install puts no `wf-trust` on your `PATH`, so copy the line as printed.
 
 ```sh
-wf-trust /path/to/project        # shows each command, asks, trusts the project directory on a typed "yes"
+wf-trust /path/to/project        # (or <plugin dir>/scripts/wf-trust /path/to/project) shows each command, asks, trusts the project directory on a typed "yes"
 wf-trust /path/to/project/.claude/workflows/deploy.yaml   # one file's exact content (its sha256) instead
 wf-trust --list                  # what is approved (projects and files)
 wf-trust --revoke <project dir | hash prefix>   # withdraw one
@@ -301,7 +303,9 @@ How the engine reads Claude Code's answer:
 - A missing file, entry or flag, an unreadable or malformed file, or `CLAUDE_CODE_IGNORE_PERSISTED_TRUST` all mean "not trusted", and then `wf-trust` is the way.
 - The flag is an internal record of Claude Code, not a documented interface: if a Claude Code release renames it, the engine falls back to `wf-trust` instead of trusting anything.
 
-`wf-trust` is `scripts/wf-trust` of the plugin (also a `wf-trust` bin of the npm package). It refuses to run without a terminal, so an agent cannot approve for you; no MCP tool of the engine can. Its record is `$STATE_DIR/trusted-workflows.json` (default `~/.claude/workflow-state/`): a running server picks it up on its next read, and per-file approvals of an earlier version keep working. A session already running keeps the definition it started with.
+`wf-trust` is `scripts/wf-trust` of the plugin (also a `wf-trust` bin of the npm package); the lines above write the bare name, the engine's own messages write the full path, so they run without a link (see "The `wf-*` commands").
+
+It refuses to run without a terminal, so an agent cannot approve for you; no MCP tool of the engine can. Its record is `$STATE_DIR/trusted-workflows.json` (default `~/.claude/workflow-state/`): a running server picks it up on its next read, and per-file approvals of an earlier version keep working. A session already running keeps the definition it started with.
 
 **Strict mode.** For those who want to approve each file's exact content regardless of the folder answer, set `WF_TRUST_STRICT=1` in the environment of the server. Then neither Claude Code's trust nor a project approval counts: a file loads only after `wf-trust` approved its sha256 (`wf-trust <project>` records each file's hash), and an edited file asks again.
 

@@ -14,6 +14,7 @@
 //
 // Every check prints `STEP <name> PASS|FAIL <reason>` on stdout; the shell turns each into its own
 // PASS / FAIL line. Exit 0 whenever the checks ran (a FAIL is a line, not an exit code), 2 on usage.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -144,6 +145,24 @@ async function mcp([clone, project, home, port, sidsFile]) {
       must(!out.includes("  ship ("), "an exec workflow of an untrusted project was loaded");
       must(out.includes("wf-trust") && out.includes("not trusted"), "list does not say how to trust the project");
       return "README's ship.yaml (an exec state) is held back and list names wf-trust";
+    });
+    // A plugin install puts no wf-trust on the user's PATH: the line list prints must run as copied, from a
+    // shell whose PATH holds nothing of the plugin.
+    await step("trust-command-copyable", async () => {
+      const hint = /`(\S*wf-trust) ([^`]+)`/.exec(await text("list"));
+      must(hint !== null, "list prints no `<path>/wf-trust <project>` command");
+      const [, cmd] = hint;
+      must(path.isAbsolute(cmd), `the printed command word is not a full path: ${cmd}`);
+      must(
+        cmd === path.join(fs.realpathSync(clone), "scripts", "wf-trust") || cmd === path.join(clone, "scripts", "wf-trust"),
+        `the printed command is not the clone's scripts/wf-trust: ${cmd}`,
+      );
+      const bare = `${path.dirname(process.execPath)}:/usr/bin:/bin`;
+      const r = spawnSync("sh", ["-c", `command -v wf-trust`], { env: { PATH: bare, HOME: home }, encoding: "utf8" });
+      must(r.status !== 0, "wf-trust is already on the smoke's PATH, the check proves nothing");
+      const run = spawnSync(cmd, ["--list"], { env: { PATH: bare, HOME: home, STATE_DIR: path.join(home, ".claude", "workflow-state") }, cwd: project, encoding: "utf8" });
+      must(run.status === 0, `the printed command exited ${run.status}: ${run.stderr}`);
+      return "the command list prints for the consent step is the clone's wf-trust by full path and runs with no wf-* on PATH";
     });
     fs.writeFileSync(
       path.join(home, ".claude.json"),

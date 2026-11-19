@@ -35,7 +35,7 @@ Definitions are frozen at session start (snapshot isolation); hot-reload affects
 
 ## Claude Code asked me about a write to `trusted-workflows.json` or `~/.claude/workflows/`
 
-An agent tried to write the exec-consent record or a workflow into the global workflows directory. A workflow there runs its `exec` states without a consent step, so the plugin's PreToolUse hook (`hooks/trust-write-gate.sh`) makes it a question to you. Confirm only what you asked for; approve a project yourself with `wf-trust <project>` in a terminal. What the guard covers and does not: [Trusting project workflows](/getting-started#what-consent-does-and-does-not-protect-against).
+An agent tried to write the exec-consent record or a workflow into the global workflows directory. A workflow there runs its `exec` states without a consent step, so the plugin's PreToolUse hook (`hooks/trust-write-gate.sh`) makes it a question to you. Confirm only what you asked for; approve a project yourself with `<plugin dir>/scripts/wf-trust <project>` in a terminal (the question prints that path). What the guard covers and does not: [Trusting project workflows](/getting-started#what-consent-does-and-does-not-protect-against).
 
 ## A project install from a git URL does not run
 

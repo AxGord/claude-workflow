@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { ClaudeFolderTrust, folderTrustKeys } from "./claude-trust.js";
 import { WorkflowFileSchema } from "./types.js";
@@ -56,7 +57,7 @@ export function hashContent(raw: string | Uint8Array): string {
 export function actionStateRefusal(what: string): string {
   return (
     `${what}: exec/fetch states are not accepted from modify or create (the command would run with ` +
-    "nothing the user approved). Write the state in a workflow YAML file under .claude/workflows/ of a project the user trusted (accepted in Claude Code, or `wf-trust <project>` run by the USER in a terminal)."
+    `nothing the user approved). Write the state in a workflow YAML file under .claude/workflows/ of a project the user trusted (accepted in Claude Code, or \`${wfTrustCommand()} <project>\` run by the USER in a terminal).`
   );
 }
 
@@ -67,9 +68,20 @@ export function actionStateNames(states: Record<string, { type?: string }> | und
     .map(([name]) => name);
 }
 
+/** The plugin (or package) directory this module runs from: `src/` under vitest, `build/` once compiled, one level below it either way. */
+const PLUGIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+const shellWord = (s: string): string =>
+  /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+
+/** The `wf-trust` command word a user can paste into a terminal: the script's full path, because a plugin install puts no `wf-*` on the user's PATH. */
+export function wfTrustCommand(): string {
+  return shellWord(path.join(PLUGIN_DIR, "scripts", "wf-trust"));
+}
+
 /** What the user runs to approve a project; one wording for every refusal. */
 export function trustHint(projectDir: string): string {
-  return `run \`wf-trust ${projectDir}\` in a terminal (it shows the commands and asks; the agent cannot approve for you)`;
+  return `run \`${wfTrustCommand()} ${shellWord(projectDir)}\` in a terminal (it shows the commands and asks; the agent cannot approve for you)`;
 }
 
 /** One plain sentence: why `projectDir`'s files are left out and the two ways to fix it. */
