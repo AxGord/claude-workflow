@@ -89,11 +89,15 @@ describe("an agent waits in the foreground and never ends a turn with live work"
           /read-only gate refuses a redirect, `\$\( \)` and `sleep`, so you cannot detach a command or loop on a marker: a command that would outlast one call .* you do not run; name it in your verdict as unverified/,
         );
       } else {
+        const d = file.startsWith("templates/") ? "{{context.wt}}.log" : "{{context.wt}}-logs";
         expect(brief).toContain(
-          "nohup sh -c '<cmd>; echo $? > L.done' > L.log 2>&1 & echo $! > L.pid",
+          `nohup sh -c '<cmd>; echo $? > ${d}/L.done' > ${d}/L.log 2>&1 & echo $! > ${d}/L.pid`,
+        );
+        expect(brief).toContain(
+          `until [ -s ${d}/L.done ] || ! kill -0 "$(cat ${d}/L.pid)" 2>/dev/null || [ $i -ge 540 ]; do sleep 1;`,
         );
         expect(brief).toMatch(
-          /until \[ -s L\.done \] \|\| ! kill -0 "\$\(cat L\.pid\)" 2>\/dev\/null \|\| \[ \$i -ge 540 \]; do sleep 1;/,
+          /Marker, log and pid go by ABSOLUTE path .* does not persist across calls .* chain `cd` with `&&`/,
         );
         expect(brief).toMatch(/never `sleep` alone/);
       }
