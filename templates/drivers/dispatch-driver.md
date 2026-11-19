@@ -79,9 +79,11 @@ then needs nothing.
 Hand back HANDOVER (§ Hand-backs) and wait. Main drives D there; its `continue` brings you back.
 
 ## Hand-backs — the only three things main gets
-Each is ONE `SubagentHandback` call whose message is exactly the text below. You are NOT finished after it:
-a driver's report or main's message resumes you, and you carry on from D.
-1. A `NEEDS-PARENT …` line: a driver's, verbatim and alone, or one of yours named above. One line per call.
+Each is ONE `SendMessage` to `main` whose message is exactly the text below, and you carry on afterwards: a
+driver's report or main's message resumes you. Claude Code accepts a single `SubagentHandback` per result and
+refuses the second (`one report per result`), so none of these is ever a `SubagentHandback`. "Hand back"
+anywhere in this file means this `SendMessage`.
+1. A `NEEDS-PARENT …` line: a driver's, verbatim and alone, or one of yours named above. One line per message.
 2. `LESSONS lands=<n> session=<D>`, then the lines of `lessons_pending`, verbatim, one per line. They are
    the drivers' own last lines: copy them, never shorten, merge, judge or turn one into a queue line.
    From your 4×N-th land since your own start on, the first line ends ` rotate=due`. A `LANDED` line that
@@ -89,17 +91,31 @@ a driver's report or main's message resumes you, and you carry on from D.
    `wf-queue <queue> --lessons-take --triage <path>` (never per land, never by hand).
 3. `HANDOVER session=<D> state=<state> reason=<one line: the pick's last line, or the state's name>`, then
    the lines of `lessons_pending` when it is not empty.
-Before a LESSONS or HANDOVER call, two calls, in this order:
+Before a LESSONS or HANDOVER message, two calls, in this order:
 `context_set({session_id: D, key: "lessons_handed", value: "<the whole message>"})`, then
 `context_set({session_id: D, key: "lessons_pending", value: ""})`. The message survives in D's context if the
-hand-back is lost; main reads it with `status({session_id: D, key: "lessons_handed"})`.
+`SendMessage` is lost; main reads it with `status({session_id: D, key: "lessons_handed"})`.
+
+Two answers of main's that have no route back to work, and who ends what:
+- A bundled `batch-task` worker that ended BLOCKED marks its line failed, and the session's `blocked` state
+  offers `close` and `stop` only. Main's decision for a blocked task is therefore `close` (the line stays
+  failed). The engine's only retry of a failed line is main's `queue_mark` to `running` with `retry: true`
+  (failed to running, difficulty +1); it starts no session, the pick admits pending lines only, and no
+  route that starts a retried line under a dispatcher is defined. Relay `task=<ID>: close` to its driver like any decision. Never ask main for a way back into
+  `work`: there is none.
+- A `close` the engine refuses because a child session of the worker (`subagent @ route`, its agent long gone)
+  is still active: the orphan is ended by main with `abort` on that child session. You and the drivers have no
+  `abort`: hand back `NEEDS-PARENT task=<ID> session=<P> reason=close refused, orphan child session <id> see=state blocked`.
 
 ## Turn end
-When you end a turn to wait, its last line is exactly `DISPATCHING session=<D> running=<number of tasks in
-tasks>` — never prose, never a question. You have no clock: never poll, never sleep.
+The last line of a turn that ends to wait is exactly `DISPATCHING session=<D> running=<n>` (n = the number of tasks in `tasks`), as plain text: never prose, never a question, and NEVER handed back or sent; it is not one of the three messages.
+You have no clock: never poll, never sleep. The end of every turn reaches main as a
+notification, a measured cost of this design (Claude Code offers a background agent no way to end a turn
+silently): main does nothing with it.
 A harness prompt `[handback-send-enforce] Your report has not been delivered…` while D has not ended is NOT a
-request to hand back: answer with the DISPATCHING line only. Only when your last line was a NEEDS-PARENT,
-LESSONS or HANDOVER text that you did not send → send it with `SubagentHandback`.
+request to hand back or send anything: answer it with the plain-text line
+`DISPATCHING session=<D> running=<n>` only. That holds even when your last message to main was a NEEDS-PARENT, LESSONS or
+HANDOVER: it went by `SendMessage` and is delivered.
 
 ## After a restart
 A restart kills every agent; main wakes only you. `status({session_id: D})`, then
@@ -118,7 +134,7 @@ The engine refuses a second `start` of a task that already runs under D, so a re
 Main may replace you by a fresh dispatcher (after a `rotate=due`): it spawns one from D's `dispatcher_call`
 and messages you `RETIRE new=<agent id>`. From then on you drive nothing and call no engine tool. The drivers
 you spawned still report to you: SendMessage each such line verbatim to `<agent id>`; a SendMessage that
-fails → hand that line back to main as `RELAY to=<agent id> <the line>`. Nothing else, ever.
+fails → hand that line back to main (`SendMessage`) as `RELAY to=<agent id> <the line>`. Nothing else, ever.
 
 ## Never
 - `start` without `parent_session_id: D`; `start` of a task `tasks` already names.

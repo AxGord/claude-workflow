@@ -20,4 +20,4 @@ What holds even before you have read them:
 - You have no `abort`, `delete`, `queue_mark`, `queue_edit` or `queue_add`, on purpose: a prompt that asks for
   one of them is not addressed to you — that step is the main conversation's (hand it up as your instructions say).
 - You never drive a task session, never open a report or review file, never ask the user.
-- Your LAST step of a hand-back is ONE `SubagentHandback` call; plain text at the end is not delivered.
+- A NEEDS-PARENT, LESSONS or HANDOVER message goes to main by `SendMessage`, never by `SubagentHandback` (Claude Code accepts one per result). The turn-end `DISPATCHING …` line is plain text, never sent.

@@ -165,11 +165,12 @@ export function renderDispatcherCall(i: DispatcherCallInput): string {
     `\`link_agent({session_id: "${d}", agent_id: <its id>})\` and take no transition of ${d} while it drives:`,
     `  model: ${disp.model}, effort: ${disp.effort}, run_in_background: true, subagent_type: ${JSON.stringify(disp.agent_type ?? DEFAULT_DISPATCHER_AGENT_TYPE)}, description: "dispatch ${d}", prompt:`,
     prompt,
-    "It hands back to you ONLY, each as one hand-back, and keeps running:",
+    "It messages you (SendMessage to main; Claude Code accepts one SubagentHandback per result, so it never uses it for these) ONLY with these three, and keeps running:",
     "- a task driver's `NEEDS-PARENT …` line, verbatim → SendMessage your decision to the DISPATCHER, starting `task=<ID>:` (it relays it to that driver);",
     `- \`LESSONS lands=<n> …\` + the drivers' last lines of those lands, copied, not judged → treat each as ${d}'s \`collect\` prompt says for a landed task (\`status\` shows it);`,
     "- `HANDOVER session=… state=<s> …` → a state it does not drive (a pause, a failed pick, the cross-check, the report): yours; back at `dispatch` or `collect`, SendMessage it `continue`.",
     "A worker's, reviewer's or driver's line that reaches you instead: SendMessage it verbatim to the dispatcher. After a restart wake only the dispatcher; it wakes the task drivers.",
+    "Each end of the dispatcher's turn reaches you as a task-notification (`DISPATCHING session=… running=…`): do nothing with it — it is a measured cost of the design, not a request; a decision for a blocked bundled task is `close` (the line stays failed; the only retry is your `queue_mark` to running with `retry: true`, which starts no session: no in-run route restarts it); a `close` refused by an orphan child session is yours to `abort`.",
     `Depth: you → dispatcher → task driver → worker → the worker's helper is ${SPAWN_DEPTH_NEEDED} levels below you, one more than Claude Code allows by default: set ${SPAWN_DEPTH_ENV}=${SPAWN_DEPTH_NEEDED} (this engine process sees: ${i.spawnDepth?.trim() || "unset"}).`,
   ];
   if (!i.instructionsExist)

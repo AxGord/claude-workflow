@@ -482,9 +482,9 @@ dispatcher:
 - A driver that ended with no last line is pinged once, then re-spawned from the task session's `driver_call`.
 - It decides nothing and has no `abort`, `delete`, `queue_mark`, `queue_edit` or `queue_add`.
 
-**What reaches the main conversation**, each as one hand-back while the agent keeps running:
+**What reaches the main conversation**, each as one `SendMessage` to `main` while the agent keeps running (Claude Code accepts a single `SubagentHandback` per result and refuses the second, so the dispatcher never uses it for these):
 
-| Hand-back | When | The main conversation's answer |
+| Message | When | The main conversation's answer |
 |---|---|---|
 | a driver's `NEEDS-PARENT …` line, verbatim | a task needs a decision | `SendMessage` to the dispatcher, starting `task=<ID>:`; it relays to that driver |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, default 5) | judge each line as the `collect` prompt says for a landed task |
@@ -493,9 +493,14 @@ dispatcher:
 - The lessons are copied, never judged or turned into queue lines by the agent. The last block handed is also in the context key `lessons_handed`.
 - A `LANDED` line that ends `lessons=filed N, triage M` needs no reading: its records are already filed. Only the triage file's rows are judged, in a batch; the line names the file (`triage_file=<path>`) when M > 0.
 - A worker's, reviewer's or driver's line that reaches the main conversation is sent verbatim to the dispatcher.
+- The turn-end line `DISPATCHING session=<D> running=<n>` is plain text, never sent. A `[handback-send-enforce]` prompt is answered with that line only.
+- Every end of the dispatcher's turn reaches the main conversation as a task-notification, which it ignores. No way to end a background agent's turn silently was found: it is a measured cost of the design, one wake of the main context per turn.
+- A blocked bundled task has no route back to `work` (`blocked` offers `close` and `stop`): the main conversation's decision is `close`, and the line stays failed.
+  - The engine's only retry of it is `queue_mark` to `running` with `retry: true` (failed to running, difficulty +1), which starts no session: the pick admits pending lines only, so no route that starts a retried line under a dispatcher is defined.
+- A `close` refused by an orphan child session of the worker (its agent gone) is cleared by the main conversation with `abort` on that child; the dispatcher and the drivers have no `abort` and hand back a NEEDS-PARENT naming it.
 - Rotation: from its 4×N-th land on, the `LESSONS` line ends `rotate=due`. The main conversation may then spawn a fresh dispatcher from `dispatcher_call` and send the old one `RETIRE new=<agent id>`; the old one only relays its drivers' late lines.
 
-Not verified by a live run yet: where a task driver's report goes while the dispatcher has handed back, a spawn at the fourth level, and a `SendMessage` between two dispatchers.
+Not verified by a live run yet: a `SendMessage` between two dispatchers. A live probe verified where a task driver's report goes while the dispatcher has handed back (a second task's LANDED reached the dispatcher while a NEEDS-PARENT was open) and a spawn at the fourth level.
 
 #### Agent types
 
