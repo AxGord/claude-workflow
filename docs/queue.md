@@ -184,6 +184,7 @@ Converting the old Markdown queue (`- [m] ID | key: value | … |` lines under `
 - `wf-queue --convert <old.md> [--status S]` prints the YAML.
 - `--into <new.yaml>` writes it. `--status pending` is refused, exit 2 and no file written, when a line has no `difficulty:`, as for an append.
 - `--into <existing.yaml> [--status backlog]` APPENDS the old file's open (not done) lines with that status. `--status pending` is refused, exit 2 and the file unchanged, when an appended line has no `difficulty:`, as `queue_add` refuses it.
+- The task keys the converter reads from a row are `model`, `effort`, `after`, `touches`, `owner`, `repo`, `workflow`, `exclusive`, `difficulty`, `kind`, `priority` and `sweep`; `sweep:` lands in the task's `sweep` key, not in its text.
 - Marks map to statuses (`[-]`/`[~]` → done with a note), `⏸` → `parked`, fields before the first metadata field and later `(<who> <date>…)` fields → `notes`, the rest → `text`; a twice-used id gets a `-2` suffix.
 - `wf-queue --convert <config.json> [--into <config.yaml>]` turns a JSON config (pool `config.json`, `pool-gate.json`, `read-only-commands.json`) into the YAML the engine now reads.
 - A task row the converter cannot read refuses the conversion with its line numbers (a done row without an id is skipped and named on stderr).

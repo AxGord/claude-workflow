@@ -29,6 +29,7 @@ const META_KEYS = new Set([
   "difficulty",
   "kind",
   "priority",
+  "sweep",
 ]);
 // A field this long is the line's prose; `⏸` inside prose is a mention, not a pause.
 const PROSE_MIN = 160;
