@@ -456,7 +456,11 @@ describe("wf-queue --lessons", () => {
   async function cli(...args: string[]): Promise<{ code: unknown; out: string; err: string }> {
     const out: string[] = [];
     const err: string[] = [];
-    vi.spyOn(process.stdout, "write").mockImplementation(c => (out.push(String(c)), true));
+    vi.spyOn(process.stdout, "write").mockImplementation((c: unknown, cb?: unknown) => {
+      out.push(String(c));
+      if (typeof cb === "function") (cb as () => void)();
+      return true;
+    });
     vi.spyOn(process.stderr, "write").mockImplementation(c => (err.push(String(c)), true));
     process.argv = ["node", "wf-queue", ...args];
     process.exitCode = undefined;

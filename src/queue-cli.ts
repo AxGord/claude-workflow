@@ -11,8 +11,8 @@
 //   wf-queue <q> --header <key>                   the header's value of <key> (empty when absent)
 //   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, difficulty: 3, touches: [a], text: …}`)
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
-//   wf-queue <q> --lessons <ID> --records <file>… [--triage <file>] [--repo <dir>] [--workflow <name>]   (triage: the flag, else the header's `lessons_triage:`, else ../backups/slice-logs/lessons-triage.txt)  the lesson records of a landed task as queue lines / triage rows (src/lessons-file.ts); prints `lessons=filed N, triage M[, already K]`, exit 0 for any record, 2 for usage / an unreadable queue
-//   wf-queue <q> --lessons-take [--triage <file>]   prints the triage file and empties it, under the lock a land's append takes
+//   wf-queue <q> --lessons <ID> --records <file>… [--triage <file>] [--repo <dir>: the filed repo only when the origin line is gone] [--workflow <name>]   (triage: the flag, else the header's `lessons_triage:`, else ../backups/slice-logs/lessons-triage.txt)  the lesson records of a landed task as queue lines / triage rows (src/lessons-file.ts); prints `lessons=filed N, triage M[, already K]`, exit 0 for any record, 2 for usage / an unreadable queue
+//   wf-queue <q> --lessons-take [--triage <file>]   prints the triage file, then empties it (only once the rows are out), under the lock a land's append takes
 //   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header (the window)
 //   wf-queue <q> --header-set archive_after_days=N | exclusive_hold=yes|no [--reason TEXT]   queue_header (a header key: N ≥ 1 / yes|no, `key=` removes; any other key refused; --reason is echoed, not written)
 //   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   the manual archive (done/failed lines → <q>.archive.yaml); a pick does it by the header's archive_after_days
@@ -25,6 +25,7 @@
 // runs (done; what stays pending is blocked) · 12 nothing runs and batch_size is 0 (paused) · 2 error.
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import YAML from "yaml";
 import { fileLessons, formatLessons, takeTriage } from "./lessons-file.js";
 import { appendMarkdown, jsonToYaml, markdownToYaml } from "./queue-convert.js";
@@ -125,6 +126,15 @@ async function convert(args: readonly string[]): Promise<string> {
   fs.mkdirSync(path.dirname(path.resolve(into)), { recursive: true });
   fs.writeFileSync(into, out, { flag: "wx" });
   return `wrote ${path.resolve(into)}\n`;
+}
+
+/** Writes to stdout and resolves when the stream took it; rejects when it fails (a closed pipe). */
+async function out(text: string): Promise<void> {
+  const write = process.stdout.write.bind(process.stdout) as (
+    t: string,
+    cb: (err?: Error | null) => void,
+  ) => boolean;
+  await promisify(write)(text);
 }
 
 /** The triage file: `--triage`, else the header's `lessons_triage:` (relative = beside the queue), else `../backups/slice-logs/lessons-triage.txt` of the queue's directory. */
@@ -255,7 +265,7 @@ async function main(args: string[]): Promise<number> {
   }
   if (op === "--lessons-take") {
     const o = options(args.slice(1), ["--triage"]);
-    process.stdout.write(await takeTriage(triageFile(file, o.get("--triage")?.[0])));
+    await takeTriage(triageFile(file, o.get("--triage")?.[0]), text => out(text));
     return 0;
   }
   if (op === "--lessons") {

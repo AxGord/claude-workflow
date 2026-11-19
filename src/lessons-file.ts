@@ -262,7 +262,8 @@ export async function fileLessons(opts: LessonsOptions): Promise<LessonsResult> 
   const queue0 = readQueue(opts.queue);
   const origin = queue0.lines.find(l => l.id === opts.task);
   const repo = origin !== undefined ? resolveRepo(queue0, origin) : repoNamed(queue0, opts.repo);
-  const repoValue = opts.repo ?? origin?.meta.repo;
+  // One repo for the check and for the filed line: the origin line's own, `--repo` only when it is gone.
+  const repoValue = origin !== undefined ? origin.meta.repo : opts.repo;
   const wfRaw = (opts.workflow ?? origin?.meta.workflow ?? "").trim();
   const workflow = wfRaw !== "" && wfRaw !== "-" && wfRaw !== "—" ? wfRaw : undefined;
   let filed = 0;
@@ -351,10 +352,14 @@ export async function fileLessons(opts: LessonsOptions): Promise<LessonsResult> 
 }
 
 /**
- * Prints and empties the triage file under the lock `appendTriage` takes: a row a land appends meanwhile
- * lands either in what is returned or in the emptied file, never in between. A missing file is "".
+ * Hands the triage file's text to `emit`, then empties the file, all under the lock `appendTriage` takes: a
+ * row a land appends meanwhile lands either in what is returned or in the emptied file, never in between. The
+ * file is emptied only after `emit` resolved, so a failed or killed output loses no row. A missing file is "".
  */
-export async function takeTriage(file: string): Promise<string> {
+export async function takeTriage(
+  file: string,
+  emit: (text: string) => void | Promise<void> = () => undefined,
+): Promise<string> {
   const abs = path.resolve(file);
   if (!fs.existsSync(abs)) return "";
   const release = await lockfile.lock(abs, {
@@ -364,7 +369,10 @@ export async function takeTriage(file: string): Promise<string> {
   });
   try {
     const text = fs.readFileSync(abs, "utf8");
-    if (text !== "") fs.writeFileSync(abs, "");
+    if (text !== "") {
+      await emit(text);
+      fs.writeFileSync(abs, "");
+    }
     return text;
   } finally {
     await release();
