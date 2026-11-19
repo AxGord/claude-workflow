@@ -163,7 +163,7 @@ The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it
 | Command | What it does |
 |---------|--------------|
 | `wf-skills list [--json]` | Each bundled skill: shipped, installed, and `current`, `outdated`, `edited`, `deleted`, not installed or (a stack skill) `available`; your `learned-*` skills under their own heading (not in `--json`); changes nothing |
-| `wf-skills add <name>…` / `add --all-stack` | Install shipped skills by name (how a stack skill gets in); a skill already there is left as it is |
+| `wf-skills add <name>…` / `add --all-stack` | Install shipped skills by name (how a stack skill gets in); a skill already there is left as it is, a name given twice is taken once |
 | `wf-skills diff <name>` | Your copy against the version this release ships |
 | `wf-skills split <name>` | Move the text you only ADDED to an edited bundled copy into `learned-<name>` and restore the shipped text, so the copy updates again; refuses (writing nothing) when the diff is not pure additions |
 | `wf-skills update <name>…` | Install the shipped version; an edited copy is saved to `$STATE_DIR/skill-backups` first |
@@ -178,7 +178,7 @@ The hook writes a manifest, `$STATE_DIR/skills/manifest.json`: for every file it
 
 Run `wf-skills remove` **before** `/plugin uninstall`: the command lives in the plugin, and a session started in between copies the skills again.
 
-- It removes every unedited copy and the manifest, and never touches an edited copy, a `learned-*` skill or a skill the engine did not ship.
+- It removes every unedited copy, the manifest and the `.wf-*` staging directories an interrupted update left, and never touches an edited copy, a `learned-*` skill or a skill the engine did not ship.
 - `--dry-run` prints what it would do and changes nothing.
 - The state and pool directories hold your ledger, so they stay unless you add `--state`.
 - `--state` names them and removes them (end every Claude Code session first), the workflow directory too when it is empty.

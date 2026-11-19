@@ -43,7 +43,8 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 /plugin install workflow
 ```
 
-To remove it, run `wf-skills remove` first (it deletes the unedited skill copies the plugin put in `~/.claude/skills`;
+To remove it, run `wf-skills remove` first (it deletes the unedited skill copies the plugin put in `~/.claude/skills`
+and the staging directories of an interrupted update;
 your edited copies and `learned-*` skills stay), then `/plugin uninstall workflow`.
 [Concepts](https://axgord.github.io/claude-workflow/concepts#updating-and-removing-the-skills) lists what stays.
 

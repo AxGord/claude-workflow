@@ -10,7 +10,8 @@
 //                                   text, so the copy is updated again; refuses unless the diff is pure additions
 //   wf-skills update <name>…        force the shipped version; an edited copy is saved to <state dir>/skill-backups first
 //   wf-skills remove [--state] [--dry-run]
-//                                   remove every UNEDITED engine copy and the manifest; an edited copy and a skill the
+//                                   remove every UNEDITED engine copy, the manifest and the staging directories an interrupted
+//                                   update left (.wf-*); an edited copy and a skill the
 //                                   engine never shipped stay. --state also removes the engine's state and pool
 //                                   directories (sessions, ledger, skill backups, pool log), named first
 //   wf-skills sync [--quiet]        what the hook runs on every start (--quiet: only the note about edited copies)
@@ -141,6 +142,8 @@ function remove(ctx: SkillsContext, flags: ReadonlySet<string>): void {
   const pre = dry ? "would remove" : "removed";
   for (const name of plan.remove) out(`${pre} ${path.join(ctx.skillsDir, name)}`);
   for (const name of plan.keep) out(`kept (edited) ${path.join(ctx.skillsDir, name)}`);
+  for (const name of plan.scratch)
+    out(`${pre} ${path.join(ctx.skillsDir, name)} (interrupted update)`);
   if (hadManifest) out(`${pre} ${manifest}`);
   if (stateDirs.length === 0) {
     out(

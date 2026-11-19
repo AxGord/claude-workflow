@@ -5,8 +5,14 @@ import type { SessionState } from "./types.js";
 import { LOCK_STALE_MS } from "./types.js";
 import { EventLog } from "./event-log.js";
 import { parseLedger, taskCostRows, type LedgerEntry } from "./ledger.js";
+import { TRUST_FILE } from "./trust.js";
 
 export const LEDGER_FILE = "ledger.jsonl";
+/**
+ * The `*.json` files of the state directory that are not sessions (an operator's consent list): every reader that
+ * enumerates sessions skips them, so a new such file is named here once.
+ */
+export const NON_SESSION_FILES: ReadonlySet<string> = new Set([TRUST_FILE]);
 /** The ledger lines of the last `LEDGER_RECENT_DAYS` days: the plan pane reads this one, since the plugin API rejects a read of a file over 4 MiB and the ledger is never pruned. */
 export const LEDGER_RECENT_FILE = "ledger-recent.jsonl";
 export const LEDGER_RECENT_DAYS = 30;
@@ -208,7 +214,7 @@ export class Storage {
     if (!fs.existsSync(this._stateDir)) return [];
     return fs
       .readdirSync(this._stateDir)
-      .filter(f => f.endsWith(".json"))
+      .filter(f => f.endsWith(".json") && !NON_SESSION_FILES.has(f))
       .map(f => f.replace(/\.json$/, ""));
   }
 

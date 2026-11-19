@@ -92,7 +92,7 @@ describe("learned-<name>: lessons live beside a bundled skill, not inside it", (
         skills: { ...manifest.skills, "learned-a": manifest.skills.a },
       }),
     );
-    expect(planRemove(t.ctx)).toEqual({ remove: ["a"], keep: [] });
+    expect(planRemove(t.ctx)).toEqual({ remove: ["a"], keep: [], scratch: [] });
     removeSkills(t.ctx);
     expect(fs.readdirSync(t.ctx.skillsDir)).toEqual(["learned-a"]);
   });

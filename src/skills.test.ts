@@ -408,7 +408,7 @@ describe("bundled skills: manifest, update, adoption, removal", () => {
       fs.writeFileSync(path.join(ctx.skillsDir, "c", "SKILL.md"), "edited c\n");
       // a: unedited but older than what is shipped now; b: current
       const next = ship({ ...V1, a: { "SKILL.md": "a v2\n" }, c: { "SKILL.md": "c\n" } }, "1.1.0");
-      expect(planRemove(next)).toEqual({ remove: ["a", "b"], keep: ["c"] });
+      expect(planRemove(next)).toEqual({ remove: ["a", "b"], keep: ["c"], scratch: [] });
       removeSkills(next);
       expect(fs.readdirSync(ctx.skillsDir).sort()).toEqual(["c", "mine"]);
       expect(read(ctx, "c")).toBe("edited c\n");

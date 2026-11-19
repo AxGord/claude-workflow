@@ -324,11 +324,19 @@ function restoreInterrupted(skills: string): void {
   }
 }
 
+/** The staging entries a sweep would remove: an `.wf-old.<name>.<pid>` whose `<name>` is gone is restored first, so it stays. */
+function scratchEntries(skills: string): string[] {
+  if (!fs.existsSync(skills)) return [];
+  return fs.readdirSync(skills).filter(entry => {
+    if (!entry.startsWith(SCRATCH)) return false;
+    const m = /^\.wf-old\.(.+)\.\d+$/.exec(entry);
+    return !(m && kindOf(path.join(skills, m[1])) === "none");
+  });
+}
+
 function sweepScratch(skills: string): void {
-  if (!fs.existsSync(skills)) return;
-  for (const name of fs.readdirSync(skills)) {
-    if (name.startsWith(SCRATCH))
-      fs.rmSync(path.join(skills, name), { recursive: true, force: true });
+  for (const name of scratchEntries(skills)) {
+    fs.rmSync(path.join(skills, name), { recursive: true, force: true });
   }
 }
 
@@ -531,7 +539,9 @@ export function addSkills(
   allStack = false,
 ): AddResult {
   const shipped = shippedSkills(ctx.root);
-  const wanted = allStack ? [...new Set([...stackSkillNames(ctx.root), ...names])].sort() : names;
+  const wanted = allStack
+    ? [...new Set([...stackSkillNames(ctx.root), ...names])].sort()
+    : [...new Set(names)];
   for (const name of wanted) {
     if (!shipped.has(name)) throw new Error(`no bundled skill named ${name} (wf-skills list)`);
   }
@@ -572,6 +582,8 @@ export interface RemovePlan {
   readonly remove: readonly string[];
   /** Edited copies: kept. */
   readonly keep: readonly string[];
+  /** Staging directories an interrupted install left in the skills dir (the engine's own prefix only): removed. */
+  readonly scratch: readonly string[];
 }
 
 export function planRemove(ctx: SkillsContext): RemovePlan {
@@ -581,6 +593,7 @@ export function planRemove(ctx: SkillsContext): RemovePlan {
       .filter(r => r.installed && ["current", "outdated", "retired"].includes(r.state))
       .map(r => r.name),
     keep: rows.filter(r => r.installed && r.state === "edited").map(r => r.name),
+    scratch: scratchEntries(ctx.skillsDir),
   };
 }
 
@@ -591,6 +604,9 @@ export function removeSkills(ctx: SkillsContext): RemovePlan {
     if (fs.existsSync(ctx.skillsDir)) restoreInterrupted(ctx.skillsDir);
     const plan = planRemove(ctx);
     for (const name of plan.remove) {
+      fs.rmSync(path.join(ctx.skillsDir, name), { recursive: true, force: true });
+    }
+    for (const name of plan.scratch) {
       fs.rmSync(path.join(ctx.skillsDir, name), { recursive: true, force: true });
     }
     fs.rmSync(path.dirname(path.join(ctx.stateDir, MANIFEST_FILE)), {
@@ -693,6 +709,18 @@ function frontmatterEnd(lines: readonly string[]): number {
 
 const trimBlank = (lines: readonly string[]): string => lines.join("\n").replace(/^\n+|\s+$/g, "");
 
+/** Whether `text` stands in `base` as a whole section (its "moved from" line and block), not as a part of a longer one. */
+function holdsSection(base: string, text: string): boolean {
+  for (let at = base.indexOf(text); at >= 0; at = base.indexOf(text, at + 1)) {
+    const before = base.slice(0, at);
+    const after = base.slice(at + text.length);
+    if ((before === "" || before.endsWith("\n\n")) && /^\s*($|_Moved from )/.test(after)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** What `split` would move, or the reason it refuses: only a copy that is the shipped text plus added lines and files splits. */
 function planSplit(ctx: SkillsContext, name: string): SplitPlan {
   const shipped = shippedSkills(ctx.root).get(name);
@@ -777,8 +805,8 @@ export function splitSkill(ctx: SkillsContext, name: string): SplitResult {
     const base = fs.existsSync(skillFile)
       ? fs.readFileSync(skillFile, "utf8")
       : learnedSkillStub(name);
-    // A block the learned skill already holds was written by a run that died before the restore: not twice.
-    const fresh = plan.sections.filter(sec => !base.includes(sec.block));
+    // A section the learned skill already holds was written by a run that died before the restore: not twice.
+    const fresh = plan.sections.filter(sec => !holdsSection(base, sec.text));
     if (fresh.length > 0) {
       const tmp = `${skillFile}.tmp.${process.pid}`;
       fs.writeFileSync(tmp, `${base.trimEnd()}\n\n${fresh.map(sec => sec.text).join("\n\n")}\n`);
