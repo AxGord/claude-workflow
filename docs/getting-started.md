@@ -7,6 +7,8 @@ description: Install the plugin, then use it two ways (one task, or a queue) and
 
 ## Quick Start
 
+**A git-sourced install has no server yet.** The community catalog and `--marketplace AxGord/claude-workflow` copy the repository's files without `build/` (it is gitignored), and Claude Code installs the dependencies with install scripts off. So `node build/index.js` has no file and the MCP server does not start (`Cannot find module '.../build/index.js'`, seen with `claude plugin install` in a scratch config). Until a built release is published there, install from a local checkout you built, or from the npm package.
+
 ### From Community Plugins (recommended)
 
 The plugin is listed in the [claude-plugins-community](https://github.com/anthropics/claude-plugins-community/) catalog:
@@ -21,10 +23,11 @@ The plugin is listed in the [claude-plugins-community](https://github.com/anthro
 The repository is its own marketplace (`.claude-plugin/marketplace.json`):
 
 ```bash
-/plugin install workflow --marketplace AxGord/claude-workflow
+claude plugin install workflow --marketplace AxGord/claude-workflow
 ```
 
-A local checkout works the same way: `claude plugin marketplace add /path/to/mcp-workflow-engine`, then
+A local checkout works the same way, once it is built (`npm ci && npm run build` in it):
+`claude plugin marketplace add /path/to/mcp-workflow-engine`, then
 `claude plugin install workflow@claude-workflow` — the plugin is then read from the checkout itself (edit, then
 `/reload-plugins`). Install it from a folder that IS the plugin, not through a symlink to it: the hooks module
 (`hooks/plan-pane.tsx`) must resolve inside the marketplace folder.
@@ -66,7 +69,17 @@ Supported marketplace sources: the **npm package** (`claude-mcp-workflow`) and a
 
 ### Uninstall
 
-Run `wf-skills remove` (`scripts/wf-skills` of the plugin), then `/plugin uninstall workflow`. The plugin copies its skills into `~/.claude/skills/` and keeps state in `~/.claude/workflow-state/` and `~/.claude/workflow-pool/`; an uninstall alone removes none of them. `wf-skills remove` takes out the skill copies you did not edit, `--state` the two state directories, `--dry-run` shows what it would do. Details: [Updating and removing the skills](/concepts#updating-and-removing-the-skills).
+Run `wf-skills remove` (`scripts/wf-skills` of the plugin; see "The `wf-*` commands" below), then `/plugin uninstall workflow`. The plugin copies its skills into `~/.claude/skills/` and keeps state in `~/.claude/workflow-state/` and `~/.claude/workflow-pool/`; an uninstall alone removes none of them. `wf-skills remove` takes out the skill copies you did not edit, `--state` the two state directories, `--dry-run` shows what it would do. Details: [Updating and removing the skills](/concepts#updating-and-removing-the-skills).
+
+### The `wf-*` commands
+
+`wf-skills`, `wf-queue`, `wf-run` and `wf-trust` are not on your `PATH` after a plugin install. Run one as `<plugin dir>/scripts/wf-skills` (for a local checkout that is the checkout; `claude plugin list` shows it as `Read from:`), or link the four once; the scripts follow the link to find `build/`:
+
+```bash
+for c in wf-skills wf-queue wf-run wf-trust; do ln -s "<plugin dir>/scripts/$c" ~/.local/bin/$c; done
+```
+
+`npm install -g claude-mcp-workflow` puts them on the `PATH` instead.
 
 ## Recommended CLAUDE.md Snippet
 

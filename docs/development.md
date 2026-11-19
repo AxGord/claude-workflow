@@ -43,6 +43,9 @@ npm run check:leased   # check under pool leases sized to each half (scripts/che
 npm run check:ci # the suite as CI runs it (scripts/check-ci.sh): env -i, an empty HOME, no system git
                  # config, TMPDIR inside it, git user.useConfigOnly (no guessed identity), TZ America/St_Johns (CHECK_CI_TZ),
                  # LANG=C — plus CI's package.json / plugin.json version check
+npm run smoke:fresh   # what a new user gets (scripts/smoke-fresh-install.sh): a fresh clone of HEAD, npm ci, build, the SessionStart hook,
+                      # the MCP server over stdio, the dashboard, wf-run, wf-queue and the docs' commands in a temp HOME; one PASS/FAIL
+                      # line per step, exit 1 on a FAIL; needs the registry (~1 min cold); compares the real ~/.claude before and after
 npm run lint     # typescript-eslint (type-checked); fails only on findings absent from eslint-baseline.json
 npm run lint:baseline  # re-record eslint-baseline.json (after fixing findings, to ratchet down)
 npm run format:check   # biome format check (formatter only; part of check)

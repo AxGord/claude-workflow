@@ -43,6 +43,9 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 /plugin install workflow
 ```
 
+A git-sourced install (the catalog, this repository as a marketplace) copies the files without `build/`, so its MCP
+server does not start yet: use a built local checkout or the npm package (details below).
+
 To remove it, run `wf-skills remove` first (it deletes the unedited skill copies the plugin put in `~/.claude/skills`
 and the staging directories of an interrupted update;
 your edited copies and `learned-*` skills stay), then `/plugin uninstall workflow`.

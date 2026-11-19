@@ -21,3 +21,15 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+
+  # What a new user gets: a fresh clone, `npm ci`, the build, the hook, the server, the docs' commands, in a temp
+  # HOME (scripts/smoke-fresh-install.sh). About a minute on a cold cache.
+  smoke-fresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm run smoke:fresh
