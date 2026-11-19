@@ -233,7 +233,7 @@ The views:
 - **Cost tab** — what the finished task pipelines cost, for a day range (today by default; `from` / `to` date inputs, drawn in the page's theme, with their calendar popup, by its `color-scheme`).
   - Per task:
     - its outcome: `landed` = completed through a `land` state (`land_failed` is not one), `closed` = completed without landing, `failed`, `unknown` = completed on a line that recorded no visits;
-    - review rounds, tokens, USD, and the stages as run (model, tokens, USD).
+    - review rounds (entries into the state `review`, as `wf-calibration` counts; the `review*` states summed, routing aside, only for a workflow with no `review` state), tokens, USD, and the stages as run (model, tokens, USD).
   - The range's totals and USD per landed (landed tasks that recorded tokens).
   - A bar trend of USD per landed over the last 14 days.
   - A task's tokens and USD are its ledger `spend` when it has one (one `spend` row, the transcripts' real figure; a `spend` with unmeasured agents makes the task unmeasured), else the old estimate from `tokens*` at the blended price.

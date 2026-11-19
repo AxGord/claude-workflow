@@ -44,8 +44,13 @@ export function bandOf(difficulty: number | undefined): string {
   return difficulty <= 3 ? "1-3" : difficulty <= 6 ? "4-6" : "7-10";
 }
 
-/** Entries into review states (`review*`, routing states `*_route` aside). */
+/**
+ * A task's review rounds: the entries into the state named `review` when the entry has one (a workflow whose review
+ * is several states, `review_spawn`, `review_warm`, still enters `review` once per round). Only a workflow with no
+ * state of that name falls back to the sum over its `review*` states, routing states `*_route` aside.
+ */
 export function reviewRounds(visits: LedgerEntry["visits"]): number {
+  if (visits?.review !== undefined) return visits.review;
   return Object.entries(visits ?? {})
     .filter(([name]) => name.startsWith("review") && !name.endsWith("_route"))
     .reduce((sum, [, n]) => sum + n, 0);
@@ -159,7 +164,7 @@ export function calibrate(
       if (claimOff) row.claim_off += 1;
       bump(row.outcomes, e.outcome ?? "-");
       if (e.verdict !== undefined) bump(row.verdicts, e.verdict);
-      if (i === roundsAt) row.review_rounds += e.visits?.review ?? reviewRounds(e.visits);
+      if (i === roundsAt) row.review_rounds += reviewRounds(e.visits);
       row.tokens +=
         tokensByStage(
           e,

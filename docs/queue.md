@@ -553,7 +553,7 @@ A PreToolUse(Bash) hook (`hooks/read-only-gate.sh`) refuses a Bash call made by 
 
 ## Calibration report
 
-`wf-calibration [--since DATE] [--project PATH] [--findings-key KEY] [--json]` folds `ledger.jsonl` per project × workflow × difficulty band of the FINAL difficulty (1-3, 4-6, 7-10, `-`) × stage × model/effort: tasks, review rounds (entries into `review*` states), escalations, tokens, outcomes, verdicts. Lines without stage data count under stage `-`.
+`wf-calibration [--since DATE] [--project PATH] [--findings-key KEY] [--json]` folds `ledger.jsonl` per project × workflow × difficulty band of the FINAL difficulty (1-3, 4-6, 7-10, `-`) × stage × model/effort: tasks, review rounds (entries into the state `review`; the `review*` states summed, routing aside, only for a workflow with no `review` state), escalations, tokens, outcomes, verdicts. Lines without stage data count under stage `-`.
 
 - Task-level figures count once per task, on its first stage row.
 - `claim` counts tasks whose final difficulty is >=2 off the claim.
