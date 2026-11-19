@@ -12,8 +12,7 @@ import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import {
   STATUS_TOOL,
-  dispatcherTaskSessions,
-  dispatcherWakeLines,
+  dispatcherSplit,
   drivenByRootAgent,
   pickUpConversation,
   stepNote,
@@ -77,18 +76,8 @@ export async function pickupReport(
       s => s.context.claude_code_pid === pid,
     );
     // under a dispatcher agent only the task sessions of its `tasks` key (and what runs below them) are its to wake
-    const taskIds = dispatcherTaskSessions(root);
-    const underTask = (s: SessionState): boolean => {
-      for (let cur: SessionState | undefined = s; cur && cur.session_id !== root.session_id; ) {
-        if (taskIds.has(cur.session_id)) return true;
-        cur = cur.parent_session_id ? byId.get(cur.parent_session_id) : undefined;
-      }
-      return false;
-    };
-    const its = subs.filter(underTask);
-    const dispatcher = dispatcherWakeLines(root, "    ", its.length);
+    const { lines: dispatcher, mine } = dispatcherSplit(root, subs, byId, "    ");
     if (dispatcher.length > 0) lines.push(...dispatcher);
-    const mine = dispatcher.length > 0 ? subs.filter(s => !underTask(s)) : subs;
     if (mine.length > 0) {
       lines.push(
         "    sessions below it continue as they are — wake each sub-agent (only you can: SendMessage is your tool); one no agent drives is yours; an earlier visit's agent of a `driver:` workflow's state is not woken:",

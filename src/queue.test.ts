@@ -1872,6 +1872,29 @@ describe("queue archive", () => {
       expect(fs.readFileSync(file, "utf8")).toBe(before);
     });
   });
+  describe("lessons_every (ENG-DISPATCHER-FOLLOWUPS item 6)", () => {
+    const withKey = (key: string): string => {
+      const file = yamlQueue("  - id: A\n    text: x\n    difficulty: 3\n");
+      if (key !== "")
+        fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("tasks:", `${key}\ntasks:`));
+      return file;
+    };
+    it("a value that is not a whole number of lands refuses the pick, dry-run too, and writes nothing", async () => {
+      for (const bad of ["often", "0", "-2", "2.5"]) {
+        const file = withKey(`lessons_every: ${bad}`);
+        const before = fs.readFileSync(file, "utf8");
+        await expect(pickQueue(file)).rejects.toThrow("lessons_every");
+        await expect(pickQueue(file, { dryRun: true })).rejects.toThrow("lessons_every");
+        expect(fs.readFileSync(file, "utf8")).toBe(before);
+      }
+    });
+    it("a whole number, or no key, picks as before", async () => {
+      for (const key of ["lessons_every: 3", ""]) {
+        const file = withKey(key);
+        expect((await pickQueue(file)).admitted.map(a => a.id)).toEqual(["A"]);
+      }
+    });
+  });
   it("archive then pick admits a line whose after: is archived", async () => {
     const file = yamlQueue(FILE);
     const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });

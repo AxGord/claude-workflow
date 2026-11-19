@@ -474,8 +474,15 @@ dispatcher:
 - The `transition` reply that leaves the `after` state repeats the block, also through an exec chain. The main conversation builds the queue, then spawns the agent instead of acting on the `dispatch` prompt.
 - The block is kept in the session's context as `dispatcher_call`; a fresh dispatcher is spawned from `status({session_id, key: "dispatcher_call"})`.
 - The `after` state is kept beside it as `dispatcher_after` (absent when `dispatcher:` declares no `after`): until an agent is linked to the session or the session has left that state, the main conversation still drives it and the pickup applies no dispatcher rule.
-- A second `start` of a `context.task` that already runs under that session is refused and names the running session, so a dispatcher that repeats a `dispatch` after a restart starts nothing twice.
-- After a Claude restart the SessionStart pickup names the dispatcher's `SendMessage` instead of the task sessions of its `tasks` key and what runs below them. A sub-session `tasks` does not name is still listed for the main conversation. Before the session has left `after` with no agent linked, the pickup is unchanged.
+- A second `start` of a `context.task` that already runs under that session is refused and names the running session, so a dispatcher that repeats a `dispatch` after a restart starts nothing twice. When that session's workflow has a `driver:` the refusal also names its `driver_call` key; when it has none (its task is driven by the main conversation) it says so instead of naming a key the session never had.
+- After a Claude restart the SessionStart pickup names the dispatcher's `SendMessage` instead of the task sessions of its `tasks` key and what runs below them.
+  - A sub-session `tasks` does not name is still listed for the main conversation.
+  - The exception is a task session the dispatcher started and died before it wrote `tasks` (a direct child with a `task` and a `driver_call`; a task the main conversation drives itself stays listed to it): it is the dispatcher's, and its repeated `dispatch` finds it through the refusal above.
+  - Before the session has left `after` with no agent linked, the pickup is unchanged.
+- The `resume` reply of that session says the same (one owner, `dispatcherSplit`): the dispatcher's `SendMessage`, then only the sub-sessions its `tasks` key does not name.
+- `dispatch` delivers its full prompt on every visit (`full_on_revisit`). `status` always answers with the full prompt; the one-line `Revisit #N` is the reply of the `transition` that re-enters a state already visited.
+  - A dispatcher agent that acts on the reply of the transition that brings it back to `dispatch` would otherwise have no recipe in front of it and guess the task workflow of an admitted line.
+  - A project heir that overrides `dispatch` keeps the flag, or its own `revisit_prompt` carries the recipe.
 - Unlike `driver:` it records no `agent_step` and changes no wake rule of the session's children. A workflow declares `driver:` or `dispatcher:`, not both; an unknown `after` state fails the load.
 
 **What the agent does** (`templates/drivers/dispatch-driver.md`)
@@ -483,6 +490,7 @@ dispatcher:
 - `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`.
 - `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`. It absorbs `WAITING` lines and notifications, and relays a stray worker or reviewer line to that task's driver.
 - A driver that ended with no last line is pinged once, then re-spawned from the task session's `driver_call`.
+- A task session that ended `stopped` is not the dispatcher's to route: its driver's `NEEDS-PARENT` line goes to the main conversation, the slot stays taken, and `stop` (which ends the whole batch session) is taken only on the main conversation's word.
 - It decides nothing and has no `abort`, `delete`, `queue_mark`, `queue_edit` or `queue_add`.
 
 **What reaches the main conversation**, each as one `SendMessage` to `main` while the agent keeps running (Claude Code accepts a single `SubagentHandback` per result and refuses the second, so the dispatcher never uses it for these):
@@ -490,7 +498,7 @@ dispatcher:
 | Message | When | The main conversation's answer |
 |---|---|---|
 | a driver's `NEEDS-PARENT …` line, verbatim | a task needs a decision | `SendMessage` to the dispatcher, starting `task=<ID>:`; it relays to that driver |
-| `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, default 5) | judge each line as the `collect` prompt says for a landed task |
+| `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
 
 - The lessons are copied, never judged or turned into queue lines by the agent. The last block handed is also in the context key `lessons_handed`.
@@ -498,10 +506,18 @@ dispatcher:
 - A worker's, reviewer's or driver's line that reaches the main conversation is sent verbatim to the dispatcher.
 - The turn-end line `DISPATCHING session=<D> running=<n>` is plain text, never sent. A `[handback-send-enforce]` prompt is answered with that line only.
 - Every end of the dispatcher's turn reaches the main conversation as a task-notification, which it ignores. No way to end a background agent's turn silently was found: it is a measured cost of the design, one wake of the main context per turn.
+
 - A blocked bundled task has no route back to `work` (`blocked` offers `close` and `stop`): the main conversation's decision is `close`, and the line stays failed.
   - The engine's only retry of it is `queue_mark` to `running` with `retry: true` (failed to running, difficulty +1), which starts no session: the pick admits pending lines only, so no route that starts a retried line under a dispatcher is defined.
 - A `close` refused by an orphan child session of the worker (its agent gone) is cleared by the main conversation with `abort` on that child; the dispatcher and the drivers have no `abort` and hand back a NEEDS-PARENT naming it.
-- Rotation: from its 4×N-th land on, the `LESSONS` line ends `rotate=due`. The main conversation may then spawn a fresh dispatcher from `dispatcher_call` and send the old one `RETIRE new=<agent id>`; the old one only relays its drivers' late lines.
+- Rotation: the `LESSONS` line ends `rotate=due` when the lands have reached or passed a multiple of 4×N since the previous `LESSONS` message.
+  - The lands are counted in the context key `lands_done`, which the agent updates in each `slot_free` `set`, not from its memory; `lessons_lands` holds the count at the previous message, so a message sent off the exact multiple still rotates.
+  - The main conversation may then spawn a fresh dispatcher from `dispatcher_call` and send the old one `RETIRE new=<agent id>`; the old one only relays its drivers' late lines.
+
+**Switching it on mid-campaign**
+
+- Task drivers that the main conversation spawned before the switch keep reporting to the main conversation for their whole life (their `LANDED` and `NEEDS-PARENT` lines are relayed to it, a measured share of its cost in a 10-land trial). The engine has no way to hand a running driver to a dispatcher: switch on an empty window (no task running), or let the old ones finish first.
+- A second root session on a scratch queue makes the user's plan pane show that queue: a probe should use the project's own queue or end the scratch session before looking at the pane.
 
 Not verified by a live run yet: a `SendMessage` between two dispatchers. A live probe verified where a task driver's report goes while the dispatcher has handed back (a second task's LANDED reached the dispatcher while a NEEDS-PARENT was open) and a spawn at the fourth level.
 

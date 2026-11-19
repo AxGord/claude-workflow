@@ -16,7 +16,7 @@ import { Loader } from "./loader.js";
 import { pickupReport } from "./session-cli.js";
 import { dispatcherHolds, dispatcherWakeLines } from "./takeover.js";
 import { InMemoryStorage, cleanupDir, createFixtureDir } from "./test-helpers.js";
-import { registerTools } from "./tools.js";
+import { formatResume, registerTools } from "./tools.js";
 
 // ENG-DISPATCHER-DRIVER: an opt-in dispatcher agent over the task drivers. Off, nothing changes.
 
@@ -223,7 +223,8 @@ describe("the opt-in is on: start answers with the dispatcher's DRIVER block", (
     expect(twin.text).toContain(
       `task "T1" already runs under ${d} as session ${p} (no agent linked)`,
     );
-    expect(twin.text).toContain(`status({ session_id: "${p}", key: "driver_call" })`);
+    // ENG-DISPATCHER-FOLLOWUPS: the task workflow here has no `driver:`, so there is no driver call to name
+    expect(twin.text).not.toContain("driver_call");
     expect(m.storage.readAll()).toHaveLength(2);
     const other = await m.call("start", { ...start, context: { task: "T2" } });
     expect(other.isError).toBeUndefined();
@@ -351,7 +352,7 @@ describe("the shipped dispatcher agent type", () => {
 
 describe("a restart: the pickup wakes the dispatcher only", () => {
   /** A dispatcher root with task T1 (driver1, a worker below it) and a session `tasks` does not name (rev1). */
-  async function restarted(o: { link: boolean; left: boolean }) {
+  async function restarted(o: { link: boolean; left: boolean; resume?: boolean }) {
     process.env.WF_T_DISP = "1";
     const m = fixture();
     const d = sid((await m.call("start", { workflow: "disp", reply: "id" })).text);
@@ -389,7 +390,10 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
         claude_session_id: "conv",
         suspended_at: "2026-01-01T00:00:00.000Z",
       }));
-    return { ...m, d, text: await pickupReport(m.storage, "conv", process.pid) };
+    const text = o.resume
+      ? formatResume(await m.engine.resume(d))
+      : await pickupReport(m.storage, "conv", process.pid);
+    return { ...m, d, text };
   }
 
   it("names the dispatcher's SendMessage and neither the task driver nor the worker below it", async () => {
@@ -407,6 +411,62 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
     const { text } = await restarted({ link: true, left: true });
     expect(text).toContain("wake each sub-agent");
     expect(text).toContain(`SendMessage({ to: "rev1"`);
+  });
+
+  it("the `resume` reply wakes the dispatcher only, as the pickup does (ENG-DISPATCHER-FOLLOWUPS)", async () => {
+    const { text, d } = await restarted({ link: true, left: true, resume: true });
+    expect(text).toContain(
+      `DISPATCHER — a dispatcher agent drives ${d}: wake ONLY it; the 2 session(s) of its \`tasks\` key and below them`,
+    );
+    expect(text).toContain(`SendMessage({ to: "disp1", message: "Continue — the run was restarted`);
+    expect(text).not.toContain("driver1");
+    expect(text).not.toContain("worker1");
+    // a sub-session `tasks` does not name stays listed
+    expect(text).toContain(`SendMessage({ to: "rev1"`);
+  });
+
+  it("a task session with a driver started but not yet in `tasks` is the dispatcher's too; one without a driver stays listed to the conversation (ENG-DISPATCHER-FOLLOWUPS)", async () => {
+    process.env.WF_T_DISP = "1";
+    const m = fixture({
+      ...FIXTURE,
+      drv: {
+        initial: "claim",
+        driver: { model: "haiku", effort: "low", prompt_ref: "task-driver" },
+        states: {
+          claim: { prompt: "claim", transitions: { go: "done" } },
+          done: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const d = sid((await m.call("start", { workflow: "disp", reply: "id" })).text);
+    await m.call("transition", { session_id: d, transition: "ready" });
+    const child = async (workflow: string, task: string) =>
+      sid(
+        (
+          await m.call("start", {
+            workflow,
+            reply: "id",
+            parent_session_id: d,
+            context: { task },
+          })
+        ).text,
+      );
+    const p = await child("drv", "T9");
+    const q = await child("task", "T8");
+    await m.engine.linkAgent(p, "driver9");
+    await m.engine.linkAgent(q, "main8");
+    await m.engine.linkAgent(d, "disp1");
+    for (const id of [d, p, q])
+      await m.storage.update(id, s => ({
+        ...s!,
+        claude_session_id: "conv",
+        suspended_at: "2026-01-01T00:00:00.000Z",
+      }));
+    const text = await pickupReport(m.storage, "conv", process.pid);
+    expect(m.storage.read(d)!.context.tasks).toBeUndefined();
+    expect(text).toContain("wake ONLY it; the 1 session(s)");
+    expect(text).not.toContain("driver9");
+    expect(text).toContain(`SendMessage({ to: "main8"`);
   });
 
   it("past the `after` state with no agent linked: the call to spawn it from", async () => {

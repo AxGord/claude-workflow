@@ -6,7 +6,7 @@ import type { SessionState } from "./types.js";
 import { isPidAlive } from "./process.js";
 import { Executor } from "./executor.js";
 import { currentStep, listedStanding, type IsRoute } from "./agent-link.js";
-import { DISPATCHER_AFTER_KEY, DISPATCHER_CALL_KEY } from "./driver.js";
+import { DISPATCHER_AFTER_KEY, DISPATCHER_CALL_KEY, DRIVER_CALL_KEY } from "./driver.js";
 
 export const RESUME_TOOL = "mcp__plugin_workflow_wf__resume";
 export const STATUS_TOOL = "mcp__plugin_workflow_wf__status";
@@ -241,6 +241,40 @@ export function dispatcherWakeLines(root: SessionState, indent: string, below: n
     `${indent}  SendMessage({ to: "${root.agent_id}", message: "Continue — the run was restarted: call ${STATUS_TOOL}({ session_id: '${id}' }) — NOT start(), NOT resume() — then wake each task driver of its \`tasks\` key as your instructions' § After a restart say." })`,
     `${indent}  that SendMessage fails → spawn a fresh one from ${STATUS_TOOL}({ session_id: '${id}', key: '${DISPATCHER_CALL_KEY}' }), link_agent it, and send it the same message`,
   ];
+}
+
+/**
+ * The sessions below a root `subs` split for the conversation that picked the root up: under a dispatcher
+ * agent (`dispatcherHolds`) the task sessions of its `tasks` key and what runs below them are the agent's to
+ * wake — and a child of the root that carries a `task` but is not in `tasks` yet (the dispatcher died between `start` and
+ * `dispatched`) — (`lines` says so, `mine` leaves them out); any other root leaves `lines` empty and `mine` whole.
+ * One owner of the split for the SessionStart pickup and the `resume` reply.
+ */
+export function dispatcherSplit(
+  root: SessionState,
+  subs: readonly SessionState[],
+  byId: ReadonlyMap<string, SessionState>,
+  indent: string,
+): { lines: string[]; mine: SessionState[] } {
+  const taskIds = dispatcherTaskSessions(root);
+  const underTask = (s: SessionState): boolean => {
+    for (let cur: SessionState | undefined = s; cur && cur.session_id !== root.session_id; ) {
+      if (taskIds.has(cur.session_id)) return true;
+      // a task session the dispatcher started and died before it wrote `tasks` is still its own: its repeated `dispatch` finds it
+      // (only with a driver call: a task the main conversation drives itself stays listed to it)
+      if (
+        cur.parent_session_id === root.session_id &&
+        typeof cur.context.task === "string" &&
+        typeof cur.context[DRIVER_CALL_KEY] === "string"
+      )
+        return true;
+      cur = cur.parent_session_id ? byId.get(cur.parent_session_id) : undefined;
+    }
+    return false;
+  };
+  const its = subs.filter(underTask);
+  const lines = dispatcherWakeLines(root, indent, its.length);
+  return { lines, mine: lines.length > 0 ? subs.filter(s => !underTask(s)) : [...subs] };
 }
 
 /**

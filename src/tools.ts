@@ -18,7 +18,14 @@ import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } f
 import { withProgress, type ProgressSink } from "./progress.js";
 import { activeParents, staleNote } from "./stale.js";
 import { scopeVerdict } from "./session-scope.js";
-import { RESUME_TOOL, activeSubtree, drivenByRootAgent, subAgentLines, where } from "./takeover.js";
+import {
+  RESUME_TOOL,
+  activeSubtree,
+  dispatcherSplit,
+  drivenByRootAgent,
+  subAgentLines,
+  where,
+} from "./takeover.js";
 import {
   MARK_TARGETS,
   QueueError,
@@ -278,12 +285,15 @@ export function formatResume(result: ResumeResult): string {
   const children = result.suspendedChildren;
   const byId = new Map(children.map(s => [s.session_id, s]));
   const parents = new Map([...byId, [result.session.session_id, result.session]]);
-  if (children.length > 0) {
+  // under a dispatcher agent only it is woken: the task sessions of its `tasks` key are its to wake
+  const { lines: dispatcher, mine } = dispatcherSplit(result.session, children, parents, "");
+  if (dispatcher.length > 0) parts.push("", ...dispatcher);
+  if (mine.length > 0) {
     parts.push(
       "",
       "SUSPENDED SUB-AGENT SESSIONS — wake each agent (agent → session → state), with the message below it; one no agent drives is yours; an earlier visit's agent of a `driver:` workflow's state is not woken:",
       ...subAgentLines(
-        children,
+        mine,
         RESUME_TOOL,
         "  ",
         s => drivenByRootAgent(s, result.status.sessionId, byId),

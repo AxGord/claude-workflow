@@ -1207,6 +1207,20 @@ export function archiveAfterDays(queue: Queue): number | undefined {
 }
 
 /**
+ * The header's `lessons_every: N` (a whole number ≥ 1): how many lands the dispatcher agent lets pass between its LESSONS
+ * messages (it reads the key from the file, so the pick is where a bad value is refused); absent = the agent's default.
+ */
+export function lessonsEvery(queue: Queue): number | undefined {
+  const raw = queue.header.lessons_every?.trim();
+  if (raw === undefined || raw === "") return undefined;
+  if (!/^[1-9]\d*$/.test(raw))
+    throw new QueueError(
+      `${queue.file}: lessons_every: "${raw}" is not a whole number of lands (1 or more)`,
+    );
+  return Number(raw);
+}
+
+/**
  * Pick under the lock and mark every admitted task running; `dryRun` reads without the lock or a write.
  * With the header's `archive_after_days: N`, the done / failed lines that ended more than N days ago
  * move to the archive first, under the same lock (what `archiveQueue` moves; no line without `ended:`).
@@ -1215,6 +1229,7 @@ export async function pickQueue(
   file: string,
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<PickResult> {
+  lessonsEvery(readQueue(file));
   if (opts.dryRun === true) return { ...planPick(readQueue(file)), dryRun: true };
   return withQueueLock(file, () => {
     const days = archiveAfterDays(readQueue(file));

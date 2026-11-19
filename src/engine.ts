@@ -329,10 +329,15 @@ export class Engine {
             s.stack.length > 0 &&
             s.context.task === task,
         );
-      if (twin)
+      if (twin) {
+        const call =
+          typeof twin.context[DRIVER_CALL_KEY] === "string"
+            ? `its driver's call is status({ session_id: "${twin.session_id}", key: "${DRIVER_CALL_KEY}" })`
+            : "its workflow declares no `driver:`, so it has no driver call: the main conversation drives it";
         throw new Error(
-          `task "${task}" already runs under ${parentSessionId} as session ${twin.session_id} (${twin.agent_id ? `agent ${twin.agent_id}` : "no agent linked"}): start no second one — its driver's call is status({ session_id: "${twin.session_id}", key: "${DRIVER_CALL_KEY}" })`,
+          `task "${task}" already runs under ${parentSessionId} as session ${twin.session_id} (${twin.agent_id ? `agent ${twin.agent_id}` : "no agent linked"}): start no second one — ${call}`,
         );
+      }
     }
     const level =
       priority ??

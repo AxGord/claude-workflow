@@ -182,6 +182,8 @@ states:
       report: report
 
   dispatch:
+    # The reply of the transition that re-enters this state is the one-line `Revisit #N` (`status` answers in full): the recipe rides on every visit.
+    full_on_revisit: true
     prompt: |-
       The pick admitted (and set running in {{context.queue_file}}) one line per free slot, `ID model effort repo workflow difficulty kind` (`kind` is `feature` when the line has none):
       {{stdout}}

@@ -29,7 +29,9 @@ Follow the prompt's steps for each admitted line, with these rules:
   `link_agent({session_id: P, agent_id: <the id the Agent call returned>})`.
 - `start` refused with `task "<ID>" already runs under … as session <P>` → that task was started before
   (a restart, a context reset): start nothing. The message names its agent; `no agent linked` → spawn its
-  driver from `status({session_id: P, key: "driver_call"})` exactly, then `link_agent`.
+  driver from `status({session_id: P, key: "driver_call"})` exactly, then `link_agent`. A refusal that says
+  the workflow declares no `driver:` names no `driver_call` (the session has none): main drives that task;
+  keep it in `tasks` as `ID=P driver=main` and spawn nothing.
 - A `start` answer WITHOUT a DRIVER block (a task workflow with no `driver:`) → you never drive a task
   session: keep it in `tasks` as `ID=P driver=main` and, after the transition below, hand back
   `NEEDS-PARENT task=<ID> session=<P> reason=task workflow has no driver: main drives it see=state dispatch`.
@@ -45,7 +47,8 @@ then needs nothing.
   field differently, e.g. `slice=<ID>`): the task session ended. Do NOT do what the prompt says about its
   `lessons=` tail or `decided=` file (a queue line, a memory note, an audit): that is main's, later.
   ONE call: `transition({session_id: D, transition: "slot_free", set: {tasks: "<without that task>",
-  lessons_pending: "<the old value, a newline, this line verbatim>"}})`. The reply is the next `dispatch`
+  lessons_pending: "<the old value, a newline, this line verbatim>", lands_done: "<the old value, 0 when
+  absent, plus 1>"}})` (count a `LANDED` line only; `CLOSED` adds nothing). The reply is the next `dispatch`
   (new lines admitted: start them first) or `collect`. Then, when `lessons_pending` holds N or more
   `LANDED` lines → hand back LESSONS (§ Hand-backs). Launch first, lessons second.
 - **`NEEDS-PARENT task=<ID> session=<P> …`**: hand that line to main, verbatim and alone (§ Hand-backs).
@@ -73,6 +76,9 @@ then needs nothing.
   WITHOUT an agent is not yours to advance: hand back `NEEDS-PARENT task=<ID> session=<P> reason=stale, no agent see=state collect`.
 - **Routing**: `slot_free` only on a LANDED or CLOSED line. `stalled` only when `tasks` is empty AND the
   last pick admitted nothing. `stop` only on main's word. Nothing ended → no transition; end the turn.
+- **A task that ended `stopped`**: the prompt's "a task session ended `stopped` → `stop`" is for a dispatcher that
+  drives the tasks itself, not for you. Its driver's last line is a `NEEDS-PARENT … see=state stopped`: hand it
+  to main like any other, keep the task's slot, take no transition. `stop` follows only when main says so.
 
 ## States that are not yours
 `paused`, `pick_failed`, `cross_check`, `report`, any state a project added, a terminal: take no transition.
@@ -86,14 +92,17 @@ anywhere in this file means this `SendMessage`.
 1. A `NEEDS-PARENT …` line: a driver's, verbatim and alone, or one of yours named above. One line per message.
 2. `LESSONS lands=<n> session=<D>`, then the lines of `lessons_pending`, verbatim, one per line. They are
    the drivers' own last lines: copy them, never shorten, merge, judge or turn one into a queue line.
-   From your 4×N-th land since your own start on, the first line ends ` rotate=due`. A `LANDED` line that
+   When `lands_done` (the context key, never your memory) has reached or passed a multiple of 4×N since the previous
+   LESSONS message — whole(`lands_done` / 4×N) is greater than whole(`lessons_lands` / 4×N), `lessons_lands` 0 when
+   absent — the first line ends ` rotate=due` (the message may go off the exact multiple). A `LANDED` line that
    ends `lessons=filed N, triage M triage_file=<path>` is copied whole: main reads that file, in a batch, with
    `wf-queue <queue> --lessons-take --triage <path>` (never per land, never by hand).
 3. `HANDOVER session=<D> state=<state> reason=<one line: the pick's last line, or the state's name>`, then
    the lines of `lessons_pending` when it is not empty.
-Before a LESSONS or HANDOVER message, two calls, in this order:
+Before a LESSONS or HANDOVER message, these calls, in this order:
 `context_set({session_id: D, key: "lessons_handed", value: "<the whole message>"})`, then
-`context_set({session_id: D, key: "lessons_pending", value: ""})`. The message survives in D's context if the
+`context_set({session_id: D, key: "lessons_pending", value: ""})`; for a LESSONS message a third,
+`context_set({session_id: D, key: "lessons_lands", value: "<lands_done>"})`. The message survives in D's context if the
 `SendMessage` is lost; main reads it with `status({session_id: D, key: "lessons_handed"})`.
 
 Two answers of main's that have no route back to work, and who ends what:
