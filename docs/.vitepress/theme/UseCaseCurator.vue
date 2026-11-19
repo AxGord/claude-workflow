@@ -134,6 +134,7 @@ const pct = (n: number, of: number): string => (of === 0 ? "—" : `${Math.round
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
   column-gap: 8px;
+  align-content: start;
   padding: 10px 12px;
   border: 1px solid var(--panel-border);
   border-radius: 12px;

@@ -415,6 +415,7 @@ All prompts support `{{mustache}}` templates. Context values are available every
 - `{{root_workflow}}` (the workflow at the stack root, e.g. `subagent`);
 - `{{session_id}}` and `{{parent_session_id}}` (empty at the root);
 - `{{project_root}}` (the main checkout of the session's cwd: a linked worktree gives its main worktree, a cwd outside a repo gives the cwd; fixed when the session starts, so a worktree removed mid-run still renders it; a session started before it existed maps its cwd at each render; also the exec env `WF_PROJECT_ROOT`; only sessions of a restarted server render it);
+  - `start` refuses `project_root` as an initial context key, but a later `context_set` of it is accepted: the variable and `WF_PROJECT_ROOT` follow the key from then on.
 - `{{stale_sessions}}` (one `STALE:` line per stale session below this one — § Stall detection — or `none`; computed only when a template names it).
 
 After action execution, result variables are also available:

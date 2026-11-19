@@ -907,6 +907,33 @@ describe("Engine — session cwd, ids, outcome, accounting (ENG-1a)", () => {
     ).rejects.toThrow('"project_root" is the engine\'s');
   });
 
+  it("a mid-session context_set of project_root is not refused: {{project_root}} and WF_PROJECT_ROOT follow the key", async () => {
+    setup({
+      moved: {
+        initial: "wait",
+        states: {
+          wait: { prompt: "root={{project_root}}", transitions: { next: "probe" } },
+          probe: {
+            type: "exec",
+            command: 'printf %s "$WF_PROJECT_ROOT"',
+            on_success: "show",
+            on_error: "show",
+            success_prompt: "{{stdout}}|{{project_root}}",
+          },
+          show: { prompt: "show", transitions: { done: "end" } },
+          end: { terminal: true, outcome: "complete" },
+        },
+      },
+    });
+    const bare = tmpDir();
+    const { sessionId } = await engine.start("moved", undefined, undefined, bare);
+    expect(engine.getStatus(sessionId).prompt).toBe(`root=${bare}`);
+    await engine.setContext(sessionId, "project_root", "/elsewhere");
+    expect(engine.getStatus(sessionId).prompt).toBe("root=/elsewhere");
+    const r = await engine.transition(sessionId, "next");
+    expect(r.prompt.trim()).toBe("/elsewhere|/elsewhere");
+  });
+
   it("a session stored without project_root maps its cwd when it renders", async () => {
     setup({
       old: {

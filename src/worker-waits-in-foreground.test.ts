@@ -71,7 +71,9 @@ describe("an agent waits in the foreground and never ends a turn with live work"
         /in the FOREGROUND with the longest Bash timeout \(600000\), never with `run_in_background`/,
       );
       expect(brief).toMatch(
-        /Never start a Monitor for a command you wait for\. When the harness moves a foreground call to the background at its timeout, TaskStop it, or wait on it in FOREGROUND calls/,
+        readOnly
+          ? /Never start a Monitor for a command you wait for\. When the harness moves a foreground call to the background at its timeout, TaskStop it before any end of turn\./
+          : /Never start a Monitor for a command you wait for\. When the harness moves a foreground call to the background at its timeout, TaskStop it, or wait on it in FOREGROUND calls/,
       );
       expect(brief).toMatch(
         /Never end your turn while anything you started is alive, mid-run as well as at your last line/,
@@ -82,6 +84,7 @@ describe("an agent waits in the foreground and never ends a turn with live work"
       if (readOnly) {
         expect(brief).not.toContain("nohup");
         expect(brief).not.toContain("L.done");
+        expect(brief).not.toContain("the until chain");
         expect(brief).toMatch(
           /read-only gate refuses a redirect, `\$\( \)` and `sleep`, so you cannot detach a command or loop on a marker: a command that would outlast one call .* you do not run; name it in your verdict as unverified/,
         );
