@@ -490,7 +490,10 @@ dispatcher:
 **What the agent does** (`templates/drivers/dispatch-driver.md`)
 
 - `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`.
-- `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`. It absorbs `WAITING` lines and notifications, and relays a stray worker or reviewer line to that task's driver.
+- `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`.
+- `collect`, on main's message `lines added` (sent when `queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…`) it takes `refill` with no `set`: the pick runs again without a land.
+  - A project heir with its own `collect` must add `refill: pick` to its transitions (the state is replaced whole); without it the transition is refused and the dispatcher hands back `NEEDS-PARENT`.
+  - `collect` absorbs `WAITING` lines and notifications, and relays a stray worker or reviewer line to that task's driver.
 - A driver that ended with no last line is pinged once, then re-spawned from the task session's `driver_call`.
 - A task session that ended `stopped` is not the dispatcher's to route: its driver's `NEEDS-PARENT` line goes to the main conversation, the slot stays taken, and `stop` (which ends the whole batch session) is taken only on the main conversation's word.
 - It decides nothing and has no `abort`, `delete`, `queue_mark`, `queue_edit` or `queue_add`.

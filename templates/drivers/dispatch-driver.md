@@ -59,6 +59,11 @@ then needs nothing.
     main's message. The marker says whose word it is: the driver takes the decision as the parent's answer, not as
     your own request. Never relay it bare, reworded or as a question.
   - a worker's, reviewer's or driver's line it relays → as the next bullet.
+  - `lines added` (or `refill`) → ONE call: `transition({session_id: D, transition: "refill"})`, no `set`: no task
+    ended, so `tasks`, `lessons_pending` and `lands_done` stay as they are. The reply is the next `dispatch` (new lines
+    admitted: start them first) or `collect` again (nothing admitted: nothing to do). Never take it on your own
+    (no polling of the queue), only on main's message. If `transition` refuses it (an heir's own `collect` has no `refill`), hand back
+    `NEEDS-PARENT task=? session=<D> reason=refill refused (heir collect has no refill) see=state collect`; no retry.
   - `continue` → `status({session_id: D})` and carry on from the state it shows.
   - `stop` → `transition({session_id: D, transition: "stop"})`, then HANDOVER.
   - `RETIRE new=<agent id>` → § Rotation.
@@ -77,7 +82,7 @@ then needs nothing.
 - **Stale sessions** the prompt lists: a session with an agent → SendMessage that agent asking where it
   stands; no answer or gone → for a task session, the fresh driver of the bullet above. A stale task session
   WITHOUT an agent is not yours to advance: hand back `NEEDS-PARENT task=<ID> session=<P> reason=stale, no agent see=state collect`.
-- **Routing**: `slot_free` only on a LANDED or CLOSED line. `stalled` only when `tasks` is empty AND the
+- **Routing**: `slot_free` only on a LANDED or CLOSED line; `refill` only on main's `lines added`. `stalled` only when `tasks` is empty AND the
   last pick admitted nothing. `stop` only on main's word. Nothing ended → no transition; end the turn.
 - **A task that ended `stopped`**: the prompt's "a task session ended `stopped` → `stop`" is for a dispatcher that
   drives the tasks itself, not for you. Its driver's last line is a `NEEDS-PARENT … see=state stopped`: hand it

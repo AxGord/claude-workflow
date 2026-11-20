@@ -36,6 +36,8 @@ import {
   formatPickSummary,
   markQueue,
   pickQueue,
+  planPick,
+  readQueue,
   resolveQueueFile,
   setQueueHeaderKey,
   setQueueWindow,
@@ -351,6 +353,21 @@ interface ToolExtra {
     method: "notifications/progress";
     params: { progressToken: string | number; progress: number; message?: string };
   }) => Promise<void>;
+}
+
+/**
+ * After a queue write: the lines a pick would admit into the free slots right now. A running batch session
+ * admits only on a land's `slot_free`, so the caller is told to send the dispatcher a `refill`.
+ */
+function refillHint(file: string): string {
+  try {
+    const n = planPick(readQueue(file)).admitted.length;
+    return n > 0
+      ? `\nnote: a pick would admit ${n} line(s) now; a running batch session picks only on a land; tell its dispatcher "lines added" (transition \`refill\` at \`collect\`).`
+      : "";
+  } catch {
+    return "";
+  }
 }
 
 export function registerTools(
@@ -1294,7 +1311,15 @@ export function registerTools(
           ...(args.force !== undefined ? { force: args.force } : {}),
           ...(args.from !== undefined ? { from: args.from } : {}),
         });
-        return { content: [{ type: "text", text: formatMark(r) }] };
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                formatMark(r) + (args.to === "promoted" ? refillHint(resolveQueueFile(args)) : ""),
+            },
+          ],
+        };
       } catch (err) {
         return queueError(err);
       }
@@ -1340,7 +1365,7 @@ export function registerTools(
           content: [
             {
               type: "text",
-              text: `${r.id}: added at line ${r.lineNo}${made}${(r.warnings ?? []).map(w => `\nwarning: ${w}`).join("")}`,
+              text: `${r.id}: added at line ${r.lineNo}${made}${(r.warnings ?? []).map(w => `\nwarning: ${w}`).join("")}${refillHint(file)}`,
             },
           ],
         };
@@ -1385,7 +1410,10 @@ export function registerTools(
           content: [
             {
               type: "text",
-              text: r.task + (r.warnings ?? []).map(w => `\nwarning: ${w}`).join(""),
+              text:
+                r.task +
+                (r.warnings ?? []).map(w => `\nwarning: ${w}`).join("") +
+                refillHint(resolveQueueFile(args)),
             },
           ],
         };

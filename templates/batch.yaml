@@ -257,11 +257,15 @@ states:
       - a task session reached its terminal (`done` / `closed` / `released`) → update `tasks`, then
         `slot_free` (the pick runs again and refills the freed slot).
       - a task session ended `stopped` → `stop`.
+      - the main conversation says lines were added, unparked, re-prioritised or freed of their `after:` while a slot is
+        free (`queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…` then) → `refill` (the pick runs
+        again without a land; admits nothing when no slot is free or no line is admissible, and `collect` stays). Never poll for it.
       - task sessions still running, none ended → END your turn here, no transition.
       - none of YOURS runs and the last pick admitted nothing (exit 10: the running tasks left belong to
         other sessions, or block by overlap) → `stalled`.
     transitions:
       slot_free: pick
+      refill: pick
       stalled: cross_check
       stop: report
 
