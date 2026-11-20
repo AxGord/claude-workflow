@@ -64,6 +64,8 @@ The log keeps no priority and no age for a lease, so the rows here show none; th
 
 **Underuse.** The other way round is just as visible: a lease asks for threads the caller says it will use. A lease whose tree runs at least half its threads (and at least one cpu) below them for 30 seconds is logged as UNDERUSE in `pool.log` and marked `(UNDERUSE)` in `wf-run --status`, `pool_status` and the dashboard's Pool tab (an `UNDERUSE ~N` plaque).
 
+The 30 seconds are real time: a lease nobody sampled for longer than a meter credits (nobody polls the pool and its holder never passes) is judged by ONE status call over the stretch since its last sample (its meter, else its grant), by the process table's own cpu average, not from that call.
+
 - `wf-run --status` and `pool_status` also show what every measured lease runs against what it holds (`holds 4 threads, runs ~3`); the dashboard shows `runs` only in the OVERRUN and UNDERUSE plaques.
 - The pool only reports it: the size of a lease is its caller's declaration, and the caller fixes it.
 - `wf-run --usage` adds up the leases that ended, per label, so a project can right-size its own callers.

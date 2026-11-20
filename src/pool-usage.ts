@@ -9,7 +9,7 @@ const USAGE_MAX_BYTES = 1 << 20;
 // A meter advances at most this often (every advance rewrites pool.json and wakes every waiter) ...
 export const METER_STEP_MS = 10_000;
 // ... and credits a gap longer than this to nobody: the lease was not sampled over it.
-const METER_MAX_GAP_MS = 30_000;
+export const METER_MAX_GAP_MS = 30_000;
 const MS_PER_MIN = 60_000;
 export const DEFAULT_USAGE_WINDOW_MS = 24 * 60 * MS_PER_MIN;
 

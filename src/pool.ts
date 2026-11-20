@@ -12,7 +12,13 @@ import { parseYaml, warnLeftoverJson } from "./yaml-config.js";
 import lockfile from "proper-lockfile";
 import { LOCK_NAME_PATTERN, LOCK_STALE_MS, PRIORITY_LEVELS, type PriorityLevel } from "./types.js";
 import { p90 } from "./estimate.js";
-import { advanceMeter, appendUsage, usageRecord, type LeaseMeter } from "./pool-usage.js";
+import {
+  advanceMeter,
+  appendUsage,
+  METER_MAX_GAP_MS,
+  usageRecord,
+  type LeaseMeter,
+} from "./pool-usage.js";
 import {
   bootTimeMs,
   isGroupAlive,
@@ -690,6 +696,17 @@ export function underuses(lease: PoolEntry, view: Pick<PoolView, "budget" | "run
   return n > 0 && runs !== undefined && n - runs >= Math.max(1, n / 2);
 }
 
+/**
+ * Where the underuse window of a lease first seen underusing begins: now, unless nobody sampled
+ * the lease for longer than a meter credits (nobody polled the pool, its holder never passes):
+ * the reading is then the process table's own average over that stretch (`ProcSample.cpu`), so
+ * the window opens at the last sample (its meter, else its grant), not at this call.
+ */
+function underuseStart(lease: PoolEntry, now: number): number {
+  const last = lease.meter?.at ?? lease.started;
+  return last !== undefined && now - last > METER_MAX_GAP_MS ? last : now;
+}
+
 /** `underuses` for longer than UNDERUSE_GRACE_MS: what `--status` flags. */
 export function underusing(
   lease: PoolEntry,
@@ -1266,7 +1283,7 @@ export class Pool {
       next = { ...next, overrun: now };
     }
     if (underuses(e, view)) {
-      const since = e.underuse_since ?? now;
+      const since = e.underuse_since ?? underuseStart(e, now);
       next = { ...next, underuse_since: since };
       if (e.underuse === undefined && now - since >= UNDERUSE_GRACE_MS) {
         this._log(now, `underuse: ${where}`);
