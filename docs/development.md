@@ -449,7 +449,20 @@ Every url in a tag is absolute (`https://axgord.github.io/claude-workflow/...`):
 
 ### The release
 
-A push to `master` that changes `package.json` runs `.github/workflows/publish.yml`: version check, build, tests, `npm publish`, then the git channel.
+The suite runs once per commit, in `.github/workflows/ci.yml`, on a node matrix (22 and 24):
+
+- `package.json` `engines.node` is the lowest version of that matrix (`>=22.0.0`); 20 and 18 are past end of life and untested, so not claimed;
+- a new node version goes into the matrix first, and a raised `engines` follows the matrix, never the other way round.
+
+A push to `master` that changes `package.json` runs `.github/workflows/publish.yml`: the `ci-green` gate, version check, build (no tests), `npm publish`, then the git channel.
+
+The gate is `scripts/ci-green.sh <sha>`, so a release cannot be cut from a commit the matrix did not pass:
+
+- it reads the `push` runs of `ci.yml` for the commit being published (`gh api`, `actions: read`);
+- it waits while one is still running (a push starts both workflows at once) and fails the job unless one is green;
+- a `workflow_dispatch` is gated the same way, on the commit of the ref it was dispatched from;
+- a commit with no CI run is refused after three minutes;
+- after a failed CI cell, re-run the failed jobs of that CI run (the success replaces the verdict), then re-run the publish workflow.
 
 Claude Code never builds a plugin at install (it copies the files and installs the dependencies from `package-lock.json` with scripts off), so the commit a git source names must already hold `build/`. `master` stays without built files. After a successful publish the workflow:
 

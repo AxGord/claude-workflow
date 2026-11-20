@@ -12,7 +12,26 @@ permissions:
   contents: write
 
 jobs:
+  # The suite does not run here: it ran, on every supported node, in ci.yml for this very commit. The gate waits for
+  # that run (a push to master starts both workflows at once) and fails unless it is green; a dispatch is gated the
+  # same way, on the commit of the ref it was dispatched from. One mechanism for both triggers: a workflow_run trigger
+  # runs in master's context, needs the CI's head_sha threaded into every checkout, and does not cover a dispatch.
+  ci-green:
+    if: github.repository == 'AxGord/claude-workflow'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: CI is green for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: sh scripts/ci-green.sh "$GITHUB_SHA" "$GITHUB_REPOSITORY"
+
   publish:
+    needs: ci-green
     if: github.repository == 'AxGord/claude-workflow'
     runs-on: ubuntu-latest
     steps:
@@ -60,12 +79,12 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and test
+      # Build only: the tests are ci.yml's, and the gate above holds the release until they are green.
+      - name: Build
         if: steps.version.outputs.changed == 'true'
         run: |
           npm ci
           npm run build
-          npm test
 
       # A re-run after a failure past the publish must reach the release commit: skip the publish when npm has the version
       - name: Check npm for this version

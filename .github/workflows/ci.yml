@@ -3,13 +3,21 @@ name: CI
 on: [push, pull_request]
 
 jobs:
+  # The suite, once per commit, on every node the engine supports: package.json `engines.node` is the lowest of
+  # this matrix. 22 is the oldest in maintenance LTS and 24 the newest LTS (the version publish.yml builds on);
+  # 20 and 18 are past end of life and are not tested, so they are not claimed. publish.yml does not run the
+  # suite again: it waits for THIS workflow to be green for the commit it publishes (scripts/ci-green.sh).
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
       - name: Verify version consistency
         run: |
           PKG_VERSION=$(node -p "require('./package.json').version")
@@ -23,7 +31,7 @@ jobs:
       - run: npm test
 
   # What a new user gets: a fresh clone, `npm ci`, the build, the hook, the server, the docs' commands, in a temp
-  # HOME (scripts/smoke-fresh-install.sh). About a minute on a cold cache.
+  # HOME (scripts/smoke-fresh-install.sh). About a minute on a cold cache. On the lowest supported node.
   smoke-fresh:
     runs-on: ubuntu-latest
     timeout-minutes: 5

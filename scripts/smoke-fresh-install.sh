@@ -46,7 +46,7 @@
 # writes it, not obtained), and it proves nothing about files outside ~/.claude (the npm cache is the temp one).
 #
 # EXITS. 0 every step PASS (WARN lines do not count) · 1 at least one FAIL · 2 usage, or a prerequisite missing
-# (node >= 18, git, npm, a git source) before anything was made · 130 interrupted (INT, TERM, HUP).
+# (node >= 22, git, npm, a git source) before anything was made · 130 interrupted (INT, TERM, HUP).
 # CLEANUP. One EXIT trap removes the temp dir (not with --keep) after killing the process GROUP of the step that
 # is running (every step is its own group: `set -m`, so npm's children and the MCP server die with it), on a
 # FAIL exit, on Ctrl-C and on a signal alike. A step that cannot be killed gets KILL after a second.
@@ -79,8 +79,8 @@ done
 for tool in node git npm find sort comm mktemp; do
   command -v "$tool" >/dev/null 2>&1 || { echo "smoke:fresh: $tool is not on PATH" >&2; exit 2; }
 done
-node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)' \
-  || { echo "smoke:fresh: node >= 18 is required (package.json engines)" >&2; exit 2; }
+node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 22 ? 0 : 1)' \
+  || { echo "smoke:fresh: node >= 22 is required (package.json engines)" >&2; exit 2; }
 [ -n "$HOME" ] && [ -d "$HOME" ] || { echo "smoke:fresh: HOME is not a directory" >&2; exit 2; }
 git -C "$SRC" rev-parse --verify -q HEAD >/dev/null 2>&1 \
   || { echo "smoke:fresh: $SRC is not a git repository with a commit" >&2; exit 2; }
