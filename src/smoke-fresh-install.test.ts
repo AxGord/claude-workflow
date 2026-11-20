@@ -217,8 +217,8 @@ describe("docs: what the walk of a fresh install changed", () => {
     expect(text).toContain("not on your `PATH`");
   });
 
-  it("getting-started and README say that a git-sourced install has no compiled server", () => {
+  it("getting-started and README say that a git install gets the built release branch", () => {
     for (const rel of ["README.md", "docs/getting-started.md"])
-      expect(read(rel), rel).toMatch(/without `build\/`/);
+      expect(read(rel), rel).toContain("`release` branch");
   });
 });

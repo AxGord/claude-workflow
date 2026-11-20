@@ -9,7 +9,7 @@ description: Install the plugin, then use it two ways (one task, or a queue) and
 
 **Prerequisites.** Claude Code, Node.js, and `jq` on your `PATH` (`brew install jq`, `apt install jq`). The SessionStart and SessionEnd hooks parse their input with `jq`. Without it the start hook still tells the agent to call `start`, but adds a notice that it skipped the plan resume, the resume pickup and the conversation stamp (so a later `claude --resume` cannot find the conversation's sessions), and the SessionEnd hook cannot suspend its sessions.
 
-**A git-sourced install has no server yet.** The community catalog and `--marketplace AxGord/claude-workflow` copy the repository's files without `build/` (it is gitignored), and Claude Code installs the dependencies with install scripts off. So `node build/index.js` has no file and the MCP server does not start (`Cannot find module '.../build/index.js'`, seen with `claude plugin install` in a scratch config). Until a built release is published there, install from a local checkout you built, or from the npm package.
+**A git install gets the latest release, built.** Claude Code never builds a plugin at install: it copies the files and installs the dependencies with install scripts off. `master` has no `build/` (it is gitignored), so the community catalog and `--marketplace AxGord/claude-workflow` take the plugin from the repository's `release` branch, which the release workflow makes: `master`'s release commit plus the compiled `build/*.js`. A plain clone of `master` has no server until you run `npm run build`.
 
 ### From Community Plugins (recommended)
 
@@ -22,16 +22,14 @@ The plugin is listed in the [claude-plugins-community](https://github.com/anthro
 
 ### From this repository
 
-The repository is its own marketplace (`.claude-plugin/marketplace.json`):
+The repository is its own marketplace (`.claude-plugin/marketplace.json`; its entry names the `release` branch, so the plugin is the built release, not the checkout):
 
 ```bash
 claude plugin install workflow --marketplace AxGord/claude-workflow
 ```
 
-A local checkout works the same way, once it is built (`npm ci && npm run build` in it):
-`claude plugin marketplace add /path/to/mcp-workflow-engine`, then
-`claude plugin install workflow@claude-workflow` — the plugin is then read from the checkout itself (edit, then
-`/reload-plugins`). Install it from a folder that IS the plugin, not through a symlink to it: the hooks module
+A local checkout is not read through this marketplace (its entry points at GitHub). Build it (`npm ci && npm run build`) and load it with `claude --plugin-dir /path/to/mcp-workflow-engine` (see "Manual" below; edit, then
+`/reload-plugins`). Load it from a folder that IS the plugin, not through a symlink to it: the hooks module
 (`hooks/plan-pane.tsx`) must resolve inside the marketplace folder.
 
 ### From npm
@@ -67,7 +65,7 @@ claude --plugin-dir ./
 
 ### Install channels
 
-Supported marketplace sources: the **npm package** (`claude-mcp-workflow`) and a **local directory**. A marketplace entry that points at the git repository (git URL as a plugin source) is **not** supported — `build/` is gitignored, so a git-sourced install has no compiled MCP server to run. (Cloning for development works — see above — because you run `npm run build` yourself.)
+Supported sources: the **catalog** and **this repository** (both install the `release` branch, which carries `build/`), the **npm package** (`claude-mcp-workflow`), and a **development checkout** you built (`claude --plugin-dir`). A marketplace entry that points at `master` of the git repository is not supported: `build/` is gitignored there, so the install would have no compiled MCP server. Point it at the `release` branch (`{ "source": "github", "repo": "AxGord/claude-workflow", "ref": "release" }`) or at a tag `v<version>`.
 
 ### Uninstall
 

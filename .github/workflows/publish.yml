@@ -70,11 +70,36 @@ jobs:
           npm run build
           npm test
 
-      - name: Publish to npm
+      # A re-run after a failure past the publish must reach the release commit: skip the publish when npm has the version
+      - name: Check npm for this version
         if: steps.version.outputs.changed == 'true'
+        id: npm
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          if [ "$(npm view "claude-mcp-workflow@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.version.outputs.changed == 'true' && steps.npm.outputs.published != 'true'
         run: npm publish --provenance --access public
 
-      # After publish: a failed publish must not leave a tag behind (the version-bump check would skip forever)
+      # After publish: a failed publish must not leave a branch or a tag behind (the version-bump check would skip forever).
+      # A git-sourced install (the community catalog, this repository as a marketplace) copies the committed files and
+      # never builds, so the tagged commit is master's release commit plus build/, pushed as the `release` branch.
+      - name: Make the release commit
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA=$(scripts/release-tree.sh --commit --message "Release v$VERSION (master $(git rev-parse --short HEAD) plus build/)")
+          git push --force origin "$SHA:refs/heads/release"
+          git tag "v$VERSION" "$SHA"
+          git push origin "v$VERSION"
+
       - name: Create GitHub Release
         if: steps.version.outputs.changed == 'true'
         uses: softprops/action-gh-release@v3

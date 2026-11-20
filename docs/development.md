@@ -43,7 +43,8 @@ npm run check:leased   # check under pool leases sized to each half (scripts/che
 npm run check:ci # the suite as CI runs it (scripts/check-ci.sh): env -i, an empty HOME, no system git
                  # config, TMPDIR inside it, git user.useConfigOnly (no guessed identity), TZ America/St_Johns (CHECK_CI_TZ),
                  # LANG=C — plus CI's package.json / plugin.json version check
-npm run smoke:fresh   # what a new user gets (scripts/smoke-fresh-install.sh): a fresh clone of HEAD, npm ci, build, the SessionStart hook,
+npm run smoke:fresh   # what a new user gets (scripts/smoke-fresh-install.sh): a fresh clone of HEAD, npm ci, build, the git channel's release tree
+                      # (scripts/release-tree.sh, `npm ci --omit=dev --ignore-scripts` timed against Claude Code's 60 s, a server handshake), the SessionStart hook,
                       # the MCP server over stdio, the dashboard, wf-run, wf-queue and the docs' commands in a temp HOME; one PASS/FAIL
                       # line per step, exit 1 on a FAIL; needs the registry (~1 min cold); compares the real ~/.claude before and after;
                       # the unit tests stub its install and build steps (SMOKE_INSTALL_CMD, SMOKE_BUILD_CMD), a real run never sets them
@@ -445,6 +446,22 @@ Every url in a tag is absolute (`https://axgord.github.io/claude-workflow/...`):
 - the narration is `video/script.md`;
 - `video/storyboard.json` ties each phrase to a card or a stretch of the replay;
 - a local free voice (Kokoro by default, Chatterbox cloning a sample of yours) voices one WAV per phrase cached by text, so an edit or a UI change re-renders one command (`video/README.md`).
+
+### The release
+
+A push to `master` that changes `package.json` runs `.github/workflows/publish.yml`: version check, build, tests, `npm publish`, then the git channel.
+
+Claude Code never builds a plugin at install (it copies the files and installs the dependencies from `package-lock.json` with scripts off), so the commit a git source names must already hold `build/`. `master` stays without built files. After a successful publish the workflow:
+
+- runs `scripts/release-tree.sh --commit`: a commit whose parent is the `master` release commit and whose tree is that commit's tree plus `build/*.js` (compiled from the committed sources; no `.d.ts`, no maps: only what runs);
+- force-pushes it as branch `release`, tags it `v<version>` and creates the GitHub release from that version's CHANGELOG block;
+- leaves no branch and no tag when the publish failed.
+
+The publish step is skipped when `npm view claude-mcp-workflow@<version> version` already answers that version. A run that failed after the publish (the release commit, the push, the tag) is therefore finished by re-running the workflow. A tag that exists without a GitHub release is finished by hand (create the release from that tag with the CHANGELOG block).
+
+The marketplace entry in `.claude-plugin/marketplace.json` is a `github` source with `ref: release`. The community catalog pins a `sha`; what moves that pin is the catalog's own automation (not read from here).
+
+After the push check: the Actions run is green; branch `release` exists; the tag's commit holds `build/index.js`; the catalog's pinned `sha` moves to it. `scripts/release-tree.sh --dir DIR` writes the same tree to a directory; `npm run smoke:fresh` walks it, and `src/git-install-starts.test.ts` starts its server.
 
 ### Deploy
 

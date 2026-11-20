@@ -14,8 +14,11 @@
 #   install    `npm ci` (the registry, cold cache) and `npm run build`
 #   manifest   plugin.json, marketplace.json, .mcp.json, package.json agree; hook files are executable
 #   npm-pack   `npm pack --dry-run`: the package carries build/, templates/, hooks/, dashboard/, scripts/
-#   git-channel  WARN while build/ is not committed: a git-sourced install (the community catalog, this repository
-#              as a marketplace) has no compiled server (a WARN is a known release blocker, never a FAIL)
+#   git-channel  what a git-sourced install (the community catalog, this repository as a marketplace) gets: master
+#              carries no build/ (it must not), `scripts/release-tree.sh --dir` assembles the release tree, which
+#              is copied as a plugin cache holds it (no node_modules), `npm ci --omit=dev --ignore-scripts` runs
+#              as Claude Code runs it (its time is printed against the 60 s limit), and the server of the tree's
+#              .mcp.json answers an MCP handshake (`release-start`)
 #   hook       the SessionStart hook as Claude Code runs it (executed directly, stdin = the event JSON,
 #              cwd = the project, CLAUDE_PLUGIN_ROOT = the clone): its output, the skills it provisions
 #   wf-skills  list, add a stack skill
@@ -90,6 +93,7 @@ T=$(cd "$T" && pwd -P)
 CLONE=$T/clone PROJ=$T/project FHOME=$T/home LOGS=$T/logs FTMP=$T/tmp
 STATE=$FHOME/.claude/workflow-state POOL=$FHOME/.claude/workflow-pool
 mkdir -p "$PROJ" "$FHOME" "$LOGS" "$FTMP" || exit 2
+CACHE_GIVEN=$NPM_CACHE
 [ -n "$NPM_CACHE" ] || NPM_CACHE=$T/npm-cache
 TAG=smoke-fresh-$$
 PASSED=0 FAILED=0 WARNED=0 CHILD= SNAPPED=0 DONE=0
@@ -267,13 +271,35 @@ RUN_IN=$LOGS/pack.json
 runlog "$LOGS/pack.log" fresh node "$driver" pack "$CLONE"
 RUN_IN=/dev/null
 relay "$LOGS/pack.log" npm-pack
-# The git channels (the community catalog's `url` source, this repository as a marketplace) install the TREE: no
-# build/ unless it is committed, and Claude Code installs the dependencies with install scripts off (a `prepare`
-# script does not run), so .mcp.json's `node build/index.js` has no file. The npm channel ships build/ (npm-pack).
+# The git channels (the community catalog's `url` source, this repository's marketplace entry) install the TREE of
+# the commit they name, never building: Claude Code copies the files and installs the dependencies from
+# package-lock.json with install scripts off. master has no build/; the commit the release workflow pushes as branch
+# `release` is master's release commit plus build/ (scripts/release-tree.sh). The step walks that path.
 if git -C "$CLONE" ls-files --error-unmatch build/index.js >/dev/null 2>&1; then
-  pass git-channel "build/index.js is committed: a git-sourced install has a server to start"
+  fail git-channel "build/index.js is committed on master: the release tree adds it, master stays without built files" ""
 else
-  warn git-channel "a git-sourced install (the community catalog, this repository as a marketplace) copies the tree without build/ (gitignored): the MCP server's node build/index.js has no file there"
+  rm -rf "$T/release" "$T/plugin-cache"
+  runlog "$LOGS/release-tree.log" in_dir "$CLONE" sh scripts/release-tree.sh --dir "$T/release"
+  if [ "$RC" -ne 0 ] || [ ! -f "$T/release/build/index.js" ]; then
+    fail git-channel "scripts/release-tree.sh --dir exited $RC, or left no build/index.js" "$LOGS/release-tree.log"
+  else
+    cp -R "$T/release" "$T/plugin-cache"
+    t0=$(date +%s)
+    # An empty npm cache of its own (unless --npm-cache was given): the cold install a new user pays, so the 60 s check can fire
+    rcache=$NPM_CACHE
+    [ -n "$CACHE_GIVEN" ] || rcache=$T/npm-cache-release
+    runlog "$LOGS/release-deps.log" in_dir "$T/plugin-cache" env npm_config_cache="$rcache" npm ci --omit=dev --ignore-scripts
+    secs=$(($(date +%s) - t0))
+    if [ "$RC" -ne 0 ]; then fail git-channel "npm ci --omit=dev --ignore-scripts in the release tree exited $RC" "$LOGS/release-deps.log"
+    elif [ "$secs" -gt 60 ]; then fail git-channel "the dependency install took ${secs}s: Claude Code gives it 60s" ""
+    else
+      [ -n "$CACHE_GIVEN" ] && cnote="a reused npm cache (--npm-cache)" || cnote="a cold npm cache"
+      pass git-channel "release tree = master + $(find "$T/release/build" -type f | wc -l | tr -d ' ') built files; npm ci --omit=dev --ignore-scripts in ${secs}s of Claude Code's 60s, $cnote"
+      fresh git -C "$PROJ" init -q 2>/dev/null
+      runlog "$LOGS/release-start.log" fresh node "$driver" plugin-start "$T/plugin-cache" "$PROJ" "$FHOME" "$PORT"
+      relay "$LOGS/release-start.log" release-start
+    fi
+  fi
 fi
 
 # --- the SessionStart hook, as Claude Code runs it --------------------------------------------------------
@@ -353,15 +379,24 @@ left=$(ls -d "$FHOME"/.claude/skills/*/ 2>/dev/null | wc -l | tr -d ' ')
 if [ "$RC" -eq 0 ] && [ "$left" -eq 0 ] && [ ! -d "$STATE" ] && [ ! -d "$POOL" ]; then pass uninstall "wf-skills remove --state left no skill, no state, no pool in the temp HOME"
 else fail uninstall "remove --state exited $RC, $left skill directories left, state dir $([ -d "$STATE" ] && echo present || echo gone)" "$LOGS/remove.log"; fi
 
-# --- the plugin install commands, as far as a CLI goes (README / getting-started: a local checkout) ----------
+# --- the plugin install commands, as far as a CLI goes (the release tree as a marketplace) ----------
 if command -v claude >/dev/null 2>&1; then
-  cc() { in_dir "$PROJ" CLAUDE_CONFIG_DIR="$FHOME/.claude" claude plugin "$@"; }
-  runlog "$LOGS/cc-add.log" cc marketplace add "$CLONE"
-  [ "$RC" -ne 0 ] || runlog "$LOGS/cc-install.log" cc install workflow@claude-workflow
-  [ "$RC" -ne 0 ] || runlog "$LOGS/cc-list.log" cc list
-  if [ "$RC" -eq 0 ] && grep -q 'workflow@claude-workflow' "$LOGS/cc-list.log" && grep -q "Read from: $CLONE" "$LOGS/cc-list.log"; then
-    pass claude-plugin-cli "claude plugin marketplace add <checkout> and install workflow@claude-workflow: enabled, read from the checkout (temp CLAUDE_CONFIG_DIR)"
-  else fail claude-plugin-cli "marketplace add / install / list exited $RC" "$LOGS/cc-list.log"; fi
+  # The clone's marketplace entry names the GitHub `release` branch (a network source that does not exist before
+  # a release), so the CLI walk uses a marketplace of the same name whose entry is the release tree beside it.
+  MKT=$T/marketplace
+  if [ -d "$T/release" ] && mkdir -p "$MKT/.claude-plugin" && cp -R "$T/release" "$MKT/plugin" \
+    && fresh node -e 'const fs=require("fs");const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));m.plugins[0].source="./plugin";fs.writeFileSync(process.argv[2],JSON.stringify(m))' \
+      "$CLONE/.claude-plugin/marketplace.json" "$MKT/.claude-plugin/marketplace.json"; then
+    cc() { in_dir "$PROJ" CLAUDE_CONFIG_DIR="$FHOME/.claude" claude plugin "$@"; }
+    runlog "$LOGS/cc-add.log" cc marketplace add "$MKT"
+    [ "$RC" -ne 0 ] || runlog "$LOGS/cc-install.log" cc install workflow@claude-workflow
+    [ "$RC" -ne 0 ] || runlog "$LOGS/cc-list.log" cc list
+    if [ "$RC" -eq 0 ] && grep -q 'workflow@claude-workflow' "$LOGS/cc-list.log" && grep -q "Read from: $MKT/plugin" "$LOGS/cc-list.log"; then
+      pass claude-plugin-cli "claude plugin marketplace add <the release tree as a marketplace> and install workflow@claude-workflow: enabled, read from it (temp CLAUDE_CONFIG_DIR)"
+    else fail claude-plugin-cli "marketplace add / install / list exited $RC" "$LOGS/cc-list.log"; fi
+  else
+    skip claude-plugin-cli "no release tree to offer as a marketplace (the git-channel step did not assemble one)"
+  fi
 else
   skip claude-plugin-cli "claude is not on PATH: /plugin marketplace add, /plugin install, the hooks and the plan pane need a real Claude Code"
 fi

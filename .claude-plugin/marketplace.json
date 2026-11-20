@@ -10,7 +10,11 @@
   "plugins": [
     {
       "name": "workflow",
-      "source": "./",
+      "source": {
+        "source": "github",
+        "repo": "AxGord/claude-workflow",
+        "ref": "release"
+      },
       "description": "Structured workflow orchestration for AI agents via finite-state machines.",
       "version": "0.1.11"
     }

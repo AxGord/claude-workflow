@@ -47,8 +47,9 @@ and skips the plan resume, the resume pickup and the conversation stamp.
 /plugin install workflow
 ```
 
-A git-sourced install (the catalog, this repository as a marketplace) copies the files without `build/`, so its MCP
-server does not start yet: use a built local checkout or the npm package (details below).
+Both the catalog and this repository as a marketplace (`/plugin marketplace add AxGord/claude-workflow`) give the
+latest release, built: the plugin comes from the repository's `release` branch, which holds `master` plus the
+compiled `build/`. A development checkout is not that tree: build it yourself (details below).
 
 To remove it, run `wf-skills remove` first (it deletes the unedited skill copies the plugin put in `~/.claude/skills`
 and the staging directories of an interrupted update;

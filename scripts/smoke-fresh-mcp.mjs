@@ -7,6 +7,9 @@
 //       the plugin's manifests agree with each other and name files that exist
 //   node smoke-fresh-mcp.mjs pack      <clone>      (`npm pack --dry-run --json` on stdin)
 //       the npm package carries what the plugin runs
+//   node smoke-fresh-mcp.mjs plugin-start <plugin-dir> <project> <home> <port>
+//       the server a git-sourced install runs: the command of the plugin's own .mcp.json, started in the plugin
+//       directory as Claude Code leaves it (release tree, dependencies installed), one initialize + tools/list
 //   node smoke-fresh-mcp.mjs block     <markdown> <needle>
 //       the first fenced yaml block of <markdown> that contains <needle>
 //   node smoke-fresh-mcp.mjs tasks     <markdown> <needle>
@@ -199,6 +202,43 @@ async function mcp([clone, project, home, port, sidsFile]) {
   }
 }
 
+async function pluginStart([plugin, project, home, port]) {
+  await step("release-start", async () => {
+    const wf = JSON.parse(fs.readFileSync(path.join(plugin, ".mcp.json"), "utf8")).mcpServers.wf;
+    const sdk = "@modelcontextprotocol/sdk/dist/esm/client";
+    const { Client } = await fromClone(plugin, `${sdk}/index.js`);
+    const { StdioClientTransport } = await fromClone(plugin, `${sdk}/stdio.js`);
+    const stderr = [];
+    const transport = new StdioClientTransport({
+      command: wf.command === "node" ? process.execPath : wf.command,
+      args: wf.args.map(a => a.replace("${CLAUDE_PLUGIN_ROOT}", plugin)),
+      cwd: project,
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: home,
+        TMPDIR: process.env.TMPDIR ?? "",
+        STATE_DIR: path.join(home, ".claude", "workflow-state"),
+        WF_POOL_DIR: path.join(home, ".claude", "workflow-pool"),
+        DASHBOARD_PORT: port,
+        CLAUDE_PLUGIN_ROOT: plugin,
+      },
+      stderr: "pipe",
+    });
+    transport.stderr?.on("data", d => stderr.push(String(d)));
+    const client = new Client({ name: "smoke-fresh-release", version: "1" });
+    try {
+      await client.connect(transport);
+      const names = (await client.listTools()).tools.map(t => t.name);
+      must(names.includes("start"), `tool start is not served (${names.join(" ")}); stderr: ${stderr.join("").slice(0, 200)}`);
+      return `${wf.command} ${wf.args.join(" ")} answered initialize and served ${names.length} tools`;
+    } catch (err) {
+      throw new Error(`${err instanceof Error ? err.message : err}; stderr: ${stderr.join("").slice(0, 200)}`);
+    } finally {
+      await client.close().catch(() => {});
+    }
+  });
+}
+
 async function manifest([clone]) {
   const json = rel => JSON.parse(fs.readFileSync(path.join(clone, rel), "utf8"));
   await step("manifest", async () => {
@@ -272,6 +312,9 @@ switch (mode) {
   case "mcp":
     await mcp(argv);
     break;
+  case "plugin-start":
+    await pluginStart(argv);
+    break;
   case "manifest":
     await manifest(argv);
     break;
@@ -287,6 +330,6 @@ switch (mode) {
     break;
   }
   default:
-    process.stderr.write("usage: smoke-fresh-mcp.mjs mcp|manifest|pack|block|tasks …\n");
+    process.stderr.write("usage: smoke-fresh-mcp.mjs mcp|plugin-start|manifest|pack|block|tasks …\n");
     process.exit(2);
 }
