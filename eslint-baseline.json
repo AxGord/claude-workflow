@@ -108,12 +108,6 @@
     "count": 1
   },
   {
-    "file": "src/fanout.test.ts",
-    "rule": "@typescript-eslint/no-unsafe-return",
-    "message": "Unsafe return of a value of type `any`.",
-    "count": 1
-  },
-  {
     "file": "src/hooks.test.ts",
     "rule": "@typescript-eslint/no-unsafe-assignment",
     "message": "Unsafe assignment of an `any` value.",
@@ -196,12 +190,6 @@
     "rule": "@typescript-eslint/no-unnecessary-type-assertion",
     "message": "This assertion is unnecessary since it does not change the type of the expression.",
     "count": 2
-  },
-  {
-    "file": "src/pool.test.ts",
-    "rule": "@typescript-eslint/no-unsafe-return",
-    "message": "Unsafe return of a value of type `any`.",
-    "count": 1
   },
   {
     "file": "src/pool.test.ts",

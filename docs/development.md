@@ -48,7 +48,7 @@ npm run smoke:fresh   # what a new user gets (scripts/smoke-fresh-install.sh): a
                       # line per step, exit 1 on a FAIL; needs the registry (~1 min cold); compares the real ~/.claude before and after;
                       # the unit tests stub its install and build steps (SMOKE_INSTALL_CMD, SMOKE_BUILD_CMD), a real run never sets them
 npm run lint     # typescript-eslint (type-checked); fails only on findings absent from eslint-baseline.json
-npm run lint:baseline  # re-record eslint-baseline.json (after fixing findings, to ratchet down)
+npm run lint:baseline  # re-record eslint-baseline.json; a fixed finding left in the baseline fails the suite (src/eslint-baseline-ratchet.test.ts) though `npm run lint` stays exit 0, so re-record in the same commit as the fix
 npm run format:check   # biome format check (formatter only; part of check)
                        # TypeScript: the compiler is 7 (devDependency `typescript7`, `npm:typescript@^7`, run as
                        # node_modules/typescript7/bin/tsc); `typescript` stays ^5.9 because typescript-eslint (peer <6.1),
