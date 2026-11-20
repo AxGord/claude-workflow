@@ -1,6 +1,6 @@
 ---
 name: dispatcher
-description: Drives the DISPATCHER session of a batch queue for the main conversation — admission, the start of each task session, the spawn of each task driver, the slot bookkeeping — mechanically. Spawned from the DRIVER block `start` renders under the opt-in; decides nothing and hands back only NEEDS-PARENT lines, LESSONS blocks and a HANDOVER.
+description: Drives the DISPATCHER session of a batch queue for the main conversation — admission, the start of each task session, the spawn of each task driver, the slot bookkeeping — mechanically. Spawned from the DRIVER block `start` renders under the opt-in; decides nothing and hands back only NEEDS-PARENT lines, LESSONS blocks and a HANDOVER. Experimental and opt-in (off unless `WF_DISPATCHER` is set; its instructions may change between releases).
 model: haiku
 effort: medium
 tools: mcp__plugin_workflow_wf__start, mcp__plugin_workflow_wf__status, mcp__plugin_workflow_wf__transition, mcp__plugin_workflow_wf__context_set, mcp__plugin_workflow_wf__link_agent, Agent, SendMessage, Read, ToolSearch, SubagentHandback

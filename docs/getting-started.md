@@ -352,6 +352,6 @@ Nothing to set up; the budget defaults to the performance cores minus two. [Thre
 | `STATE_DIR` | `~/.claude/workflow-state/` | Session JSON persistence (also `exec/`: foreground exec output and exit codes) |
 | `WF_TRUST_STRICT` | off | `1`: a project file's exec/fetch states load only after `wf-trust` approved that file's exact content; Claude Code's folder trust and project approvals no longer count ([Trusting project workflows](#trusting-project-workflows)) |
 | `WF_SUSPENDED_TTL_DAYS` | `7` | A suspended session nobody resumed for this long is abandoned at server start |
-| `WF_DISPATCHER` | unset | Set (not empty, `0`, `false`, `off`, `no`): `start` of `batch` answers with a dispatcher agent's call ([Queue](/queue#the-dispatcher-agent-dispatcher-opt-in)); needs `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4` |
+| `WF_DISPATCHER` | unset | Experimental. Set (not empty, `0`, `false`, `off`, `no`): `start` of `batch` answers with a dispatcher agent's call ([Queue](/queue#the-dispatcher-agent-dispatcher-opt-in)); needs `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4` |
 | `DASHBOARD_PORT` | `3100` | Web dashboard HTTP port |
 | `DASHBOARD_HOST` | `127.0.0.1` | Web dashboard bind address |

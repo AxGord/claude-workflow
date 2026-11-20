@@ -454,10 +454,12 @@ A push to `master` that changes `package.json` runs `.github/workflows/publish.y
 Claude Code never builds a plugin at install (it copies the files and installs the dependencies from `package-lock.json` with scripts off), so the commit a git source names must already hold `build/`. `master` stays without built files. After a successful publish the workflow:
 
 - runs `scripts/release-tree.sh --commit`: a commit whose parent is the `master` release commit and whose tree is that commit's tree plus `build/*.js` (compiled from the committed sources; no `.d.ts`, no maps: only what runs);
-- force-pushes it as branch `release`, tags it `v<version>` and creates the GitHub release from that version's CHANGELOG block;
+- force-pushes it as branch `release`, tags it `v<version>` and creates the GitHub release from `scripts/release-notes.sh <version>` (the lead of that version's CHANGELOG block, up to its first `### ` heading, and a link to CHANGELOG.md at the tag);
 - leaves no branch and no tag when the publish failed.
 
-The publish step is skipped when `npm view claude-mcp-workflow@<version> version` already answers that version. A run that failed after the publish (the release commit, the push, the tag) is therefore finished by re-running the workflow. A tag that exists without a GitHub release is finished by hand (create the release from that tag with the CHANGELOG block).
+The publish step is skipped when `npm view claude-mcp-workflow@<version> version` already answers that version. A run that failed after the publish (the release commit, the push, the tag) is therefore finished by re-running the workflow. A tag that exists without a GitHub release is finished by hand (create the release from that tag with the output of `scripts/release-notes.sh <version>`).
+
+GitHub refuses a release body over 125,000 characters, so a version's CHANGELOG block keeps its summary above a `### ` heading and its entries below it.
 
 The marketplace entry in `.claude-plugin/marketplace.json` is a `github` source with `ref: release`. The community catalog pins a `sha`; what moves that pin is the catalog's own automation (not read from here).
 

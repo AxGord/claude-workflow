@@ -448,6 +448,8 @@ A landed task's lessons are filed by a script, not read by the dispatcher on eve
 
 #### The dispatcher agent (`dispatcher:`, opt-in)
 
+The dispatcher agent is experimental: it is off unless `WF_DISPATCHER` is set, its instructions may change between releases, and it has been tried on one campaign so far.
+
 By default the main conversation runs the dispatching session itself: every `start`, driver spawn, `link_agent`, `tasks` update and `slot_free`, in its own long context. With the opt-in a cheap agent does that, and the main conversation gets only what needs a decision.
 
 ```yaml
@@ -529,7 +531,7 @@ The plugin ships four subagent types in `agents/`:
 - `workflow:driver` (haiku/medium).
   - It follows the task-driver rules: probe a WAITING agent once on a later wake (after the hand-back, before the notification), and answer a notice that an agent waits on its own background work with the WAITING line only, while the shipped worker, recon and reviewer prompts make an agent wait in foreground calls and never end a turn with live background work.
   - Of the workflow tools it has only `start`, `status`, `transition`, `context_set`, `link_agent`, `queue_mark` and `queue_edit`, so a driver cannot `abort`, `delete`, `create` or `modify` a session.
-- `workflow:dispatcher` (haiku/medium), spawned only under the opt-in above.
+- `workflow:dispatcher` (experimental, haiku/medium), spawned only under the opt-in above.
   - Of the workflow tools it has only `start`, `status`, `transition`, `context_set` and `link_agent`, so it cannot `abort` or `delete` a session, nor mark, edit or add a queue line.
   - Its rules are one file, `templates/drivers/dispatch-driver.md`, which its spawn prompt names.
 - `workflow:recon` (sonnet/medium) and `workflow:reviewer` (opus/high), both read-only: no Edit tool, a Write tool limited by a PreToolUse(Write) hook to the task report directory. That is an absolute path in scratch space with a `<task>.log` / `<task>-logs` directory in it, outside any git work tree, no `..`; a write inside the worktree is refused.

@@ -1,7 +1,7 @@
 {
   "name": "workflow",
   "displayName": "Workflow Engine",
-  "version": "0.1.11",
+  "version": "0.2.0",
   "description": "Structured workflow orchestration for AI agents via finite-state machines.",
   "keywords": [
     "workflow",

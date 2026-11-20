@@ -53,10 +53,7 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          BODY=$(awk "/^## \\[?${VERSION}\\]?/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md)
-          if [ -z "$BODY" ]; then
-            BODY="Release v$VERSION"
-          fi
+          BODY=$(sh scripts/release-notes.sh "$VERSION")
           {
             echo "body<<EOF"
             echo "$BODY"

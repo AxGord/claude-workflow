@@ -3,6 +3,7 @@ description: "Long-running batch orchestration — a queue file of tasks; the en
 initial: load_skills
 max_transitions: 100000
 
+# EXPERIMENTAL: off unless WF_DISPATCHER is set, its instructions may change between releases, tried on one campaign so far.
 # Opt-in: with the environment variable WF_DISPATCHER set (anything but empty / 0 / false / off / no) in the
 # Claude Code process, `start` of this workflow answers with a DRIVER block for a cheap dispatcher agent
 # (`workflow:dispatcher`) that drives `dispatch` and `collect` from the moment the session leaves `plan_queue`;
