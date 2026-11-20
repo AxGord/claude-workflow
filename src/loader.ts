@@ -18,6 +18,7 @@ import {
 } from "./types.js";
 import { stationWarnings } from "./stations.js";
 import { driverRefError } from "./driver.js";
+import { POOL_GATE_FILE } from "./pool-gate.js";
 import { modelTableErrors } from "./model-table.js";
 import {
   TrustStore,
@@ -123,6 +124,8 @@ export class Loader {
   private _workflows: Map<string, WorkflowDefinition> = new Map();
   /** The names whose loaded definition is the project tier's own file. */
   private _projectNames: ReadonlySet<string> = new Set();
+  /** The files of the project tier that parsed and passed the schema (a later merge or validation can still refuse them: `broken()`). */
+  private _projectFiles: readonly TierEntry[] = [];
   private _untrusted: readonly UntrustedFile[] = [];
   private _broken: readonly BrokenFile[] = [];
   /** The bundled tier of the last load; a file that fails the next read keeps its entry here. */
@@ -218,6 +221,12 @@ export class Loader {
 
   public get globalDir(): string {
     return this._globalDir;
+  }
+
+  /** The name and file of every project-tier file that passed the schema, one per name; a file in `broken()` failed later (its merge or validation). */
+  public projectFiles(): readonly { name: string; file: string }[] {
+    this._syncTrust();
+    return this._projectFiles.map(({ file, def }) => ({ name: def.name, file }));
   }
 
   /** The workflows the project tier defines itself (not those it only inherits from below). */
@@ -384,6 +393,7 @@ export class Loader {
     }
     this._workflows = next;
     this._projectNames = own;
+    this._projectFiles = projectTier < 0 ? [] : [...tiers[projectTier].values()];
     this._untrusted = untrusted;
     this._broken = failures;
   }
@@ -486,7 +496,10 @@ export class Loader {
       failures.push({ name, file: fp, reason, stale: false });
     };
 
-    const files = fs.readdirSync(dir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml"));
+    // pool-gate.yaml shares the directory but is the pool gate's config, not a workflow.
+    const files = fs
+      .readdirSync(dir)
+      .filter(f => (f.endsWith(".yaml") || f.endsWith(".yml")) && f !== POOL_GATE_FILE);
 
     for (const file of files) {
       const fp = path.join(dir, file);

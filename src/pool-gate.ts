@@ -8,6 +8,8 @@ import { parseYaml, warnLeftoverJson } from "./yaml-config.js";
 
 /** Where a project declares its heavy commands, searched from the cwd up to the git root. */
 export const POOL_GATE_CONFIG = path.join(".claude", "workflows", "pool-gate.yaml");
+/** The file's name: it sits among the workflow files but is the engine's own config, never a workflow. */
+export const POOL_GATE_FILE = path.basename(POOL_GATE_CONFIG);
 const LABEL_MAX = 80;
 const THREADS_VAR = "$WF_THREADS";
 

@@ -330,11 +330,13 @@ else fail wf-skills-add "add lang-python exited $RC" "$LOGS/skills-add.log"; fi
 
 # --- the commands the docs tell the reader to type: not on a fresh PATH; a link makes them so -------------------
 mkdir -p "$T/bin"
-for c in wf-skills wf-queue wf-run wf-trust; do ln -s "$CLONE/scripts/$c" "$T/bin/$c"; done
+for c in wf-skills wf-queue wf-run wf-trust wf-validate; do ln -s "$CLONE/scripts/$c" "$T/bin/$c"; done
 runlog "$LOGS/link.log" in_dir "$PROJ" PATH="$T/bin:$PATH" wf-trust --list
-if [ "$RC" -eq 0 ] && [ "$(PATH="$T/bin:$PATH" command -v wf-queue)" = "$T/bin/wf-queue" ]; then
-  pass path-link "wf-skills, wf-queue, wf-run and wf-trust run through a symlink on PATH (each finds build/ beside the real file)"
-else fail path-link "wf-trust --list through a symlink exited $RC" "$LOGS/link.log"; fi
+LINK_RC=$RC
+runlog "$LOGS/link-validate.log" in_dir "$PROJ" PATH="$T/bin:$PATH" wf-validate
+if [ "$LINK_RC" -eq 0 ] && [ "$RC" -eq 0 ] && [ "$(PATH="$T/bin:$PATH" command -v wf-queue)" = "$T/bin/wf-queue" ]; then
+  pass path-link "wf-trust and wf-validate run through a symlink on PATH and wf-queue resolves there (each finds build/ beside the real file)"
+else fail path-link "through a symlink: wf-trust --list exited $LINK_RC, wf-validate exited $RC" "$LOGS/link.log"; fi
 
 # --- the MCP server, the docs' workflows, the dashboard ---------------------------------------------------
 SMOKE_CLONE=$CLONE

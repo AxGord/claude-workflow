@@ -15,6 +15,7 @@
     "wf-run": "build/wf-run.js",
     "wf-queue": "build/queue-cli.js",
     "wf-trust": "build/trust-cli.js",
+    "wf-validate": "build/validate-cli.js",
     "wf-skills": "build/skills-cli.js",
     "wf-calibration": "build/calibration-cli.js"
   },

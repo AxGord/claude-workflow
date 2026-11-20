@@ -73,13 +73,21 @@ Run `wf-skills remove` (`scripts/wf-skills` of the plugin; see "The `wf-*` comma
 
 ### The `wf-*` commands
 
-`wf-skills`, `wf-queue`, `wf-run` and `wf-trust` are not on your `PATH` after a plugin install. Run one as `<plugin dir>/scripts/wf-skills` (for a local checkout that is the checkout; `claude plugin list` shows it as `Read from:`), or link the four once; the scripts follow the link to find `build/`:
+`wf-skills`, `wf-queue`, `wf-run`, `wf-trust` and `wf-validate` are not on your `PATH` after a plugin install. Run one as `<plugin dir>/scripts/wf-skills` (for a local checkout that is the checkout; `claude plugin list` shows it as `Read from:`), or link them once; the scripts follow the link to find `build/`:
 
 ```bash
-for c in wf-skills wf-queue wf-run wf-trust; do ln -s "<plugin dir>/scripts/$c" ~/.local/bin/$c; done
+for c in wf-skills wf-queue wf-run wf-trust wf-validate; do ln -s "<plugin dir>/scripts/$c" ~/.local/bin/$c; done
 ```
 
 `npm install -g claude-mcp-workflow` puts them on the `PATH` instead.
+
+**`wf-validate [<file.yaml | dir>...]`** checks that a project's workflow files still load, with no session and no server running. Use it as a pre-commit or gate step of a project that tracks its workflow files: a file the engine refuses to load (an `exec` state with `on_success` and no `on_error`, an unknown key, a transition to a missing state) stops every session of that workflow, and nothing else notices until one starts.
+
+- The default target is `.claude/workflows` of the current directory. `pool-gate.yaml` in it is the pool gate's config, not a workflow, and is skipped (by the server's loader as well).
+- It builds the loader the server builds (bundled templates, your global directory, the target as the project tier) and prints one line per file: `ok <name>`, or `fail <file>: <the loader's reason>`.
+- A reference the server only warns about at start (a `sub_workflow` or a required skill that is not there) is a `warn` line and does not change the result.
+- Exit 0 when every file loads (a directory that does not exist is a note, also 0), 1 when a file does not load, 2 on a bad argument.
+- It only reads: no state directory is touched, and the files' `exec` / `fetch` states are checked, never run, so it asks no trust question.
 
 ## Recommended CLAUDE.md Snippet
 

@@ -106,7 +106,7 @@ The full documentation is the site **https://axgord.github.io/claude-workflow/**
 
 | Page | Covers |
 |------|--------|
-| [Getting started](https://axgord.github.io/claude-workflow/getting-started) | Install channels, the CLAUDE.md snippet, one task or a queue, your own workflow, permissions, trusting a project's exec states (Claude Code's folder trust, `wf-trust` as the fallback; what consent does and does not protect against, and the guarded writes of the trust record and the global workflows directory) |
+| [Getting started](https://axgord.github.io/claude-workflow/getting-started) | Install channels, the `wf-*` commands (`wf-validate` checks that a project's workflow files load), the CLAUDE.md snippet, one task or a queue, your own workflow, permissions, trusting a project's exec states (Claude Code's folder trust, `wf-trust` as the fallback; what consent does and does not protect against, and the guarded writes of the trust record and the global workflows directory) |
 | [Concepts](https://axgord.github.io/claude-workflow/concepts) | How it works, bundled workflows and skills, MCP tools |
 | [Use case: anyparse](https://axgord.github.io/claude-workflow/use-case-anyparse) | A real project on the engine: a queue line's way by its difficulty, with the project's own numbers |
 | [Workflow YAML](https://axgord.github.io/claude-workflow/workflow-yaml) | The file format, three-tier loading, `extends:` |
