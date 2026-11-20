@@ -772,14 +772,16 @@ describe("Executor resource:", () => {
     const r = await executor.execute(
       {
         type: "exec",
-        command: `cp "${path.join(dir, "pool.json")}" "${leasedDuringRun}"; sleep 0.05`,
+        command: `cp "${path.join(dir, "pool.json")}" "${leasedDuringRun}" && sleep 0.05`,
         resource: { threads: 6 },
       },
       {},
       { sessionId: "s1", rootSessionId: "s1" },
     );
     const elapsed = performance.now() - t0;
-    expect(r.exit_code).toBe(0);
+    // before anything reads `seen`: a failed cp must show its stderr here, not as a later ENOENT
+    expect(r.exit_code, `leased command failed, stderr: ${r.stderr}`).toBe(0);
+    expect(r.stderr, "leased command wrote to stderr").toBe("");
     expect(r.wait_ms).toBeGreaterThanOrEqual(100);
     expect(r.duration_ms).toBeGreaterThanOrEqual(40);
     // the wait is not inside duration_ms: the two add up to the call, not more
