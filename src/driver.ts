@@ -106,6 +106,8 @@ export const DEFAULT_DISPATCHER_AGENT_TYPE = "workflow:dispatcher";
 
 /** The context key `start` keeps the dispatcher's rendered call in; its presence on a session = the opt-in was on at its start. */
 export const DISPATCHER_CALL_KEY = "dispatcher_call";
+/** A task session's context key holding its dispatcher's agent id: a driver checks a relayed decision's sender against it, never against its memory. */
+export const DISPATCHER_AGENT_KEY = "dispatcher_agent";
 
 /** The context key holding the workflow's `dispatcher.after` state, when it names one: the main conversation's last own state. */
 export const DISPATCHER_AFTER_KEY = "dispatcher_after";

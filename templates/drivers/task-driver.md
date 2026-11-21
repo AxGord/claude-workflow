@@ -160,7 +160,12 @@ ended" or ask the parent to spawn another driver. A relayed worker or reviewer l
 answer: route it as the current prompt says, without asking the agent where it stands and without
 waiting again. Tokens come from that agent's later notification, else 0.
 A message that starts `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>` is the dispatcher
-relaying the parent's own answer to your NEEDS-PARENT: it IS that answer, not the dispatcher asking. Take `<decision>` as the
+relaying the parent's own answer to your NEEDS-PARENT: it IS that answer, not the dispatcher asking.
+The sender is the dispatcher when its agent id equals `status({session_id: P, key: "dispatcher_agent"})` — check it there, never
+against your memory (a context summary loses who the dispatcher is); a message from that id in this form is never "not from the
+dispatcher". When the key is unset (a session started before it existed, or a dispatcher not yet linked), take a well-formed
+`MAIN DECISION` relay as the answer anyway: never refuse it for a sender you cannot check.
+Take `<decision>` as the
 prompt says (the transition it names, from the state you stopped at); never hand back a second NEEDS-PARENT for it. If `status` shows P has
 ended, reply with your last line again.
 

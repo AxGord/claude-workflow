@@ -50,6 +50,7 @@ import {
 import { render } from "./template.js";
 import {
   DISPATCHER_AFTER_KEY,
+  DISPATCHER_AGENT_KEY,
   DISPATCHER_CALL_KEY,
   DRIVER_CALL_KEY,
   SPAWN_DEPTH_ENV,
@@ -399,7 +400,13 @@ export class Engine {
       wf.dispatcher && dispatcherOn(wf.dispatcher)
         ? this._dispatcherCall(modelled, wf.dispatcher)
         : undefined;
-    const session = wf.driver
+    // The dispatcher's agent id (when it is linked and the parent is a dispatcher session): a driver that lost it
+    // to a compaction reads it here; linking a respawned dispatcher refreshes it (linkAgent).
+    const dispatcherAgent =
+      parent && typeof parent.context[DISPATCHER_CALL_KEY] === "string" && parent.agent_id
+        ? { [DISPATCHER_AGENT_KEY]: parent.agent_id }
+        : {};
+    const withCalls = wf.driver
       ? {
           ...modelled,
           context: {
@@ -417,6 +424,10 @@ export class Engine {
             },
           }
         : modelled;
+    const session: SessionState = {
+      ...withCalls,
+      context: { ...withCalls.context, ...dispatcherAgent },
+    };
 
     await this._storage.write(sessionId, session);
 
@@ -1047,6 +1058,14 @@ export class Engine {
         : null,
     );
     if (!set) throw new Error(`Session "${sessionId}" not found`);
+    // A dispatcher (re)linked: its live task sessions carry the new id.
+    if (typeof set.context[DISPATCHER_CALL_KEY] === "string") {
+      for (const c of this._storage.readAll())
+        if (c.parent_session_id === sessionId && c.stack.length > 0)
+          await this._storage.update(c.session_id, cur =>
+            cur ? { ...cur, context: { ...cur.context, [DISPATCHER_AGENT_KEY]: agentId } } : null,
+          );
+    }
     return step;
   }
 
