@@ -251,10 +251,8 @@ describe("the install steps come right after the scene", () => {
   it("a component in the hero's after-slot behind the scene, so it sits above the features; the markdown no longer has it", () => {
     expect(THEME).toContain('"home-hero-after": () => [h(Scene), h(Install)]');
     expect(LANDING).not.toContain("## Install");
-    expect(INSTALL).toContain(
-      "/plugin marketplace add https://github.com/anthropics/claude-plugins-community",
-    );
-    expect(INSTALL).toContain("/plugin install workflow");
+    expect(INSTALL).toContain("/plugin marketplace add AxGord/claude-workflow");
+    expect(INSTALL).toContain("/plugin install workflow@claude-workflow");
     expect(INSTALL).toContain("withBase('/getting-started')");
   });
 });

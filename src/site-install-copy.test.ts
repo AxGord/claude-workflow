@@ -13,7 +13,7 @@ import {
 
 const HAVE_BROWSER = browserInstalled();
 const COMMANDS =
-  "/plugin marketplace add https://github.com/anthropics/claude-plugins-community\n/plugin install workflow";
+  "/plugin marketplace add AxGord/claude-workflow\n/plugin install workflow@claude-workflow";
 
 let site: BuiltSite | undefined;
 let browser: Browser;

@@ -39,4 +39,4 @@ An agent tried to write the exec-consent record or a workflow into the global wo
 
 ## A project install from a git URL does not run
 
-`build/` is gitignored, so a git-sourced plugin has no compiled MCP server. Install from the community catalog, npm or a local checkout; see [Getting started](/getting-started#install-channels).
+`build/` is gitignored, so a git-sourced plugin has no compiled MCP server. Install from this repository's marketplace (`/plugin marketplace add AxGord/claude-workflow`), npm or a local checkout; see [Getting started](/getting-started#install-channels).

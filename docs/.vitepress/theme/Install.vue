@@ -15,8 +15,8 @@ import { withBase } from "vitepress";
       <div class="language-text vp-adaptive-theme">
         <button title="Copy Code" class="copy"></button>
         <span class="lang">text</span>
-        <pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>/plugin marketplace add https://github.com/anthropics/claude-plugins-community</span></span>
-<span class="line"><span>/plugin install workflow</span></span></code></pre>
+        <pre class="shiki shiki-themes github-light github-dark vp-code" tabindex="0"><code><span class="line"><span>/plugin marketplace add AxGord/claude-workflow</span></span>
+<span class="line"><span>/plugin install workflow@claude-workflow</span></span></code></pre>
       </div>
     </div>
     <p>

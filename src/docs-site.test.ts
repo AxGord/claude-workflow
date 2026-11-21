@@ -23,8 +23,8 @@ const headings = (rel: string): string[] => {
 const MOVED: [string, string][] = [
   ["## Features", "README.md"],
   ["## Quick Start", "docs/getting-started.md"],
-  ["### From Community Plugins (recommended)", "docs/getting-started.md"],
-  ["### From this repository", "docs/getting-started.md"],
+  ["### From this repository (recommended)", "docs/getting-started.md"],
+  ["### From Community Plugins", "docs/getting-started.md"],
   ["### From npm", "docs/getting-started.md"],
   ["### Manual (for development)", "docs/getting-started.md"],
   ["### Install channels", "docs/getting-started.md"],

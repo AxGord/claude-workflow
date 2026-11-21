@@ -43,13 +43,15 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 prints a one-line notice and skips the plan resume, the resume pickup and the conversation stamp.
 
 ```bash
-/plugin marketplace add https://github.com/anthropics/claude-plugins-community
-/plugin install workflow
+/plugin marketplace add AxGord/claude-workflow
+/plugin install workflow@claude-workflow
 ```
 
-Both the catalog and this repository as a marketplace (`/plugin marketplace add AxGord/claude-workflow`) give the
-latest release, built: the plugin comes from the repository's `release` branch, which holds `master` plus the
-compiled `build/`. A development checkout is not that tree: build it yourself (details below).
+This repository as a marketplace gives the latest release, built: the plugin comes from the repository's
+`release` branch, which holds `master` plus the compiled `build/`. A development checkout is not that tree: build it
+yourself (details below). The `claude-community` catalog (`anthropics/claude-plugins-community`) may serve an older
+version (its entry is pinned to 0.1.11, which has no `build/`, so the server does not start): do not install from
+it until its pin is bumped.
 
 To remove it, run `wf-skills remove` first (it deletes the unedited skill copies the plugin put in `~/.claude/skills`
 and the staging directories of an interrupted update;
