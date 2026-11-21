@@ -63,9 +63,25 @@ npm run build
 claude --plugin-dir ./
 ```
 
+`--plugin-dir` loads the checkout for that one session. To keep it for every session, point Claude Code at the checkout in `~/.claude/settings.json`:
+
+```json
+{ "env": { "CLAUDE_CODE_PLUGIN_DIRS": "<absolute path of the checkout>" } }
+```
+
+- Disable the marketplace copy of the plugin (`claude plugin disable workflow@claude-workflow`, or whichever marketplace you installed `workflow` from), or two `workflow` plugins load. `claude plugin list` then shows `workflow@inline` with `Path:` set to the checkout, loaded.
+- Run `npm ci && npm run build` after pulling; the checkout must have `build/`. After an edit, `/reload-plugins`.
+- Do not add the checkout as a directory marketplace. Its `.claude-plugin/marketplace.json` names the `release` branch on GitHub, so after a restart Claude Code falls back to the copy in `~/.claude/plugins/cache/`: the server runs old code and every live session answers `Workflow "<name>" not found`. A symlink of the checkout inside another directory marketplace fails to load (`Path escapes plugin directory`).
+
 ### Install channels
 
-Supported sources: the **catalog** and **this repository** (both install the `release` branch, which carries `build/`), the **npm package** (`claude-mcp-workflow`), and a **development checkout** you built (`claude --plugin-dir`). A marketplace entry that points at `master` of the git repository is not supported: `build/` is gitignored there, so the install would have no compiled MCP server. Point it at the `release` branch (`{ "source": "github", "repo": "AxGord/claude-workflow", "ref": "release" }`) or at a tag `v<version>`.
+Supported sources:
+
+- the **catalog** and **this repository**: both install the `release` branch, which carries `build/`;
+- the **npm package** (`claude-mcp-workflow`);
+- a **development checkout** you built: `claude --plugin-dir` for one session, `CLAUDE_CODE_PLUGIN_DIRS` in the user settings for every session.
+
+A marketplace entry that points at `master` of the git repository is not supported: `build/` is gitignored there, so the install would have no compiled MCP server. Point it at the `release` branch (`{ "source": "github", "repo": "AxGord/claude-workflow", "ref": "release" }`) or at a tag `v<version>`.
 
 ### Uninstall
 
