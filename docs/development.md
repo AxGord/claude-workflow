@@ -467,10 +467,16 @@ The gate is `scripts/ci-green.sh <sha>`, so a release cannot be cut from a commi
 Claude Code never builds a plugin at install (it copies the files and installs the dependencies from `package-lock.json` with scripts off), so the commit a git source names must already hold `build/`. `master` stays without built files. After a successful publish the workflow:
 
 - runs `scripts/release-tree.sh --commit`: a commit whose parent is the `master` release commit and whose tree is that commit's tree plus `build/*.js` (compiled from the committed sources; no `.d.ts`, no maps: only what runs);
-- force-pushes it as branch `release`, tags it `v<version>` and creates the GitHub release from `scripts/release-notes.sh <version>` (the lead of that version's CHANGELOG block, up to its first `### ` heading, and a link to CHANGELOG.md at the tag);
+- pushes it as branch `release` (forced) and the tag `v<version>` in ONE `git push --atomic`, through `scripts/release-push.sh` (every remote call retried 4 times, 10/30/60 s apart, by `scripts/retry.sh`), and creates the GitHub release from `scripts/release-notes.sh <version>` (the lead of that version's CHANGELOG block, up to its first `### ` heading, and a link to CHANGELOG.md at the tag);
 - leaves no branch and no tag when the publish failed.
 
-The publish step is skipped when `npm view claude-mcp-workflow@<version> version` already answers that version. A run that failed after the publish (the release commit, the push, the tag) is therefore finished by re-running the workflow. A tag that exists without a GitHub release is finished by hand (create the release from that tag with the output of `scripts/release-notes.sh <version>`).
+Every step of the job is safe to run again, so a transient failure (a GitHub storage error on the push, the registry's lag) is finished by re-running the workflow:
+
+- the publish goes through `scripts/npm-publish.sh`: a publish refused because the version already exists counts as published, and it then waits (up to 10 minutes) until `npm view claude-mcp-workflow@<version> version` answers, since the registry answers 404 for minutes after a publish. The step is still skipped when `npm view` already answers the version;
+- the release commit is deterministic: author, committer and dates are those of the `master` commit (`scripts/release-tree.sh --commit`), so a re-run makes the same sha. When the tag already names that sha it is left alone; when it names another commit the job fails, it never moves a released tag;
+- the version check counts a release as done only when the tag AND its GitHub release exist, so a tag without a release is finished by the re-run (`softprops/action-gh-release` updates the release of an existing tag, it does not make a second one).
+
+Only a real run on GitHub proves the workflow YAML, a GitHub-side push failure and the registry's real lag; `src/publish-retry-idempotent.test.ts` runs the three scripts against a local bare remote and a fake `npm`.
 
 GitHub refuses a release body over 125,000 characters, so a version's CHANGELOG block keeps its summary above a `### ` heading and its entries below it.
 

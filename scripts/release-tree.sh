@@ -5,7 +5,9 @@
 #        scripts/release-tree.sh --commit [--rev REV] [--message TEXT]
 #   --dir DIR      write the tree into DIR (an empty or missing directory)
 #   --commit       write a commit whose parent is REV and whose tree is REV's tree plus build/; print its id
-#                  (no ref moves, the working tree and the index stay as they are; the author is git's config)
+#                  (no ref moves, the working tree and the index stay as they are; author, committer and dates are
+#                  REV's own, so the same REV makes the same commit id on every run: a re-run of a release can
+#                  tell that the tag it finds already names this commit)
 #   --rev REV      the commit whose committed files are the base (default HEAD)
 #
 # Claude Code never builds at install: it copies the files and installs the dependencies from package-lock.json with
@@ -65,4 +67,10 @@ while IFS= read -r f; do
   git -C "$root" update-index --add --cacheinfo "$mode_bits,$blob,build/$f"
 done <"$tmp/files"
 tree=$(git -C "$root" write-tree)
+# Identity and dates come from the base commit, never from git's config or the clock: the commit id is a function of
+# the base commit (and the build, which is deterministic for the same sources and compiler).
+meta() { git -C "$root" log -1 --format="$1" "$sha"; }
+GIT_AUTHOR_NAME=$(meta %an) GIT_AUTHOR_EMAIL=$(meta %ae) GIT_AUTHOR_DATE=$(meta %aI)
+GIT_COMMITTER_NAME=$(meta %cn) GIT_COMMITTER_EMAIL=$(meta %ce) GIT_COMMITTER_DATE=$(meta %cI)
+export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_AUTHOR_DATE GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL GIT_COMMITTER_DATE
 git -C "$root" commit-tree "$tree" -p "$sha" -m "$msg"

@@ -54,15 +54,19 @@ jobs:
             exit 1
           fi
 
+      # Done = the tag exists AND its GitHub release exists. A tag without a release (the run failed at the release step)
+      # is finished by this re-run, not skipped: every step below is safe to repeat.
       - name: Check for version bump
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "Tag v$VERSION already exists, skipping"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1 && gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION and its release already exist, skipping"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
-            echo "New version: $VERSION"
+            echo "New version, or an unfinished release: $VERSION"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
@@ -86,7 +90,8 @@ jobs:
           npm ci
           npm run build
 
-      # A re-run after a failure past the publish must reach the release commit: skip the publish when npm has the version
+      # A re-run after a failure past the publish must reach the release commit: skip the publish when npm has the version.
+      # `npm view` can still answer 404 for minutes after a publish; the publish step below also accepts a duplicate refusal.
       - name: Check npm for this version
         if: steps.version.outputs.changed == 'true'
         id: npm
@@ -100,22 +105,21 @@ jobs:
 
       - name: Publish to npm
         if: steps.version.outputs.changed == 'true' && steps.npm.outputs.published != 'true'
-        run: npm publish --provenance --access public
+        run: sh scripts/npm-publish.sh claude-mcp-workflow "${{ steps.version.outputs.version }}" -- npm publish --provenance --access public
 
       # After publish: a failed publish must not leave a branch or a tag behind (the version-bump check would skip forever).
       # A git-sourced install (the community catalog, this repository as a marketplace) copies the committed files and
       # never builds, so the tagged commit is master's release commit plus build/, pushed as the `release` branch.
+      # The commit is deterministic (identity and dates of the master commit), so a re-run makes the same sha: the branch
+      # and the tag go in one atomic push with retries, and a tag that already names the sha is left alone (scripts/release-push.sh).
       - name: Make the release commit
         if: steps.version.outputs.changed == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           VERSION="${{ steps.version.outputs.version }}"
           SHA=$(scripts/release-tree.sh --commit --message "Release v$VERSION (master $(git rev-parse --short HEAD) plus build/)")
-          git push --force origin "$SHA:refs/heads/release"
-          git tag "v$VERSION" "$SHA"
-          git push origin "v$VERSION"
+          sh scripts/release-push.sh origin refs/heads/release "v$VERSION" "$SHA"
 
+      # softprops/action-gh-release updates the release of an existing tag instead of creating a second one.
       - name: Create GitHub Release
         if: steps.version.outputs.changed == 'true'
         uses: softprops/action-gh-release@v3
