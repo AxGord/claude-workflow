@@ -870,6 +870,8 @@ export interface QueueLineView {
   readonly lastNoteDate?: string;
   /** The first line of the task's last note (a failed mark writes its reason there), when it has one. */
   readonly lastNote?: string;
+  /** The commit the line landed as, read from its notes (`landedShaOf`): a land of a line with `repo:` set is in that repo, whose commits carry no `Slice:` trailer, so the plan pane's Landed row has no other source. */
+  readonly landedSha?: string;
   /** The day (`YYYY-MM-DD`) `queue_mark` moved the line to done or failed, when it recorded one. */
   readonly ended?: string;
   /** The day (`YYYY-MM-DD`) `wf-queue --restore` brought the line back from the archive; the auto-archive counts its age from the later of this and `ended`. */
@@ -905,6 +907,15 @@ const lastNoteOf = (l: QueueLine): { lastNote?: string } => {
   const first = (l.notes.at(-1)?.text ?? "").trim().split("\n")[0]?.trim() ?? "";
   return first === "" ? {} : { lastNote: first };
 };
+
+/** The commit a `landed <sha>` note names (the mark's note of a land, any case; a trailing `YYYY-MM-DD;` detail follows it in some queues): the latest such note of the line, else none. */
+export function landedShaOf(l: QueueLine): string | undefined {
+  for (const n of [...l.notes].reverse()) {
+    const m = /^landed\s+([0-9a-f]{7,40})\b/i.exec(n.text.trim());
+    if (m !== null) return (m[1] ?? "").toLowerCase();
+  }
+  return undefined;
+}
 
 /**
  * With nothing admittable now and lines running: the ids the picker would admit once the running lines are done, by their place
@@ -969,6 +980,7 @@ export function describeQueue(queue: Queue): {
       notes: l.notes.length,
       ...(l.notes.at(-1)?.date !== undefined ? { lastNoteDate: l.notes.at(-1)?.date } : {}),
       ...lastNoteOf(l),
+      ...(landedShaOf(l) !== undefined ? { landedSha: landedShaOf(l) } : {}),
       ...(l.meta.ended !== undefined ? { ended: l.meta.ended } : {}),
       ...(l.meta.restored !== undefined ? { restored: l.meta.restored } : {}),
       ...(l.meta.added !== undefined ? { added: l.meta.added } : {}),

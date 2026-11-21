@@ -142,8 +142,15 @@ function parseSession(text: string): Parsed | null {
   }
 }
 
+/** The land sha each line's notes name (`landedSha` of the engine's /api/queue answer), by line id. */
+export function landShasOf(api: { lines?: { id: string; landedSha?: string }[] } | null | undefined): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const l of Array.isArray(api?.lines) ? api.lines : []) if (typeof l?.landedSha === 'string' && l.landedSha !== '') out.set(String(l.id), l.landedSha)
+  return out
+}
+
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; ended?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; landedSha?: string; ended?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }, now: number = Date.now()): QueueView {
@@ -193,13 +200,13 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
   }
 }
 
-async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string; landBranch?: string; taskIds?: string[] }> {
+async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string; landBranch?: string; taskIds?: string[]; shas?: Map<string, string> }> {
   const res = await $.http.fetch(`${DASHBOARD}/api/queue?file=${encodeURIComponent(file)}`).catch((e: unknown) => String(e))
   if (typeof res === 'string') return { queue: null, error: 'queue: ' + res }
   try {
     const body = JSON.parse(res.text)
     if (!res.ok) return { queue: null, error: 'queue: ' + String(body?.error ?? res.status) }
-    return { queue: queueView(file, body, now), error: '', ...(typeof body?.landBranch === 'string' ? { landBranch: body.landBranch } : {}), taskIds: [...(Array.isArray(body?.lines) ? body.lines.map((l: any) => String(l?.id)) : []), ...(Array.isArray(body?.archivedIds) ? body.archivedIds.map(String) : [])] }
+    return { queue: queueView(file, body, now), error: '', ...(typeof body?.landBranch === 'string' ? { landBranch: body.landBranch } : {}), taskIds: [...(Array.isArray(body?.lines) ? body.lines.map((l: any) => String(l?.id)) : []), ...(Array.isArray(body?.archivedIds) ? body.archivedIds.map(String) : [])], shas: landShasOf(body) }
   } catch (e) {
     return { queue: null, error: 'queue: ' + String(e) }
   }
@@ -536,8 +543,8 @@ function landFigures(ledger: Ledger, slice: string): { start: number; difficulty
   return { start, difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) }
 }
 
-/** The landed task runs of the ledger inside the window that `seen` (the slices git shows) lacks, of the lines of THIS queue (`own`: its lines and its archive; the ledger holds every project's runs) in whatever workflow they ran: a land made before the repo wrote a `Slice:` trailer. They carry no sha. */
-function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, now: number): Land[] {
+/** The landed task runs of the ledger inside the window that `seen` (the slices git shows) lacks, of the lines of THIS queue (`own`: its lines and its archive; the ledger holds every project's runs) in whatever workflow they ran: a land made before the repo wrote a `Slice:` trailer. Git has no commit of them, so the sha is the one the line's `landed <sha>` note names (the land of a line with `repo:` set is in that repo), else `—`. */
+function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, shas: Map<string, string>, now: number): Land[] {
   const since = now - LAND_DAYS * 24 * 3600 * 1000
   const out: Land[] = []
   for (const [slice, lp] of ledger.landed) {
@@ -545,13 +552,13 @@ function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, now: n
     const d = new Date(lp.endedAt)
     const at = `${dayOf(lp.endedAt)} ${two(d.getHours())}:${two(d.getMinutes())}`
     const { start, difficulty, usd, usdFloor } = landFigures(ledger, slice)
-    out.push({ sha: '—', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) })
+    out.push({ sha: shas.get(slice) ?? '—', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) })
   }
   return out
 }
 
 /** The Landed tree's rows, newest first, and the branch they were read from: the commits of the land branch carrying a `Slice:` trailer, then the ledger's landed task runs of the window that git does not show (each slice once). A slice whose queue line is still `running` has no row: its merge commit exists before the ledger and the mark, so the row would draw `?` figures and the task would leave the running group early. */
-async function lands($: any, queueFile: string, ledger: Ledger, header: string | undefined, own: Set<string>, running: Set<string>, now: number): Promise<{ lands: Land[]; branch: string }> {
+async function lands($: any, queueFile: string, ledger: Ledger, header: string | undefined, own: Set<string>, running: Set<string>, shas: Map<string, string>, now: number): Promise<{ lands: Land[]; branch: string }> {
   const repo = repoOf(queueFile)
   if (repo === queueFile) return { lands: [], branch: 'main' }
   const branch = await landBranchOf($, repo, header)
@@ -571,7 +578,7 @@ async function lands($: any, queueFile: string, ledger: Ledger, header: string |
       const at = p[1] ?? ''
       return { sha: p[0] ?? '', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) }
     })
-  const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, now).filter(l => !running.has(l.slice))
+  const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, shas, now).filter(l => !running.has(l.slice))
   return { lands: extra.length === 0 ? fromGit : [...fromGit, ...extra].sort((a, b) => landMs(b.at, now) - landMs(a.at, now)), branch }
 }
 
@@ -728,7 +735,7 @@ async function build($: any): Promise<Snapshot> {
     }),
     ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(failedRecent, failedTotals) } : {}),
   }
-  const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), new Set(queue.running.map(l => l.id)), now) : { lands: [], branch: 'main' }
+  const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), new Set(queue.running.map(l => l.id)), loaded.shas ?? new Map(), now) : { lands: [], branch: 'main' }
   const landed = read.lands
   const recent = landed.filter(l => landMs(l.at, now) > now - 24 * 3600 * 1000).length
   const landedSum = landedUsd(landed)

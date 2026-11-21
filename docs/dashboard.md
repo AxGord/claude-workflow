@@ -26,7 +26,10 @@ The pane's parts:
   - `✓ Landed · 14d (n) · $landed · parent $P (S%) · branch`: the queue repo's `git log --first-parent` lines carrying a `Slice:` trailer, the Cost tab's 14 days. The heading's parts:
     - The log is of the branch the queue's lands target: the header's `land_branch:` when set, else the repo's checked-out branch (`git branch --show-current`), else `main`. The heading names the branch when it is not `main`.
     - A land made before the repo wrote the trailer, which git does not show, is read from the ledger's task runs that went through a `land` state in the window, of whatever workflow.
-    - Such a land is read only for a line of this queue or its archive (the ledger holds every project's runs). Each slice counts once, with `—` in the sha column.
+    - Such a land is read only for a line of this queue or its archive (the ledger holds every project's runs). Each slice counts once.
+    - Its sha column is the commit the line's own `landed <sha>` note names (any case, the latest such note; `/api/queue` carries it as `landedSha`).
+    - A line with `repo:` set lands in that repo, whose commits carry no `Slice:` trailer, so only its note names the commit.
+    - A land whose notes name no sha draws `—`.
     - `$landed` is the sum of the ledger's real `spend.usd` over those lines, each line once. A line with no spend row, or only a partial one (`usd_partial`), adds nothing, and `$landed` is absent when no line is measured.
     - `parent $P` is the top-level Claude Code session's own spend recorded in the same 14 days, of the queue repo's own conversations only (ledger `parent_spend`, below). Its `project` is matched to the repo by Claude Code's project directory name.
     - `S%` is the parent's share of `$landed`, absent without a landed sum.
