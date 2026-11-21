@@ -207,7 +207,7 @@ states:
       dirty=$(git status --porcelain)
       base=$(git merge-base master HEAD) || exit 2
       if git diff --name-only "$base" HEAD | grep -qx CHANGELOG.md; then nolog=; else nolog=1; fi
-      # A fix round is open when a review text exists and its verdict (read as review_filed reads it) is not MERGE: review_filed sends every such text, a non-canonical verdict line too, to the worker. HEAD still at the reviewed commit means the list never reached the worker; the refusal prints the review's last 8000 bytes (the verdict and its FIXES list close the text), because work_unready forwards only this stdout.
+      # A fix round is open when a review text exists and its verdict (read as review_filed reads it) is not MERGE: review_filed sends every such text with a verdict line, a non-canonical one too, to the worker; a text with no verdict line is refused to `review_refile` and never reaches the worker. HEAD still at the reviewed commit means the list never reached the worker; the refusal prints the review's last 8000 bytes (the verdict and its FIXES list close the text), because work_unready forwards only this stdout.
       v=$(printf '%s\n' "$TEXT" | grep -E '^(VERDICT +)?(MERGE|FIXES)' | tail -1 | sed -E 's/^VERDICT +//')
       [ -n "$v" ] || { printf '%s\n' "$TEXT" | sed '/^[[:space:]]*$/d' | tail -1 | grep -Eq '(^|[^A-Za-z])MERGE[.[:space:]]*$' && v=MERGE; }
       case "$v" in
@@ -422,7 +422,7 @@ states:
 
       On the reviewer's answer: ONE `transition` `filed` with `set: {review_text: <its final message verbatim>, review_lessons: <the JSON of its `LESSONS:` line, verbatim; leave the key out when none>}` (the engine
       files it under the queue's backups/slice-logs/<task>/ and routes MERGE → land, FIXES → work; on FIXES the list
-      goes to the worker as its fix round, verbatim). Re-entered
+      goes to the worker as its fix round, verbatim; a text with no verdict line, a paraphrase of yours, is refused to `review_refile`, never defaulted to a fix round). Re-entered
       after a rebase onto a moved master with the reviewed change unchanged (`git -C {{context.wt}} range-diff
       ORIG_HEAD...HEAD` shows only the base moved) → `merge` without a new reviewer.
     transitions:
@@ -438,16 +438,31 @@ states:
       n=$(( $(ls "$d"/review-*.md 2>/dev/null | wc -l) + 1 )); printf '%s\n' "$TEXT" > "$d/review-$n.md"; echo "wrote $d/review-$n.md"
       printf '%s\n' "$TEXT" | grep '^CLAUDE.md:' >> "$d/claude-md.txt" || true
       v=$(printf '%s\n' "$TEXT" | grep -E '^(VERDICT +)?(MERGE|FIXES)' | tail -1 | sed -E 's/^VERDICT +//')
-      # A verdict written inline at the end of the last line: only MERGE is read there, anything else goes to a fix round.
+      # A verdict written inline at the end of the last line: only MERGE is read there; a text with no verdict line at all is refused (exit 11), never sent to a fix round.
       [ -n "$v" ] || { printf '%s\n' "$TEXT" | sed '/^[[:space:]]*$/d' | tail -1 | grep -Eq '(^|[^A-Za-z])MERGE[.[:space:]]*$' && v=MERGE; }
+      # A text with no verdict line is not the reviewer's own (a driver's paraphrase): a fix round needs the reviewer's FIXES list, so it is refused, never defaulted to `work`.
+      [ -n "$v" ] || { echo "refused: review_text carries no verdict line (a line starting VERDICT, MERGE or FIXES, or a trailing MERGE): it is not the reviewer's own text"; exit 11; }
       case "$v" in
         MERGE*) if awk -v id="$TASK" '$0=="  - id: "id{f=1;next} f&&/^  - id:/{exit} f&&/^    breaking: true$/{b=1} END{exit !b}' "$QUEUE"; then exit 20; fi; exit 0;;
         *) exit 10;;
       esac
     env: { TEXT: "{{context.review_text}}", QUEUE: "{{context.queue_file}}", TASK: "{{context.task}}" }
     timeout: 10000
-    cases: { "0": project_land, "10": work, "20": breaking_ready }
+    cases: { "0": project_land, "10": work, "11": review_refile, "20": breaking_ready }
     default: work
+
+  review_refile:
+    max_visits: 2
+    on_exhausted: blocked
+    prompt: |-
+      {{stdout}}
+      The `review_text` you filed is not the reviewer's own message. SendMessage `{{context.reviewer_agent}}` (gone ->
+      `blocked`: the parent reads the review): "Resend your final message for {{context.task}} verbatim, its last line
+      MERGE or FIXES: and a numbered list." Then ONE `transition` `filed` with `set: {review_text: <its message,
+      verbatim, never your summary>, review_lessons: <the JSON of its `LESSONS:` line; leave the key out when none>}`.
+    transitions:
+      filed: review_filed
+      blocked: blocked
 
   breaking_ready:
     prompt: |-

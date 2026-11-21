@@ -71,6 +71,7 @@ The engine's own slice workflow is a tracked file: `.claude/workflows/engine-tas
 - The refusal prints the last 8000 bytes of the review (`tail -c`: the verdict and its list close the text).
 - The bundled `templates/batch-task.yaml` `work_check` carries the same guard on `batch/<task>` against `reviewed_sha` and `review_text`, which its `review` prompt has the driver set.
 - `src/work-check-unamended-fixes.test.ts` and `src/work-check-unamended-fixes-followups.test.ts` pin it.
+- `review_filed` refuses a `review_text` with no verdict line (a driver's paraphrase, or empty) with exit 11 to `review_refile`, where the driver asks the reviewer for its final message verbatim and files it again; it never defaults to a fix round with no fix list. `src/review-filed-verdict-paraphrase.test.ts` pins it.
 
 **Whether the tree needs another review**
 
