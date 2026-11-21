@@ -139,8 +139,13 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - `""`/null removes a field; a set field keeps its place, a new one goes in key order; `after`/`touches` take a list or a comma-separated string; `text` is written as a block scalar.
   - The fields are checked as `queue_add` checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused, while a line written before the rule stays editable. The status stays `queue_mark`'s.
   - An edit of `text`, `touches`, `owner` or `sweep` that changes the brief, or of `repo` to another value, rewrites `base` (at the HEAD of the line's repo then) and `text_hash`; any other edit leaves them.
-- `queue_header({ queue?, file?, batch_size?, reason?, archive_after_days?, exclusive_hold? })` — header keys, under the lock:
+- `queue_header({ queue?, file?, batch_size?, reason?, until?, archive_after_days?, exclusive_hold? })` — header keys, under the lock:
   - the window: `batch_size: N` with `reason:` (`0` pauses; the two go together);
+  - with `until: "<TASK-ID> done"` the window is temporary:
+    - the header keeps the window and reason it replaced as `window_until:`;
+    - the mark of that line that leaves `running` (`done`, `failed` or `released`, by `queue_mark`, `wf-queue` or the engine's own terminal mark) puts them back and says so in its answer (`batch_size 4 → 3  # …`);
+    - a line already `done` or `failed`, or an unknown one, is refused (the window would never end), and so is a second temporary window while one is pending;
+    - a plain window set meanwhile drops the pending revert, and the answer names it;
   - and/or `archive_after_days: N` (a whole number ≥ 1; `null` removes the key);
   - and/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line, see the pick rules; `null` removes the key = on).
   - One call sets the window, a key or several; a set of one leaves the other keys as they are. No other key is settable here (the rest of the header is written when the queue is made).
@@ -166,11 +171,11 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - 12: none, nothing runs and `batch_size: 0`;
   - 2: error.
 - Further forms:
-  - `--done|--failed|--release|--running|--promote|--shelve <ID> [--note T] [--from W]`; `--running <ID> --retry`: failed→running, `difficulty:` +1; `--running <ID> --force REASON`: mark a line the picker would not admit;
+  - `--done|--failed|--release|--running|--promote|--shelve <ID> [--note T] [--from W]`; `--failed|--release <ID> --if-running`: a line that is not `running` is left as it is (no refusal), which is how a pipeline's last step marks a line it may already have marked; `--running <ID> --retry`: failed→running, `difficulty:` +1; `--running <ID> --force REASON`: mark a line the picker would not admit;
   - `--header <key>`;
   - `--add '<YAML mapping>' [--after ID|--before ID]`;
   - `--edit <ID> [--set key=value]… [--append-note T] [--from W]` (`key=` removes);
-  - `--batch-size <N> --reason T`;
+  - `--batch-size <N> --reason T [--until "<ID> done"]` (the temporary window above);
   - `--header-set archive_after_days=N|exclusive_hold=yes|no [--reason T]` (`archive_after_days=` / `exclusive_hold=` removes the key; another key is refused; the reason is echoed, not written);
   - `--archive --older-than <days> [--include-unended] [--dry-run]`;
   - `--restore <ID>` (an archived line back into the queue);
@@ -486,28 +491,37 @@ dispatcher:
 - `dispatch` delivers its full prompt on every visit (`full_on_revisit`). `status` always answers with the full prompt; the one-line `Revisit #N` is the reply of the `transition` that re-enters a state already visited.
   - A dispatcher agent that acts on the reply of the transition that brings it back to `dispatch` would otherwise have no recipe in front of it and guess the task workflow of an admitted line.
   - A project heir that overrides `dispatch` keeps the flag, or its own `revisit_prompt` carries the recipe.
+- The block also carries main's duties in this mode, once (the engine tells them at the moment they apply, so main need not remember them):
+  - answer a task driver directly, a route only from the line's `routes=`;
+  - `lines added` for the refill;
+  - what a `CLOSED` line means: the slot is free; the engine already failed or released the queue line when the task workflow's terminal declares `queue_mark:` (bundled `batch-task` and its heirs), otherwise the line is still the main conversation's to mark;
+  - a window change as `queue_header` with `until`, and what a repeated `reason=unanswered` question is.
+- `status({ session_id, key: "routes" })` answers the session's transitions at its current state, `a|b|c` (`(none)` at a state with none; a context key named `routes` wins). The dispatcher reads it to put `routes=` on a `NEEDS-PARENT` line.
+- A `transition` or `status` reply carries `UNANSWERED: task=<ID> session=<P> driver=<id> asked=<time> (<n> ago): <question>` for each driver question (`ask_parent`) in the session's sub-tree that no move has answered for over 10 minutes: the dispatcher's next pass shows an answer that never reached its driver, with no polling.
 - Unlike `driver:` it records no `agent_step` and changes no wake rule of the session's children. A workflow declares `driver:` or `dispatcher:`, not both; an unknown `after` state fails the load.
 
 **What the agent does** (`templates/drivers/dispatch-driver.md`)
 
 - `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`.
-- `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`.
+- `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`; a `CLOSED` line for a `stopped` task also sends `LESSONS` at once.
 - `collect`, on main's message `lines added` (sent when `queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…`) it takes `refill` with no `set`: the pick runs again without a land.
   - A project heir with its own `collect` must add `refill: pick` to its transitions (the state is replaced whole); without it the transition is refused and the dispatcher hands back `NEEDS-PARENT`.
   - `collect` absorbs `WAITING` lines and notifications, and relays a stray worker or reviewer line to that task's driver.
 - A driver that ended with no last line is pinged once, then re-spawned from the task session's `driver_call`.
-- A task session that ended `stopped` is not the dispatcher's to route: its driver's `NEEDS-PARENT` line goes to the main conversation, the slot stays taken, and `stop` (which ends the whole batch session) is taken only on the main conversation's word.
+- A task session that ended `stopped` or `closed` has failed its own queue line (a terminal state's `queue_mark:`), so nothing stays `running` with no pipeline: its driver's last line is `CLOSED … reason=stopped: … see=state stopped`, the dispatcher frees the slot like any `CLOSED` line and sends `LESSONS` at once so the main conversation sees the stop. `stop` (which ends the whole batch session) is taken only on the main conversation's word.
+- A `NEEDS-PARENT` is handed to the main conversation with ` driver=<agent id> routes=<a|b|c>` appended (the task's driver from `tasks`, the routes from `status` key `routes`). The main conversation answers THAT driver by `SendMessage`, `task=<ID>: <route or decision>`; the old form to the dispatcher is still relayed.
+- Its only calls on a task session are `start`, `link_agent` and `status` with `driver_call` or `routes`.
 - It decides nothing and has no `abort`, `delete`, `queue_mark`, `queue_edit` or `queue_add`.
 
 **What reaches the main conversation**, each as one `SendMessage` to `main` while the agent keeps running (Claude Code accepts a single `SubagentHandback` per result and refuses the second, so the dispatcher never uses it for these):
 
 | Message | When | The main conversation's answer |
 |---|---|---|
-| a driver's `NEEDS-PARENT …` line, verbatim | a task needs a decision | `SendMessage` to the dispatcher, starting `task=<ID>:`; it relays to that driver |
+| a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task for over 10 minutes) | `SendMessage` to the `driver=` id, `task=<ID>: <route or decision>`: directly, never through the dispatcher; a route only from `routes=` |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
 
-- The dispatcher relays the main conversation's `task=<ID>: <decision>` to the driver as `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>`. The driver takes a decision in that form as the parent's own answer to its NEEDS-PARENT (a bare relay was once read as the dispatcher asking, and answered with a second NEEDS-PARENT).
+- A decision that still reaches the dispatcher, `task=<ID>: <decision>`, is relayed to the driver as `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>`. The driver takes a decision in that form as the parent's own answer to its NEEDS-PARENT (a bare relay was once read as the dispatcher asking, and answered with a second NEEDS-PARENT).
 - The lessons are copied, never judged or turned into queue lines by the agent. The last block handed is also in the context key `lessons_handed`.
 - A `LANDED` line that ends `lessons=filed N, triage M` needs no reading: its records are already filed. Only the triage file's rows are judged, in a batch; the line names the file (`triage_file=<path>`) when M > 0.
 - A worker's, reviewer's or driver's line that reaches the main conversation is sent verbatim to the dispatcher.

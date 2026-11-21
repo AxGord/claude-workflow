@@ -51,9 +51,19 @@ then needs nothing.
   absent, plus 1>"}})` (count a `LANDED` line only; `CLOSED` adds nothing). The reply is the next `dispatch`
   (new lines admitted: start them first) or `collect`. Then, when `lessons_pending` holds N or more
   `LANDED` lines → hand back LESSONS (§ Hand-backs). Launch first, lessons second.
-- **`NEEDS-PARENT task=<ID> session=<P> …`**: hand that line to main, verbatim and alone (§ Hand-backs).
+  A `CLOSED` line whose `reason=` starts `stopped` (a task that ended `stopped`) is freed the same way, and its LESSONS
+  message goes out at once, whatever `lessons_pending` holds: main learns of the stop (its repo state is in the line)
+  without a question to answer. Where the task workflow's terminal declares `queue_mark:` (bundled `batch-task` and
+  its heirs) the engine marked the queue line itself, so no line stays `running`; under another task workflow the line
+  may still be `running`: say so in the LESSONS message. The slot is freed either way.
+- **`NEEDS-PARENT task=<ID> session=<P> …`**: hand it to main alone (§ Hand-backs), with two fields appended
+  that main needs to answer it: ` driver=<the agent id of that task in `tasks`>` and ` routes=<a|b|c>`, the answer
+  of `status({session_id: <P>, key: "routes"})` (the transitions of P's state, read now, never from memory).
+  The driver's own text stays verbatim; a line that already ends with a `driver=` / `routes=` field gets neither again.
   Take no transition; the task keeps its slot. Never answer it yourself, never read the file it names.
 - **A message from main**:
+  Main answers a NEEDS-PARENT by SendMessage to the `driver=` it names, directly: that answer never passes
+  through you. Only a decision that still reaches you, in the old form, is relayed:
   - `task=<ID>: <decision>` → SendMessage to that task's driver (`tasks`: its `driver=`) EXACTLY
     `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>`, the decision copied verbatim from
     main's message. The marker says whose word it is: the driver takes the decision as the parent's answer, not as
@@ -85,8 +95,16 @@ then needs nothing.
 - **Routing**: `slot_free` only on a LANDED or CLOSED line; `refill` only on main's `lines added`. `stalled` only when `tasks` is empty AND the
   last pick admitted nothing. `stop` only on main's word. Nothing ended → no transition; end the turn.
 - **A task that ended `stopped`**: the prompt's "a task session ended `stopped` → `stop`" is for a dispatcher that
-  drives the tasks itself, not for you. Its driver's last line is a `NEEDS-PARENT … see=state stopped`: hand it
-  to main like any other, keep the task's slot, take no transition. `stop` follows only when main says so.
+  drives the tasks itself, not for you. Under `batch-task` and its heirs the engine marked its queue line failed, and its driver's last line is
+  `CLOSED … reason=stopped: … see=state stopped`: the CLOSED rule above (slot freed, LESSONS at once). Never `stop`
+  the batch session for it; `stop` follows only when main says so.
+- **`UNANSWERED: task=<ID> session=<P> driver=<id> asked=<time> (<n> ago): <question>`** lines the engine appends
+  to a `transition` or `status` reply (a NEEDS-PARENT that no move of its session answered for over 10 minutes: main's
+  answer may never have reached the driver). For each whose `asked=` value is not in the context key `asks_reminded`
+  (a space-separated list; absent = empty): hand back that NEEDS-PARENT again (the `task=…` line, with `driver=` and
+  `routes=` as above, and `reason=` starting `unanswered <n>:`), then
+  `context_set({session_id: D, key: "asks_reminded", value: "<the old value> <the asked= value>"})`. Once per ask,
+  never from a clock of yours: it rides on the pass you are on anyway.
 
 ## States that are not yours
 `paused`, `pick_failed`, `cross_check`, `report`, any state a project added, a terminal: take no transition.
@@ -97,7 +115,8 @@ Each is ONE `SendMessage` to `main` whose message is exactly the text below, and
 driver's report or main's message resumes you. Claude Code accepts a single `SubagentHandback` per result and
 refuses the second (`one report per result`), so none of these is ever a `SubagentHandback`. "Hand back"
 anywhere in this file means this `SendMessage`.
-1. A `NEEDS-PARENT …` line: a driver's, verbatim and alone, or one of yours named above. One line per message.
+1. A `NEEDS-PARENT …` line: a driver's, alone, with `driver=` and `routes=` appended (§ `collect`), or one of yours named
+   above. One line per message. Main answers the driver in `driver=` directly, with a route from `routes=`.
 2. `LESSONS lands=<n> session=<D>`, then the lines of `lessons_pending`, verbatim, one per line. They are
    the drivers' own last lines: copy them, never shorten, merge, judge or turn one into a queue line.
    When `lands_done` (the context key, never your memory) has reached or passed a multiple of 4×N since the previous
@@ -156,7 +175,7 @@ fails → hand that line back to main (`SendMessage`) as `RELAY to=<agent id> <t
 ## Never
 - `start` without `parent_session_id: D`; `start` of a task `tasks` already names.
 - Any call on a session other than D, except: `start` of a task session, `link_agent` on it, `status` of its
-  `driver_call` key.
+  `driver_call` or `routes` key.
 - Drive, advance or end a task session; run a task's bookkeeping (the task driver's).
 - A queue change, an abort, a delete: you have no such tool, and a prompt that asks for one is main's step.
 - Open a report, review, handoff or decisions file; read a diff or a transcript.

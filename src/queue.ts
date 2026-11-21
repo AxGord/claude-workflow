@@ -1493,10 +1493,23 @@ export interface MarkResult {
   readonly difficulty?: { readonly from: number; readonly to: number };
   /** The task's keys this server does not know (kept, ignored). */
   readonly unknownKeys?: readonly string[];
+  /** `ifRunning`: the line was not `running`, so nothing was written (`from` = `to` = what it is). */
+  readonly skipped?: true;
+  /** The temporary window (`queue_header` `until`) this mark ended: the header is back to what it was before. */
+  readonly windowRestored?: WindowRestored;
 }
 
-/** The answer of a mark: `ID: failed → running`, plus the difficulty a retry raised. */
+/** A temporary window that ended with its line's mark. */
+export interface WindowRestored {
+  readonly task: string;
+  readonly from: number;
+  readonly to: number;
+  readonly reason: string;
+}
+
+/** The answer of a mark: `ID: failed → running`, plus the difficulty a retry raised and a window it ended. */
 export function formatMark(r: MarkResult): string {
+  if (r.skipped) return `${r.id}: still ${r.from}, nothing marked`;
   const d = r.difficulty;
   const bump = !d
     ? ""
@@ -1504,7 +1517,11 @@ export function formatMark(r: MarkResult): string {
       ? ` (difficulty ${d.from} → ${d.to})`
       : ` (difficulty ${d.to}: already the cap)`;
   const extra = r.unknownKeys?.length ? `\n${unknownKeyNotice(r.id, r.unknownKeys)}` : "";
-  return `${r.id}: ${r.from} → ${r.to}${bump}${extra}`;
+  const w = r.windowRestored;
+  const restored = w
+    ? `\nbatch_size ${w.from} → ${w.to}${w.reason ? `  # ${w.reason}` : ""}  (the window set until ${w.task} done ends with it)`
+    : "";
+  return `${r.id}: ${r.from} → ${r.to}${bump}${extra}${restored}`;
 }
 
 /** Today as `YYYY-MM-DD` (local time): a note's date. */
@@ -1622,16 +1639,22 @@ export async function markQueue(
     readonly retry?: boolean;
     readonly from?: string;
     readonly force?: string;
+    /** `failed` / `released` only: a line that is not `running` is left as it is, no refusal. */
+    readonly ifRunning?: boolean;
   } = {},
 ): Promise<MarkResult> {
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
   checkNote(note);
+  if (opts.ifRunning === true && to !== "failed" && to !== "released")
+    throw new QueueError("if-running goes with `failed` or `released` only");
   if (opts.retry === true && to !== "running")
     throw new QueueError("retry restarts a failed task: it goes with `running` only");
   const { from, to: status }: { from: Status; to: Status } =
     opts.retry === true ? { from: "failed", to: "running" } : MARK_TARGETS[to];
   return writing(file, e => {
     const line = lineOf(e.queue, id);
+    if (opts.ifRunning === true && line.status !== "running")
+      return { id, from: line.status, to: line.status, skipped: true };
     if (line.status !== from) {
       const hint =
         line.status === "failed" && to === "running" ? " (retry: true restarts a failed task)" : "";
@@ -1669,14 +1692,50 @@ export async function markQueue(
       difficulty = { from: was, to: Math.min(was + 1, DIFFICULTY_MAX) };
       node.set("difficulty", difficulty.to);
     }
+    const windowRestored = from === "running" ? endWindow(e, id) : undefined;
     return {
       id,
       from,
       to: status,
       ...(difficulty ? { difficulty } : {}),
       ...(line.unknownKeys.length > 0 ? { unknownKeys: line.unknownKeys } : {}),
+      ...(windowRestored ? { windowRestored } : {}),
     };
   });
+}
+
+/** The header key a temporary window keeps what it replaced in. */
+const WINDOW_UNTIL = "window_until";
+
+interface WindowUntil {
+  readonly task: string;
+  readonly batch_size: number;
+  readonly reason: string;
+}
+
+/** The pending revert of a temporary window (`window_until:` in the header), if the file holds a readable one. */
+function windowUntilOf(header: Readonly<Record<string, string>>): WindowUntil | undefined {
+  const raw = header[WINDOW_UNTIL];
+  if (raw === undefined) return undefined;
+  try {
+    const w = JSON.parse(raw) as Partial<WindowUntil>;
+    return typeof w.task === "string" && Number.isInteger(w.batch_size)
+      ? { task: w.task, batch_size: w.batch_size as number, reason: w.reason ?? "" }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A mark of `id` that leaves `running` ends the temporary window set until it: the window and its reason go back. */
+function endWindow(e: Editable, id: string): WindowRestored | undefined {
+  const w = windowUntilOf(e.queue.header);
+  if (w?.task !== id) return undefined;
+  e.doc.set("batch_size", w.batch_size);
+  if (w.reason !== "") e.doc.set("reason", w.reason);
+  else e.doc.delete("reason");
+  e.doc.delete(WINDOW_UNTIL);
+  return { task: id, from: e.queue.batchSize, to: w.batch_size, reason: w.reason };
 }
 
 function lineOf(queue: Queue, id: string): QueueLine {
@@ -2003,19 +2062,48 @@ export interface HeaderResult {
   readonly from: number;
   readonly to: number;
   readonly reason: string;
+  /** A temporary window: the task whose end-mark puts `from` (and the reason before) back. */
+  readonly until?: string;
+  /** A temporary window still pending that this plain window replaced: its task. */
+  readonly droppedUntil?: string;
 }
 
-/** The header's `batch_size: N` and `reason:` under the lock: the window, `0` = the pause. */
+/** `until` of a temporary window: `<TASK-ID> done`. */
+const UNTIL_RE = /^(\S+) done$/;
+
+/**
+ * The header's `batch_size: N` and `reason:` under the lock: the window, `0` = the pause. With
+ * `until: "<TASK-ID> done"` the window is temporary: the header keeps what it replaced as
+ * `window_until:`, and the mark of that line that leaves `running` (done, failed or released) puts it
+ * back. A plain window replaces a pending temporary one (its revert is dropped, the answer says so);
+ * a second temporary window while one is pending is refused.
+ */
 export async function setQueueWindow(
   file: string,
   batchSize: number,
   reason: string,
+  until?: string,
 ): Promise<HeaderResult> {
   if (!Number.isInteger(batchSize) || batchSize < 0)
     throw new QueueError(`batch_size is a whole number ≥ 0, not ${batchSize}`);
   const why = reason.trim();
   if (why === "" || /[\n\r]/.test(why)) throw new QueueError("the reason is one non-empty line");
+  const task = until === undefined ? undefined : UNTIL_RE.exec(until.trim())?.[1];
+  if (until !== undefined && (task === undefined || !ID_RE.test(task)))
+    throw new QueueError(`until is "<TASK-ID> done", not "${until}"`);
   return writing(file, e => {
+    const pending = windowUntilOf(e.queue.header);
+    const was = { size: e.queue.batchSize, reason: e.queue.batchComment ?? "" };
+    if (task !== undefined) {
+      const line = lineOf(e.queue, task);
+      if (line.status === "done" || line.status === "failed")
+        throw new QueueError(`${task} is ${line.status}: a window until its mark would never end`);
+      if (pending !== undefined)
+        throw new QueueError(
+          `a window until ${pending.task} done is pending (it restores batch_size ${pending.batch_size}): set a plain window first, or wait for its mark`,
+        );
+    }
+    if (task === undefined) e.doc.delete(WINDOW_UNTIL);
     e.doc.set("batch_size", batchSize);
     if (e.doc.has("reason")) e.doc.set("reason", why);
     else {
@@ -2023,8 +2111,33 @@ export async function setQueueWindow(
       const at = top.items.findIndex(p => String((p.key as Scalar).value) === "batch_size");
       top.items.splice(at + 1, 0, e.doc.createPair("reason", why));
     }
-    return { from: e.queue.batchSize, to: batchSize, reason: why };
+    if (task !== undefined) {
+      const top = e.doc.contents as YAMLMap;
+      const at = top.items.findIndex(p => String((p.key as Scalar).value) === "tasks");
+      top.items.splice(
+        at < 0 ? top.items.length : at,
+        0,
+        e.doc.createPair(WINDOW_UNTIL, { task, batch_size: was.size, reason: was.reason }),
+      );
+    }
+    return {
+      from: was.size,
+      to: batchSize,
+      reason: why,
+      ...(task !== undefined ? { until: task } : {}),
+      ...(task === undefined && pending !== undefined ? { droppedUntil: pending.task } : {}),
+    };
   });
+}
+
+/** `batch_size 3 → 4  # why`, plus the temporary window's end or the one a plain window replaced. */
+export function formatWindow(r: HeaderResult): string {
+  const base = `batch_size ${r.from} → ${r.to}  # ${r.reason}`;
+  if (r.until !== undefined)
+    return `${base}\nuntil ${r.until} done: the mark of ${r.until} that leaves running (done, failed or released) puts batch_size ${r.from} back`;
+  if (r.droppedUntil !== undefined)
+    return `${base}\nthe pending window until ${r.droppedUntil} done is dropped: ${r.droppedUntil}'s mark will not put the old window back`;
+  return base;
 }
 
 /**

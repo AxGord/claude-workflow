@@ -115,7 +115,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string): string => fs.readFileSync(path.join(ROOT, f), "utf8");
 
 describe("the dispatcher's instructions and the bundled dispatch state", () => {
-  it("a task that ended `stopped` has a rule: handed to main, the slot kept, `stop` on main's word", () => {
+  it("a task that ended `stopped` has a rule: a CLOSED line, the slot freed, `stop` on main's word", () => {
     const md = read("templates/drivers/dispatch-driver.md");
     expect(md).toContain("**A task that ended `stopped`**");
     expect(md).toContain("see=state stopped");

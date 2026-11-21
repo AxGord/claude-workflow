@@ -458,20 +458,25 @@ states:
   closed:
     terminal: true
     outcome: complete
+    # The engine fails the queue line when it is still `running` (the blocked / prepare_failed marks come first and win).
+    queue_mark: failed
     prompt: "Task {{context.task}} closed without landing (failed). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): its slot is free — in {{parent_session_id}} transition `slot_free`."
 
   released:
     terminal: true
     outcome: complete
+    queue_mark: released
     prompt: "Task {{context.task}} released before any work (pending again). A driver: reply with your last line (CLOSED …) and stop — the dispatcher's session is not yours. The dispatcher itself (no driver): in {{parent_session_id}} transition `slot_free`."
 
   stopped:
     terminal: true
     outcome: fail
+    # The engine fails the queue line: a stopped task is not left `running` with no pipeline behind it.
+    queue_mark: failed
     prompt: |-
-      Task {{context.task}} STOPPED: report to the user the task, the reason, and the exact state of
+      Task {{context.task}} STOPPED (its queue line is marked failed): report to the user the task, the reason, and the exact state of
       {{context.cwd}}:
       {{context.repo_state}}
-      A driver: put that in a NEEDS-PARENT line and
-      stop — the dispatcher's session is not yours. The dispatcher itself (no driver): in {{parent_session_id}}
+      A driver: reply with the last line `CLOSED task=<ID> reason=stopped: <the reason and the repo state, one line> lessons=none see=state stopped`
+      and stop — the dispatcher's session is not yours; it frees the slot and tells the parent. The dispatcher itself (no driver): in {{parent_session_id}}
       transition `stop`.

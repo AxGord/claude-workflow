@@ -48,6 +48,7 @@ import {
   stagesSpawned,
 } from "./model-table.js";
 import { render } from "./template.js";
+import { markQueue } from "./queue.js";
 import {
   DISPATCHER_AFTER_KEY,
   DISPATCHER_AGENT_KEY,
@@ -64,7 +65,8 @@ import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
 import { secondRootRefusal } from "./session-scope.js";
 import { actionStateRefusal } from "./trust.js";
-import { activeParents, staleNote, staleness, type Staleness } from "./stale.js";
+import { activeParents, staleNote, staleness, unansweredAskLine, type Staleness } from "./stale.js";
+import { openAsk } from "./event-fold.js";
 
 /** Template vars with an action's result laid over them; the lazy getters (`stale_sessions`) carried along. */
 function withResult(vars: Record<string, unknown>, result: ActionResult): Record<string, unknown> {
@@ -818,6 +820,21 @@ export class Engine {
       const of = s.parent_session_id ? `, child of ${s.parent_session_id}` : "";
       const agent = s.agent_id ? `, agent ${s.agent_id}` : "";
       lines.push(`STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}`);
+    }
+    return lines;
+  }
+
+  /**
+   * One `UNANSWERED:` line per driver question in `sessionId`'s active sub-tree that has stood open past
+   * `ASK_UNANSWERED_AFTER_S`: a decision that never reached its driver stays visible on the next pass.
+   */
+  public unansweredAskLines(sessionId: string, now: number = Date.now()): string[] {
+    const lines: string[] = [];
+    for (const id of activeSubtree(this._storage, sessionId).slice(1)) {
+      const s = this._storage.read(id);
+      const ask = s ? openAsk(s) : null;
+      const line = s && ask ? unansweredAskLine(s, ask, now) : undefined;
+      if (line) lines.push(line);
     }
     return lines;
   }
@@ -1907,6 +1924,7 @@ export class Engine {
       ? render(terminalState.prompt, this._buildTemplateVars(session))
       : undefined;
 
+    await this._markQueueLine(session, terminalState?.queue_mark, frame.current_state);
     const result = await this._popStackCore(session, outcome, taskOps);
     if (!terminalPrompt) return result;
 
@@ -1921,6 +1939,29 @@ export class Engine {
       // a revisit — bypass the revisit compression in the tool formatter.
       forcePrompt: true,
     };
+  }
+
+  /**
+   * A terminal state with `queue_mark:`: the session's own queue line, when it is still `running`, goes to
+   * `failed` / `released` (a mark that leaves `running` also ends a temporary window set until it). Never
+   * throws: a missing queue or line must not keep the session from ending.
+   */
+  private async _markQueueLine(
+    session: SessionState,
+    mark: "failed" | "released" | undefined,
+    ended: string,
+  ): Promise<void> {
+    const file = session.context.queue_file;
+    const task = session.context.task;
+    if (mark === undefined || typeof file !== "string" || typeof task !== "string") return;
+    try {
+      await markQueue(file, task, mark, `ended ${ended}: the pipeline made no mark`, {
+        ifRunning: true,
+        from: "engine",
+      });
+    } catch {
+      // no queue file, no such line, a held lock: the end of the session stands
+    }
   }
 
   private async _popStackCore(

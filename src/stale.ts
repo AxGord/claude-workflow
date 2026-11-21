@@ -97,3 +97,23 @@ export function formatSeconds(s: number): string {
 export function staleNote(st: Staleness): string {
   return `no engine call for ${formatSeconds(st.idle_s)} (since ${st.since}), past its state's stale_after ${formatSeconds(st.after_s)}`;
 }
+
+/** Seconds a driver's open question (`ask_parent`) goes unanswered before a `collect` pass lists it again. */
+export const ASK_UNANSWERED_AFTER_S = 600;
+
+/**
+ * One line for a driver's question that no move of its session has answered for longer than
+ * `ASK_UNANSWERED_AFTER_S`: the session, its task and agent, when it asked, the question. Keyed by
+ * `asked=<time>` so a reader that reminded the parent once can tell an ask it has seen.
+ */
+export function unansweredAskLine(
+  s: SessionState,
+  ask: { readonly text: string; readonly at: string },
+  now: number,
+): string | undefined {
+  const at = Date.parse(ask.at);
+  if (Number.isNaN(at) || (now - at) / 1000 <= ASK_UNANSWERED_AFTER_S) return undefined;
+  const task = typeof s.context.task === "string" ? ` task=${s.context.task}` : "";
+  const agent = s.agent_id ? ` driver=${s.agent_id}` : "";
+  return `UNANSWERED:${task} session=${s.session_id}${agent} asked=${ask.at} (${formatSeconds(Math.floor((now - at) / 1000))} ago): ${ask.text.trim().slice(0, 300)}`;
+}

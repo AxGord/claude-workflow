@@ -35,6 +35,11 @@ states:
     outcome: complete            # or "fail"
 ```
 
+- `queue_mark: failed | released` on a terminal state with no transitions (on any other state it is a load error):
+  - when the session enters it, the engine marks the session's own queue line (context `queue_file` and `task`) that is still `running` `failed` / `released`, noted `ended <state>: the pipeline made no mark`;
+  - a line already marked, a missing queue and a missing line leave the end of the session as it is;
+  - bundled `batch-task` declares it on `closed`, `stopped` (`failed`) and `released`, so no task session that ends leaves its line `running`.
+
 ## Three-Tier Loading
 
 Workflows load from three sources in ascending priority — later tiers override earlier ones:

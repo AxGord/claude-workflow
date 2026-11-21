@@ -651,6 +651,14 @@ export class Loader {
           `state "${name}" stale_after is never read on a ${state.terminal ? "terminal" : "sub_workflow"} state`,
         );
 
+      if (
+        state.queue_mark !== undefined &&
+        (!state.terminal || Object.keys(state.transitions ?? {}).length > 0)
+      )
+        errors.push(
+          `state "${name}" queue_mark is read only on a terminal state with no transitions (the one that ends the session)`,
+        );
+
       // terminal + transitions is allowed: "soft terminal" — considered complete
       // but can be re-entered via transitions (useful for top-level confirmation loops)
     }

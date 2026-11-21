@@ -172,6 +172,10 @@ export const StateDefinitionSchema = z
     transitions: z.record(z.string()).optional(),
     terminal: z.boolean().optional(),
     outcome: z.enum(["complete", "fail"]).optional(),
+    // On a terminal state: when the session enters it, its own queue line (context `queue_file` + `task`)
+    // that is still `running` is marked `failed` or `released` by the engine, so no line stays running
+    // with no pipeline behind it. A line already marked is left as it is.
+    queue_mark: z.enum(["failed", "released"]).optional(),
     max_visits: z.number().int().positive().optional(),
     // a move past max_visits enters this state instead of being refused
     on_exhausted: z.string().optional(),
@@ -488,8 +492,11 @@ export const WorkflowTransitionInputSchema = z.object({
   actor: z.string().optional().describe("Identity of the agent performing this action"),
 });
 
+/** The one `status` key that is not a context key: the session's current transitions (a context key of this name wins). */
+export const STATUS_ROUTES_KEY = "routes";
+
 export const STATUS_KEY_DESCRIPTION =
-  "Return only this context key's FULL value (status cuts every value to 200 chars)";
+  "Return only this context key's FULL value (status cuts every value to 200 chars). `routes` (when the context has no such key): the session's transitions at its current state, `a|b|c`";
 
 export const WorkflowStatusInputSchema = z.object({
   session_id: z.string().describe("Session identifier"),

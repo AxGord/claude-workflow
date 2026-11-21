@@ -208,7 +208,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `queue_mark` | Move one task's status (`running` / `done` / `failed` / `released` / `promoted` / `shelved`; `retry` restarts a failed task) | `queue`, `file`, `id`, `to`, `note`, `retry`, `force` |
 | `queue_add` | Add a task (pending or backlog) to a queue, checked as a pick reads it | `queue`, `file`, `task`, `after_id`, `before_id` |
 | `queue_edit` | Set / remove a task's fields, append a note to its `notes:` | `queue`, `file`, `id`, `set`, `append_note`, `from` |
-| `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason, and/or its `archive_after_days`, `exclusive_hold` | `queue`, `file`, `batch_size`, `reason`, `archive_after_days`, `exclusive_hold` |
+| `queue_header` | Set a queue's `batch_size` (0 = pause) with its reason (with `until: "<TASK-ID> done"` the window is temporary: the engine restores it at that line's mark), and/or its `archive_after_days`, `exclusive_hold` | `queue`, `file`, `batch_size`, `reason`, `until`, `archive_after_days`, `exclusive_hold` |
 
 Notes on the tools above:
 

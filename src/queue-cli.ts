@@ -13,7 +13,8 @@
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
 //   wf-queue <q> --lessons <ID> --records <file>… [--triage <file>] [--repo <dir>: the filed repo only when the origin line is gone] [--workflow <name>]   (triage: the flag, else the header's `lessons_triage:`, else ../backups/slice-logs/lessons-triage.txt)  the lesson records of a landed task as queue lines / triage rows (src/lessons-file.ts); prints `lessons=filed N, triage M[, already K]`, exit 0 for any record, 2 for usage / an unreadable queue
 //   wf-queue <q> --lessons-take [--triage <file>]   prints the triage file, then empties it (only once the rows are out), under the lock a land's append takes
-//   wf-queue <q> --batch-size <N> --reason TEXT                   queue_header (the window)
+//   wf-queue <q> --done|--failed|--release <ID> ... --if-running (with --failed / --release: a line not running is left as it is, exit 0)
+//   wf-queue <q> --batch-size <N> --reason TEXT [--until "<ID> done"]   queue_header (the window; --until: temporary, the mark of <ID> that leaves running puts the old window back)
 //   wf-queue <q> --header-set archive_after_days=N | exclusive_hold=yes|no [--reason TEXT]   queue_header (a header key: N ≥ 1 / yes|no, `key=` removes; any other key refused; --reason is echoed, not written)
 //   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   the manual archive (done/failed lines → <q>.archive.yaml); a pick does it by the header's archive_after_days
 //   wf-queue <q> --restore <ID>   one archived line back into the queue (CLI only, no MCP tool)
@@ -47,6 +48,7 @@ import {
   rewriteQueue,
   resolveQueueFile,
   formatHeaderKey,
+  formatWindow,
   setQueueHeaderKey,
   setQueueWindow,
   STATUSES,
@@ -55,8 +57,8 @@ import {
 } from "./queue.js";
 
 const USAGE =
-  "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--note TEXT] [--from WHO] | --header <key> | --path" +
-  " | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME] | --lessons-take [--triage FILE] | --batch-size <N> --reason TEXT | --header-set archive_after_days=N|exclusive_hold=yes|no [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>" +
+  "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--if-running] [--note TEXT] [--from WHO] | --header <key> | --path" +
+  ' | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME] | --lessons-take [--triage FILE] | --batch-size <N> --reason TEXT [--until "<ID> done"] | --header-set archive_after_days=N|exclusive_hold=yes|no [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>' +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
 /** `--flag value` pairs after an op; a flag outside `allowed`, a missing value, or a repeat of a non-list flag is a usage error. */
@@ -171,11 +173,16 @@ async function main(args: string[]): Promise<number> {
       args.slice(2),
       ["--note", "--from", ...(op === "--running" ? ["--force"] : [])],
       [],
-      op === "--running" ? ["--retry"] : [],
+      op === "--running"
+        ? ["--retry"]
+        : op === "--failed" || op === "--release"
+          ? ["--if-running"]
+          : [],
     );
     const from = o.get("--from")?.[0];
     const r = await markQueue(file, id, MARKS[op], o.get("--note")?.[0], {
       retry: o.has("--retry"),
+      ...(o.has("--if-running") ? { ifRunning: true } : {}),
       ...(o.get("--force")?.[0] !== undefined ? { force: o.get("--force")?.[0] as string } : {}),
       ...(from !== undefined ? { from } : {}),
     });
@@ -291,13 +298,13 @@ async function main(args: string[]): Promise<number> {
     return 0;
   }
   if (op === "--batch-size") {
-    const o = options(args.slice(2), ["--reason"]);
+    const o = options(args.slice(2), ["--reason", "--until"]);
     const n = args[1] !== undefined && /^\d+$/.test(args[1]) ? Number(args[1]) : Number.NaN;
     if (Number.isNaN(n)) throw new QueueError("--batch-size needs a whole number");
     const reason = o.get("--reason")?.[0];
     if (reason === undefined) throw new QueueError("--batch-size needs --reason TEXT");
-    const r = await setQueueWindow(file, n, reason);
-    process.stdout.write(`batch_size ${r.from} → ${r.to}  # ${r.reason}\n`);
+    const r = await setQueueWindow(file, n, reason, o.get("--until")?.[0]);
+    process.stdout.write(`${formatWindow(r)}\n`);
     return 0;
   }
   if (op === "--header-set") {

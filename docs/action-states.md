@@ -532,6 +532,7 @@ Where it shows:
 - `sessions` marks one `[STALE: no engine call for 47m (since …), past its state's stale_after 30m]`.
 - `status` of a session lists the STALE sessions below it on top (the session itself is its parent's `status` and `sessions`' to show) (`STALE: session <id> (<workflow @ state>, child of <parent>, agent <agent id>) — …`) with what to do once: SendMessage the agent; no answer → abort the session, or let a new agent continue it from `status` — the session holds the step, so a restart loses nothing.
   - `transition` appends the same lines.
+  - Both also append one `UNANSWERED: task=<ID> session=<id> driver=<agent> asked=<time> (<n> ago): <question>` per driver question (`ask_parent`, see the live map) in that sub-tree that no move of its session has answered for over 10 minutes, so a parent's answer that never reached its driver is seen on the parent's next event; there is no clock and no polling.
   - A line the answer's prompt already renders (`{{stale_sessions}}`) is not repeated; a revisit's digest renders no prompt, so there they come back as the notice.
   - A step run again (resume, an interrupted lease wait) drops its old `run_at`: its own first lease starts its clock.
 - The bundled `batch` `collect` prompt lists the run's stale sessions (`{{stale_sessions}}`), so the dispatcher messages or restarts a stuck driver/worker; its `paused` state (waits for the user) is `stale_after: 0`.

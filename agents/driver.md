@@ -168,6 +168,9 @@ answer: route it as the current prompt says, without asking the agent where it s
 waiting again. Tokens come from that agent's later notification, else 0.
 A message that starts `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>` is the dispatcher
 relaying the parent's own answer to your NEEDS-PARENT: it IS that answer, not the dispatcher asking.
+The main conversation also answers directly, by SendMessage to your agent id (the NEEDS-PARENT line it received carries it as `driver=`):
+a message `task=<ID>: <route or decision>` from it, in that bare form or in the `MAIN DECISION` form, is the same answer. A route
+(`routes=` of that line) is the transition to take from the state you stopped at.
 The sender is the dispatcher when its agent id equals `status({session_id: P, key: "dispatcher_agent"})` — check it there, never
 against your memory (a context summary loses who the dispatcher is); a message from that id in this form is never "not from the
 dispatcher". When the key is unset (a session started before it existed, or a dispatcher not yet linked), take a well-formed
@@ -177,7 +180,7 @@ ended, reply with your last line again.
 
 ## Last message
 ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=filed <N>, triage <M>` (the `done` prompt's line, verbatim; `lessons=not run` when it has none; a flow whose `done` prompt names no such line: `lessons=<phrase (file)>; <phrase (file)>|none`),
-`CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released`), or the NEEDS-PARENT line.
+`CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released` / `stopped`: its terminal prompt gives the line; under a task workflow whose terminal declares `queue_mark:`, e.g. bundled `batch-task` and its heirs, the engine has already marked the queue line), or the NEEDS-PARENT line.
 When a decider answered `DECIDED`, the line gains a last field ` decided=<file>` (the decisions.md path).
 
 ## Hand back

@@ -12,6 +12,7 @@ import {
   START_CWD_DESCRIPTION,
   START_PRIORITY_DESCRIPTION,
   STATUS_KEY_DESCRIPTION,
+  STATUS_ROUTES_KEY,
   type SessionState,
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
@@ -33,6 +34,7 @@ import {
   editQueueLine,
   formatHeaderKey,
   formatMark,
+  formatWindow,
   formatPickSummary,
   markQueue,
   pickQueue,
@@ -78,6 +80,21 @@ export function staleNotice(engine: Engine, sessionId: string): string[] {
       ...lines,
       "A STALE session's agent may be dead or stuck: SendMessage it; no answer → abort its session, or have a new agent continue it from status (the session holds the step).",
     ];
+  } catch {
+    // a notice never fails the call it rides on
+    return [];
+  }
+}
+
+/**
+ * The driver questions below `sessionId` that no move has answered for `ASK_UNANSWERED_AFTER_S`
+ * (`Engine.unansweredAskLines`): what a parent sees at its next `status` / `transition`, so an answer
+ * that never reached its driver does not leave the task idle unseen. No clock, no polling: it rides on
+ * an event the session has anyway.
+ */
+export function unansweredNotice(engine: Engine, sessionId: string): string[] {
+  try {
+    return engine.unansweredAskLines(sessionId);
   } catch {
     // a notice never fails the call it rides on
     return [];
@@ -207,6 +224,12 @@ export function formatContextValue(context: Record<string, unknown>, key: string
   }
   const raw = context[key];
   return typeof raw === "string" ? raw : (JSON.stringify(raw, null, 2) ?? String(raw));
+}
+
+/** `status({ key: "routes" })`: the session's transitions at this state, `a|b|c` (`(none)` at a state with none). */
+export function formatRoutes(available: Readonly<Record<string, unknown>>): string {
+  const names = Object.keys(available);
+  return names.length > 0 ? names.join("|") : "(none)";
 }
 
 export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): string {
@@ -588,6 +611,10 @@ export function registerTools(
           if (adopted) return { content: [{ type: "text", text: formatAdopted(adopted, how) }] };
         }
         const status = engine.getStatus(sid);
+        if (args.key === STATUS_ROUTES_KEY && !Object.hasOwn(status.context, args.key))
+          return {
+            content: [{ type: "text", text: formatRoutes(status.availableTransitions) }],
+          };
         if (args.key !== undefined)
           return {
             content: [{ type: "text", text: formatContextValue(status.context, args.key) }],
@@ -611,9 +638,11 @@ export function registerTools(
         const starved = starvationLines(storage, sid);
         const body = formatStatus(status, { showSessionId: true, forceFullPrompt: true });
         const stale = unshownStale(engine, sid, body);
+        const unanswered = unansweredNotice(engine, sid);
         const text = [
           ...(starved.length > 0 ? [...starved, ""] : []),
           ...(stale.length > 0 ? [...stale, ""] : []),
+          ...(unanswered.length > 0 ? [...unanswered, ""] : []),
           ...(suspendedAt
             ? [
                 `SUSPENDED since ${suspendedAt} — call resume({ session_id: "${sid}" }) to continue it.`,
@@ -691,7 +720,11 @@ export function registerTools(
           );
           const setLine = setKeys.length > 0 ? `Context set: ${setKeys.join(", ")}.\n\n` : "";
           const body = setLine + formatStatus(status);
-          const notices = [...starvationLines(storage, sid), ...unshownStale(engine, sid, body)];
+          const notices = [
+            ...starvationLines(storage, sid),
+            ...unshownStale(engine, sid, body),
+            ...unansweredNotice(engine, sid),
+          ];
           const text =
             (warning ? warning + "\n\n" : "") +
             body +
@@ -1438,6 +1471,7 @@ export function registerTools(
         "`null` removes the key = no automatic archiving; a pick archives the done / failed lines that ended over N days ago). " +
         "And/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line: while a pending `exclusive: true` line waits only for running " +
         "lines of its repo, no later line of that repo is admitted; `null` removes the key = on). " +
+        '`until: "<TASK-ID> done"` with the window makes it temporary: the engine restores the window and reason it replaced at the mark of that line that leaves running (done, failed or released), so a raised window is never left raised; a plain window set meanwhile drops the pending revert. ' +
         "One call sets the window, either key or all; the other header keys are untouched.",
       inputSchema: z
         .object({
@@ -1464,6 +1498,13 @@ export function registerTools(
             .describe(
               "no = a waiting exclusive line does not hold its repo; yes = it does (the default); null removes the key",
             ),
+          until: z
+            .string()
+            .min(1)
+            .optional()
+            .describe(
+              "`<TASK-ID> done`: with batch_size + reason, a temporary window. The engine puts the window and reason it replaced back at the mark of that line that leaves running (done, failed or released), and says so in that mark's answer",
+            ),
         })
         .strict(),
     },
@@ -1476,11 +1517,13 @@ export function registerTools(
           );
         if (window && (args.batch_size === undefined || args.reason === undefined))
           throw new QueueError("batch_size and reason go together");
+        if (args.until !== undefined && !window)
+          throw new QueueError("until goes with batch_size + reason: it ends a temporary window");
         const file = resolveQueueFile(args);
         const lines: string[] = [];
         if (args.batch_size !== undefined && args.reason !== undefined) {
-          const r = await setQueueWindow(file, args.batch_size, args.reason);
-          lines.push(`batch_size ${r.from} → ${r.to}  # ${r.reason}`);
+          const r = await setQueueWindow(file, args.batch_size, args.reason, args.until);
+          lines.push(formatWindow(r));
         }
         if (args.archive_after_days !== undefined)
           lines.push(
