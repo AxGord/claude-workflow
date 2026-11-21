@@ -404,7 +404,7 @@ states:
       diff does not touch is an open item for a follow-up line, not a FIXES item. Run every command in the foreground.
       Last line MERGE or FIXES: and a numbered list." Then context_set `reviewed_sha` = HEAD of {{context.wt}} and handle
       its answer as below. (A reviewer that no longer answers → spawn a fresh one as on the first entry.)
-      First entry — spawn ONE reviewer: Agent, model opus, effort high, prompt:
+      First entry — spawn ONE reviewer: Agent, model {{context.review_model}}, effort {{context.review_effort}} (both empty → {{context.model}}, {{context.effort}}), prompt:
 
         Review engine slice {{context.task}} READ-ONLY: change no file, make no commit, call no workflow tool
         (mcp__plugin_workflow_wf__*). The brief is its line in {{context.queue_file}}; the change is HEAD of

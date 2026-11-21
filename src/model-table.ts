@@ -50,8 +50,10 @@ export function stagesRead(state: unknown): string[] {
  * `review_model` / `review_effort` for the review spawn.
  */
 const SPAWN_ALIASES: Readonly<Record<string, { model: string; effort: string }>> = {
-  execute: { model: MODEL_KEYS.model, effort: MODEL_KEYS.effort },
+  // review first: a review spawn that falls back to the bare `model` / `effort` reads those too, and
+  // the first stage a state spawns on (the one `link_agent` records) must be review, not execute.
   review: { model: MODEL_KEYS.reviewModel, effort: MODEL_KEYS.reviewEffort },
+  execute: { model: MODEL_KEYS.model, effort: MODEL_KEYS.effort },
 };
 
 /**
