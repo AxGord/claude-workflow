@@ -34,7 +34,7 @@ it.each([["plan"], ["routed"]])(
     const engine = new Engine(storage, loader, new Executor());
     const p = (await engine.start("task")).sessionId;
     const w = (await engine.start("child", undefined, p)).sessionId;
-    await engine.linkAgent(w, "worker1");
+    await engine.linkAgent(w, "aebad64149cc767ba");
     await engine.transition(p, via);
     const dead = spawn("true");
     await new Promise(r => dead.on("exit", r));
@@ -49,7 +49,7 @@ it.each([["plan"], ["routed"]])(
     await engine.reapOrphanedSessions();
     const text = formatResume(await new Engine(storage, loader, new Executor()).resume(p));
     expect(text).not.toContain("an earlier step's agent");
-    expect(text).toContain("worker1 → " + w);
-    expect(text).toContain(`SendMessage({ to: "worker1"`);
+    expect(text).toContain("aebad64149cc767ba → " + w);
+    expect(text).toContain(`SendMessage({ to: "aebad64149cc767ba"`);
   },
 );

@@ -138,12 +138,19 @@ export interface LedgerAgentSpend {
   readonly cache_write: number;
 }
 
-/** What the task's agents really spent, summed from their transcripts (`measureSpend`). `usd` is absent when any agent could not be read: the task is unmeasured, never $0. */
+/**
+ * What the task's agents really spent, summed from their transcripts (`measureSpend`). `usd` is the sum of the
+ * agents that could be read; `usd_partial` marks a sum that leaves out an agent that could not (`unmeasured`):
+ * a lower bound, never the task's whole cost (`wholeUsd` reads it so). `usd` is absent when no agent could be read:
+ * unmeasured, never $0.
+ */
 export interface LedgerSpend {
   readonly agents: number;
   /** The same spend per agent and linked state: `usd` of the rows sums to this `usd`. Absent on a line from before the record. */
   readonly by_agent?: readonly LedgerAgentSpend[];
   readonly usd?: number;
+  /** `usd` leaves out the `unmeasured` agents: a lower bound. */
+  readonly usd_partial?: true;
   /** Agent ids whose transcript was missing, unreadable or of an unpriced model. */
   readonly unmeasured?: readonly string[];
   /** Agents of the task's conversations active in its window that nothing names: the figure may be incomplete. */
@@ -299,7 +306,14 @@ export function parseLedger(content: string): LedgerEntry[] {
   return out;
 }
 
-/** The ledger's task lines by queue line id, each cut to what a task's cost needs (`task`, `session_id`, `parent_session_id`, `spend.usd`, `parent_spend.usd`): the plan pane sums them. */
+/** The task's whole cost: `usd` unless it is a partial sum (a lower bound is never taken for a whole). */
+export function wholeUsd(
+  spend: Pick<LedgerSpend, "usd" | "usd_partial"> | undefined,
+): number | undefined {
+  return spend?.usd_partial ? undefined : spend?.usd;
+}
+
+/** The ledger's task lines by queue line id, each cut to what a task's cost needs (`task`, `session_id`, `parent_session_id`, `spend.usd` with its `usd_partial` mark, `parent_spend.usd`): the plan pane sums them. */
 export function taskCostRows(content: string): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const line of content.split("\n")) {
@@ -311,7 +325,9 @@ export function taskCostRows(content: string): Map<string, string[]> {
         task: j.task,
         ...(j.session_id !== undefined ? { session_id: j.session_id } : {}),
         ...(j.parent_session_id ? { parent_session_id: j.parent_session_id } : {}),
-        ...(j.spend?.usd !== undefined ? { spend: { usd: j.spend.usd } } : {}),
+        ...(j.spend?.usd !== undefined
+          ? { spend: { usd: j.spend.usd, ...(j.spend.usd_partial ? { usd_partial: true } : {}) } }
+          : {}),
         ...(j.parent_spend?.usd !== undefined ? { parent_spend: { usd: j.parent_spend.usd } } : {}),
       });
       const rows = out.get(j.task);

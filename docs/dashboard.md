@@ -27,7 +27,7 @@ The pane's parts:
     - The log is of the branch the queue's lands target: the header's `land_branch:` when set, else the repo's checked-out branch (`git branch --show-current`), else `main`. The heading names the branch when it is not `main`.
     - A land made before the repo wrote the trailer, which git does not show, is read from the ledger's task runs that went through a `land` state in the window, of whatever workflow.
     - Such a land is read only for a line of this queue or its archive (the ledger holds every project's runs). Each slice counts once, with `—` in the sha column.
-    - `$landed` is the sum of the ledger's real `spend.usd` over those lines, each line once. A line with no spend row adds nothing, and `$landed` is absent when no line is measured.
+    - `$landed` is the sum of the ledger's real `spend.usd` over those lines, each line once. A line with no spend row, or only a partial one (`usd_partial`), adds nothing, and `$landed` is absent when no line is measured.
     - `parent $P` is the top-level Claude Code session's own spend recorded in the same 14 days, of the queue repo's own conversations only (ledger `parent_spend`, below). Its `project` is matched to the repo by Claude Code's project directory name.
     - `S%` is the parent's share of `$landed`, absent without a landed sum.
     - A title longer than the pane is cut with `…`.
@@ -41,7 +41,7 @@ The pane's parts:
     - A day's spend counts a failed or closed line only when its latest run ended on that very date (not the same `DD.MM` of another year).
     - The status band's `✓ n` still counts the last 24 hours.
   - **Cost.** Each Landed and Failed row carries `$cost` right after the kind glyph (the difficulty bar stays first).
-    - It is the ledger's real `spend.usd` summed over every task run of the line (`slice-pipeline` / `engine-task` rows with a `task`).
+    - It is the ledger's real `spend.usd` summed over every task run of the line (`slice-pipeline` / `engine-task` rows with a `task`). When a run's sum left an agent out (`usd_partial`) and every run has a figure, the row draws the sum as a lower bound, `≥$17.40`; it is not added to a day, the Landed heading or the Failed header.
     - A line any of whose runs recorded no spend, or that has no ledger row, shows `—`, never `$0.00`.
     - A failed row reads the same source as the Failed header: the whole ledger through `/api/ledger-rows`, not the 30-day `ledger-recent.jsonl`. So a line whose runs are older than 30 days shows its cost, and the counted rows add up to the header's total.
     - A line with a run of no recorded spend, in any window, shows `—`.
@@ -60,7 +60,7 @@ The pane's parts:
     - the ledger's `spend.usd` of every run of the `n` lines, plus the `parent_spend.usd` of those rows;
     - a row nested under a row of the same line, by `parent_session_id`, adds only its parent spend: the parent row's `spend` already covers it;
     - `· k not in the ledger` for the lines with no row anywhere in the ledger, which add 0;
-    - `· k unmeasured` for the lines with a run that recorded no spend. A line is measured whole or not at all: they are left out of the sums, and their rows show `—`;
+    - `· k unmeasured` for the lines with a run that recorded no spend or only a partial sum. A line is measured whole or not at all: they are left out of the sums, and their rows show `—` (`≥$x` for a line whose runs all recorded a sum and some is partial);
     - `· no ledger rows` when none has one; nothing while there is no ledger file.
     - The rows are read from the whole `ledger.jsonl` through the engine's `/api/ledger-rows`, not only the 30-day `ledger-recent.jsonl`, so a line whose runs are older than that window still counts.
   - **Fold rows.** Every `+N more` row of a capped list is a fold row too: Next's `+N more can start (dependencies done), in the picker's order`, the Waiting tab's `+N more`, the Sessions tab's `+N more`.
@@ -236,7 +236,7 @@ The views:
     - review rounds (entries into the state `review`, as `wf-calibration` counts; the `review*` states summed, routing aside, only for a workflow with no `review` state), tokens, USD, and the stages as run (model, tokens, USD).
   - The range's totals and USD per landed (landed tasks that recorded tokens).
   - A bar trend of USD per landed over the last 14 days.
-  - A task's tokens and USD are its ledger `spend` when it has one (one `spend` row, the transcripts' real figure; a `spend` with unmeasured agents makes the task unmeasured), else the old estimate from `tokens*` at the blended price.
+  - A task's tokens and USD are its ledger `spend` when it has one (one `spend` row, the transcripts' real figure; a `spend` with unmeasured agents, marked `usd_partial`, makes the task unmeasured), else the old estimate from `tokens*` at the blended price.
   - The tab states its price table and the date it was updated: `PRICES_USD_PER_MTOK` / `PRICES_UPDATED` in `src/calibration.ts`.
   - The table is blended USD per million tokens by model family: opus, sonnet, haiku, fable. It is derived as 75% input + 25% output of the bare family keys of `TURN_RATES_USD_PER_MTOK`, so a rate edit moves both; edit the rates and `PRICES_UPDATED` together.
   - A stage's estimate blends by its model's full id, through the same longest-key match as the per-turn price: a stage on `claude-opus-4-1` is priced at that id's blend, the family blend being the fallback for an unknown id. The note prints each blend rounded to four decimals.
@@ -437,7 +437,7 @@ One style for every view (sessions, session detail, workflow graphs, plan).
 | `GET` | `/api/workflows` | List all workflow definitions, each with its `stations` (the live map's columns), `map: false` where set and, for a task workflow, its `driver` model and effort |
 | `GET` | `/api/queues` | Queue files named by sessions' `context.queue_file` |
 | `GET` | `/api/queue?file=<path>` | Every line of that queue with the picker's reason per pending line, its `kind` and the kind's glyph `mark` |
-| `GET` | `/api/ledger-rows?tasks=<id,id>` | The whole ledger's cost rows (JSON lines: `task`, `session_id`, `parent_session_id`, `spend.usd`, `parent_spend.usd`) of those queue lines; the plan pane's Failed header sums them, since the plugin API cannot read a ledger over 4 MiB |
+| `GET` | `/api/ledger-rows?tasks=<id,id>` | The whole ledger's cost rows (JSON lines: `task`, `session_id`, `parent_session_id`, `spend.usd` with its `usd_partial` mark, `parent_spend.usd`) of those queue lines; the plan pane's Failed header sums them, since the plugin API cannot read a ledger over 4 MiB |
 
 Notes on the event log:
 

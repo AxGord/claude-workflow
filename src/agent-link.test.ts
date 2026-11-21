@@ -101,21 +101,21 @@ describe("agent links (engine)", () => {
     const p = (await engine.start("task")).sessionId;
     const w = (await engine.start("child", undefined, p)).sessionId;
     const x = (await engine.start("child", undefined, p)).sessionId;
-    expect(await call("link_agent", { session_id: w, agent_id: "a1" })).toBe(
-      `Session "${w}" linked to agent a1 at its parent's work visit 1.`,
+    expect(await call("link_agent", { session_id: w, agent_id: "a8a8bb7cd343aa2ad" })).toBe(
+      `Session "${w}" linked to agent a8a8bb7cd343aa2ad at its parent's work visit 1.`,
     );
-    await engine.linkAgent(x, "x1");
+    await engine.linkAgent(x, "a6dbf9ac2da09ee1d");
     expect(storage.read(w)!.agent_step).toEqual({ workflow: "task", state: "work", visit: 1 });
     expect(engine.linkedAgentLines(p)).toEqual([
       `LINKED AGENTS at work (visit 1) ${HEAD}`,
-      `  agent a1 → session ${w}: linked at visit 1 → current`,
-      `  agent x1 → session ${x}: linked at visit 1 → current`,
+      `  agent a8a8bb7cd343aa2ad → session ${w}: linked at visit 1 → current`,
+      `  agent a6dbf9ac2da09ee1d → session ${x}: linked at visit 1 → current`,
     ]);
     // a respawned agent replaces agent_id but joins linked_agents; linking one again adds nothing
-    await call("link_agent", { session_id: w, agent_id: "a1b" });
-    await call("link_agent", { session_id: w, agent_id: "a1" });
-    expect(storage.read(w)!.agent_id).toBe("a1");
-    expect(storage.read(w)!.linked_agents).toEqual(["a1", "a1b"]);
+    await call("link_agent", { session_id: w, agent_id: "a30f5eef91a397e4b" });
+    await call("link_agent", { session_id: w, agent_id: "a8a8bb7cd343aa2ad" });
+    expect(storage.read(w)!.agent_id).toBe("a8a8bb7cd343aa2ad");
+    expect(storage.read(w)!.linked_agents).toEqual(["a8a8bb7cd343aa2ad", "a30f5eef91a397e4b"]);
     // a session without a parent records no step
     const root = (
       await engine.start(
@@ -128,7 +128,7 @@ describe("agent links (engine)", () => {
         "second root of the test",
       )
     ).sessionId;
-    expect(await engine.linkAgent(root, "r")).toBeUndefined();
+    expect(await engine.linkAgent(root, "a4b43b0aee35624cd")).toBeUndefined();
     expect(storage.read(root)!.agent_step).toBeUndefined();
 
     await engine.transition(w, "end");
@@ -140,17 +140,17 @@ describe("agent links (engine)", () => {
     const at2 = engine.linkedAgentLines(p);
     expect(at2).toEqual([
       `LINKED AGENTS at work (visit 2) ${HEAD}`,
-      `  agent a1 → session ${w}: linked at visit 1, now visit 2 → stale (its session ended)`,
-      `  agent x1 → session ${x}: linked at visit 1, now visit 2 → an earlier visit's (its session still runs)`,
+      `  agent a8a8bb7cd343aa2ad → session ${w}: linked at visit 1, now visit 2 → stale (its session ended)`,
+      `  agent a6dbf9ac2da09ee1d → session ${x}: linked at visit 1, now visit 2 → an earlier visit's (its session still runs)`,
     ]);
     const status = await call("status", { session_id: p });
     expect(status).toContain(`work (visit 2)\n`);
     expect(status).toContain(at2.join("\n"));
 
     // the fix round SendMessages the same worker and links it again
-    await call("link_agent", { session_id: w, agent_id: "a1" });
+    await call("link_agent", { session_id: w, agent_id: "a8a8bb7cd343aa2ad" });
     expect(engine.linkedAgentLines(p)[1]).toBe(
-      `  agent a1 → session ${w}: linked at visit 2 → current`,
+      `  agent a8a8bb7cd343aa2ad → session ${w}: linked at visit 2 → current`,
     );
   });
 
@@ -159,16 +159,16 @@ describe("agent links (engine)", () => {
     const { storage, engine } = m;
     const p = (await engine.start("task")).sessionId;
     const w = (await engine.start("child", undefined, p)).sessionId;
-    await engine.linkAgent(w, "worker1");
+    await engine.linkAgent(w, "aebad64149cc767ba");
     await engine.transition(w, "end");
     await engine.transition(p, "review");
     const r1 = (await engine.start("child", undefined, p)).sessionId;
-    await engine.linkAgent(r1, "rev1");
+    await engine.linkAgent(r1, "a18ce5ff019d7aa48");
     await engine.transition(p, "fix");
-    await engine.linkAgent(w, "worker1");
+    await engine.linkAgent(w, "aebad64149cc767ba");
     await engine.transition(p, "review");
     const r2 = (await engine.start("child", undefined, p)).sessionId;
-    await engine.linkAgent(r2, "rev2");
+    await engine.linkAgent(r2, "a19b881cf37d2b89c");
     const dead = spawn("true");
     await new Promise(r => dead.on("exit", r));
     for (const id of [p, r1, r2]) {
@@ -183,7 +183,7 @@ describe("agent links (engine)", () => {
     return { p, r1, r2 };
   }
   const earlier = (r1: string, p: string) =>
-    `rev1 → ${r1} → child @ go — linked at its parent's review visit 1, the parent is now at visit 2: an earlier visit's agent — not woken; abort({ session_id: '${r1}', caller_session_id: '${p}' }) once it is not needed`;
+    `a18ce5ff019d7aa48 → ${r1} → child @ go — linked at its parent's review visit 1, the parent is now at visit 2: an earlier visit's agent — not woken; abort({ session_id: '${r1}', caller_session_id: '${p}' }) once it is not needed`;
 
   it("a restart mid-review: resume wakes the current reviewer only; status marks the earlier one", async () => {
     const m = mount();
@@ -192,17 +192,17 @@ describe("agent links (engine)", () => {
     const r = await next.resume(p);
     expect(r.suspendedChildren.map(c => c.session_id).sort()).toEqual([r1, r2].sort());
     const text = formatResume(r);
-    expect(text).toContain(`rev2 → ${r2} → child @ go\n`);
-    expect(text).toContain(`SendMessage({ to: "rev2"`);
+    expect(text).toContain(`a19b881cf37d2b89c → ${r2} → child @ go\n`);
+    expect(text).toContain(`SendMessage({ to: "a19b881cf37d2b89c"`);
     expect(text).toContain(earlier(r1, p));
     // ENG-ABORT-GUARD-FOLLOWUPS: the closing abort hint names a caller, else the abort guard refuses it
     expect(text).toContain("abort({ session_id, caller_session_id: <your own session id> })");
-    expect(text).not.toContain(`SendMessage({ to: "rev1"`);
-    expect(text).not.toContain("worker1");
+    expect(text).not.toContain(`SendMessage({ to: "a18ce5ff019d7aa48"`);
+    expect(text).not.toContain("aebad64149cc767ba");
     expect(next.linkedAgentLines(p)).toEqual([
       `LINKED AGENTS at review (visit 2) ${HEAD}`,
-      `  agent rev2 → session ${r2}: linked at visit 2 → current`,
-      `  agent rev1 → session ${r1}: linked at visit 1, now visit 2 → an earlier visit's (its session still runs)`,
+      `  agent a19b881cf37d2b89c → session ${r2}: linked at visit 2 → current`,
+      `  agent a18ce5ff019d7aa48 → session ${r1}: linked at visit 1, now visit 2 → an earlier visit's (its session still runs)`,
     ]);
   });
 
@@ -210,11 +210,11 @@ describe("agent links (engine)", () => {
     const m = mount();
     const { p, r1, r2 } = await midReview(m);
     const text = await pickupReport(m.storage, "conv", process.pid);
-    expect(text).toContain(`rev2 → ${r2} → child @ go\n`);
-    expect(text).toContain(`SendMessage({ to: "rev2"`);
+    expect(text).toContain(`a19b881cf37d2b89c → ${r2} → child @ go\n`);
+    expect(text).toContain(`SendMessage({ to: "a19b881cf37d2b89c"`);
     expect(text).toContain(earlier(r1, p));
-    expect(text).not.toContain(`SendMessage({ to: "rev1"`);
-    expect(text).not.toContain("worker1");
+    expect(text).not.toContain(`SendMessage({ to: "a18ce5ff019d7aa48"`);
+    expect(text).not.toContain("aebad64149cc767ba");
   });
 
   it("a restart in the fix state: a review session left running is an earlier step's, not woken", async () => {
@@ -223,7 +223,7 @@ describe("agent links (engine)", () => {
     const p = (await engine.start("task")).sessionId;
     await engine.transition(p, "review");
     const r1 = (await engine.start("child", undefined, p)).sessionId;
-    await engine.linkAgent(r1, "rev1");
+    await engine.linkAgent(r1, "a18ce5ff019d7aa48");
     await engine.transition(p, "fix");
     const dead = spawn("true");
     await new Promise(r => dead.on("exit", r));
@@ -238,7 +238,7 @@ describe("agent links (engine)", () => {
     await engine.reapOrphanedSessions();
     const text = formatResume(await m.restart().resume(p));
     expect(text).toContain("an earlier step's agent — not woken");
-    expect(text).not.toContain(`SendMessage({ to: "rev1"`);
+    expect(text).not.toContain(`SendMessage({ to: "a18ce5ff019d7aa48"`);
   });
 
   it("linkedAgentLines: a parent without driver: skips the scan; a failing read is soft", async () => {
@@ -271,11 +271,11 @@ describe("agent links (engine)", () => {
     const { storage, engine } = m;
     const d = (await engine.start("loop")).sessionId;
     const c1 = (await engine.start("child", undefined, d)).sessionId;
-    expect(await engine.linkAgent(c1, "drv1")).toBeUndefined();
+    expect(await engine.linkAgent(c1, "a5db487825cafe926")).toBeUndefined();
     await engine.transition(d, "dispatched");
     await engine.transition(d, "again");
     const c2 = (await engine.start("child", undefined, d)).sessionId;
-    await engine.linkAgent(c2, "drv2");
+    await engine.linkAgent(c2, "a23527b2a08bf555f");
     expect(storage.read(c1)!.agent_step).toBeUndefined();
     expect(engine.linkedAgentLines(d)).toEqual([]);
     const dead = spawn("true");
@@ -297,7 +297,7 @@ describe("agent links (engine)", () => {
     const { storage, engine } = m;
     const d = (await engine.start("loop")).sessionId;
     const c1 = (await engine.start("child", undefined, d)).sessionId;
-    await engine.linkAgent(c1, "drv1");
+    await engine.linkAgent(c1, "a5db487825cafe926");
     await engine.transition(d, "dispatched");
     const dead = spawn("true");
     await new Promise(r => dead.on("exit", r));
@@ -311,7 +311,7 @@ describe("agent links (engine)", () => {
     }
     await engine.reapOrphanedSessions();
     const text = formatResume(await m.restart().resume(d));
-    expect(text).toContain(`SendMessage({ to: "drv1"`);
+    expect(text).toContain(`SendMessage({ to: "a5db487825cafe926"`);
     expect(text).not.toContain("earlier step's agent");
   });
 
@@ -319,8 +319,9 @@ describe("agent links (engine)", () => {
     const m = mount();
     const { d, c1 } = await dispatcherLoop(m);
     const text = formatResume(await m.restart().resume(d));
-    for (const agent of ["drv1", "drv2"]) expect(text).toContain(`SendMessage({ to: "${agent}"`);
-    expect(text).toContain(`drv1 → ${c1} → child @ go\n`);
+    for (const agent of ["a5db487825cafe926", "a23527b2a08bf555f"])
+      expect(text).toContain(`SendMessage({ to: "${agent}"`);
+    expect(text).toContain(`a5db487825cafe926 → ${c1} → child @ go\n`);
     expect(text).not.toContain("an earlier visit's agent — not woken");
     expect(text).not.toContain(`abort({ session_id: '${c1}'`);
     expect(await m.call("status", { session_id: d })).not.toContain("LINKED AGENTS");
@@ -328,7 +329,8 @@ describe("agent links (engine)", () => {
     const m2 = mount();
     await dispatcherLoop(m2);
     const pickup = await pickupReport(m2.storage, "conv", process.pid);
-    for (const agent of ["drv1", "drv2"]) expect(pickup).toContain(`SendMessage({ to: "${agent}"`);
+    for (const agent of ["a5db487825cafe926", "a23527b2a08bf555f"])
+      expect(pickup).toContain(`SendMessage({ to: "${agent}"`);
     expect(pickup).not.toContain("an earlier visit's agent — not woken");
   });
 });

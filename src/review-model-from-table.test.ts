@@ -110,7 +110,7 @@ describe("engine-task round-1 reviewer follows the model_table review row", () =
       return { ...cur, stack };
     });
     const child = await engine.start("local-task", undefined, parent.sessionId, cwd);
-    await engine.linkAgent(child.sessionId, "reviewer1");
+    await engine.linkAgent(child.sessionId, "a6ce19528a40dde95");
     const links = storage.read(child.sessionId)?.agent_links ?? [];
     expect(links).toHaveLength(1);
     expect(links[0]).toMatchObject({ state: "review", stage: "review" });

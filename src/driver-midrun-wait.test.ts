@@ -63,22 +63,22 @@ describe("ENG-DRIVER-ENFORCE-MIDRUN-WAIT", () => {
     const { engine, call } = mount();
     const p = (await engine.start("task")).sessionId;
     const w = (await engine.start("child", undefined, p)).sessionId;
-    await call("link_agent", { session_id: w, agent_id: "worker1" });
+    await call("link_agent", { session_id: w, agent_id: "aebad64149cc767ba" });
     await engine.transition(p, "next");
 
     const status = await call("status", { session_id: p });
     expect(status).toContain("plan_spawn");
     expect(status).toContain("LINKED AGENTS");
-    expect(status).toContain("worker1");
+    expect(status).toContain("aebad64149cc767ba");
     expect(status).toContain("live (its session still runs)");
-    expect(engine.linkedAgentLines(p).join("\n")).toContain("worker1");
+    expect(engine.linkedAgentLines(p).join("\n")).toContain("aebad64149cc767ba");
   });
 
   it("an ended worker is not listed at a spawn state, nor a running one at a state that is no spawn state", async () => {
     const ended = mount();
     const p = (await ended.engine.start("task")).sessionId;
     const w = (await ended.engine.start("child", undefined, p)).sessionId;
-    await ended.call("link_agent", { session_id: w, agent_id: "worker1" });
+    await ended.call("link_agent", { session_id: w, agent_id: "aebad64149cc767ba" });
     await ended.engine.transition(w, "end");
     await ended.engine.transition(p, "next");
     expect(ended.engine.linkedAgentLines(p)).toEqual([]);
@@ -86,7 +86,7 @@ describe("ENG-DRIVER-ENFORCE-MIDRUN-WAIT", () => {
     const other = mount();
     const q = (await other.engine.start("task")).sessionId;
     const x = (await other.engine.start("child", undefined, q)).sessionId;
-    await other.call("link_agent", { session_id: x, agent_id: "w2" });
+    await other.call("link_agent", { session_id: x, agent_id: "a62d7d5184b7a313d" });
     await other.engine.transition(q, "other");
     expect(other.engine.linkedAgentLines(q)).toEqual([]);
   });
@@ -95,25 +95,25 @@ describe("ENG-DRIVER-ENFORCE-MIDRUN-WAIT", () => {
     const { engine, call } = mount(PIPE);
     const p = (await engine.start("task")).sessionId;
     const recon = (await engine.start("child", undefined, p)).sessionId;
-    await call("link_agent", { session_id: recon, agent_id: "recon1" });
+    await call("link_agent", { session_id: recon, agent_id: "a3a411f313f3c6693" });
     await tick();
     await engine.transition(p, "skip");
     await tick();
     const w = (await engine.start("child", undefined, p)).sessionId;
-    await call("link_agent", { session_id: w, agent_id: "worker1" });
+    await call("link_agent", { session_id: w, agent_id: "aebad64149cc767ba" });
     await tick();
     await engine.transition(p, "started");
     const at = engine.linkedAgentLines(p).join("\n");
     expect(at).toContain("plan_spawn");
-    expect(at).toContain("worker1");
-    expect(at).not.toContain("recon1");
+    expect(at).toContain("aebad64149cc767ba");
+    expect(at).not.toContain("a3a411f313f3c6693");
   });
 
   it("a recon agent linked at recon_spawn is not listed at plan_spawn when no worker was linked", async () => {
     const { engine, call } = mount(PIPE);
     const p = (await engine.start("task")).sessionId;
     const recon = (await engine.start("child", undefined, p)).sessionId;
-    await call("link_agent", { session_id: recon, agent_id: "recon1" });
+    await call("link_agent", { session_id: recon, agent_id: "a3a411f313f3c6693" });
     await tick();
     await engine.transition(p, "skip");
     await tick();
@@ -132,7 +132,7 @@ describe("ENG-DRIVER-ENFORCE-MIDRUN-WAIT", () => {
     await tick();
     await engine.transition(p, "warm");
     await tick();
-    await call("link_agent", { session_id: r, agent_id: "rev1" });
+    await call("link_agent", { session_id: r, agent_id: "a18ce5ff019d7aa48" });
     await tick();
     await engine.transition(p, "no_verdict");
     expect(engine.linkedAgentLines(p)).toEqual([]);

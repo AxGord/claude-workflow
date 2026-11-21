@@ -35,7 +35,7 @@ describe("the driver's link records the driver's model", () => {
       model: "opus",
       effort: "high",
     });
-    await engine.linkAgent(t.sessionId, "driver-agent-1");
+    await engine.linkAgent(t.sessionId, "a15199993e77a3ea7");
     const link = storage.events
       .since(0)
       .find(e => e.kind === "agent_link" && e.session === t.sessionId);

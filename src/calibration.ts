@@ -1,7 +1,7 @@
 // The calibration report: the ledger (`ledger.jsonl`) folded per project × workflow × difficulty band × stage,
 // the figures a `model_table` is tuned from. Pure; src/calibration-cli.ts reads the file and prints.
 import path from "node:path";
-import type { LedgerEntry } from "./ledger.js";
+import { wholeUsd, type LedgerEntry } from "./ledger.js";
 
 export interface CalibrationOptions {
   /** Keep lines that ended at or after this date (ISO date or timestamp). */
@@ -476,7 +476,7 @@ export function buildCost(entries: readonly LedgerEntry[], from: string, to: str
     const ended = Date.parse(e.ended_at);
     if (Number.isNaN(ended)) continue;
     const stages = costStages(e);
-    const spend = e.spend?.usd !== undefined ? e.spend : undefined;
+    const spend = wholeUsd(e.spend) !== undefined ? e.spend : undefined;
     const spendTokens = spend
       ? spend.input + spend.output + spend.cache_read + spend.cache_write
       : 0;

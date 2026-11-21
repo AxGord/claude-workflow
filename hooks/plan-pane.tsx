@@ -228,8 +228,8 @@ export function ledgerRunsOf(text: string): Map<string, Run> {
   return out
 }
 
-/** What the ledger says of a queue line over every run of it: `usd` is the sum of the runs' real spend, absent when ANY run recorded none (a line is measured whole or not at all, never $0); the latest run's end and how it ended. */
-export type TaskSpend = { usd?: number; endedAt: number; outcome: 'landed' | 'closed' | 'failed' | 'unknown' }
+/** What the ledger says of a queue line over every run of it: `usd` is the sum of the runs' real spend, absent when ANY run recorded none or only a partial sum (a line is measured whole or not at all, never $0); `usdFloor` is that sum when every run recorded one and some is partial (`spend.usd_partial`): a lower bound, drawn `≥$x`, never added to a total; the latest run's end and how it ended. */
+export type TaskSpend = { usd?: number; usdFloor?: number; endedAt: number; outcome: 'landed' | 'closed' | 'failed' | 'unknown' }
 
 /** How a task run ended, as the Cost tab reads it (`costOutcome`): not completed = failed; completed through a `land` state = landed; completed without = closed; no visits recorded = unknown. */
 function outcomeOf(j: Record<string, unknown>): TaskSpend['outcome'] {
@@ -240,17 +240,20 @@ function outcomeOf(j: Record<string, unknown>): TaskSpend['outcome'] {
 
 /** The spend of the ledger's task runs by queue line id; rows without `task`, of other workflows or with no end are skipped. */
 export function ledgerSpendOf(text: string): Map<string, TaskSpend> {
-  const acc = new Map<string, { usd: number; isMeasured: boolean; endedAt: number; outcome: TaskSpend['outcome'] }>()
+  const acc = new Map<string, { usd: number; isMeasured: boolean; isPartial: boolean; endedAt: number; outcome: TaskSpend['outcome'] }>()
   for (const line of text.split('\n')) {
     if (!line.includes('"task"')) continue
     try {
       const j = JSON.parse(line) as Record<string, unknown>
       const ended = Date.parse(String(j.ended_at ?? ''))
       if (typeof j.task !== 'string' || j.task === '' || !TASK_WORKFLOWS.has(String(j.workflow)) || !Number.isFinite(ended)) continue
-      const usd = (j.spend as { usd?: unknown } | undefined)?.usd
-      const cur = acc.get(j.task) ?? { usd: 0, isMeasured: true, endedAt: -Infinity, outcome: 'unknown' as const }
-      if (typeof usd === 'number' && Number.isFinite(usd)) cur.usd += usd
-      else cur.isMeasured = false
+      const spend = j.spend as { usd?: unknown; usd_partial?: unknown } | undefined
+      const usd = spend?.usd
+      const cur = acc.get(j.task) ?? { usd: 0, isMeasured: true, isPartial: false, endedAt: -Infinity, outcome: 'unknown' as const }
+      if (typeof usd === 'number' && Number.isFinite(usd)) {
+        cur.usd += usd
+        if (spend?.usd_partial === true) cur.isPartial = true
+      } else cur.isMeasured = false
       if (ended >= cur.endedAt) {
         cur.endedAt = ended
         cur.outcome = outcomeOf(j)
@@ -260,7 +263,7 @@ export function ledgerSpendOf(text: string): Map<string, TaskSpend> {
       // a torn or foreign line is not a run
     }
   }
-  return new Map([...acc].map(([task, a]) => [task, { ...(a.isMeasured ? { usd: a.usd } : {}), endedAt: a.endedAt, outcome: a.outcome }]))
+  return new Map([...acc].map(([task, a]) => [task, { ...(a.isMeasured ? (a.isPartial ? { usdFloor: a.usd } : { usd: a.usd }) : {}), endedAt: a.endedAt, outcome: a.outcome }]))
 }
 
 /** One stretch of the parent's own spend, as a task's ledger line records it (`parent_spend`): the end of the stretch, the project directory of the conversation's transcript and its real cost. */
@@ -288,7 +291,7 @@ export function projectDirOf(repo: string): string {
 }
 
 /** A task's latest run that went through a `land` state, of any workflow (a queue's own task workflow is not one of `TASK_WORKFLOWS`): when it began and ended, its difficulty and its own spend. */
-export type LedgerLand = { start: number; endedAt: number; difficulty: string; usd?: number }
+export type LedgerLand = { start: number; endedAt: number; difficulty: string; usd?: number; usdFloor?: number }
 
 /** The landed task runs of the ledger by queue line id, whatever the workflow; the latest landed run of a line wins. */
 export function ledgerLandedOf(text: string): Map<string, LedgerLand> {
@@ -300,9 +303,11 @@ export function ledgerLandedOf(text: string): Map<string, LedgerLand> {
       const ended = Date.parse(String(j.ended_at ?? ''))
       if (typeof j.task !== 'string' || j.task === '' || !Number.isFinite(ended) || outcomeOf(j) !== 'landed') continue
       if ((out.get(j.task)?.endedAt ?? -Infinity) > ended) continue
-      const usd = (j.spend as { usd?: unknown } | undefined)?.usd
+      const spend = j.spend as { usd?: unknown; usd_partial?: unknown } | undefined
+      const usd = spend?.usd
+      const figure = typeof usd === 'number' && Number.isFinite(usd) ? (spend?.usd_partial === true ? { usdFloor: usd } : { usd }) : {}
       const start = Date.parse(String(j.started_at ?? ''))
-      out.set(j.task, { start: Number.isFinite(start) ? start : NaN, endedAt: ended, difficulty: typeof j.difficulty === 'number' ? String(j.difficulty) : '', ...(typeof usd === 'number' && Number.isFinite(usd) ? { usd } : {}) })
+      out.set(j.task, { start: Number.isFinite(start) ? start : NaN, endedAt: ended, difficulty: typeof j.difficulty === 'number' ? String(j.difficulty) : '', ...figure })
     } catch {
       // a torn or foreign line is not a run
     }
@@ -310,18 +315,18 @@ export function ledgerLandedOf(text: string): Map<string, LedgerLand> {
   return out
 }
 
-/** What the ledger rows of a queue line add up to: the agents' `spend.usd` and the parent's `parent_spend.usd` (a row records either as absent: it adds 0). `isUnmeasured` is set when a row that counts toward `usd` recorded no spend: the line is measured whole or not at all, so its sum is not a cost. */
-export type TaskTotals = { usd: number; parentUsd: number; isUnmeasured?: true }
+/** What the ledger rows of a queue line add up to: the agents' `spend.usd` and the parent's `parent_spend.usd` (a row records either as absent: it adds 0). `isUnmeasured` is set when a row that counts toward `usd` recorded no spend or only a partial sum (`spend.usd_partial`): the line is measured whole or not at all, so its sum is not a cost; `isPartial` is set besides when every such row recorded a figure and some is partial: `usd` is then a lower bound (`≥$x`), never added to a total. */
+export type TaskTotals = { usd: number; parentUsd: number; isUnmeasured?: true; isPartial?: true }
 
 /** The totals of the ledger's rows by queue line id, over every run of a line and whatever workflow ran it; a row with no `task` is skipped. A row's `spend` already covers its descendant sessions, so a row whose `parent_session_id` is a row of the same task (a recon child of the pipeline) adds only its `parent_spend`. */
 export function ledgerTotalsOf(text: string): Map<string, TaskTotals> {
-  type Row = { task: string; session: string; parentSession: string; usd: number; parentUsd: number; isUsdMeasured: boolean }
+  type Row = { task: string; session: string; parentSession: string; usd: number; parentUsd: number; isUsdMeasured: boolean; isPartial: boolean }
   const rows: Row[] = []
   const usdOf = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
   for (const line of text.split('\n')) {
     if (!line.includes('"task"')) continue
     try {
-      const j = JSON.parse(line) as { task?: unknown; session_id?: unknown; parent_session_id?: unknown; spend?: { usd?: unknown }; parent_spend?: { usd?: unknown } }
+      const j = JSON.parse(line) as { task?: unknown; session_id?: unknown; parent_session_id?: unknown; spend?: { usd?: unknown; usd_partial?: unknown }; parent_spend?: { usd?: unknown } }
       if (typeof j.task !== 'string' || j.task === '') continue
       rows.push({
         task: j.task,
@@ -329,6 +334,7 @@ export function ledgerTotalsOf(text: string): Map<string, TaskTotals> {
         parentSession: typeof j.parent_session_id === 'string' ? j.parent_session_id : '',
         usd: usdOf(j.spend?.usd),
         isUsdMeasured: typeof j.spend?.usd === 'number' && Number.isFinite(j.spend.usd),
+        isPartial: j.spend?.usd_partial === true,
         parentUsd: usdOf(j.parent_spend?.usd),
       })
     } catch {
@@ -337,15 +343,23 @@ export function ledgerTotalsOf(text: string): Map<string, TaskTotals> {
   }
   const sessions = new Set(rows.filter(r => r.session !== '').map(r => `${r.task}\n${r.session}`))
   const out = new Map<string, TaskTotals>()
+  const blank = new Set<string>()
   for (const r of rows) {
     const cur = out.get(r.task) ?? { usd: 0, parentUsd: 0 }
     if (r.parentSession === '' || !sessions.has(`${r.task}\n${r.parentSession}`)) {
       cur.usd += r.usd
-      if (!r.isUsdMeasured) cur.isUnmeasured = true
+      if (!r.isUsdMeasured) {
+        cur.isUnmeasured = true
+        blank.add(r.task)
+      } else if (r.isPartial) {
+        cur.isUnmeasured = true
+        cur.isPartial = true
+      }
     }
     cur.parentUsd += r.parentUsd
     out.set(r.task, cur)
   }
+  for (const task of blank) delete out.get(task)?.isPartial
   return out
 }
 
@@ -512,12 +526,14 @@ async function landBranchOf($: any, repo: string, header: string | undefined): P
 }
 
 /** The start, difficulty and cost a Landed row draws for a slice: the pipeline runs and spend of the ledger when it has them, else the slice's landed run of ANY workflow (a queue's own task workflow is not one of `TASK_WORKFLOWS`). Read from the ledger on disk, so they survive a restart of the host process. */
-function landFigures(ledger: Ledger, slice: string): { start: number; difficulty: string; usd?: number } {
+function landFigures(ledger: Ledger, slice: string): { start: number; difficulty: string; usd?: number; usdFloor?: number } {
   const lp = ledger.landed.get(slice)
   const start = ledger.runs.get(slice)?.start ?? lp?.start ?? NaN
   const difficulty = ledger.runs.get(slice)?.difficulty ?? lp?.difficulty ?? ''
-  const usd = ledger.spends.has(slice) ? ledger.spends.get(slice)?.usd : lp?.usd
-  return { start, difficulty, ...(usd !== undefined ? { usd } : {}) }
+  const figure = ledger.spends.get(slice) ?? lp
+  const usd = figure?.usd
+  const usdFloor = figure?.usdFloor
+  return { start, difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) }
 }
 
 /** The landed task runs of the ledger inside the window that `seen` (the slices git shows) lacks, of the lines of THIS queue (`own`: its lines and its archive; the ledger holds every project's runs) in whatever workflow they ran: a land made before the repo wrote a `Slice:` trailer. They carry no sha. */
@@ -528,8 +544,8 @@ function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, now: n
     if (!own.has(slice) || seen.has(slice) || lp.endedAt < since || lp.endedAt > now + 24 * 3600 * 1000) continue
     const d = new Date(lp.endedAt)
     const at = `${dayOf(lp.endedAt)} ${two(d.getHours())}:${two(d.getMinutes())}`
-    const { start, difficulty, usd } = landFigures(ledger, slice)
-    out.push({ sha: '—', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}) })
+    const { start, difficulty, usd, usdFloor } = landFigures(ledger, slice)
+    out.push({ sha: '—', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) })
   }
   return out
 }
@@ -551,9 +567,9 @@ async function lands($: any, queueFile: string, ledger: Ledger, header: string |
     .filter(p => p.length >= 3 && (p[2] ?? '').trim() !== '')
     .map(p => {
       const slice = (p[2] ?? '').trim()
-      const { start, difficulty, usd } = landFigures(ledger, slice)
+      const { start, difficulty, usd, usdFloor } = landFigures(ledger, slice)
       const at = p[1] ?? ''
-      return { sha: p[0] ?? '', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}) }
+      return { sha: p[0] ?? '', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) }
     })
   const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, now)
   return { lands: extra.length === 0 ? fromGit : [...fromGit, ...extra].sort((a, b) => landMs(b.at, now) - landMs(a.at, now)), branch }
@@ -707,8 +723,8 @@ async function build($: any): Promise<Snapshot> {
     failedLines: loaded.queue.failedLines.map(l => {
       // the row reads the header's source (the whole ledger), so the rows add up to the header; a line with a run of no recorded spend stays `—`
       const t = failedTotals.get(l.id)
-      const usd = t && !t.isUnmeasured ? t.usd : undefined
-      return usd !== undefined ? { ...l, usd } : l
+      if (t && !t.isUnmeasured) return { ...l, usd: t.usd }
+      return t?.isPartial ? { ...l, usdFloor: t.usd } : l
     }),
     ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(failedRecent, failedTotals) } : {}),
   }

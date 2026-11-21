@@ -47,7 +47,7 @@ it("following the earlier-visit abort hint verbatim on a session with active des
   const p = (await engine.start("task")).sessionId;
   const w = (await engine.start("child", undefined, p)).sessionId;
   const g = (await engine.start("child", undefined, w)).sessionId; // active descendant of w
-  await engine.linkAgent(w, "worker1");
+  await engine.linkAgent(w, "aebad64149cc767ba");
   await engine.transition(p, "plan"); // parent leaves the visit w was linked at
   const note = earlierVisitNote(storage.read(w)!, storage.read(p)!);
   expect(note).toBeDefined();

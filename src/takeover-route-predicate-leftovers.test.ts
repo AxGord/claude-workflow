@@ -46,7 +46,7 @@ it("CLI pickup report: worker linked at work is this visit's agent at plan_spawn
   const engine = new Engine(storage, loader, new Executor());
   const p = (await engine.start("task")).sessionId;
   const w = (await engine.start("child", undefined, p)).sessionId;
-  await engine.linkAgent(w, "worker1");
+  await engine.linkAgent(w, "aebad64149cc767ba");
   await engine.transition(p, "routed");
   await kill(storage, [p, w]);
   await engine.reapOrphanedSessions();
@@ -89,13 +89,13 @@ it("formatResume: a grandchild is judged by its own parent's workflow routes", a
   const m = (await engine.start("mid", undefined, r)).sessionId;
   await engine.transition(m, "next");
   const g = (await engine.start("child", undefined, m)).sessionId;
-  await engine.linkAgent(g, "grand1");
+  await engine.linkAgent(g, "a27b2b200b4920595");
   await engine.transition(m, "next");
   await kill(storage, [r, m, g]);
   await engine.reapOrphanedSessions();
   const text = formatResume(await new Engine(storage, loader, new Executor()).resume(r));
   expect(text).not.toContain("an earlier step's agent");
-  expect(text).toContain(`SendMessage({ to: "grand1"`);
+  expect(text).toContain(`SendMessage({ to: "a27b2b200b4920595"`);
 });
 
 it("pickupReport with a loader that lacks the parent's workflow still returns the report", async () => {
@@ -105,7 +105,7 @@ it("pickupReport with a loader that lacks the parent's workflow still returns th
   const engine = new Engine(storage, loader, new Executor());
   const p = (await engine.start("task")).sessionId;
   const w = (await engine.start("child", undefined, p)).sessionId;
-  await engine.linkAgent(w, "worker1");
+  await engine.linkAgent(w, "aebad64149cc767ba");
   await engine.transition(p, "routed");
   await kill(storage, [p, w]);
   await engine.reapOrphanedSessions();

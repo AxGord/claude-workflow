@@ -150,13 +150,13 @@ describe("AGENT_CONTEXT of an exec", () => {
 
   it("equals the last turn of the linked agent's transcript", async () => {
     transcript(
-      "a1",
+      "a8a8bb7cd343aa2ad",
       line({ id: "m1", read: 900_000 }),
       line({ id: "m2", input: 4, read: 300, write: 12 }),
     );
     const { engine } = setup();
     const { sessionId } = await engine.start("w");
-    await engine.linkAgent(sessionId, "agent-a1");
+    await engine.linkAgent(sessionId, "agent-a8a8bb7cd343aa2ad");
     expect(await echoed(engine, sessionId)).toBe("[316]");
   });
 
@@ -169,17 +169,17 @@ describe("AGENT_CONTEXT of an exec", () => {
   it("is empty when the linked agent's transcript cannot be found", async () => {
     const { engine } = setup();
     const { sessionId } = await engine.start("w");
-    await engine.linkAgent(sessionId, "nobody");
+    await engine.linkAgent(sessionId, "a6e854442cd2a940c");
     expect(await echoed(engine, sessionId)).toBe("[]");
   });
 
   it("follows a re-linked agent: the new agent's value", async () => {
-    transcript("a1", line({ id: "m1", read: 250_000 }));
-    transcript("a2", line({ id: "n1", read: 11 }));
+    transcript("a8a8bb7cd343aa2ad", line({ id: "m1", read: 250_000 }));
+    transcript("a693a9fdd4c2fd070", line({ id: "n1", read: 11 }));
     const { engine } = setup();
     const { sessionId } = await engine.start("w");
-    await engine.linkAgent(sessionId, "a1");
-    await engine.linkAgent(sessionId, "a2");
+    await engine.linkAgent(sessionId, "a8a8bb7cd343aa2ad");
+    await engine.linkAgent(sessionId, "a693a9fdd4c2fd070");
     expect(await echoed(engine, sessionId)).toBe("[11]");
   });
 
@@ -192,8 +192,10 @@ describe("AGENT_CONTEXT of an exec", () => {
   });
 
   it("agentContextOf reads the agent of the session it is given", () => {
-    transcript("a1", line({ id: "m1", input: 1, read: 2, write: 3 }));
-    expect(agentContextOf({ agent_id: "agent-a1" }, path.join(cfg, "projects"))).toBe(6);
+    transcript("a8a8bb7cd343aa2ad", line({ id: "m1", input: 1, read: 2, write: 3 }));
+    expect(
+      agentContextOf({ agent_id: "agent-a8a8bb7cd343aa2ad" }, path.join(cfg, "projects")),
+    ).toBe(6);
     expect(agentContextOf({}, path.join(cfg, "projects"))).toBeUndefined();
   });
 });

@@ -176,9 +176,9 @@ export function landDayToggled(foldedKeys: string[], key: string, today: string)
   return [...foldedKeys.filter(k => k !== '+' + key && k !== '-' + key), (wasOpen ? '-' : '+') + key]
 }
 
-/** `$1.23`, `$12.34`, `$123`; `—` when the line has no measured cost (never `$0.00`). */
-export function usdText(usd: number | undefined): string {
-  if (usd === undefined) return '—'
+/** `$1.23`, `$12.34`, `$123`; `—` when the line has no measured cost (never `$0.00`); `≥$17.40` for a lower bound (`floor`: a run's sum left out an unmeasured agent). */
+export function usdText(usd: number | undefined, floor?: number): string {
+  if (usd === undefined) return floor === undefined ? '—' : '≥' + usdText(floor)
   return '$' + (usd < 100 ? usd.toFixed(2) : usd.toFixed(0))
 }
 
@@ -668,9 +668,9 @@ export function paneTree(input: PaneInput): PaneNode {
     const spare = input.rows - 9 - q.running.length * (runTwo ? 2 : 1)
     const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
     // a row's cost sits right after its kind, right-aligned to the section's widest figure: it is never cut, the id is
-    const costCol = (all: (number | undefined)[]) => {
-      const w = Math.max(1, ...all.map(u => cells(usdText(u))))
-      return { w, text: (u: number | undefined) => usdText(u).padStart(w) }
+    const costCol = (all: { usd?: number; usdFloor?: number }[]) => {
+      const w = Math.max(1, ...all.map(l => cells(usdText(l.usd, l.usdFloor))))
+      return { w, text: (l: { usd?: number; usdFloor?: number }) => usdText(l.usd, l.usdFloor).padStart(w) }
     }
     const recentFailed = q.failedLines.filter(l => l.recent)
     const olderFailed = q.failedLines.filter(l => !l.recent)
@@ -678,17 +678,17 @@ export function paneTree(input: PaneInput): PaneNode {
     const shownFailed = isOpen('failed-older') ? q.failedLines : recentFailed
     // only the rows drawn size the section: a row of a folded day is not on screen and must not widen the cost column or flip the layout
     const shownLands = isOpen('lands') ? s.lands.filter(l => isOpen('lands-' + l.at.slice(0, 5))) : []
-    const landCost = costCol(shownLands.map(l => l.usd))
-    const failCost = costCol(shownFailed.map(l => l.usd))
-    const costOf = (u: number | undefined, c: { text: (u: number | undefined) => string }) => text({ dimColor: u === undefined }, c.text(u))
-    const landTwo = !fitsOneLine(shownLands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l.usd)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
+    const landCost = costCol(shownLands)
+    const failCost = costCol(shownFailed)
+    const costOf = (l: { usd?: number; usdFloor?: number }, c: { text: (l: { usd?: number; usdFloor?: number }) => string }) => text({ dimColor: l.usd === undefined && l.usdFloor === undefined }, c.text(l))
+    const landTwo = !fitsOneLine(shownLands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
     const stampOf = (date: string) => {
       // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
       const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(date)
       return when ? `${when[2]}.${when[1]}` : 'date unknown'
     }
     const reasonOf = (l: FailedLine) => (l.reason === '' ? 'no note' : l.reason)
-    const failTwo = !fitsOneLine(shownFailed.map(l => `    ${BAR_W} ${markOf(l.id)} ${failCost.text(l.usd)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
+    const failTwo = !fitsOneLine(shownFailed.map(l => `    ${BAR_W} ${markOf(l.id)} ${failCost.text(l)} ${l.id} ${stampOf(l.date)} ${reasonOf(l)}`), columns)
     body = col(
       text({}, text({ weight: 'bold' }, q.file.replace(/^.*\//, '')), text({ dimColor: true }, `  pending ${q.pending} · done ${q.done}${q.failed > 0 ? ` · failed ${q.failed}` : ''}`)),
       header('running', TONE.ok, `▶ Running ${q.running.length}/${q.window}`),
@@ -736,10 +736,10 @@ export function paneTree(input: PaneInput): PaneNode {
                     landTwo
                       // two lines: bar, kind, cost, times, sha; the id indented under them
                       ? col(
-                          text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l.usd, landCost), ' ', text({ dimColor: true }, fitCells(`${l.start}-${l.at.slice(6)} ${l.sha}`, Math.max(1, columns - 13 - landCost.w)))),
+                          text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l, landCost), ' ', text({ dimColor: true }, fitCells(`${l.start}-${l.at.slice(6)} ${l.sha}`, Math.max(1, columns - 13 - landCost.w)))),
                           text({}, '    ', TAB, fitCells(l.slice, Math.max(1, columns - 4 - TAB.length))),
                         )
-                      : text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l.usd, landCost), ' ', text({ dimColor: true }, `${l.start}-${l.at.slice(6)} ${l.sha}`), ' ', l.slice),
+                      : text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l, landCost), ' ', text({ dimColor: true }, `${l.start}-${l.at.slice(6)} ${l.sha}`), ' ', l.slice),
                   )
                 : []),
             ]
@@ -752,14 +752,14 @@ export function paneTree(input: PaneInput): PaneNode {
         ? shownFailed.map(l => {
             const stamp = stampOf(l.date)
             if (!failTwo) {
-              return text({}, '    ', level(l.difficulty), ' ', kindOf(l.id), ' ', costOf(l.usd, failCost), ' ', l.id, ' ', text({ dimColor: true }, `${stamp} ${reasonOf(l)}`))
+              return text({}, '    ', level(l.difficulty), ' ', kindOf(l.id), ' ', costOf(l, failCost), ' ', l.id, ' ', text({ dimColor: true }, `${stamp} ${reasonOf(l)}`))
             }
             // two lines: bar, kind, cost, id, date; the reason indented under them
             const lead = 4 + 5 + 1 + 1 + 1 + failCost.w + 1
             const idFit = fitCells(l.id, Math.max(1, columns - lead - cells(stamp) - 1))
             const stampFit = fitCells(stamp, Math.max(1, columns - lead - cells(idFit) - 1))
             return col(
-              text({}, '    ', level(l.difficulty), ' ', kindOf(l.id), ' ', costOf(l.usd, failCost), ' ', idFit, ' ', text({ dimColor: true }, stampFit)),
+              text({}, '    ', level(l.difficulty), ' ', kindOf(l.id), ' ', costOf(l, failCost), ' ', idFit, ' ', text({ dimColor: true }, stampFit)),
               text({ dimColor: true }, '    ', TAB, fitCells(reasonOf(l), Math.max(1, columns - 4 - TAB.length))),
             )
           })

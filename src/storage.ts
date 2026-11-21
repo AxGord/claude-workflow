@@ -146,7 +146,7 @@ export class Storage {
         const j = JSON.parse(line) as Record<string, unknown>;
         if (!(Date.parse(typeof j.ended_at === "string" ? j.ended_at : "") >= since)) continue;
         if (typeof j.task !== "string" && !j.parent_spend) continue;
-        const spend = j.spend as { usd?: unknown } | undefined;
+        const spend = j.spend as { usd?: unknown; usd_partial?: unknown } | undefined;
         const ps = j.parent_spend as { to?: unknown; project?: unknown; usd?: unknown } | undefined;
         keep.push(
           JSON.stringify({
@@ -157,7 +157,14 @@ export class Storage {
             outcome: j.outcome,
             visits: j.visits,
             difficulty: j.difficulty,
-            ...(spend && spend.usd !== undefined ? { spend: { usd: spend.usd } } : {}),
+            ...(spend && spend.usd !== undefined
+              ? {
+                  spend: {
+                    usd: spend.usd,
+                    ...(spend.usd_partial === true ? { usd_partial: true } : {}),
+                  },
+                }
+              : {}),
             ...(ps ? { parent_spend: { to: ps.to, project: ps.project, usd: ps.usd } } : {}),
           }),
         );

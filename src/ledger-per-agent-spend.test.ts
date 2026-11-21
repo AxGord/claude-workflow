@@ -64,29 +64,29 @@ describe("measureSpend per agent", () => {
 
   it("splits an agent linked again at the call's time, and the rows sum to the task's spend", () => {
     const root = transcripts({
-      w1: [
+      aa95dcb8aebb202ef: [
         turn("m1", "2026-11-09T10:10:00Z", SONNET, MTOK),
         turn("m2", "2026-11-09T10:40:00Z", SONNET, MTOK),
         turn("m3", "2026-11-09T10:50:00Z", SONNET, MTOK),
       ],
-      r1: [turn("m4", "2026-11-09T10:30:00Z", OPUS, MTOK)],
+      a7c92cf1eee8d99cc: [turn("m4", "2026-11-09T10:30:00Z", OPUS, MTOK)],
     });
     const worker = sess("w", {
-      agent_id: "w1",
+      agent_id: "aa95dcb8aebb202ef",
       agent_links: [
-        link("w1", "2026-11-09T10:05:00Z", "work_spawn", "execute"),
-        link("w1", "2026-11-09T10:35:00Z", "fixes", "fix"),
+        link("aa95dcb8aebb202ef", "2026-11-09T10:05:00Z", "work_spawn", "execute"),
+        link("aa95dcb8aebb202ef", "2026-11-09T10:35:00Z", "fixes", "fix"),
       ],
     });
     const reviewer = sess("r", {
-      agent_id: "r1",
-      agent_links: [link("r1", "2026-11-09T10:20:00Z", "review_spawn", "review")],
+      agent_id: "a7c92cf1eee8d99cc",
+      agent_links: [link("a7c92cf1eee8d99cc", "2026-11-09T10:20:00Z", "review_spawn", "review")],
     });
     const s = measureSpend([worker, reviewer], W[0], W[1], root)!;
     expect(s.by_agent!.map(a => [a.agent, a.state, a.stage, a.model, a.usd])).toEqual([
-      ["w1", "work_spawn", "execute", SONNET, 10],
-      ["w1", "fixes", "fix", SONNET, 20],
-      ["r1", "review_spawn", "review", OPUS, 20],
+      ["aa95dcb8aebb202ef", "work_spawn", "execute", SONNET, 10],
+      ["aa95dcb8aebb202ef", "fixes", "fix", SONNET, 20],
+      ["a7c92cf1eee8d99cc", "review_spawn", "review", OPUS, 20],
     ]);
     expect(s.by_agent!.reduce((n, a) => n + a.usd!, 0)).toBeCloseTo(s.usd!, 6);
     expect(s.usd).toBeCloseTo(50, 6);
@@ -94,28 +94,28 @@ describe("measureSpend per agent", () => {
 
   it("a link at a state that spawns no stage keeps the agent's stage; an unlinked agent has none", () => {
     const root = transcripts({
-      r1: [
+      a7c92cf1eee8d99cc: [
         turn("m1", "2026-11-09T10:10:00Z", OPUS, MTOK),
         turn("m2", "2026-11-09T10:40:00Z", OPUS, MTOK),
       ],
-      d1: [turn("m3", "2026-11-09T10:15:00Z", SONNET, MTOK)],
+      a9948c645c0942477: [turn("m3", "2026-11-09T10:15:00Z", SONNET, MTOK)],
     });
     const reviewer = sess("r", {
       agent_links: [
-        link("r1", "2026-11-09T10:05:00Z", "review_spawn", "review"),
-        link("r1", "2026-11-09T10:30:00Z", "review_warm"),
+        link("a7c92cf1eee8d99cc", "2026-11-09T10:05:00Z", "review_spawn", "review"),
+        link("a7c92cf1eee8d99cc", "2026-11-09T10:30:00Z", "review_warm"),
       ],
-      context: { decider_agent: "d1" },
+      context: { decider_agent: "a9948c645c0942477" },
     });
     const rows = measureSpend([reviewer], W[0], W[1], root)!.by_agent!;
     expect(rows.map(a => [a.agent, a.state, a.stage, a.usd])).toEqual([
-      ["r1", "review_spawn", "review", 20],
-      ["r1", "review_warm", "review", 20],
-      ["d1", undefined, undefined, 10],
+      ["a7c92cf1eee8d99cc", "review_spawn", "review", 20],
+      ["a7c92cf1eee8d99cc", "review_warm", "review", 20],
+      ["a9948c645c0942477", undefined, undefined, 10],
     ]);
   });
 
-  it("an unreadable agent is a row without usd, never $0, and the task has no usd", () => {
+  it("an unreadable agent is a row without usd, never $0, and the task keeps the measured sum as a partial one", () => {
     const root = transcripts({ a1: [turn("m1", "2026-11-09T10:10:00Z", SONNET, MTOK)] });
     const s = measureSpend(
       [
@@ -128,7 +128,8 @@ describe("measureSpend per agent", () => {
       W[1],
       root,
     )!;
-    expect(s.usd).toBeUndefined();
+    expect(s.usd).toBeCloseTo(10, 6);
+    expect(s.usd_partial).toBe(true);
     expect(s.by_agent!.find(a => a.agent === "gone")).not.toHaveProperty("usd");
     expect(s.by_agent!.find(a => a.agent === "a1")!.usd).toBeCloseTo(10, 6);
   });
@@ -271,11 +272,11 @@ describe("an ended pipeline's ledger line", () => {
     fs.mkdirSync(sub, { recursive: true });
     const agent = (id: string, lines: string[]) =>
       fs.writeFileSync(path.join(sub, `agent-${id}.jsonl`), lines.join("\n"));
-    agent("w1", [
+    agent("aa95dcb8aebb202ef", [
       turn("w-a", "2026-11-09T10:03:00Z", SONNET, MTOK),
       turn("w-b", "2026-11-09T10:45:00Z", SONNET, MTOK),
     ]);
-    agent("r1", [
+    agent("a7c92cf1eee8d99cc", [
       turn("r-a", "2026-11-09T10:25:00Z", OPUS, MTOK),
       turn("r-b", "2026-11-09T10:55:00Z", OPUS, MTOK),
     ]);
@@ -303,26 +304,26 @@ describe("an ended pipeline's ledger line", () => {
     ).sessionId;
     await engine.transition(p, "go");
     at("10:01");
-    await spawn(p, "w1", "10:02");
+    await spawn(p, "aa95dcb8aebb202ef", "10:02");
     at("10:20");
     await engine.transition(p, "next");
-    await spawn(p, "r1", "10:21");
+    await spawn(p, "a7c92cf1eee8d99cc", "10:21");
     at("10:40");
     await engine.transition(p, "fixes");
-    await spawn(p, "w1", "10:41");
+    await spawn(p, "aa95dcb8aebb202ef", "10:41");
     at("10:50");
     await engine.transition(p, "next");
-    await spawn(p, "r1", "10:51");
+    await spawn(p, "a7c92cf1eee8d99cc", "10:51");
     at("11:00");
     for (const kid of kids) await engine.transition(kid, "end");
     await engine.transition(p, "land");
 
     const entry = (storage.ledger as LedgerEntry[]).find(l => l.task === "T-A")!;
     expect(entry.spend!.by_agent!.map(a => [a.agent, a.state, a.stage, a.usd])).toEqual([
-      ["w1", "work_spawn", "execute", 10],
-      ["w1", "fixes", "fix", 10],
-      ["r1", "review_spawn", "review", 20],
-      ["r1", "review_warm", "review", 20],
+      ["aa95dcb8aebb202ef", "work_spawn", "execute", 10],
+      ["aa95dcb8aebb202ef", "fixes", "fix", 10],
+      ["a7c92cf1eee8d99cc", "review_spawn", "review", 20],
+      ["a7c92cf1eee8d99cc", "review_warm", "review", 20],
     ]);
     expect(entry.spend!.usd).toBeCloseTo(60, 6);
     const rows = calibrate([entry], {}).filter(r => r.workflow === "pipe");
@@ -359,11 +360,11 @@ describe("a driver linked at the dispatcher's dispatch", () => {
     const sub = path.join(cfg, "projects", "p", "conv", "subagents");
     fs.mkdirSync(sub, { recursive: true });
     fs.writeFileSync(
-      path.join(sub, "agent-d1.jsonl"),
+      path.join(sub, "agent-a9948c645c0942477.jsonl"),
       turn("d-a", "2026-11-09T10:30:00Z", OPUS, MTOK),
     );
     fs.writeFileSync(
-      path.join(sub, "agent-w1.jsonl"),
+      path.join(sub, "agent-aa95dcb8aebb202ef.jsonl"),
       turn("w-a", "2026-11-09T10:25:00Z", SONNET, MTOK),
     );
     const storage = new InMemoryStorage();
@@ -382,21 +383,23 @@ describe("a driver linked at the dispatcher's dispatch", () => {
       })
     ).sessionId;
     at("10:01");
-    await engine.linkAgent(p, "d1");
+    await engine.linkAgent(p, "a9948c645c0942477");
     await engine.transition(p, "go");
     const w = (await engine.start("child", undefined, p)).sessionId;
     at("10:20");
-    await engine.linkAgent(w, "w1");
+    await engine.linkAgent(w, "aa95dcb8aebb202ef");
     at("10:40");
     await engine.transition(w, "end");
     await engine.transition(p, "next");
 
     const entry = (storage.ledger as LedgerEntry[]).find(l => l.task === "T-D")!;
-    expect(entry.spend!.by_agent!.find(a => a.agent === "d1")).toMatchObject({
+    expect(entry.spend!.by_agent!.find(a => a.agent === "a9948c645c0942477")).toMatchObject({
       state: "dispatch",
       usd: 20,
     });
-    expect(entry.spend!.by_agent!.find(a => a.agent === "d1")).not.toHaveProperty("stage");
+    expect(entry.spend!.by_agent!.find(a => a.agent === "a9948c645c0942477")).not.toHaveProperty(
+      "stage",
+    );
     const rows = calibrate([entry], {}).filter(r => r.workflow === "one");
     expect(rows.map(r => [r.stage, r.usd])).toEqual([
       ["-", 20],

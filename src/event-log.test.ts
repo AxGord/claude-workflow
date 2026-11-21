@@ -172,9 +172,9 @@ describe("event log", () => {
   it("link, respawn, stop and rescore", async () => {
     const { engine, storage } = setup();
     const { sessionId } = await engine.start("wf");
-    await engine.linkAgent(sessionId, "a1");
-    await engine.linkAgent(sessionId, "a1");
-    await engine.linkAgent(sessionId, "a2");
+    await engine.linkAgent(sessionId, "a8a8bb7cd343aa2ad");
+    await engine.linkAgent(sessionId, "a8a8bb7cd343aa2ad");
+    await engine.linkAgent(sessionId, "a693a9fdd4c2fd070");
     await engine.setContext(sessionId, "difficulty", "4");
     await engine.abort(sessionId);
     const kinds = storage.events.since(0).map(e => e.kind);
@@ -443,7 +443,7 @@ describe("event log across runs, files and frames", () => {
     const child = sess({
       session_id: "c",
       parent_session_id: "p",
-      agent_id: "a1",
+      agent_id: "a8a8bb7cd343aa2ad",
       agent_step: { workflow: "w", state: "review_spawn", visit: 1 },
       context: { model: "own", effort: "own" },
     });

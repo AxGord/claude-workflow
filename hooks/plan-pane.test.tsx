@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spawnOf, startText } from './plan-pane'
+import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerLandedOf, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spawnOf, startText } from './plan-pane'
 import { SINGLE_FOLD_LEVELS, SINGLE_FOLD_ORDER, TAB_LINKS, cells, dayOf, dayText, execDeadlineMs, failedHeading, fitCells, foldFlipped, nodeText, paneTree, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
 import type { PaneEl, PaneNode } from './pane-view'
 import type { PoolState, SessionRow, Snapshot, View } from '../types'
@@ -434,8 +434,8 @@ test('ledgerSpendOf: a line costs the sum of its runs; one run with no spend lea
   expect(m.get('F')).toMatchObject({ usd: 3, outcome: 'unknown' })
 })
 
-test('usdText: cents under $100, whole dollars above; no figure is `—`, never $0', () => {
-  expect([usdText(1.234), usdText(0), usdText(12.345), usdText(412.6), usdText(undefined)]).toEqual(['$1.23', '$0.00', '$12.35', '$413', '—'])
+test('usdText: cents under $100, whole dollars above; no figure is `—`, never $0; a floor is `≥$x`', () => {
+  expect([usdText(1.234), usdText(0), usdText(12.345), usdText(412.6), usdText(undefined), usdText(undefined, 17.4), usdText(2, 1)]).toEqual(['$1.23', '$0.00', '$12.35', '$413', '—', '≥$17.40', '$2.00'])
 })
 
 test('landMs reads `DD.MM HH:MM` into the latest year that is not past now; dayOf is its `DD.MM`', () => {
@@ -855,6 +855,35 @@ test('Failed: each row carries the line\'s cost in front of its id, `—` when t
   expect(all.some(t => /\$7\.50 FAIL-LONG/.test(t))).toBe(true)
   expect(all.some(t => /\?\?\?\?\? ◆ {5}— FAIL-NEW 07\.11/.test(t))).toBe(true)
   expect(all.some(t => t.includes('$0'))).toBe(false)
+})
+
+/** A run whose spend left an agent out: its `usd` is the measured sum, marked partial. */
+const partial = (line: string) => {
+  const j = JSON.parse(line) as { spend: object }
+  return JSON.stringify({ ...j, spend: { ...j.spend, usd_partial: true, unmeasured: ['PENDING'] } })
+}
+
+test('a run with a partial spend draws its measured sum as a lower bound, never `—` and never a whole; sums leave it out', async ($, on) => {
+  const ledger = [ran1('L-ONE', noon(7), 1.5), partial(ran1('L-TWO', noon(7), 17.4)), ran1('L-THREE', noon(7)), partial(ran1('FAIL-LONG', noon(7), 7.5, 'failed'))].join('\n')
+  engine(on, true, { git: DAY_GIT, ledger })
+  const all = await paneTexts($, 200, ['fold-failed', 'fold-failed-older'])
+  expect(all.some(t => /≥\$17\.40 .*bbb222 L-TWO/.test(t))).toBe(true)
+  expect(all.some(t => /≥\$7\.50 FAIL-LONG/.test(t))).toBe(true)
+  // the whole row and the unmeasured one keep their figures
+  expect(all.some(t => /\$1\.50 .*aaa111 L-ONE/.test(t))).toBe(true)
+  expect(all.some(t => / {4}— .*ccc333 L-THREE/.test(t))).toBe(true)
+  // the partial line is no part of the day sum: it is a bound, not a cost
+  expect(all.some(t => /▦ 07\.11 \(3 landed\) \$1\.50/.test(t))).toBe(true)
+})
+
+test('ledgerSpendOf, ledgerLandedOf and ledgerTotalsOf: a partial run gives the floor, a run with no spend at all none', () => {
+  const text = [partial(ran1('A', '2026-11-07T08:00:00Z', 2)), ran1('A', '2026-11-07T09:00:00Z', 3), ran1('B', '2026-11-07T08:00:00Z'), partial(ran1('B', '2026-11-07T09:00:00Z', 4))].join('\n')
+  expect(ledgerSpendOf(text).get('A')).toEqual({ usdFloor: 5, endedAt: Date.parse('2026-11-07T09:00:00Z'), outcome: 'landed' })
+  expect(ledgerSpendOf(text).get('B')).not.toHaveProperty('usdFloor')
+  expect(ledgerLandedOf(partial(ran1('A', '2026-11-07T09:00:00Z', 6))).get('A')).toMatchObject({ usdFloor: 6 })
+  expect(ledgerLandedOf(partial(ran1('A', '2026-11-07T09:00:00Z', 6))).get('A')).not.toHaveProperty('usd')
+  expect(ledgerTotalsOf(text).get('A')).toEqual({ usd: 5, parentUsd: 0, isUnmeasured: true, isPartial: true })
+  expect(ledgerTotalsOf(text).get('B')).toEqual({ usd: 4, parentUsd: 0, isUnmeasured: true })
 })
 
 test('a narrow pane keeps the cost and cuts the id: Landed and Failed rows on two lines, none past the width', async ($, on) => {

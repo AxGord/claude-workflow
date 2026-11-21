@@ -14,6 +14,11 @@ import type { AgentLink, SessionState } from "./types.js";
 /** `agent-<id>` and `<id>` both name an agent. */
 const bareId = (id: string): string => id.replace(/^agent-/, "");
 
+/** A Claude Code agent id: `a` and lowercase hex (`a15bb6b2a76ef441c`), also as the transcript's `agent-<id>`. A placeholder (`PENDING`) is none. */
+export function isAgentId(id: string): boolean {
+  return /^a[0-9a-f]{8,}$/.test(bareId(id));
+}
+
 /**
  * The agents a context names: `agent_id_<stage>` (the driver's own stage keys) and any `<role>_agent` key
  * (`recon_agent`, `worker_agent`, `reviewer_agent`, `investigator_agent`, ...).
@@ -289,7 +294,8 @@ function unnamedAgents(
 /**
  * The real spend of a task: its agents (see `agentsOf`) read from `projects` inside [startedAt, endedAt], also
  * per agent and linked state (`by_agent`: an agent's stretches of one state and stage are one row).
- * undefined when the task named no agent. Any agent unread leaves `usd` absent and lists it in `unmeasured`.
+ * undefined when the task named no agent. An agent unread is listed in `unmeasured` and left out of the sum: `usd` is then
+ * the measured agents' sum marked `usd_partial` (absent when none was read).
  */
 export function measureSpend(
   sessions: readonly SessionState[],
@@ -318,6 +324,7 @@ export function measureSpend(
     cache_write: 0,
   };
   const unmeasured: string[] = [];
+  let readAgents = 0;
   const rows: LedgerAgentSpend[] = [];
   for (const id of ids) {
     const file = transcriptOf(id, conversations, projects);
@@ -353,6 +360,7 @@ export function measureSpend(
       });
     }
     if (!ok) continue;
+    readAgents += 1;
     for (const { t } of read)
       for (const k of Object.keys(sum) as Array<keyof Usage>) sum[k] += t![k];
   }
@@ -361,7 +369,8 @@ export function measureSpend(
     agents: ids.length,
     by_agent: rows,
     ...(unnamed > 0 ? { unnamed } : {}),
-    ...(unmeasured.length === 0 ? { usd: sum.usd } : { unmeasured }),
+    ...(readAgents > 0 ? { usd: sum.usd } : {}),
+    ...(unmeasured.length > 0 ? { usd_partial: true as const, unmeasured } : {}),
     input: sum.input,
     output: sum.output,
     cache_read: sum.cache_read,

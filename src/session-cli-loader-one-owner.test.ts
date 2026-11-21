@@ -104,7 +104,7 @@ it("`pickup` through the CLI entry judges routes by a workflow only the project 
   const engine = new Engine(storage, workflowLoader(), new Executor());
   const parent = (await engine.start("task")).sessionId;
   const worker = (await engine.start("child", undefined, parent)).sessionId;
-  await engine.linkAgent(worker, "worker1");
+  await engine.linkAgent(worker, "aebad64149cc767ba");
   await engine.transition(parent, "routed");
   const elsewhere = mkdtemp();
   const dead = spawn("true");

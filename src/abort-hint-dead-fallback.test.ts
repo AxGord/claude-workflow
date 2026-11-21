@@ -29,7 +29,7 @@ it("an earlier-visit note needs the parent state: without it there is no note an
     const engine = new Engine(storage, loader, new Executor());
     const p = (await engine.start("task")).sessionId;
     const w = (await engine.start("child", undefined, p)).sessionId;
-    await engine.linkAgent(w, "worker1");
+    await engine.linkAgent(w, "aebad64149cc767ba");
     const s = storage.read(w)!;
     expect(s.parent_session_id).toBe(p);
     expect(earlierVisitNote(s, undefined)).toBeUndefined();

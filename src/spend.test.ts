@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { wholeUsd } from "./ledger.js";
 import { agentsOf, measureSpend, subtreeOf } from "./spend.js";
 import type { SessionState } from "./types.js";
 
@@ -118,7 +119,7 @@ describe("measureSpend", () => {
     expect(s.unnamed).toBe(1);
   });
 
-  it("an unreadable transcript leaves the task unmeasured, not $0", () => {
+  it("an unreadable transcript leaves the measured sum, marked partial, and the agent unmeasured; no agent read leaves no usd", () => {
     const root = projects({
       a1: [turn("m1", "2026-11-09T10:10:00Z", "sonnet", usage)],
     });
@@ -128,8 +129,15 @@ describe("measureSpend", () => {
       W[1],
       root,
     )!;
-    expect(s.usd).toBeUndefined();
+    expect(s.usd).toBeGreaterThan(0);
+    expect(s.usd_partial).toBe(true);
     expect(s.unmeasured).toEqual(["gone"]);
+    const none = measureSpend([sess("r", { context: { recon_agent: "gone" } })], W[0], W[1], root)!;
+    expect(none.usd).toBeUndefined();
+    expect(none.usd_partial).toBe(true);
+    expect(none.unmeasured).toEqual(["gone"]);
+    expect(wholeUsd(s)).toBeUndefined();
+    expect(wholeUsd({ usd: 3 })).toBe(3);
   });
 
   it("an unpriced model leaves it unmeasured; a task with no agent has no spend", () => {

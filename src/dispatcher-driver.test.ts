@@ -373,9 +373,9 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
       const p = await child(d, "T1");
       const w = await child(p);
       const r = await child(d);
-      await m.engine.linkAgent(p, "driver1");
-      await m.engine.linkAgent(w, "worker1");
-      await m.engine.linkAgent(r, "rev1");
+      await m.engine.linkAgent(p, "ab85aef08608180db");
+      await m.engine.linkAgent(w, "aebad64149cc767ba");
+      await m.engine.linkAgent(r, "a18ce5ff019d7aa48");
       await m.call("transition", {
         session_id: d,
         transition: "dispatched",
@@ -383,7 +383,7 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
       });
       ids.push(p, w, r);
     }
-    if (o.link) await m.engine.linkAgent(d, "disp1");
+    if (o.link) await m.engine.linkAgent(d, "a81977149348587ff");
     for (const id of ids)
       await m.storage.update(id, s => ({
         ...s!,
@@ -401,16 +401,18 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
     expect(text).toContain(
       `DISPATCHER — a dispatcher agent drives ${d}: wake ONLY it; the 2 session(s) of its \`tasks\` key and below them`,
     );
-    expect(text).toContain(`SendMessage({ to: "disp1", message: "Continue — the run was restarted`);
+    expect(text).toContain(
+      `SendMessage({ to: "a81977149348587ff", message: "Continue — the run was restarted`,
+    );
     expect(text).toContain(`key: '${DISPATCHER_CALL_KEY}'`);
-    expect(text).not.toContain("driver1");
-    expect(text).not.toContain("worker1");
+    expect(text).not.toContain("ab85aef08608180db");
+    expect(text).not.toContain("aebad64149cc767ba");
   });
 
   it("a sub-session `tasks` does not name is still named to the conversation, with today's lines", async () => {
     const { text } = await restarted({ link: true, left: true });
     expect(text).toContain("wake each sub-agent");
-    expect(text).toContain(`SendMessage({ to: "rev1"`);
+    expect(text).toContain(`SendMessage({ to: "a18ce5ff019d7aa48"`);
   });
 
   it("the `resume` reply wakes the dispatcher only, as the pickup does (ENG-DISPATCHER-FOLLOWUPS)", async () => {
@@ -418,11 +420,13 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
     expect(text).toContain(
       `DISPATCHER — a dispatcher agent drives ${d}: wake ONLY it; the 2 session(s) of its \`tasks\` key and below them`,
     );
-    expect(text).toContain(`SendMessage({ to: "disp1", message: "Continue — the run was restarted`);
-    expect(text).not.toContain("driver1");
-    expect(text).not.toContain("worker1");
+    expect(text).toContain(
+      `SendMessage({ to: "a81977149348587ff", message: "Continue — the run was restarted`,
+    );
+    expect(text).not.toContain("ab85aef08608180db");
+    expect(text).not.toContain("aebad64149cc767ba");
     // a sub-session `tasks` does not name stays listed
-    expect(text).toContain(`SendMessage({ to: "rev1"`);
+    expect(text).toContain(`SendMessage({ to: "a18ce5ff019d7aa48"`);
   });
 
   it("a task session with a driver started but not yet in `tasks` is the dispatcher's too; one without a driver stays listed to the conversation (ENG-DISPATCHER-FOLLOWUPS)", async () => {
@@ -453,9 +457,9 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
       );
     const p = await child("drv", "T9");
     const q = await child("task", "T8");
-    await m.engine.linkAgent(p, "driver9");
-    await m.engine.linkAgent(q, "main8");
-    await m.engine.linkAgent(d, "disp1");
+    await m.engine.linkAgent(p, "a566d9ee209f96256");
+    await m.engine.linkAgent(q, "a21ba367184eb4adb");
+    await m.engine.linkAgent(d, "a81977149348587ff");
     for (const id of [d, p, q])
       await m.storage.update(id, s => ({
         ...s!,
@@ -465,14 +469,14 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
     const text = await pickupReport(m.storage, "conv", process.pid);
     expect(m.storage.read(d)!.context.tasks).toBeUndefined();
     expect(text).toContain("wake ONLY it; the 1 session(s)");
-    expect(text).not.toContain("driver9");
-    expect(text).toContain(`SendMessage({ to: "main8"`);
+    expect(text).not.toContain("a566d9ee209f96256");
+    expect(text).toContain(`SendMessage({ to: "a21ba367184eb4adb"`);
   });
 
   it("past the `after` state with no agent linked: the call to spawn it from", async () => {
     const { text } = await restarted({ link: false, left: true });
     expect(text).toContain("no agent linked — spawn it from");
-    expect(text).not.toContain("driver1");
+    expect(text).not.toContain("ab85aef08608180db");
   });
 
   it("a restart at the `after` state under the opt-in: no DISPATCHER line, no spawn instruction", async () => {
@@ -496,7 +500,7 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
     const p = sid(
       (await m.call("start", { workflow: "task", reply: "id", parent_session_id: d })).text,
     );
-    await m.engine.linkAgent(p, "driver1");
+    await m.engine.linkAgent(p, "ab85aef08608180db");
     for (const id of [d, p])
       await m.storage.update(id, s => ({
         ...s!,
@@ -505,7 +509,7 @@ describe("a restart: the pickup wakes the dispatcher only", () => {
       }));
     const text = await pickupReport(m.storage, "conv", process.pid);
     expect(text).toContain("wake each sub-agent");
-    expect(text).toContain(`SendMessage({ to: "driver1"`);
+    expect(text).toContain(`SendMessage({ to: "ab85aef08608180db"`);
     expect(text).not.toContain("DISPATCHER");
   });
 });

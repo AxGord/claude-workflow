@@ -591,7 +591,10 @@ Summed at the task's end from the transcripts of every agent that worked on it, 
 
 A turn is counted once, only inside the task's start..end window.
 
-- An agent whose transcript cannot be read, or whose model has no rate, leaves `usd` absent and its id in `spend.unmeasured`. The task is unmeasured, never $0.
+- An agent whose transcript cannot be read, or whose model has no rate, is left out of the sum and its id listed in `spend.unmeasured`; `usd` is then the sum of the agents that were read, marked `usd_partial: true`: a lower bound, never the task's whole cost.
+  - No agent read leaves `usd` absent: unmeasured, never $0.
+  - Every reader of the ledger that wants a cost (the Cost tab, `wf-calibration`, the timeline, the use-case export, the replay export) takes a partial sum for no figure; the plan pane draws it as `≥$x` on a row.
+- `link_agent` refuses an id that is not shaped like an Agent-tool id (`a` and lowercase hex, optionally with the transcript's `agent-` prefix), naming what it got: a placeholder such as `PENDING` linked by a driver would be an agent with no transcript.
 - An agent nothing links or names (an unlinked decider, a respawned worker nobody linked) is counted in `spend.unnamed`: transcripts of the task's conversations active in its window, possibly a concurrent task's, so the figure is not presented as complete.
 
 `spend.by_agent` lists the same spend per agent and linked state: `{agent, state?, stage?, model?, usd?, input, output, cache_read, cache_write}`.
@@ -613,6 +616,6 @@ A task's line (a line with a `task`, of a session that knows its Claude conversa
 **Files and locking**
 
 - Appends follow the session files' lock discipline with the ledger's own lock file. The ledger is never pruned with old sessions.
-- Each append also rewrites `$STATE_DIR/ledger-recent.jsonl`: the task and parent-spend lines that ended in the last 30 days, cut to the fields the plan pane reads (`task`, `workflow`, `started_at`, `ended_at`, `outcome`, `visits`, `difficulty`, `spend.usd`, `parent_spend` `{to, project, usd}`), capped at 3 MiB, the oldest lines dropped first.
+- Each append also rewrites `$STATE_DIR/ledger-recent.jsonl`: the task and parent-spend lines that ended in the last 30 days, cut to the fields the plan pane reads (`task`, `workflow`, `started_at`, `ended_at`, `outcome`, `visits`, `difficulty`, `spend.usd` with its `usd_partial` mark, `parent_spend` `{to, project, usd}`), capped at 3 MiB, the oldest lines dropped first.
 - The plan pane reads it (the plugin API rejects a read of a file over 4 MiB, which the never-pruned ledger outgrows), falling back to `ledger.jsonl` while it is absent.
 - Exception: the Failed header's totals and each failed row's `$cost`. The dashboard's `GET /api/ledger-rows?tasks=<ids>` answers the cost rows of those lines from the whole `ledger.jsonl`.

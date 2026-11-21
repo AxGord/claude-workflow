@@ -125,7 +125,7 @@ describe("suspend / resume", () => {
     const { storage, engine, restart } = mount({ simple: SIMPLE_WORKFLOW });
     const root = await engine.start("simple");
     const child = await engine.start("simple", undefined, root.sessionId);
-    await engine.linkAgent(child.sessionId, "agent-7");
+    await engine.linkAgent(child.sessionId, "agent-a7777777777777777");
     // a session the root's own agent runs below it: no agent to wake
     const own = await engine.start("simple", undefined, root.sessionId);
     await orphan(storage, [root.sessionId, child.sessionId, own.sessionId]);
@@ -146,9 +146,9 @@ describe("suspend / resume", () => {
     expect(storage.read(child.sessionId)!.suspended_at).toBeDefined();
 
     const text = formatResume(r);
-    expect(text).toContain(`agent-7 → ${child.sessionId} → simple @ start`);
+    expect(text).toContain(`agent-a7777777777777777 → ${child.sessionId} → simple @ start`);
     expect(text).toContain(
-      `SendMessage({ to: "agent-7", message: "Continue: call mcp__plugin_workflow_wf__resume({ session_id: '${child.sessionId}' })`,
+      `SendMessage({ to: "agent-a7777777777777777", message: "Continue: call mcp__plugin_workflow_wf__resume({ session_id: '${child.sessionId}' })`,
     );
     expect(text).toContain(
       `  ${own.sessionId} → simple @ start — no agent linked — yours, unless a sub-agent you spawned runs it (then link_agent + SendMessage) → mcp__plugin_workflow_wf__resume({ session_id: '${own.sessionId}' })`,
@@ -232,15 +232,18 @@ describe("suspend / resume", () => {
     });
     const parent = await engine.start("w");
     const { sessionId } = await engine.start("w", undefined, parent.sessionId);
-    await engine.linkAgent(sessionId, "agent-w");
+    await engine.linkAgent(sessionId, "agent-aaaaaaaaaaaaaaaaa");
     const pending = engine.transition(sessionId, "next");
     for (let i = 0; i < 100 && !storage.read(sessionId)!.running_exec; i++)
       await new Promise(r => setTimeout(r, 10));
-    await engine.linkAgent(sessionId, "agent-x");
+    await engine.linkAgent(sessionId, "agent-abbbbbbbbbbbbbbbb");
     await pending;
-    expect(storage.read(sessionId)!.agent_id).toBe("agent-x");
+    expect(storage.read(sessionId)!.agent_id).toBe("agent-abbbbbbbbbbbbbbbb");
     // a respawn replaced agent_id, but every agent the session was linked to is kept
-    expect(storage.read(sessionId)!.linked_agents).toEqual(["agent-w", "agent-x"]);
+    expect(storage.read(sessionId)!.linked_agents).toEqual([
+      "agent-aaaaaaaaaaaaaaaaa",
+      "agent-abbbbbbbbbbbbbbbb",
+    ]);
     // and the parent's step it was linked at
     expect(storage.read(sessionId)!.agent_step).toEqual({
       workflow: "w",

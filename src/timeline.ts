@@ -1,7 +1,7 @@
 // The Timeline tab's data: one bar per task pipeline of a day, cut into segments by state. Pure: the
 // route (src/dashboard.ts) feeds it the session files and the ledger.
 import type { SessionState } from "./types.js";
-import { rootSessionIdOf, type LedgerEntry } from "./ledger.js";
+import { rootSessionIdOf, wholeUsd, type LedgerEntry } from "./ledger.js";
 import { projectNameOf } from "./pool.js";
 import { reviewRounds } from "./calibration.js";
 
@@ -452,7 +452,7 @@ export function buildTimeline(input: TimelineInput): Timeline | null {
             : "closed";
     const spanStart = Date.parse(s?.started_at ?? led?.started_at ?? "");
     const spanEnd = running ? input.now : Date.parse(s?.updated_at ?? led?.ended_at ?? "");
-    const spentUsd = led?.spend?.usd;
+    const spentUsd = wholeUsd(led?.spend);
     // the head's spend covers its subtree; a member line of the same task adds only the parent's own turns it carries
     const parentUsds = [
       led?.parent_spend?.usd,

@@ -40,8 +40,8 @@ export type QueueLine = {
   priority?: string
 }
 
-/** A `failed` queue line: `recent` = it ended within the last two days (queue_mark's `ended`; a line with none is older), its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured). */
-export type FailedLine = { id: string; difficulty: string; date: string; reason: string; recent: boolean; usd?: number }
+/** A `failed` queue line: `recent` = it ended within the last two days (queue_mark's `ended`; a line with none is older), its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured); `usdFloor` stands in when a run recorded only a partial sum (an agent unmeasured): a lower bound drawn `≥$x`, never added to a total. */
+export type FailedLine = { id: string; difficulty: string; date: string; reason: string; recent: boolean; usd?: number; usdFloor?: number }
 
 /** The Failed header's spend over the lines it counts (the recent ones): the ledger's agent `usd` and parent `parentUsd` summed over every run of each line, and how many of those lines have no ledger row (they add 0) and, when any, how many have a run with no recorded spend (left out of the sums). */
 export type FailedSpend = { usd: number; parentUsd: number; missing: number; unmeasured?: number }
@@ -68,8 +68,8 @@ export type QueueView = {
   marks: Record<string, string>
 }
 
-/** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown), `usd` the ledger's real spend over every run of the line (absent: not measured, never $0). */
-export type Land = { sha: string; slice: string; at: string; start: string; difficulty: string; usd?: number }
+/** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown), `usd` the ledger's real spend over every run of the line (absent: not measured, never $0); `usdFloor` stands in when a run recorded only a partial sum (an agent unmeasured): a lower bound drawn `≥$x`, never added to a total. */
+export type Land = { sha: string; slice: string; at: string; start: string; difficulty: string; usd?: number; usdFloor?: number }
 
 /** One day of the Landed tree (`DD.MM`): the sum of the measured lines' `usd` over its landed lines and the failed and closed lines that ended that day, how many lines the sum covers, and how many of them were measured. */
 export type DaySpend = { usd: number; lines: number; measured: number; failed: number; closed: number }

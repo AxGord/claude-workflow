@@ -431,7 +431,7 @@ const TASK_WORKFLOWS: ReadonlySet<string> = new Set(["slice-pipeline", "engine-t
 /**
  * The real spend of `tasks` from the ledger's text, as the plan pane reads it (`ledgerSpendOf` of hooks/plan-pane.tsx): a
  * row of a task workflow with an end counts, `spend.usd` is summed over every run of the line, and a line any of whose
- * runs recorded none is left out whole (never `$0`). An ALLOWLIST: a row whose `task` is not one of `tasks` is never
+ * runs recorded none, or only a partial sum (`usd_partial`), is left out whole (never `$0`). An ALLOWLIST: a row whose `task` is not one of `tasks` is never
  * read into the result, so no other project's task id, name or sum can reach the file. Keys in order, sums to 1e-4 $.
  */
 export function ledgerSpend(text: string, tasks: ReadonlySet<string>): Record<string, number> {
@@ -451,7 +451,8 @@ export function ledgerSpend(text: string, tasks: ReadonlySet<string>): Record<st
         continue;
       const usd = (j.spend as { usd?: unknown } | undefined)?.usd;
       const cur = acc.get(j.task) ?? { usd: 0, measured: true };
-      if (typeof usd === "number" && Number.isFinite(usd)) cur.usd += usd;
+      const isPartial = (j.spend as { usd_partial?: unknown } | undefined)?.usd_partial === true;
+      if (typeof usd === "number" && Number.isFinite(usd) && !isPartial) cur.usd += usd;
       else cur.measured = false;
       acc.set(j.task, cur);
     } catch {

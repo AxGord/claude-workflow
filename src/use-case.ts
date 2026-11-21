@@ -7,7 +7,7 @@
 // session and no path. The path a line takes over those facts is `slicePath` (src/use-case-path.ts).
 import path from "node:path";
 import { bandOf } from "./calibration.js";
-import type { LedgerEntry } from "./ledger.js";
+import { wholeUsd, type LedgerEntry } from "./ledger.js";
 import type { ModelTable } from "./types.js";
 import type { PathFacts } from "./use-case-path.js";
 
@@ -119,7 +119,7 @@ function median(values: readonly number[]): number | null {
 }
 
 function costGroup(entries: readonly LedgerEntry[]): CostGroup {
-  const usd = entries.flatMap(e => (e.spend?.usd === undefined ? [] : [e.spend.usd]));
+  const usd = entries.flatMap(e => wholeUsd(e.spend) ?? []);
   return {
     lands: entries.length,
     measured: usd.length,
@@ -224,7 +224,7 @@ export function foldUseCase(entries: readonly LedgerEntry[], o: UseCaseOptions):
   }
 
   const withAgents = lands.filter(
-    e => e.spend?.usd !== undefined && (e.spend.by_agent?.length ?? 0) > 0,
+    e => wholeUsd(e.spend) !== undefined && (e.spend?.by_agent?.length ?? 0) > 0,
   );
   const byStage = new Map<string, number>(STAGE_ORDER.map(s => [s, 0]));
   for (const e of withAgents)
@@ -279,7 +279,7 @@ export function foldUseCase(entries: readonly LedgerEntry[], o: UseCaseOptions):
     days: [...perDay].map(([day, n]) => ({ day, lands: n })),
     cost: {
       ...costGroup(lands),
-      usd: cents(lands.reduce((sum, e) => sum + (e.spend?.usd ?? 0), 0)),
+      usd: cents(lands.reduce((sum, e) => sum + (wholeUsd(e.spend) ?? 0), 0)),
     },
     rounds: [...groupBy(lands, e => visited(e, "review"))].map(([rounds, es]) => ({
       rounds,
@@ -303,8 +303,8 @@ export function foldUseCase(entries: readonly LedgerEntry[], o: UseCaseOptions):
       closed: stops.filter(e => visited(e, "work") === 0 && visited(e, "mark_closed") > 0).length,
       overridden: stops.filter(e => visited(e, "work") > 0).length,
       stopped: {
-        measured: stoppedCold.filter(e => e.spend?.usd !== undefined).length,
-        median: median(stoppedCold.flatMap(e => (e.spend?.usd === undefined ? [] : [e.spend.usd]))),
+        measured: stoppedCold.filter(e => wholeUsd(e.spend) !== undefined).length,
+        median: median(stoppedCold.flatMap(e => wholeUsd(e.spend) ?? [])),
       },
     },
     plan: {

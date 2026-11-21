@@ -1187,7 +1187,7 @@ export function registerTools(
     "link_agent",
     {
       description:
-        "Record which sub-agent (the Agent tool's agent id) drives a child session, so that after a restart resume() " +
+        "Record which sub-agent (the Agent tool's agent id: 'a' and hex, never a placeholder: anything else is refused) drives a child session, so that after a restart resume() " +
         "of the parent names the agent to wake with SendMessage. Call it once the child session id is known (sessions() lists children). " +
         "It also records the parent's state and visit: status() of the parent marks the agent current at that visit, " +
         "stale at a later visit of the state; linking again re-records it. Every agent linked stays on the session, so " +
@@ -1197,7 +1197,12 @@ export function registerTools(
       inputSchema: z
         .object({
           session_id: z.string().describe("The sub-agent's session"),
-          agent_id: z.string().min(1).describe("The Agent tool's id of that sub-agent"),
+          agent_id: z
+            .string()
+            .min(1)
+            .describe(
+              "The Agent tool's id of that sub-agent ('a' and hex, e.g. a15bb6b2a76ef441c)",
+            ),
         })
         .strict(),
     },

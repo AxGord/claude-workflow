@@ -38,7 +38,7 @@ import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf, type LedgerEntry, type LedgerSpend } from "./ledger.js";
-import { agentContextOf, measureParentSpend, measureSpend, subtreeOf } from "./spend.js";
+import { agentContextOf, isAgentId, measureParentSpend, measureSpend, subtreeOf } from "./spend.js";
 import {
   MODEL_KEYS,
   applyModelTable,
@@ -1022,6 +1022,10 @@ export class Engine {
    * step, or undefined when none is recorded.
    */
   public async linkAgent(sessionId: string, agentId: string): Promise<AgentStep | undefined> {
+    if (!isAgentId(agentId))
+      throw new Error(
+        `"${agentId}" is not an agent id: link_agent takes the id the Agent tool returned for the spawned sub-agent ('a' and hex, e.g. a15bb6b2a76ef441c), never a placeholder`,
+      );
     const parentId = this._storage.read(sessionId)?.parent_session_id;
     const parent = parentId ? this._storage.read(parentId) : null;
     const step =
