@@ -1,0 +1,1872 @@
+// A task queue in a YAML file, shared by every project: the top-level keys are the header —
+// `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`,
+// `archive_after_days: N` (a pick first archives the done / failed lines that ended over N days ago)
+// and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
+// `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, exclusive,
+// breaking, parked, ended, restored, added, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// under a lock beside it, edits the parsed document in place (key order and comments kept) and
+// writes it only while the file still reads as it did.
+//
+// Admission (`planPick`, pure): free = batch_size minus the running tasks; a pending task in file
+// order is admitted when its model is not `—` (parent-run), it is not `parked`, every `after:` id is
+// done, its `repo:` resolves, and it overlaps neither a running task nor one admitted earlier in the
+// same pick (`touches:` path prefixes on a `/` boundary, compared only between tasks of one repo,
+// where a task without `touches:` overlaps every task; `owner:` equal or a `.`-prefix, across repos;
+// `exclusive: true` overlaps every task of its own repo; `breaking: true` is admitted only into an empty window and nothing is admitted while it runs).
+// A pending exclusive line that waits only for running lines (or lines admitted earlier in the same pass) of its repo HOLDS the repo: no later line (priority, then file order) of that repo is admitted
+// meanwhile, so the running ones drain and it starts; other repos are not held, and the header's `exclusive_hold: no` turns the hold off. The header's `overlap: files` narrows
+// `touches:` to its FILE entries (a regular file under the task's repo, or a path that does not
+// exist whose last segment holds a `.`): a directory or glob entry is a hint that conflicts with
+// nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
+// task's own task workflow (the dispatcher's default otherwise); `difficulty:` (1..10) is what a
+// task workflow's `model_table` maps to model/effort; `kind:` (`bug|feature|research`, absent = feature) is the
+// task's type, reported by the pick. `backlog` tasks are never picked. A write that leaves a pending
+// line (not parked, not `model: —`) with no `difficulty:` is refused; lines already without one stay.
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import lockfile from "proper-lockfile";
+import YAML, { isMap, isScalar, isSeq, Scalar, YAMLSeq } from "yaml";
+import { projectRoot } from "./pool.js";
+import { kindMark } from "./map-layout.js";
+import { difficultyError, parseDifficulty } from "./model-table.js";
+import { DIFFICULTY_MAX } from "./types.js";
+export const QUEUE_EXIT = {
+    ADMITTED: 0,
+    WAIT: 10,
+    DONE: 11,
+    PAUSED: 12,
+    ERROR: 2,
+};
+export const STATUSES = ["pending", "running", "done", "failed", "backlog"];
+export const MARK_TARGETS = {
+    running: { from: "pending", to: "running" },
+    done: { from: "running", to: "done" },
+    failed: { from: "running", to: "failed" },
+    released: { from: "running", to: "pending" },
+    promoted: { from: "backlog", to: "pending" },
+    shelved: { from: "pending", to: "backlog" },
+};
+/** The task keys, in the order a new task is written. */
+export const TASK_KEYS = [
+    "id",
+    "status",
+    "difficulty",
+    "kind",
+    "priority",
+    "model",
+    "effort",
+    "repo",
+    "workflow",
+    "after",
+    "touches",
+    "owner",
+    "sweep",
+    "exclusive",
+    "breaking",
+    "parked",
+    "ended",
+    "restored",
+    "added",
+    "base",
+    "text_hash",
+    "text",
+    "notes",
+];
+/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `added` by add, `base` / `text_hash` by add and edit): never set by a caller. */
+const STATE_KEYS = new Set([
+    "ended",
+    "restored",
+    "added",
+    "base",
+    "text_hash",
+]);
+/** The keys `queue_edit` sets (status is the mark's, state keys are the engine's, notes are appended, id is fixed). */
+export const EDIT_KEYS = new Set(TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes" && !STATE_KEYS.has(k)));
+const LIST_KEYS = new Set(["after", "touches"]);
+const BOOL_KEYS = new Set(["exclusive", "breaking", "parked"]);
+const NOTE_KEYS = new Set(["from", "date", "text"]);
+/** The header's `overlap:` values; `paths` (the default) = every `touches:` entry is a path prefix. */
+const OVERLAP_MODES = ["paths", "files"];
+const ID_RE = /^[A-Za-z0-9._-]+$/;
+// The lock outlives a dead holder by this long; proper-lockfile refreshes it while held.
+const LOCK_STALE_MS = 10_000;
+const LOCK_RETRIES = {
+    retries: 300,
+    minTimeout: 10,
+    maxTimeout: 100,
+    randomize: true,
+};
+/** How every write prints the document: no folding of long scalars. */
+const YAML_OUT = { lineWidth: 0 };
+export class QueueError extends Error {
+}
+/** `unknown key priority on X: ignored by this server` — one line per task with unknown keys. */
+export function unknownKeyNotice(id, keys) {
+    return `unknown key${keys.length > 1 ? "s" : ""} ${keys.join(", ")} on ${id}: ignored by this server`;
+}
+function stripParens(s) {
+    let prev;
+    do {
+        prev = s;
+        s = s.replace(/\([^()]*\)/g, " ");
+    } while (s !== prev);
+    return s;
+}
+/** A YAML value as text: a scalar as written, anything else as JSON. */
+const str = (v) => typeof v === "string" || typeof v === "number" || typeof v === "boolean" || v === null
+    ? String(v)
+    : (JSON.stringify(v) ?? "");
+const scalarText = (v) => (Array.isArray(v) ? v.map(str).join(", ") : str(v));
+function parseNotes(v, at) {
+    if (v === undefined || v === null)
+        return [];
+    if (!Array.isArray(v))
+        throw new QueueError(`${at}: notes: is a list`);
+    return v.map((n, i) => {
+        if (typeof n === "string")
+            return { text: n };
+        if (typeof n !== "object" || n === null || Array.isArray(n))
+            throw new QueueError(`${at}: notes[${i}] is {from, date, text}`);
+        const o = n;
+        const bad = Object.keys(o).find(k => !NOTE_KEYS.has(k));
+        if (bad !== undefined)
+            throw new QueueError(`${at}: notes[${i}]: unknown key "${bad}"`);
+        return {
+            ...(o.from !== undefined ? { from: str(o.from) } : {}),
+            ...(o.date !== undefined ? { date: str(o.date) } : {}),
+            text: str(o.text ?? ""),
+        };
+    });
+}
+function parseTask(raw, index, file) {
+    const at = `${file}: tasks[${index}]`;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+        throw new QueueError(`${at} is not a mapping`);
+    const o = raw;
+    const id = typeof o.id === "string" || typeof o.id === "number" ? String(o.id) : "";
+    if (!ID_RE.test(id))
+        throw new QueueError(`${at}: id "${id}" is not a task id`);
+    const unknownKeys = Object.keys(o).filter(k => !TASK_KEYS.includes(k));
+    const status = (o.status ?? "pending");
+    if (!STATUSES.includes(status))
+        throw new QueueError(`${at} (${id}): status "${String(o.status)}" is not one of ${STATUSES.join(", ")}`);
+    const meta = {};
+    for (const k of [
+        "difficulty",
+        "kind",
+        "priority",
+        "model",
+        "effort",
+        "repo",
+        "workflow",
+        "owner",
+        "sweep",
+        "after",
+        "touches",
+        "ended",
+        "restored",
+        "added",
+        "base",
+        "text_hash",
+    ]) {
+        const v = o[k];
+        if (v === undefined || v === null)
+            continue;
+        if (LIST_KEYS.has(k) && !Array.isArray(v) && typeof v !== "string")
+            throw new QueueError(`${at} (${id}): ${k}: is a list`);
+        meta[k] = scalarText(v);
+    }
+    for (const k of BOOL_KEYS)
+        if (o[k] !== undefined && o[k] !== null && typeof o[k] !== "boolean")
+            throw new QueueError(`${at} (${id}): ${k}: is true or false`);
+    if (o.exclusive === true)
+        meta.exclusive = "yes";
+    if (o.breaking === true)
+        meta.breaking = "yes";
+    return {
+        index,
+        status,
+        id,
+        meta,
+        paused: o.parked === true,
+        text: o.text === undefined || o.text === null ? "" : str(o.text).trim(),
+        notes: parseNotes(o.notes, `${at} (${id})`),
+        unknownKeys,
+    };
+}
+export function parseQueue(text, file, archived = new Map()) {
+    let doc;
+    try {
+        doc = YAML.parse(text);
+    }
+    catch (err) {
+        throw new QueueError(`${file}: not YAML: ${err.message}`);
+    }
+    if (typeof doc !== "object" || doc === null || Array.isArray(doc))
+        throw new QueueError(`${file}: not a queue (a mapping with batch_size: and tasks:)`);
+    const top = doc;
+    const header = {};
+    for (const [k, v] of Object.entries(top))
+        if (k !== "tasks" && v !== null && v !== undefined)
+            header[k] = scalarText(v);
+    const bs = top.batch_size;
+    if (typeof bs !== "number" || !Number.isInteger(bs) || bs < 0)
+        throw new QueueError(`${file}: no "batch_size: N" (a whole number ≥ 0) in the header`);
+    const tasks = top.tasks ?? [];
+    if (!Array.isArray(tasks))
+        throw new QueueError(`${file}: tasks: is a list`);
+    const lines = tasks.map((t, i) => parseTask(t, i, file));
+    const seen = new Set();
+    for (const l of lines) {
+        if (seen.has(l.id))
+            throw new QueueError(`${file}: ${l.id} is in tasks: twice`);
+        seen.add(l.id);
+    }
+    const bases = top.base === undefined || top.base === null ? [] : [top.base].flat();
+    const baseRepos = bases
+        .map(b => /^(\/\S*?)=\S+$/.exec(str(b))?.[1])
+        .filter((r) => r !== undefined);
+    const ov = (header.overlap ?? "paths").trim();
+    const known = OVERLAP_MODES.includes(ov);
+    const overlap = known ? ov : "paths";
+    const overlapError = known
+        ? undefined
+        : `${file}: overlap: "${ov}" is not one of ${OVERLAP_MODES.join(", ")}`;
+    const reason = header.reason?.trim();
+    return {
+        file,
+        source: text,
+        lines,
+        archived,
+        batchSize: bs,
+        ...(reason ? { batchComment: reason } : {}),
+        header,
+        baseRepos,
+        overlap,
+        ...(overlapError ? { overlapError } : {}),
+    };
+}
+function touchesOf(line) {
+    const v = line.meta.touches;
+    if (v === undefined)
+        return null; // overlaps everything
+    return stripParens(v)
+        .split(",")
+        .map(p => p.trim().split(/\s+/)[0] ?? "")
+        .map(p => p.replace(/^\.\//, "").replace(/\/+$/, ""))
+        .filter(p => p !== "" && p !== "—" && p !== "-");
+}
+/** The line's `difficulty:`: undefined when absent or `-`/`—`; null when it is not 1..10. */
+function difficultyOf(line) {
+    const v = line.meta.difficulty?.trim();
+    if (!v || v === "-" || v === "—")
+        return undefined;
+    return parseDifficulty(v);
+}
+/**
+ * The refusal of a pending line a pick would run that carries no `difficulty:`: the pane draws it
+ * `?????` and the model table has no row for it. Backlog, parked, finished and parent-run (`model: —`)
+ * lines need none. A write that makes a line read so is refused; lines already in the file are never.
+ */
+export function difficultyRequired(line) {
+    if (line.status !== "pending" || line.paused)
+        return null;
+    if ((line.meta.model ?? "").trim().startsWith("—"))
+        return null;
+    if (difficultyOf(line) !== undefined)
+        return null;
+    return `${line.id}: difficulty: <1-10> is required on a pending line (backlog, parked and model: — lines need none)`;
+}
+export const PRIORITIES = ["urgent", "high", "normal", "low"];
+/** The line's `priority:`: `normal` when absent or `-`/`—`; null when it is not a priority. */
+function priorityOf(line) {
+    const v = line.meta.priority?.trim().toLowerCase();
+    if (!v || v === "-" || v === "—")
+        return "normal";
+    return PRIORITIES.includes(v) ? v : null;
+}
+/** Rank for sorting: urgent first; an unreadable priority ranks as normal (the pick refuses it). */
+const priorityRank = (l) => PRIORITIES.indexOf(priorityOf(l) ?? "normal");
+/** The order the picker visits pending lines in: priority, then file order. One comparator for the pick and for `admitOrder`. */
+const admissionOrder = (a, b) => priorityRank(a) - priorityRank(b) || a.index - b.index;
+export const KINDS = ["bug", "feature", "research"];
+/** The line's `kind:`: `feature` when absent or `-`/`—`; null when it is not a kind. */
+function kindOf(line) {
+    const v = line.meta.kind?.trim().toLowerCase();
+    if (!v || v === "-" || v === "—")
+        return "feature";
+    return KINDS.includes(v) ? v : null;
+}
+/** Why a `kind:` value is refused. */
+const kindError = (line) => `kind: "${line.meta.kind}" is not one of ${KINDS.join(", ")}`;
+/** The line's `workflow:`: undefined when absent or `—`; null when it is not a workflow name. */
+function workflowOf(line) {
+    const v = line.meta.workflow?.trim();
+    if (!v || v === "-" || v === "—")
+        return undefined;
+    return ID_RE.test(v) ? v : null;
+}
+function ownerOf(line) {
+    const v = line.meta.owner;
+    if (v === undefined)
+        return null;
+    const o = stripParens(v).trim().replace(/\s+/g, " ");
+    return o === "" || o === "—" ? null : o;
+}
+/** The line's `sweep:` command, trimmed; null when absent or blank. Carried as data: no pick rule reads it. */
+function sweepOf(line) {
+    const v = line.meta.sweep?.trim();
+    return v === undefined || v === "" ? null : v;
+}
+/** `exclusive:` with any value but an empty one or `—`: the line overlaps every other line. */
+function exclusiveOf(line) {
+    const v = line.meta.exclusive?.trim();
+    return v !== undefined && v !== "" && v !== "-" && v !== "—";
+}
+/** `breaking: true`: a format or protocol change running processes cannot follow; it runs alone in an empty window. */
+function breakingOf(line) {
+    return line.meta.breaking?.trim() === "yes";
+}
+const pathOverlap = (a, b) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+const ownerOverlap = (a, b) => a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+/**
+ * A `touches:` entry that names one file: no glob, and a regular file under `repo` — or, when it
+ * does not exist there (yet), its last segment holds a `.` (`Makefile` counts only once it exists).
+ */
+function isFileEntry(p, repo) {
+    if (/[*?[\]{}]/.test(p))
+        return false;
+    if (repo !== null) {
+        try {
+            return fs.statSync(path.resolve(repo, p)).isFile();
+        }
+        catch {
+            /* not there: judged by its name */
+        }
+    }
+    return (p.split("/").pop() ?? "").includes(".");
+}
+/** Count of git processes spawned for ignore checks (a test seam: one per repo per plan). */
+export const ignoreProbes = { count: 0 };
+/** One `git check-ignore --stdin -z` over `rels`: the entries it printed and its exit status. */
+function checkIgnore(repo, rels) {
+    ignoreProbes.count++;
+    const r = spawnSync("git", ["-C", repo, "check-ignore", "--stdin", "-z"], {
+        input: `${rels.join("\0")}\0`,
+        encoding: "utf8",
+    });
+    return {
+        out: (r.stdout ?? "").split("\0").filter(x => x !== ""),
+        status: r.status,
+    };
+}
+/**
+ * The entries of `rels` that git ignores in `repo`: ONE `git check-ignore --stdin`; empty when `repo` is no work tree.
+ * Exit 0/1 is the answer. Any other exit (an entry past a symlink is fatal) keeps what was printed and
+ * asks one by one about the rest, so a bad entry costs only itself.
+ */
+function gitIgnoredSet(repo, rels) {
+    if (rels.length === 0)
+        return new Set();
+    const all = checkIgnore(repo, rels);
+    if (all.status === 0 || all.status === 1)
+        return new Set(all.out);
+    const found = new Set(all.out);
+    for (const rel of rels) {
+        if (found.has(rel))
+            continue;
+        const one = checkIgnore(repo, [rel]);
+        if (one.status === 0 && one.out.includes(rel))
+            found.add(rel);
+    }
+    return found;
+}
+/** Whether `t` names a path inside `repo` (git refuses the whole batch on one that is not). */
+const insideRepo = (repo, t) => !path.isAbsolute(t) && !path.relative(repo, path.resolve(repo, t)).startsWith("..");
+const isGlob = (t) => /[*?[\]{}]/.test(t);
+/** repo -> its ignored `touches:` entries over the pending repo-bound lines: one git process per repo. */
+function ignoredByRepo(queue, lines) {
+    const want = new Map();
+    for (const l of lines) {
+        const v = l.meta.repo?.trim();
+        if (!v || v === "-" || v === "—")
+            continue;
+        const repo = resolveRepo(queue, l);
+        if (repo === null)
+            continue;
+        const set = want.get(repo) ?? new Set();
+        for (const t of touchesOf(l) ?? [])
+            if (!isGlob(t) && insideRepo(repo, t))
+                set.add(t);
+        want.set(repo, set);
+    }
+    return new Map([...want].map(([repo, set]) => [repo, gitIgnoredSet(repo, [...set])]));
+}
+/** The first `touches:` entry of a line that its repo's ignored set holds, or null. */
+function ignoredTouch(line, ignored) {
+    return (touchesOf(line) ?? []).find(t => ignored?.has(t) === true) ?? null;
+}
+/** Warnings for a line's `touches:` entries: git-ignored (the line runs in the parent), or a file whose directory is missing. */
+function touchesWarnings(queue, line) {
+    const repo = resolveRepo(queue, line);
+    if (repo === null)
+        return [];
+    const out = [];
+    const v = line.meta.repo?.trim();
+    const bound = !!v && v !== "-" && v !== "—";
+    const ign = bound ? ignoredTouch(line, ignoredByRepo(queue, [line]).get(repo)) : null;
+    if (ign !== null)
+        out.push(`touches ${ign} is git-ignored in ${repo}: the picker treats ${line.id} as parent-run`);
+    for (const t of touchesOf(line) ?? []) {
+        if (queue.overlap === "files" && !/[*?[\]{}]/.test(t) && !isFileEntry(t, repo))
+            out.push(`${t} is a directory: under overlap: files it conflicts with nothing — name the files`);
+    }
+    for (const t of touchesOf(line) ?? []) {
+        if (/[*?[\]{}]/.test(t) || !(t.split("/").pop() ?? "").includes("."))
+            continue;
+        const dir = path.dirname(path.resolve(repo, t));
+        let isDir = false;
+        try {
+            isDir = fs.statSync(dir).isDirectory();
+        }
+        catch {
+            /* missing */
+        }
+        if (!isDir)
+            out.push(`touches ${t}: directory ${path.dirname(t)} does not exist in ${repo}`);
+    }
+    return out;
+}
+/** A line's repo as compared across lines: the resolved path, through symlinks when it exists. */
+function repoKey(repo) {
+    if (repo === null)
+        return null;
+    try {
+        return fs.realpathSync(repo);
+    }
+    catch {
+        return repo;
+    }
+}
+/** Two repo keys name one repo; a null key (a repo that resolves nowhere) counts as the same. */
+function sameRepoKey(a, b) {
+    return a === null || b === null || a === b;
+}
+/**
+ * The header's `exclusive_hold:` — `no` / `false` turn the hold of a waiting exclusive line off;
+ * absent or any other value = on.
+ */
+export function exclusiveHoldOn(queue) {
+    const v = queue.header.exclusive_hold?.trim().toLowerCase();
+    return v !== "no" && v !== "false";
+}
+/**
+ * Why `a` and `b` may not run together, or null. `repoA`/`repoB` are their repo keys: `touches:`
+ * (and its absence) compares only within one repo (a null key, a repo that resolves nowhere, counts
+ * as the same) and so does `exclusive:` (it excludes its own repo only); `owner:` compares across repos.
+ */
+function conflict(a, b, mode, repoA, repoB) {
+    const sameRepo = sameRepoKey(repoA, repoB);
+    if (sameRepo && exclusiveOf(a))
+        return `exclusive ${a.id}`;
+    if (sameRepo && exclusiveOf(b))
+        return `exclusive ${b.id}`;
+    if (sameRepo) {
+        const ta = touchesOf(a);
+        const tb = touchesOf(b);
+        if (ta === null || tb === null)
+            return "no touches:";
+        const fa = mode === "files" ? ta.filter(p => isFileEntry(p, repoA)) : ta;
+        const fb = mode === "files" ? tb.filter(p => isFileEntry(p, repoB)) : tb;
+        for (const x of fa)
+            for (const y of fb)
+                if (pathOverlap(x, y))
+                    return `touches ${x} ~ ${y}`;
+    }
+    const oa = ownerOf(a);
+    const ob = ownerOf(b);
+    if (oa !== null && ob !== null && ownerOverlap(oa, ob))
+        return `owner ${oa}`;
+    return null;
+}
+/** null = every dependency is done; otherwise why the line must wait, and the queue lines whose end ends the wait. */
+function blockedBy(line, byId, archived) {
+    const v = line.meta.after;
+    if (v === undefined)
+        return null;
+    const waits = [];
+    const ids = [];
+    let stuck = false;
+    // Every id token is consumed; a plain word stays and makes the residue non-empty: prose beside
+    // the ids is a condition only a human can judge.
+    const rest = stripParens(v).replace(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g, tok => {
+        const dep = byId.get(tok);
+        const gone = dep ? undefined : archived.get(tok);
+        if (dep) {
+            if (dep.status !== "done") {
+                waits.push(`${tok} (${dep.status})`);
+                if (!ids.includes(tok))
+                    ids.push(tok);
+            }
+        }
+        else if (gone !== undefined) {
+            if (gone !== "done") {
+                waits.push(`${tok} (${gone}, archived)`);
+                stuck = true;
+            }
+        }
+        else if (/^[A-Z]/.test(tok) && /\d/.test(tok)) {
+            waits.push(`${tok}?`);
+            stuck = true;
+        }
+        else {
+            return tok;
+        }
+        return " ";
+    });
+    const residue = rest.replace(/[\s,+&;✅—–-]+/g, "");
+    if (residue !== "") {
+        waits.push(`manual: "${stripParens(v).trim()}"`);
+        stuck = true;
+    }
+    return waits.length === 0 ? null : { why: waits.join(", "), ids, stuck };
+}
+/**
+ * The repo a line works in, absolute: `repo:` as an absolute path; a name = the `base:` repo of
+ * that basename, else the directory of that name beside the queue's project; no `repo:` = the
+ * queue's project (the git root of the queue file's directory). null = the name resolves nowhere.
+ */
+export function resolveRepo(queue, line) {
+    return repoNamed(queue, line.meta.repo);
+}
+/** `resolveRepo` for a `repo:` value (undefined = the queue's project). */
+export function repoNamed(queue, repo) {
+    const own = projectRoot(path.dirname(queue.file));
+    const v = repo?.trim();
+    if (!v || v === "-" || v === "—")
+        return own;
+    if (path.isAbsolute(v))
+        return path.resolve(v);
+    const base = queue.baseRepos.find(r => path.basename(r) === v);
+    if (base)
+        return base;
+    const sibling = path.join(path.dirname(own), v);
+    try {
+        if (fs.statSync(sibling).isDirectory())
+            return sibling;
+    }
+    catch {
+        /* no such directory */
+    }
+    return null;
+}
+/** The admission pass over a parsed queue; writes nothing. A bad `overlap:` header is refused. */
+export function planPick(queue, opts = {}) {
+    if (opts.only === undefined && queue.overlapError !== undefined)
+        throw new QueueError(queue.overlapError);
+    const byId = new Map(queue.lines.map(l => [l.id, l]));
+    const running = queue.lines.filter(l => l.status === "running");
+    const taken = [...running];
+    const admitted = [];
+    const reasons = [];
+    const overtakes = [];
+    const prio = (x) => priorityOf(x) ?? "normal";
+    const free = queue.batchSize - running.length;
+    const holdOn = exclusiveHoldOn(queue);
+    /** The pending exclusive lines waiting only for running lines of their repo: the repo key each holds. */
+    const holds = [];
+    const repoKeys = new Map(running.map(l => [l, repoKey(resolveRepo(queue, l))]));
+    const ignoredIn = ignoredByRepo(queue, opts.only === undefined ? queue.lines.filter(l => l.status === "pending") : []);
+    const order = [...queue.lines].sort(admissionOrder);
+    for (const l of order) {
+        if (l.status !== "pending")
+            continue;
+        // `only`: a hand mark asks about one line; the window, a pause and parent-run are not its concern.
+        if (opts.only !== undefined && l.id !== opts.only)
+            continue;
+        const hand = opts.only !== undefined;
+        let why = null;
+        let repo = null;
+        let block;
+        if (!hand && queue.batchSize === 0)
+            why = "paused (batch_size 0)";
+        else if (!hand && opts.ignoreWindow !== true && free <= admitted.length)
+            why = "window full";
+        else if (!hand && (l.meta.model ?? "").startsWith("—"))
+            why = "parent-run (model —)";
+        else if (l.paused)
+            why = "parked";
+        else {
+            const after = blockedBy(l, byId, queue.archived);
+            if (after !== null) {
+                why = `after: ${after.why}`;
+                block = { after: after.ids, stuck: after.stuck };
+            }
+            else {
+                repo = resolveRepo(queue, l);
+                if (repo === null)
+                    why = `repo: "${l.meta.repo}" resolves to no directory`;
+                else if (workflowOf(l) === null)
+                    why = `workflow: "${l.meta.workflow}" is not a workflow name`;
+                else if (difficultyOf(l) === null)
+                    why = difficultyError(l.meta.difficulty);
+                else if (kindOf(l) === null)
+                    why = kindError(l);
+                else if (priorityOf(l) === null)
+                    why = `priority: "${l.meta.priority}" is not one of ${PRIORITIES.join(", ")}`;
+                else if (!hand) {
+                    const ign = ignoredTouch(l, ignoredIn.get(repo));
+                    if (ign !== null)
+                        why = `parent-run (touches ${ign} is git-ignored in its repo)`;
+                }
+            }
+            if (why === null) {
+                const key = repoKey(repo);
+                const brk = taken.find(breakingOf);
+                if (brk !== undefined) {
+                    why = `breaking ${brk.id} runs alone`;
+                    block = { after: [], stuck: false, against: { how: "runs-alone", id: brk.id } };
+                }
+                else if (breakingOf(l) && taken.length > 0) {
+                    why = `breaking: window not empty (${taken[0]?.id})`;
+                    block = {
+                        after: [],
+                        stuck: false,
+                        against: { how: "window-not-empty", id: taken[0]?.id ?? "" },
+                    };
+                }
+                const held = hand ? undefined : holds.find(h => sameRepoKey(key, h.key));
+                if (held !== undefined && why === null) {
+                    why = `held for exclusive ${held.id}`;
+                    block = { after: [], stuck: false, against: { how: "hold", id: held.id } };
+                }
+                let overlapped = false;
+                for (const t of why === null ? taken : []) {
+                    const c = conflict(l, t, queue.overlap, key, repoKeys.get(t) ?? null);
+                    if (c !== null) {
+                        why = `overlaps ${t.id} (${c})`;
+                        block = { after: [], stuck: false, against: { how: "overlap", id: t.id } };
+                        overlapped = true;
+                        break;
+                    }
+                }
+                if (overlapped &&
+                    holdOn &&
+                    !hand &&
+                    exclusiveOf(l) &&
+                    taken.some(r => sameRepoKey(key, repoKeys.get(r) ?? null))) {
+                    holds.push({ id: l.id, key });
+                    for (const a of admitted) {
+                        const al = byId.get(a.id);
+                        if (al !== undefined && sameRepoKey(key, repoKeys.get(al) ?? null))
+                            overtakes.push(`${a.id} (${prio(al)}) admitted ahead of exclusive ${l.id} (${prio(l)})`);
+                    }
+                }
+            }
+        }
+        if (why === null && repo !== null) {
+            const workflow = workflowOf(l) ?? undefined;
+            const difficulty = difficultyOf(l) ?? undefined;
+            const priority = priorityOf(l);
+            const kind = kindOf(l) ?? "feature";
+            const sweep = sweepOf(l) ?? undefined;
+            admitted.push({
+                id: l.id,
+                model: l.meta.model ?? "opus",
+                effort: l.meta.effort ?? "-",
+                repo,
+                ...(workflow ? { workflow } : {}),
+                ...(difficulty !== undefined ? { difficulty } : {}),
+                kind,
+                ...(priority !== null && priority !== "normal" ? { priority } : {}),
+                ...(sweep !== undefined ? { sweep } : {}),
+                text: l.text,
+            });
+            taken.push(l);
+            repoKeys.set(l, repoKey(repo));
+        }
+        else {
+            reasons.push({ id: l.id, why: why ?? "?", index: l.index });
+            if (block !== undefined)
+                opts.blocks?.set(l.id, block);
+        }
+    }
+    const code = admitted.length > 0
+        ? QUEUE_EXIT.ADMITTED
+        : running.length > 0
+            ? QUEUE_EXIT.WAIT
+            : queue.batchSize === 0
+                ? QUEUE_EXIT.PAUSED
+                : QUEUE_EXIT.DONE;
+    return {
+        file: queue.file,
+        code,
+        batchSize: queue.batchSize,
+        batchComment: queue.batchComment,
+        running: running.map(l => l.id),
+        pending: queue.lines.filter(l => l.status === "pending").length,
+        admitted,
+        ...(overtakes.length > 0 ? { overtakes } : {}),
+        reasons: reasons.sort((a, b) => a.index - b.index).map(({ id, why }) => ({ id, why })),
+        unknownKeys: queue.lines
+            .filter(l => l.unknownKeys.length > 0)
+            .map(l => ({ id: l.id, keys: l.unknownKeys })),
+    };
+}
+const prioOf = (l) => {
+    const p = priorityOf(l);
+    return p === null || p === "normal" ? undefined : p;
+};
+const lastNoteOf = (l) => {
+    const first = (l.notes.at(-1)?.text ?? "").trim().split("\n")[0]?.trim() ?? "";
+    return first === "" ? {} : { lastNote: first };
+};
+/** The commit a `landed <sha>` note names (the mark's note of a land, any case; a trailing `YYYY-MM-DD;` detail follows it in some queues): the latest such note of the line, else none. */
+export function landedShaOf(l) {
+    for (const n of [...l.notes].reverse()) {
+        const m = /^landed\s+([0-9a-f]{7,40})\b/i.exec(n.text.trim());
+        if (m !== null)
+            return (m[1] ?? "").toLowerCase();
+    }
+    return undefined;
+}
+/**
+ * With nothing admittable now and lines running: the ids the picker would admit once the running lines are done, by their place
+ * in that pass. The pass is the picker's own, run on the queue with the running lines marked done (window ignored).
+ */
+function unblockedByRunning(queue, now) {
+    if (now.admitted.length > 0 || !queue.lines.some(l => l.status === "running"))
+        return new Map();
+    const after = planPick({
+        ...queue,
+        lines: queue.lines.map(l => (l.status === "running" ? { ...l, status: "done" } : l)),
+    }, { ignoreWindow: true });
+    return new Map(after.admitted.map((a, i) => [a.id, i]));
+}
+/** Every line of a queue with, for each pending one, the picker's reason evaluated without the window. */
+export function describeQueue(queue) {
+    const plan = planPick(queue, { ignoreWindow: true });
+    const landBranch = queue.header.land_branch?.trim() ?? "";
+    const why = new Map(plan.reasons.map(r => [r.id, r.why]));
+    const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
+    const unblock = unblockedByRunning(queue, plan);
+    const byId = new Map(queue.lines.map(l => [l.id, l]));
+    const admit = new Map(queue.lines
+        .filter(l => l.status === "pending")
+        .sort(admissionOrder)
+        .map((l, i) => [l.id, i]));
+    return {
+        file: queue.file,
+        batchSize: queue.batchSize,
+        ...(landBranch !== "" ? { landBranch } : {}),
+        ...(queue.archived.size > 0 ? { archivedIds: [...queue.archived.keys()] } : {}),
+        lines: queue.lines.map(l => ({
+            id: l.id,
+            afterIds: afterIdsOf(l.meta.after, byId),
+            status: l.status,
+            ...(l.meta.difficulty !== undefined ? { difficulty: l.meta.difficulty } : {}),
+            kind: kindOf(l) ?? "feature",
+            mark: kindMark({ kind: kindOf(l) }),
+            ...(l.meta.model !== undefined ? { model: l.meta.model } : {}),
+            ...(l.meta.after !== undefined ? { after: l.meta.after } : {}),
+            ...(l.meta.owner !== undefined ? { owner: l.meta.owner } : {}),
+            ...(l.meta.sweep !== undefined ? { sweep: l.meta.sweep } : {}),
+            ...(l.meta.touches !== undefined ? { touches: l.meta.touches } : {}),
+            exclusive: exclusiveOf(l),
+            paused: l.paused,
+            notes: l.notes.length,
+            ...(l.notes.at(-1)?.date !== undefined ? { lastNoteDate: l.notes.at(-1)?.date } : {}),
+            ...lastNoteOf(l),
+            ...(landedShaOf(l) !== undefined ? { landedSha: landedShaOf(l) } : {}),
+            ...(l.meta.ended !== undefined ? { ended: l.meta.ended } : {}),
+            ...(l.meta.restored !== undefined ? { restored: l.meta.restored } : {}),
+            ...(l.meta.added !== undefined ? { added: l.meta.added } : {}),
+            ...(l.meta.base !== undefined ? { base: l.meta.base } : {}),
+            ...(l.meta.text_hash !== undefined ? { textHash: l.meta.text_hash } : {}),
+            text: l.text,
+            ...(l.status === "pending"
+                ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }
+                : {}),
+            ...(ready.has(l.id) ? { pickOrder: ready.get(l.id) } : {}),
+            ...(unblock.has(l.id) ? { unblockOrder: unblock.get(l.id) } : {}),
+            ...(admit.has(l.id) ? { admitOrder: admit.get(l.id) } : {}),
+            ...(prioOf(l) !== undefined ? { priority: prioOf(l) } : {}),
+        })),
+    };
+}
+/** The queue name a `queue:` argument may carry: one file-name stem, no path. */
+const QUEUE_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/**
+ * The queue file a tool or `wf-queue` call means. `file` (a full path) wins; else `queue` names
+ * `.claude/batch/<queue>.yaml`, and neither names the project's default `.claude/batch/queue.yaml` —
+ * the project being the git root of `cwd` (a linked worktree resolves to its main checkout).
+ */
+export function resolveQueueFile(sel, cwd = process.cwd()) {
+    if (sel.file !== undefined) {
+        if (sel.queue !== undefined)
+            throw new QueueError("give `file` or `queue`, not both");
+        return path.resolve(cwd, sel.file);
+    }
+    const name = sel.queue ?? "queue";
+    if (!QUEUE_NAME_RE.test(name))
+        throw new QueueError(`refused queue name "${name}" (a file-name stem, no path)`);
+    // A name is the stem: "q.yaml" would resolve to q.yaml.yaml and queue_add would create it.
+    const ext = /\.(ya?ml|md)$/i.exec(name);
+    if (ext)
+        throw new QueueError(`refused queue name "${name}" (the stem without .${ext[1]}: "${name.slice(0, ext.index)}")`);
+    return path.join(projectRoot(cwd), ".claude", "batch", `${name}.yaml`);
+}
+function readText(file) {
+    const abs = path.resolve(file);
+    try {
+        return { abs, text: fs.readFileSync(abs, "utf8") };
+    }
+    catch (err) {
+        throw new QueueError(`${abs}: ${err.code ?? String(err)}`);
+    }
+}
+export function readQueue(file) {
+    const { abs, text } = readText(file);
+    return parseQueue(text, abs, archivedStatuses(abs));
+}
+/** The archive beside a queue: `queue.yaml` → `queue.archive.yaml`. */
+export function archivePath(file) {
+    const abs = path.resolve(file);
+    return /\.ya?ml$/i.test(abs) ? abs.replace(/\.(ya?ml)$/i, ".archive.$1") : `${abs}.archive.yaml`;
+}
+const archiveCache = new Map();
+/** id → status of every line in the queue's archive (empty when there is none); re-read only when the file changed. */
+function archivedStatuses(file) {
+    const arch = archivePath(file);
+    let st;
+    try {
+        st = fs.statSync(arch);
+    }
+    catch {
+        return new Map();
+    }
+    const stamp = `${st.mtimeMs}:${st.size}`;
+    const hit = archiveCache.get(arch);
+    if (hit?.stamp === stamp)
+        return hit.ids;
+    let doc;
+    try {
+        doc = YAML.parse(fs.readFileSync(arch, "utf8"));
+    }
+    catch (err) {
+        throw new QueueError(`${arch}: not YAML: ${err.message}`);
+    }
+    const tasks = doc?.tasks ?? [];
+    if (!Array.isArray(tasks))
+        throw new QueueError(`${arch}: tasks: is a list`);
+    const ids = new Map();
+    tasks.forEach((t, i) => {
+        const l = parseTask(t, i, arch);
+        ids.set(l.id, l.status);
+    });
+    archiveCache.set(arch, { stamp, ids });
+    return ids;
+}
+const REPLAN_TRIES = 5;
+/**
+ * Writes `text` over the queue only while the file still reads as `queue` did: a hand edit made
+ * since the read (outside the lock) is never overwritten — false, and the caller plans again.
+ */
+function writeText(queue, text) {
+    if (fs.readFileSync(queue.file, "utf8") !== queue.source)
+        return false;
+    const tmp = `${queue.file}.wf-queue.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+    fs.writeFileSync(tmp, text);
+    fs.renameSync(tmp, queue.file);
+    return true;
+}
+/** `attempt` until it writes (true) or needs no write (a result); a queue that keeps changing is an error. */
+function replanning(file, attempt) {
+    for (let i = 0; i < REPLAN_TRIES; i++) {
+        const r = attempt();
+        if (r !== false)
+            return r;
+    }
+    throw new QueueError(`${file} changed under every one of ${REPLAN_TRIES} writes`);
+}
+/**
+ * Exclusive lock beside the queue: the directory `<file>.lock` (mkdir is atomic across
+ * processes), so every writer of one queue excludes the others.
+ */
+export async function withQueueLock(file, fn) {
+    const abs = path.resolve(file);
+    if (!fs.existsSync(abs))
+        throw new QueueError(`${abs}: not found`);
+    let release;
+    try {
+        try {
+            release = await lockfile.lock(abs, {
+                stale: LOCK_STALE_MS,
+                retries: LOCK_RETRIES,
+                realpath: false,
+            });
+        }
+        catch (err) {
+            throw new QueueError(`${abs}.lock is held — another pick is writing the queue (${String(err)})`);
+        }
+        return fn();
+    }
+    finally {
+        if (release)
+            await release();
+    }
+}
+function editable(file) {
+    const queue = readQueue(file);
+    const doc = YAML.parseDocument(queue.source);
+    const found = doc.get("tasks", true);
+    const seq = isSeq(found) ? found : new YAMLSeq();
+    if (seq !== found)
+        doc.set("tasks", seq);
+    seq.flow = false;
+    return { queue, doc, tasks: seq };
+}
+function taskNode(e, line) {
+    const node = e.tasks.items[line.index];
+    if (!isMap(node))
+        throw new QueueError(`${line.id}: not a mapping in ${e.queue.file}`);
+    return node;
+}
+/**
+ * One write under the lock: `change` edits the document and returns the answer; the text it prints
+ * must read back as a queue (and pass `check`) before it is written.
+ */
+function writing(file, change, check) {
+    return withQueueLock(file, () => replanning(file, () => {
+        const e = editable(file);
+        const answer = change(e);
+        const text = e.doc.toString(YAML_OUT);
+        const next = parseQueue(text, e.queue.file, e.queue.archived);
+        check?.(next, answer);
+        return writeText(e.queue, text) ? answer : false;
+    }));
+}
+/** The refusal of an id the queue's archive holds: a new line may not take it. */
+function archivedIdError(queue, id) {
+    return new QueueError(`${id} is already in ${archivePath(queue.file)} (archived)`);
+}
+/**
+ * `text` must read as a queue, and none of the lines it adds to `queue` may carry an id the archive
+ * holds (a line already in both files, left by a crash, stays readable).
+ */
+export function refuseArchivedIds(queue, text) {
+    const had = new Set(queue.lines.map(l => l.id));
+    for (const l of parseQueue(text, queue.file, queue.archived).lines)
+        if (!had.has(l.id) && queue.archived.has(l.id))
+            throw archivedIdError(queue, l.id);
+}
+/**
+ * The queue's whole text rewritten by `change` under the lock, written only while the file still
+ * reads as it did (else re-read and run again); the result must read as a queue. Returns `change`'s
+ * answer of the last run.
+ */
+export async function rewriteQueue(file, change) {
+    return withQueueLock(file, () => replanning(file, () => {
+        const queue = readQueue(file);
+        const r = change(queue.source);
+        refuseArchivedIds(queue, r.text);
+        return writeText(queue, r.text) ? r.answer : false;
+    }));
+}
+/** The header's `archive_after_days: N` (a whole number ≥ 0); absent = no automatic archiving. */
+export function archiveAfterDays(queue) {
+    const raw = queue.header.archive_after_days?.trim();
+    if (raw === undefined || raw === "")
+        return undefined;
+    if (!/^\d+$/.test(raw))
+        throw new QueueError(`${queue.file}: archive_after_days: "${raw}" is not a whole number of days`);
+    return Number(raw);
+}
+/**
+ * The header's `lessons_every: N` (a whole number ≥ 1): how many lands the dispatcher agent lets pass between its LESSONS
+ * messages (it reads the key from the file, so the pick is where a bad value is refused); absent = the agent's default.
+ */
+export function lessonsEvery(queue) {
+    const raw = queue.header.lessons_every?.trim();
+    if (raw === undefined || raw === "")
+        return undefined;
+    if (!/^[1-9]\d*$/.test(raw))
+        throw new QueueError(`${queue.file}: lessons_every: "${raw}" is not a whole number of lands (1 or more)`);
+    return Number(raw);
+}
+/**
+ * Pick under the lock and mark every admitted task running; `dryRun` reads without the lock or a write.
+ * With the header's `archive_after_days: N`, the done / failed lines that ended more than N days ago
+ * move to the archive first, under the same lock (what `archiveQueue` moves; no line without `ended:`).
+ */
+export async function pickQueue(file, opts = {}) {
+    lessonsEvery(readQueue(file));
+    if (opts.dryRun === true)
+        return { ...planPick(readQueue(file)), dryRun: true };
+    return withQueueLock(file, () => {
+        const days = archiveAfterDays(readQueue(file));
+        const archived = days === undefined ? [] : archiveLocked(file, { olderThanDays: days }).moved;
+        return replanning(file, () => {
+            const e = editable(file);
+            const plan = planPick(e.queue);
+            if (plan.admitted.length > 0) {
+                const ids = new Set(plan.admitted.map(a => a.id));
+                for (const l of e.queue.lines)
+                    if (ids.has(l.id) && l.status === "pending")
+                        taskNode(e, l).set("status", "running");
+                if (!writeText(e.queue, e.doc.toString(YAML_OUT)))
+                    return false;
+            }
+            return {
+                ...plan,
+                dryRun: false,
+                ...(archived.length > 0 ? { archived } : {}),
+            };
+        });
+    });
+}
+/** The local date `days` before `now`, `YYYY-MM-DD`. */
+function daysBefore(days, now) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - days);
+    return today(d);
+}
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** The day a line's archive age counts from: its `ended:`, or the later `restored:` day of a line brought back from the archive; none without a dated `ended:`. */
+function ageDay(meta) {
+    const ended = meta.ended;
+    if (ended === undefined || !DAY_RE.test(ended))
+        return undefined;
+    const restored = meta.restored;
+    return restored !== undefined && DAY_RE.test(restored) && restored > ended ? restored : ended;
+}
+function archivePlan(queue, opts) {
+    const cutoff = daysBefore(opts.olderThanDays, opts.now ?? new Date());
+    const byId = new Map(queue.lines.map(l => [l.id, l]));
+    const named = new Set();
+    for (const l of queue.lines)
+        if (l.status !== "done" && l.status !== "failed")
+            for (const t of afterIdsOf(l.meta.after, byId))
+                named.add(t);
+    const moved = [];
+    const keptNamed = [];
+    let unended = 0;
+    for (const l of queue.lines) {
+        if (l.status !== "done" && l.status !== "failed")
+            continue;
+        const ended = ageDay(l.meta);
+        const dated = ended !== undefined;
+        if (!dated) {
+            if (opts.includeUnended === true) {
+                if (l.status === "failed" && named.has(l.id))
+                    keptNamed.push(l.id);
+                else
+                    moved.push(l.id);
+            }
+            else
+                unended++;
+        }
+        else if (ended < cutoff) {
+            if (l.status === "failed" && named.has(l.id))
+                keptNamed.push(l.id);
+            else
+                moved.push(l.id);
+        }
+    }
+    return { moved, keptNamed, unended };
+}
+/**
+ * Moves done and failed lines that ended before `olderThanDays` days ago into the queue's archive
+ * (`archivePath`), appending, under the queue's lock. A line with no `ended:` stays unless
+ * `includeUnended`; a failed line an open line's `after:` names stays. The archive is written first,
+ * so a crash between the two writes leaves a line in both, and a re-run only removes it from the queue.
+ */
+export async function archiveQueue(file, opts) {
+    if (!Number.isInteger(opts.olderThanDays) || opts.olderThanDays < 0)
+        throw new QueueError("older-than is a whole number of days (0 or more)");
+    const archive = archivePath(file);
+    if (opts.dryRun === true) {
+        const q = readQueue(file);
+        const size = Buffer.byteLength(q.source);
+        return {
+            archive,
+            ...archivePlan(q, opts),
+            bytesBefore: size,
+            bytesAfter: size,
+            dryRun: true,
+        };
+    }
+    return withQueueLock(file, () => archiveLocked(file, opts));
+}
+/** The archive move itself, for a caller already holding the queue's lock. */
+function archiveLocked(file, opts) {
+    const archive = archivePath(file);
+    return replanning(file, () => {
+        const e = editable(file);
+        const plan = archivePlan(e.queue, opts);
+        const bytesBefore = Buffer.byteLength(e.queue.source);
+        if (plan.moved.length === 0)
+            return {
+                archive,
+                ...plan,
+                bytesBefore,
+                bytesAfter: bytesBefore,
+                dryRun: false,
+            };
+        const adoc = YAML.parseDocument(fs.existsSync(archive) ? fs.readFileSync(archive, "utf8") : "tasks: []\n");
+        const found = adoc.get("tasks", true);
+        const aseq = isSeq(found) ? found : new YAMLSeq();
+        if (aseq !== found)
+            adoc.set("tasks", aseq);
+        aseq.flow = false;
+        const have = e.queue.archived;
+        const out = new Set(plan.moved);
+        let appended = 0;
+        for (const l of e.queue.lines) {
+            if (!out.has(l.id))
+                continue;
+            const node = taskNode(e, l);
+            if (!have.has(l.id)) {
+                aseq.add(node);
+                appended++;
+                continue;
+            }
+            // held in both files (a crash between the writes): the queue's copy is the fresher one
+            const at = aseq.items.findIndex(n => isMap(n) && String(n.get("id")) === l.id);
+            const held = aseq.items[at];
+            if (isMap(held) && JSON.stringify(held.toJSON()) !== JSON.stringify(node.toJSON())) {
+                aseq.items[at] = node;
+                appended++;
+            }
+        }
+        const gone = new Set(e.queue.lines.filter(l => out.has(l.id)).map(l => l.index));
+        for (let i = e.tasks.items.length - 1; i >= 0; i--)
+            if (gone.has(i))
+                e.tasks.items.splice(i, 1);
+        const text = e.doc.toString(YAML_OUT);
+        const merged = new Map(have);
+        for (const l of e.queue.lines)
+            if (out.has(l.id))
+                merged.set(l.id, l.status);
+        parseQueue(text, e.queue.file, merged);
+        const archiveText = adoc.toString(YAML_OUT);
+        if (appended > 0) {
+            const tmp = `${archive}.wf-queue.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+            if (fs.readFileSync(e.queue.file, "utf8") !== e.queue.source)
+                return false;
+            fs.writeFileSync(tmp, archiveText);
+            fs.renameSync(tmp, archive);
+        }
+        if (!writeText(e.queue, text))
+            return false;
+        return {
+            archive,
+            ...plan,
+            bytesBefore,
+            bytesAfter: Buffer.byteLength(text),
+            dryRun: false,
+        };
+    });
+}
+/**
+ * Moves one line, whole, from the queue's archive back into the queue (appended at the end), under
+ * the queue's lock; its status and `ended:` stay as archived, and a done / failed line gets `restored:` (today), so the auto-archive counts its age from the restore. The queue is written first, so a crash
+ * between the writes leaves the line in both files and a re-run only removes the archive's copy.
+ */
+export async function restoreQueue(file, id) {
+    const archive = archivePath(file);
+    return withQueueLock(file, () => replanning(file, () => {
+        const e = editable(file);
+        const status = e.queue.archived.get(id);
+        if (status === undefined)
+            throw new QueueError(`${id} is not in ${archive}`);
+        const adoc = YAML.parseDocument(fs.readFileSync(archive, "utf8"));
+        const found = adoc.get("tasks", true);
+        const aseq = isSeq(found) ? found : new YAMLSeq();
+        const at = aseq.items.findIndex(n => isMap(n) && String(n.get("id")) === id);
+        const node = aseq.items[at];
+        if (!isMap(node))
+            throw new QueueError(`${id} is not in ${archive}`);
+        const inQueue = e.queue.lines.some(l => l.id === id);
+        let text = e.queue.source;
+        if (!inQueue) {
+            if (isMap(node) && (status === "done" || status === "failed"))
+                setOrdered(e, node, "restored", today());
+            e.tasks.items.push(node);
+            text = e.doc.toString(YAML_OUT);
+        }
+        aseq.items.splice(at, 1);
+        const rest = new Map(e.queue.archived);
+        rest.delete(id);
+        parseQueue(text, e.queue.file, rest);
+        const settled = inQueue
+            ? fs.readFileSync(e.queue.file, "utf8") === e.queue.source
+            : writeText(e.queue, text);
+        if (!settled)
+            return false;
+        const tmp = `${archive}.wf-queue.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+        fs.writeFileSync(tmp, adoc.toString(YAML_OUT));
+        fs.renameSync(tmp, archive);
+        return { id, status, archive, inQueue };
+    }));
+}
+/** The answer of an archive: what moved, what stayed and why, and the queue's size. */
+export function formatArchive(r) {
+    const lines = [
+        `${r.dryRun ? "would archive" : "archived"} ${r.moved.length} line(s) → ${r.archive}`,
+        `queue ${r.bytesBefore} → ${r.bytesAfter} bytes`,
+    ];
+    if (r.keptNamed.length > 0)
+        lines.push(`kept (failed, named by an open after:): ${r.keptNamed.join(", ")}`);
+    if (r.unended > 0)
+        lines.push(`kept ${r.unended} done/failed line(s) with no ended: (--include-unended moves them)`);
+    return lines.join("\n");
+}
+/** The answer of a mark: `ID: failed → running`, plus the difficulty a retry raised and a window it ended. */
+export function formatMark(r) {
+    if (r.skipped)
+        return `${r.id}: still ${r.from}, nothing marked`;
+    const d = r.difficulty;
+    const bump = !d
+        ? ""
+        : d.to > d.from
+            ? ` (difficulty ${d.from} → ${d.to})`
+            : ` (difficulty ${d.to}: already the cap)`;
+    const extra = r.unknownKeys?.length ? `\n${unknownKeyNotice(r.id, r.unknownKeys)}` : "";
+    const w = r.windowRestored;
+    const restored = w
+        ? `\nbatch_size ${w.from} → ${w.to}${w.reason ? `  # ${w.reason}` : ""}  (the window set until ${w.task} done ends with it)`
+        : "";
+    return `${r.id}: ${r.from} → ${r.to}${bump}${extra}${restored}`;
+}
+/** Today as `YYYY-MM-DD` (local time): a note's date. */
+export function today(now = new Date()) {
+    const p = (n) => String(n).padStart(2, "0");
+    return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+/**
+ * The short hash of what a recon reads of a line: its text, touches, owner and, when it has one, its
+ * sweep command (`\n`-joined, touches as the picker reads the list; a line without `sweep:` hashes as it did
+ * before the key existed). Equal hashes = the brief is the one the line was written with.
+ */
+export function textHashOf(text, touches, owner, sweep = "") {
+    const parts = [text.trim(), touches.trim(), owner.trim()];
+    if (sweep.trim() !== "")
+        parts.push(sweep.trim());
+    return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 12);
+}
+/** `textHashOf` for a parsed line. */
+export const lineTextHash = (line) => textHashOf(line.text, line.meta.touches ?? "", line.meta.owner ?? "", line.meta.sweep ?? "");
+/** `textHashOf` for a task node. */
+function nodeTextHash(node) {
+    const o = node.toJSON();
+    const list = Array.isArray(o.touches) ? o.touches.map(str).join(", ") : str(o.touches ?? "");
+    return textHashOf(str(o.text ?? ""), list, str(o.owner ?? ""), str(o.sweep ?? ""));
+}
+/** HEAD of the git repo `repo`, or null (no such directory, not a repo, no commit). */
+function headOf(repo) {
+    if (repo === null)
+        return null;
+    const r = spawnSync("git", ["-C", repo, "rev-parse", "--verify", "-q", "HEAD"], {
+        encoding: "utf8",
+    });
+    const sha = (r.stdout ?? "").trim();
+    return r.status === 0 && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+/**
+ * Records where a line was written: `text_hash` of the node's text, touches, owner and sweep, and `base`,
+ * HEAD of the node's repo (left out, or dropped, when that repo is not git).
+ */
+function stampBase(e, node) {
+    setOrdered(e, node, "text_hash", nodeTextHash(node));
+    const repo = node.get("repo");
+    const head = headOf(repoNamed(e.queue, typeof repo === "string" ? repo : undefined));
+    if (head !== null)
+        setOrdered(e, node, "base", head);
+    else if (node.has("base"))
+        node.delete("base");
+}
+/** Whether `repo:` now names another directory than `was`; a re-spelling of the same repo is not a change, a name that resolves nowhere is compared as written. */
+function repoChanged(queue, was, now) {
+    const next = typeof now === "string" ? now : undefined;
+    const a = repoNamed(queue, was);
+    const b = repoNamed(queue, next);
+    return a === null || b === null ? (was?.trim() ?? "") !== (next?.trim() ?? "") : a !== b;
+}
+function checkNote(note) {
+    if (note !== undefined && note.trim() === "" && note !== "")
+        throw new QueueError("a note is not blank");
+}
+/** Appends `{from, date, text}` to the task's `notes:` (created when absent); `date` defaults to today. */
+function addNote(e, node, text, from, date = today()) {
+    const found = node.get("notes", true);
+    const seq = isSeq(found) ? found : new YAMLSeq();
+    if (seq !== found)
+        node.set("notes", seq);
+    seq.flow = false;
+    seq.add(e.doc.createNode({ from, date, text }));
+}
+/** Sets `k` on a task node; a new key goes where TASK_KEYS orders it among the present ones. */
+function setOrdered(e, node, k, v) {
+    if (node.has(k)) {
+        node.set(k, v);
+        return;
+    }
+    const order = TASK_KEYS.indexOf(k);
+    const at = node.items.findIndex(p => TASK_KEYS.indexOf(String(isScalar(p.key) ? p.key.value : p.key)) > order);
+    const pair = e.doc.createPair(k, v);
+    if (at < 0)
+        node.items.push(pair);
+    else
+        node.items.splice(at, 0, pair);
+}
+/** Why the picker would not admit this pending line (window, pause and parent-run aside); null = it would. */
+function admitRefusal(queue, id) {
+    const plan = planPick(queue, { only: id });
+    return plan.reasons.find(r => r.id === id)?.why ?? null;
+}
+/**
+ * One task's status under the lock, only from the status `to` expects; `note` goes to its `notes:`.
+ * `retry` (with `running` only) restarts a failed task: failed → running, and raises its
+ * `difficulty:` by one (at most 10) — the retried task's session starts a row up.
+ */
+export async function markQueue(file, id, to, note, opts = {}) {
+    if (!ID_RE.test(id))
+        throw new QueueError(`refused task id "${id}"`);
+    checkNote(note);
+    if (opts.ifRunning === true && to !== "failed" && to !== "released")
+        throw new QueueError("if-running goes with `failed` or `released` only");
+    if (opts.retry === true && to !== "running")
+        throw new QueueError("retry restarts a failed task: it goes with `running` only");
+    const { from, to: status } = opts.retry === true ? { from: "failed", to: "running" } : MARK_TARGETS[to];
+    return writing(file, e => {
+        const line = lineOf(e.queue, id);
+        if (opts.ifRunning === true && line.status !== "running")
+            return { id, from: line.status, to: line.status, skipped: true };
+        if (line.status !== from) {
+            const hint = line.status === "failed" && to === "running" ? " (retry: true restarts a failed task)" : "";
+            throw new QueueError(`${id} is ${line.status}, expected ${from}${hint}`);
+        }
+        let forced;
+        if (to === "running" && opts.retry !== true) {
+            const why = admitRefusal(e.queue, id);
+            if (why !== null) {
+                const reason = opts.force?.trim();
+                if (!reason)
+                    throw new QueueError(`${id} would not be admitted: ${why} (force: "<reason>" marks it anyway, the reason goes into its notes)`);
+                forced = `forced running over: ${why}; ${reason}`;
+            }
+        }
+        if (to === "promoted") {
+            const why = difficultyRequired({ ...line, status: "pending" });
+            if (why !== null)
+                throw new QueueError(why);
+        }
+        const node = taskNode(e, line);
+        node.set("status", status);
+        if (status === "done" || status === "failed")
+            setOrdered(e, node, "ended", today());
+        else {
+            node.delete("ended");
+            node.delete("restored");
+        }
+        if (forced !== undefined)
+            addNote(e, node, forced, opts.from ?? "mark");
+        const text = note?.trim();
+        if (text)
+            addNote(e, node, text, opts.from ?? "mark");
+        const was = opts.retry === true ? difficultyOf(line) : undefined;
+        let difficulty;
+        if (typeof was === "number") {
+            difficulty = { from: was, to: Math.min(was + 1, DIFFICULTY_MAX) };
+            node.set("difficulty", difficulty.to);
+        }
+        const windowRestored = from === "running" ? endWindow(e, id) : undefined;
+        return {
+            id,
+            from,
+            to: status,
+            ...(difficulty ? { difficulty } : {}),
+            ...(line.unknownKeys.length > 0 ? { unknownKeys: line.unknownKeys } : {}),
+            ...(windowRestored ? { windowRestored } : {}),
+        };
+    });
+}
+/** The header key a temporary window keeps what it replaced in. */
+const WINDOW_UNTIL = "window_until";
+/** The pending revert of a temporary window (`window_until:` in the header), if the file holds a readable one. */
+function windowUntilOf(header) {
+    const raw = header[WINDOW_UNTIL];
+    if (raw === undefined)
+        return undefined;
+    try {
+        const w = JSON.parse(raw);
+        return typeof w.task === "string" && Number.isInteger(w.batch_size)
+            ? { task: w.task, batch_size: w.batch_size, reason: w.reason ?? "" }
+            : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+/** A mark of `id` that leaves `running` ends the temporary window set until it: the window and its reason go back. */
+function endWindow(e, id) {
+    const w = windowUntilOf(e.queue.header);
+    if (w?.task !== id)
+        return undefined;
+    e.doc.set("batch_size", w.batch_size);
+    if (w.reason !== "")
+        e.doc.set("reason", w.reason);
+    else
+        e.doc.delete("reason");
+    e.doc.delete(WINDOW_UNTIL);
+    return { task: id, from: e.queue.batchSize, to: w.batch_size, reason: w.reason };
+}
+function lineOf(queue, id) {
+    const line = queue.lines.find(l => l.id === id);
+    const gone = queue.archived.get(id);
+    if (!line && gone !== undefined)
+        throw new QueueError(`${id} is archived (${gone}) in ${archivePath(queue.file)}`);
+    if (!line)
+        throw new QueueError(`no task ${id} in ${queue.file}`);
+    return line;
+}
+/** The `after:` ids that pick would wait on as unknown (`X?`). */
+function unknownAfterIds(after, byId, archived) {
+    const unknown = [];
+    for (const tok of stripParens(after).match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g) ?? [])
+        if (!byId.has(tok) && !archived.has(tok) && /^[A-Z]/.test(tok) && /\d/.test(tok))
+            unknown.push(tok);
+    return unknown;
+}
+/** The queue ids an `after:` text names, as the picker reads it (text in parentheses is prose). */
+function afterIdsOf(after, byId) {
+    const toks = stripParens(after ?? "").match(/[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*/g) ?? [];
+    return [...new Set(toks)].filter(t => byId.has(t));
+}
+/** A dependency path from `id` back to itself through `after:` ids, or null. */
+function afterCycle(queue, id) {
+    const byId = new Map(queue.lines.map(l => [l.id, l]));
+    const deps = (l) => afterIdsOf(l.meta.after, byId);
+    const seen = new Set();
+    const walk = (cur, trail) => {
+        for (const d of deps(byId.get(cur))) {
+            if (d === id)
+                return [...trail, d];
+            if (seen.has(d))
+                continue;
+            seen.add(d);
+            const found = walk(d, [...trail, d]);
+            if (found)
+                return found;
+        }
+        return null;
+    };
+    return walk(id, [id]);
+}
+/**
+ * Checks the fields `keys` of `line` (every field when `keys` is undefined) as a pick would read
+ * them in `queue` (which holds the task): `after:` names only tasks of the queue and closes no
+ * cycle, `workflow:` is one word, `repo:` resolves, `difficulty:` is 1..10,
+ * `kind:` and `priority:` are one of theirs, `sweep:` is one non-empty line.
+ */
+function checkFields(queue, line, keys) {
+    const has = (k) => (keys === undefined || keys.has(k)) && line.meta[k] !== undefined;
+    if (has("after")) {
+        const byId = new Map(queue.lines.map(l => [l.id, l]));
+        const unknown = unknownAfterIds(line.meta.after, byId, queue.archived);
+        if (unknown.length > 0)
+            throw new QueueError(`${line.id}: after: ${unknown.join(", ")} — no such task in the queue`);
+        const cycle = afterCycle(queue, line.id);
+        if (cycle)
+            throw new QueueError(`${line.id}: after: closes a cycle ${cycle.join(" → ")}`);
+    }
+    if (has("workflow") && workflowOf(line) === null)
+        throw new QueueError(`${line.id}: workflow: "${line.meta.workflow}" is not a workflow name`);
+    if (has("repo") && resolveRepo(queue, line) === null)
+        throw new QueueError(`${line.id}: repo: "${line.meta.repo}" resolves to no directory`);
+    if (has("difficulty") && difficultyOf(line) === null)
+        throw new QueueError(`${line.id}: ${difficultyError(line.meta.difficulty)}`);
+    if (has("kind") && kindOf(line) === null)
+        throw new QueueError(`${line.id}: ${kindError(line)}`);
+    if (has("priority") && priorityOf(line) === null)
+        throw new QueueError(`${line.id}: priority: "${line.meta.priority}" is not one of ${PRIORITIES.join(", ")}`);
+    if (has("sweep") && (sweepOf(line) === null || /[\n\r]/.test(line.meta.sweep ?? "")))
+        throw new QueueError(`${line.id}: sweep: is one non-empty line (the command)`);
+}
+/** Splits a list given as one string on its top-level commas (a `(…)` keeps its commas). */
+export function splitList(v) {
+    const out = [];
+    let depth = 0;
+    let cur = "";
+    for (const ch of v) {
+        if (ch === "(")
+            depth++;
+        else if (ch === ")" && depth > 0)
+            depth--;
+        if (ch === "," && depth === 0) {
+            out.push(cur);
+            cur = "";
+        }
+        else
+            cur += ch;
+    }
+    out.push(cur);
+    return out.map(s => s.trim()).filter(s => s !== "" && s !== "—" && s !== "-");
+}
+/**
+ * A task field's value as written: `after`/`touches` a list (a string is split on its commas),
+ * `exclusive`/`breaking`/`parked` a boolean (`no`/`false`/`""` false), `difficulty` a number when it is one,
+ * `text` a block scalar; null removes the field (`""`, null, or a false flag).
+ */
+function fieldValue(e, key, raw) {
+    if (raw === null || raw === undefined || raw === "")
+        return null;
+    if (LIST_KEYS.has(key)) {
+        const list = Array.isArray(raw) ? raw.map(x => str(x).trim()) : splitList(str(raw));
+        const seq = e.doc.createNode(list);
+        seq.flow = true;
+        return seq;
+    }
+    if (BOOL_KEYS.has(key)) {
+        const on = typeof raw === "boolean" ? raw : !/^(no|false|0|—|-)$/i.test(str(raw).trim());
+        return on ? true : null;
+    }
+    if (key === "difficulty")
+        return /^\d+$/.test(str(raw).trim()) ? Number(raw) : str(raw);
+    if (typeof raw !== "string")
+        throw new QueueError(`${key}: a value is a string`);
+    if (key === "text") {
+        const s = new Scalar(raw.trim());
+        s.type = Scalar.BLOCK_LITERAL;
+        return s;
+    }
+    if (/[\n\r]/.test(raw))
+        throw new QueueError(`${key}: a value is one line`);
+    return raw.trim();
+}
+/** A new queue file's content: the minimal header a pick reads. */
+const NEW_QUEUE = "batch_size: 1\ntasks: []\n";
+/** The 1-based line of task `id` in `text`. */
+function lineNoOf(text, id) {
+    const doc = YAML.parseDocument(text);
+    const tasks = doc.get("tasks", true);
+    if (!isSeq(tasks))
+        return 0;
+    const node = tasks.items.find(n => isMap(n) && isScalar(n.get("id", true)) && String(n.get("id")) === id);
+    const at = node?.range?.[0] ?? 0;
+    return text.slice(0, at).split("\n").length;
+}
+/**
+ * A new pending (or backlog) task under the lock: after the task `after`, before the task `before`,
+ * or last. The task must read as a pick reads it: a unique id, known keys, `after:` naming only
+ * tasks of the queue (and no cycle), a one-word `workflow:`, a `repo:` that resolves, a
+ * `difficulty:` of 1..10 (required on a pending line, see `difficultyRequired`).
+ */
+export async function addQueueLine(file, task, pos = {}, opts = {}) {
+    const id = typeof task.id === "string" ? task.id.trim() : "";
+    if (!ID_RE.test(id))
+        throw new QueueError(`refused task id "${String(task.id)}"`);
+    const unknown = Object.keys(task).find(k => !TASK_KEYS.includes(k));
+    if (unknown !== undefined)
+        throw new QueueError(`${id}: unknown key "${unknown}" (keys: ${TASK_KEYS.join(", ")})`);
+    if (task.ended !== undefined)
+        throw new QueueError(`${id}: ended is written by queue_mark when a line ends, not set on a new one`);
+    if (task.restored !== undefined)
+        throw new QueueError(`${id}: restored is written by the archive restore, not set on a new line`);
+    for (const k of ["added", "base", "text_hash"])
+        if (task[k] !== undefined)
+            throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
+    const status = task.status ?? "pending";
+    if (status !== "pending" && status !== "backlog")
+        throw new QueueError(`${id}: a new task is pending or backlog, not ${str(status)}`);
+    if (pos.after !== undefined && pos.before !== undefined)
+        throw new QueueError("after_id and before_id exclude each other");
+    const place = (e) => {
+        if (e.queue.lines.some(l => l.id === id))
+            throw new QueueError(`${id} is already in ${e.queue.file}`);
+        if (e.queue.archived.has(id))
+            throw archivedIdError(e.queue, id);
+        const at = pos.after !== undefined
+            ? lineOf(e.queue, pos.after).index + 1
+            : pos.before !== undefined
+                ? lineOf(e.queue, pos.before).index
+                : e.tasks.items.length;
+        const node = e.doc.createNode({ id });
+        for (const k of TASK_KEYS) {
+            if (k === "id" || task[k] === undefined)
+                continue;
+            if (k === "status")
+                node.set("status", status);
+            else if (k === "notes") {
+                for (const n of parseNotes(task.notes, id))
+                    addNote(e, node, n.text, n.from ?? "parent", n.date);
+            }
+            else {
+                const v = fieldValue(e, k, task[k]);
+                if (v !== null)
+                    node.set(k, v);
+            }
+        }
+        if (task.status === undefined)
+            node.items.splice(1, 0, e.doc.createPair("status", status));
+        setOrdered(e, node, "added", new Date().toISOString());
+        stampBase(e, node);
+        e.tasks.items.splice(at, 0, node);
+        return at;
+    };
+    const check = (next) => {
+        const line = lineOf(next, id);
+        checkFields(next, line);
+        const why = difficultyRequired(line);
+        if (why !== null)
+            throw new QueueError(why);
+    };
+    const abs = path.resolve(file);
+    let created = false;
+    if (opts.create === true && !fs.existsSync(abs)) {
+        // the task is judged against the bare header BEFORE the file exists, so a refused first task
+        // creates nothing and no rollback can delete a task another call wrote
+        const doc = YAML.parseDocument(NEW_QUEUE);
+        const tasks = doc.get("tasks", true);
+        tasks.flow = false;
+        const e = {
+            queue: parseQueue(NEW_QUEUE, abs, archivedStatuses(abs)),
+            doc,
+            tasks,
+        };
+        place(e);
+        check(parseQueue(doc.toString(YAML_OUT), abs, e.queue.archived));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        try {
+            fs.writeFileSync(abs, NEW_QUEUE, { flag: "wx" });
+            created = true;
+        }
+        catch (err) {
+            if (err.code !== "EEXIST")
+                throw err;
+        }
+    }
+    await writing(file, place, check);
+    const lineNo = lineNoOf(fs.readFileSync(abs, "utf8"), id);
+    const warnings = touchesWarnings(readQueue(abs), lineOf(readQueue(abs), id));
+    return {
+        id,
+        lineNo,
+        ...(created ? { created: true } : {}),
+        ...(warnings.length > 0 ? { warnings } : {}),
+    };
+}
+/**
+ * Sets fields of one task under the lock (`""`/null removes the field) and/or appends a note to
+ * its `notes:`; the status is `queue_mark`'s. A set field keeps its place; a new one goes where
+ * TASK_KEYS orders it among the present ones. The fields set must read as a pick reads them
+ * (see addQueueLine).
+ */
+export async function editQueueLine(file, id, set, appendNote, noteFrom = "parent") {
+    if (!ID_RE.test(id))
+        throw new QueueError(`refused task id "${id}"`);
+    for (const k of Object.keys(set))
+        if (k === "ended")
+            throw new QueueError(`${id}: ended is written by queue_mark, not set`);
+        else if (k === "restored")
+            throw new QueueError(`${id}: restored is written by the archive restore, not set`);
+        else if (k === "added" || k === "base" || k === "text_hash")
+            throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
+        else if (!EDIT_KEYS.has(k))
+            throw new QueueError(`unknown field "${k}" (keys: ${[...EDIT_KEYS].join(", ")})`);
+    const note = appendNote?.trim() || undefined;
+    if (Object.keys(set).length === 0 && note === undefined)
+        throw new QueueError("nothing to edit: give fields to set or a note");
+    let wasMissing = false;
+    const done = await writing(file, e => {
+        const line = lineOf(e.queue, id);
+        wasMissing = difficultyRequired(line) !== null;
+        const node = taskNode(e, line);
+        for (const [k, raw] of Object.entries(set)) {
+            const v = fieldValue(e, k, raw);
+            if (v === null)
+                node.delete(k);
+            else
+                setOrdered(e, node, k, v);
+        }
+        // the brief or the repo changed: it was written now, at this HEAD of its repo (an edit that leaves both equal keeps both)
+        if (nodeTextHash(node) !== lineTextHash(line) ||
+            repoChanged(e.queue, line.meta.repo, node.get("repo")))
+            stampBase(e, node);
+        if (note !== undefined)
+            addNote(e, node, note, noteFrom);
+        return { id, task: new YAML.Document(node).toString(YAML_OUT).trimEnd() };
+    }, next => {
+        const line = lineOf(next, id);
+        checkFields(next, line, new Set(Object.keys(set)));
+        // an edit is refused only when it MAKES the line lack a difficulty: a line written before the rule stays editable
+        const why = wasMissing ? null : difficultyRequired(line);
+        if (why !== null)
+            throw new QueueError(why);
+    });
+    if (!("touches" in set) && !("repo" in set))
+        return done;
+    const q = readQueue(file);
+    const warnings = touchesWarnings(q, lineOf(q, id));
+    return warnings.length > 0 ? { ...done, warnings } : done;
+}
+/** `until` of a temporary window: `<TASK-ID> done`. */
+const UNTIL_RE = /^(\S+) done$/;
+/**
+ * The header's `batch_size: N` and `reason:` under the lock: the window, `0` = the pause. With
+ * `until: "<TASK-ID> done"` the window is temporary: the header keeps what it replaced as
+ * `window_until:`, and the mark of that line that leaves `running` (done, failed or released) puts it
+ * back. A plain window replaces a pending temporary one (its revert is dropped, the answer says so);
+ * a second temporary window while one is pending is refused.
+ */
+export async function setQueueWindow(file, batchSize, reason, until) {
+    if (!Number.isInteger(batchSize) || batchSize < 0)
+        throw new QueueError(`batch_size is a whole number ≥ 0, not ${batchSize}`);
+    const why = reason.trim();
+    if (why === "" || /[\n\r]/.test(why))
+        throw new QueueError("the reason is one non-empty line");
+    const task = until === undefined ? undefined : UNTIL_RE.exec(until.trim())?.[1];
+    if (until !== undefined && (task === undefined || !ID_RE.test(task)))
+        throw new QueueError(`until is "<TASK-ID> done", not "${until}"`);
+    return writing(file, e => {
+        const pending = windowUntilOf(e.queue.header);
+        const was = { size: e.queue.batchSize, reason: e.queue.batchComment ?? "" };
+        if (task !== undefined) {
+            const line = lineOf(e.queue, task);
+            if (line.status === "done" || line.status === "failed")
+                throw new QueueError(`${task} is ${line.status}: a window until its mark would never end`);
+            if (pending !== undefined)
+                throw new QueueError(`a window until ${pending.task} done is pending (it restores batch_size ${pending.batch_size}): set a plain window first, or wait for its mark`);
+        }
+        if (task === undefined)
+            e.doc.delete(WINDOW_UNTIL);
+        e.doc.set("batch_size", batchSize);
+        if (e.doc.has("reason"))
+            e.doc.set("reason", why);
+        else {
+            const top = e.doc.contents;
+            const at = top.items.findIndex(p => String(p.key.value) === "batch_size");
+            top.items.splice(at + 1, 0, e.doc.createPair("reason", why));
+        }
+        if (task !== undefined) {
+            const top = e.doc.contents;
+            const at = top.items.findIndex(p => String(p.key.value) === "tasks");
+            top.items.splice(at < 0 ? top.items.length : at, 0, e.doc.createPair(WINDOW_UNTIL, { task, batch_size: was.size, reason: was.reason }));
+        }
+        return {
+            from: was.size,
+            to: batchSize,
+            reason: why,
+            ...(task !== undefined ? { until: task } : {}),
+            ...(task === undefined && pending !== undefined ? { droppedUntil: pending.task } : {}),
+        };
+    });
+}
+/** `batch_size 3 → 4  # why`, plus the temporary window's end or the one a plain window replaced. */
+export function formatWindow(r) {
+    const base = `batch_size ${r.from} → ${r.to}  # ${r.reason}`;
+    if (r.until !== undefined)
+        return `${base}\nuntil ${r.until} done: the mark of ${r.until} that leaves running (done, failed or released) puts batch_size ${r.from} back`;
+    if (r.droppedUntil !== undefined)
+        return `${base}\nthe pending window until ${r.droppedUntil} done is dropped: ${r.droppedUntil}'s mark will not put the old window back`;
+    return base;
+}
+/**
+ * The header keys a tool may set besides the window (`batch_size` / `reason`): `archive_after_days`
+ * a whole number ≥ 1, `exclusive_hold` `yes` or `no`; each removed with `null`.
+ */
+export const SETTABLE_HEADER_KEYS = ["archive_after_days", "exclusive_hold"];
+/**
+ * One header key of {@link SETTABLE_HEADER_KEYS} under the lock: `value` set or changed, `null`
+ * removes it. The window (`batch_size` / `reason`) and every other key stay as they are; an unknown
+ * key and a value the key does not take are refused, nothing written.
+ */
+export async function setQueueHeaderKey(file, key, value) {
+    if (!SETTABLE_HEADER_KEYS.includes(key))
+        throw new QueueError(`${key} is not a header key a tool sets (${SETTABLE_HEADER_KEYS.join(", ")}; the window is batch_size + reason)`);
+    if (value !== null) {
+        if (key === "exclusive_hold") {
+            if (value !== "yes" && value !== "no")
+                throw new QueueError(`${key} is yes or no (null removes it), not ${value}`);
+        }
+        else if (typeof value !== "number" || !Number.isInteger(value) || value < 1)
+            throw new QueueError(`${key} is a whole number ≥ 1 (null removes it), not ${value}`);
+    }
+    return writing(file, e => {
+        const from = e.queue.header[key]?.trim() || undefined;
+        if (value === null)
+            e.doc.delete(key);
+        else if (e.doc.has(key))
+            e.doc.set(key, value);
+        else {
+            const top = e.doc.contents;
+            const at = top.items.findIndex(p => String(p.key.value) === "tasks");
+            top.items.splice(at < 0 ? top.items.length : at, 0, e.doc.createPair(key, value));
+        }
+        return { key, from, to: value ?? undefined };
+    });
+}
+/** `archive_after_days 30 → 7`, `exclusive_hold (none) → no`: what a header key set did. */
+export function formatHeaderKey(r) {
+    return `${r.key} ${r.from ?? "(none)"} → ${r.to ?? "(none)"}`;
+}
+// Reasons that say nothing about a line itself: with `explain` they fold into one summary line each.
+const BLANK_WHY = new Set(["window full", "paused (batch_size 0)"]);
+const BLANK_NAMES = 5;
+/**
+ * The `--explain` lines: a line with a substantive reason (`after:`, `overlaps`, `⏸`, …) by name in
+ * file order, then one line per blank reason (`N lines: window full — first: A, B …`). `all` = one
+ * line per pending line.
+ */
+export function explainLines(reasons, mode) {
+    if (mode === false)
+        return [];
+    if (mode === "all")
+        return reasons.map(x => `  ${x.id}: ${x.why}`);
+    const out = reasons.filter(x => !BLANK_WHY.has(x.why)).map(x => `  ${x.id}: ${x.why}`);
+    for (const why of BLANK_WHY) {
+        const ids = reasons.filter(x => x.why === why).map(x => x.id);
+        if (ids.length === 0)
+            continue;
+        if (ids.length === 1)
+            out.push(`  ${ids[0]}: ${why}`);
+        else {
+            const more = ids.length > BLANK_NAMES ? " …" : "";
+            out.push(`  ${ids.length} lines: ${why} — first: ${ids.slice(0, BLANK_NAMES).join(", ")}${more}`);
+        }
+    }
+    return out;
+}
+/** The pick's summary: counts, a pause, why nothing was admitted, and (with `explain`) why pending lines wait. */
+export function formatPickSummary(r, explain) {
+    const out = [];
+    const running = r.running.length > 0 ? ` (${r.running.join(", ")})` : "";
+    out.push(`queue ${r.file}: batch_size ${r.batchSize}, running ${r.running.length}${running}, ` +
+        `pending ${r.pending}, admitted ${r.admitted.length}${r.dryRun ? " (dry run)" : ""}`);
+    if (r.batchSize === 0)
+        out.push(`window 0 — paused${r.batchComment ? `: ${r.batchComment}` : ""}`);
+    if (r.admitted.length === 0)
+        out.push(r.code === QUEUE_EXIT.WAIT
+            ? "nothing admitted: wait for a running line to end"
+            : r.code === QUEUE_EXIT.PAUSED
+                ? "nothing admitted and nothing runs: paused"
+                : "nothing admitted and nothing runs: the queue is done (what stays pending is blocked)");
+    if (r.archived !== undefined && r.archived.length > 0)
+        out.push(`archived ${r.archived.length} old line(s) (archive_after_days)`);
+    for (const o of r.overtakes ?? [])
+        out.push(o);
+    out.push(...explainLines(r.reasons, explain));
+    for (const u of r.unknownKeys)
+        out.push(unknownKeyNotice(u.id, u.keys));
+    return out.join("\n");
+}
+/**
+ * `ID\tmodel\teffort\trepo\tworkflow\tdifficulty\tkind` — one admitted line as the exec form prints it
+ * (`-` = no `workflow:` / `difficulty:`; `kind` is `feature` when the line has none).
+ */
+export function formatTask(a) {
+    return [a.id, a.model, a.effort, a.repo, a.workflow ?? "-", a.difficulty ?? "-", a.kind].join("\t");
+}

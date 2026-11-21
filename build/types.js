@@ -1,0 +1,321 @@
+import { z } from "zod";
+// --- Workflow Definition (parsed from YAML) ---
+/** `threads: "budget"` asks for the pool's whole budget as configured when the request is made; a later raise of `budget` does not grow a waiting or held lease. */
+export const RESOURCE_THREADS_BUDGET = "budget";
+/** An exec's deadline stretches by its command's pool wait, up to this many times its `timeout`. */
+export const POOL_WAIT_CEILING_FACTOR = 4;
+/** A named lock: one word, no whitespace (`port:3000`, `ios-simulator`). */
+export const LOCK_NAME_PATTERN = /^\S+$/;
+/**
+ * A session's priority level and the pool priority it stands for. A lease's
+ * priority is its session's level plus the step's own `priority`, so a step
+ * fine-tunes within its level as long as it stays under the level spacing.
+ */
+export const PRIORITY_LEVELS = { low: -100, normal: 0, high: 100, urgent: 200 };
+export const DEFAULT_PRIORITY_LEVEL = "normal";
+export const PriorityLevelSchema = z.enum(["low", "normal", "high", "urgent"]);
+const ThreadCountSchema = z.union([
+    z.number().int().positive(),
+    z.literal(RESOURCE_THREADS_BUDGET),
+]);
+/** `threads: { min, max }`: take what is free, at least `min`, at most `max`. */
+export const FlexibleThreadsSchema = z
+    .object({
+    min: z.number().int().positive(),
+    max: ThreadCountSchema,
+})
+    .strict()
+    .refine(t => t.max === RESOURCE_THREADS_BUDGET || t.min <= t.max, {
+    message: "threads.min must not exceed threads.max",
+});
+/** The keys of `resource:` (the loader names the nearest one for a typo). */
+export const ResourceObjectSchema = z
+    .object({
+    threads: z.union([ThreadCountSchema, FlexibleThreadsSchema]).optional(),
+    // flexible threads only: wait this long for the full max before taking what is free
+    wait_full: z.number().nonnegative().optional(),
+    // machine-wide mutual exclusion by name, granted atomically with the threads
+    locks: z
+        .array(z.string().regex(LOCK_NAME_PATTERN, "a lock name is one word without whitespace"))
+        .nonempty()
+        .optional(),
+    priority: z.number().int().optional(),
+    wait_timeout: z.number().nonnegative().optional(),
+})
+    .strict();
+export const ResourceSchema = ResourceObjectSchema.refine(r => r.threads !== undefined || r.locks !== undefined, { message: "resource needs threads, locks, or both" }).refine(r => r.wait_full === undefined || typeof r.threads === "object", {
+    message: "wait_full needs threads: { min, max }",
+});
+/**
+ * The keys of `fanout:` (the loader names the nearest one for a typo): run the
+ * exec's command `count` times (`WF_SHARD=i/N`, 1-based) or once per line
+ * `items_command` prints (`WF_ITEM=<line>`), each instance under its own
+ * pool lease of `threads_each` threads, at most `max_parallel` at once.
+ */
+export const FanoutObjectSchema = z
+    .object({
+    count: z.number().int().positive().optional(),
+    items_command: z.string().min(1).optional(),
+    threads_each: z.number().int().positive(),
+    max_parallel: z.number().int().positive().optional(),
+})
+    .strict();
+export const FanoutSchema = FanoutObjectSchema.refine(f => (f.count === undefined) !== (f.items_command === undefined), { message: "fanout needs exactly one of count, items_command" });
+/** A task's difficulty as a queue line's `difficulty:` and a session's `context.difficulty` carry it. */
+export const DIFFICULTY_MIN = 1;
+export const DIFFICULTY_MAX = 10;
+/** The Agent tool's effort levels: a row naming another is a typo. */
+export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"]);
+/** One model choice: what an Agent call of that step takes. */
+export const ModelChoiceObjectSchema = z
+    .object({ model: z.string().min(1), effort: EffortSchema })
+    .strict();
+/** A `model_table` row: the difficulties up to `upto` (after the previous row's) take this model and effort. */
+export const ModelRowObjectSchema = z
+    .object({
+    upto: z.number().int().min(DIFFICULTY_MIN).max(DIFFICULTY_MAX),
+    model: z.string().min(1),
+    effort: EffortSchema,
+})
+    .strict();
+/**
+ * A task workflow's `model_table:` (the loader names the nearest key for a typo): `rows` map
+ * `context.difficulty` to `model` / `effort` (ascending `upto`, the last row's 10); each `escalate`
+ * entry (`state: N`) moves one row up once that state's visits reach N; `review` maps the
+ * `context.review_class` an exec measured from the diff to the reviewer's model and effort. `stages`
+ * (named agent steps — any lowercase name; the bundled workflows use plan, execute, review, review_verify, fix) each map the difficulty by their own
+ * rows; `stages.execute` replaces `rows` (the model / effort every workflow already reads), and
+ * `escalate` moves the execute and fix stages only.
+ */
+export const ModelTableObjectSchema = z
+    .object({
+    rows: z.array(ModelRowObjectSchema).nonempty().optional(),
+    stages: z.record(z.array(ModelRowObjectSchema).nonempty()).optional(),
+    escalate: z.record(z.number().int().positive()).optional(),
+    review: z.record(ModelChoiceObjectSchema).optional(),
+})
+    .strict();
+/**
+ * A task workflow's `driver:` — the cheap agent that drives one task session for the dispatcher.
+ * `prompt_ref` = the driver's instructions: a bare name (`task-driver`) is a shipped one
+ * (`templates/drivers/<name>.md`), anything else a path (absolute, `~/…`, or relative to the session's cwd).
+ * `agent_type` = the Agent call's `subagent_type` (default `workflow:driver`, the plugin's agents/driver.md:
+ * workflow tools plus Agent / SendMessage / Read only, so the driver cannot edit code).
+ * `start` of a session of such a workflow answers with the exact Agent call (src/driver.ts).
+ */
+export const DriverObjectSchema = z
+    .object({
+    model: z.string().min(1),
+    effort: EffortSchema,
+    prompt_ref: z.string().min(1),
+    agent_type: z.string().min(1).optional(),
+})
+    .strict();
+/**
+ * A dispatching workflow's `dispatcher:` — the cheap agent that drives the DISPATCHER session itself
+ * (admission, task starts, driver spawns, slot bookkeeping) for the main conversation. Opt-in:
+ * `env` = the environment variable that turns it on (absent = always on); off, the workflow is as if
+ * it declared none. `after` = the state the main conversation still drives itself (building the
+ * queue); the reply that leaves it repeats the block. `prompt_ref` / `agent_type` as in `driver:`
+ * (default type `workflow:dispatcher`). Unlike `driver:` it changes nothing but `start`'s answer:
+ * no `agent_step`, no one-agent-per-visit reading of the session's children.
+ */
+export const DispatcherObjectSchema = z
+    .object({
+    model: z.string().min(1),
+    effort: EffortSchema,
+    prompt_ref: z.string().min(1),
+    agent_type: z.string().min(1).optional(),
+    env: z
+        .string()
+        .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an environment variable name")
+        .optional(),
+    after: z.string().min(1).optional(),
+})
+    .strict();
+// Single source of truth for state fields. Tool schemas derive from this.
+// To hide internal fields from tools: StateDefinitionSchema.omit({ _field: true })
+export const StateDefinitionSchema = z
+    .object({
+    prompt: z.string().optional(),
+    transitions: z.record(z.string()).optional(),
+    terminal: z.boolean().optional(),
+    outcome: z.enum(["complete", "fail"]).optional(),
+    // On a terminal state: when the session enters it, its own queue line (context `queue_file` + `task`)
+    // that is still `running` is marked `failed` or `released` by the engine, so no line stays running
+    // with no pipeline behind it. A line already marked is left as it is.
+    queue_mark: z.enum(["failed", "released"]).optional(),
+    max_visits: z.number().int().positive().optional(),
+    // a move past max_visits enters this state instead of being refused
+    on_exhausted: z.string().optional(),
+    sub_workflow: z.string().optional(),
+    on_complete: z.string().optional(),
+    on_fail: z.string().optional(),
+    task: z.string().optional(),
+    // The state asks its parent a question: entering it logs an `ask` event, leaving it an `answer`
+    // (the live workflow map draws the pair)
+    ask: z.literal("parent").optional(),
+    // Live workflow map: `false` keeps the state out of the band's stations (an exec helper), `true`
+    // makes it one off the shortest path, and on a terminal picks the success end (src/stations.ts)
+    station: z.boolean().optional(),
+    // Skill gate: require skills to be loaded before proceeding
+    skills: z.array(z.string()).optional(),
+    // Include project-specific workflow list in prompt
+    include_workflows: z.boolean().optional(),
+    // Deliver a short digest instead of the full prompt when this state's
+    // full prompt was already delivered once in this server process (the
+    // agent's context already holds it; status() always returns the full text)
+    digest_on_repeat: z.boolean().optional(),
+    // Always deliver the full prompt, also on a revisit: the state's text carries what the agent must do
+    // THIS time (a fresh session to start, a value that changed), not a rule it can recall from the first visit.
+    full_on_revisit: z.boolean().optional(),
+    // Template (rendered like `prompt`) shown on a revisit instead of the generic
+    // "Revisit #N" line, for per-visit data such as an exec's {{stdout}}
+    revisit_prompt: z.string().optional(),
+    // seconds the state may go with no engine call before `sessions` / `status` mark the session
+    // STALE (0 = never); unset = the state type's default (`STALE_AFTER_DEFAULTS` in stale.ts)
+    stale_after: z.number().int().nonnegative().optional(),
+    // Action state fields
+    type: z.enum(["prompt", "exec", "fetch"]).optional(),
+    // exec
+    command: z.string().optional(),
+    cwd: z.string().optional(),
+    // ms; counts the run, not a pool wait (its own lease's, or its session's `wf-run` waiter's, up to 4x)
+    timeout: z.number().positive().optional(),
+    env: z.record(z.string()).optional(),
+    background: z.boolean().optional(),
+    max_output: z.number().int().positive().optional(), // stdout/stderr truncation limit in bytes (default 10KB)
+    // heavy work: lease `threads` and/or named `locks` from the machine-wide
+    // pool before running (wait_timeout seconds, then exit 75); foreground exec only
+    resource: ResourceSchema.optional(),
+    // run the command as N shards, each under its own pool lease; exit 0 only if every shard exits 0
+    fanout: FanoutSchema.optional(),
+    // exec killed by its `timeout` (exit 124) routes here instead of on_error/cases
+    on_timeout: z.string().optional(),
+    // fetch
+    url: z.string().optional(),
+    method: z.enum(["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD"]).optional(),
+    headers: z.record(z.string()).optional(),
+    body: z.string().optional(),
+    // shared action routing
+    on_success: z.string().optional(),
+    on_error: z.string().optional(),
+    cases: z.record(z.string()).optional(),
+    default: z.string().optional(),
+    success_prompt: z.string().optional(),
+    error_prompt: z.string().optional(),
+    retry: z
+        .object({ max: z.number().int().positive(), interval: z.number().int().positive() })
+        .strict()
+        .optional(),
+    context_set: z.record(z.string()).optional(), // auto-set context keys after action succeeds; values are templates (e.g. "{{stdout}}")
+})
+    .strict(); // an unknown key is a typo, never a silently ignored field
+export const WorkflowDefinitionSchema = z
+    .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    initial: z.string().min(1),
+    max_transitions: z.number().int().positive().optional().default(50),
+    model_table: ModelTableObjectSchema.optional(),
+    driver: DriverObjectSchema.optional(),
+    dispatcher: DispatcherObjectSchema.optional(),
+    // Live map: `false` keeps a root session of this workflow with no children (a conversation, not a task) off the map
+    map: z.boolean().optional(),
+    states: z.record(StateDefinitionSchema),
+})
+    .strict();
+/**
+ * A workflow YAML file as written. With `extends: <workflow>` it is a heir:
+ * the base's states plus its own (a state of the same name replaces the
+ * base's whole), and `initial` / `max_transitions` / `description` / `model_table` / `driver` / `dispatcher` from the
+ * heir where it sets them. Without `extends`, `initial` and `states` are required.
+ */
+export const WorkflowFileObjectSchema = z
+    .object({
+    name: z.string().min(1),
+    description: z.string().optional(),
+    extends: z.string().min(1).optional(),
+    initial: z.string().min(1).optional(),
+    max_transitions: z.number().int().positive().optional(),
+    model_table: ModelTableObjectSchema.optional(),
+    driver: DriverObjectSchema.optional(),
+    dispatcher: DispatcherObjectSchema.optional(),
+    map: z.boolean().optional(),
+    states: z.record(StateDefinitionSchema).optional(),
+})
+    .strict();
+export const WorkflowFileSchema = WorkflowFileObjectSchema.refine(f => f.extends !== undefined || (f.initial !== undefined && f.states !== undefined), { message: "a workflow without extends needs initial and states" });
+// --- Tool input schemas ---
+export const START_CWD_DESCRIPTION = "Absolute path of an existing directory the session works in (e.g. a sub-agent's git worktree); " +
+    "exec states without their own cwd run there. Default: the server's cwd";
+export const START_PRIORITY_DESCRIPTION = "Priority level of the session's pool leases: low | normal | high | urgent. Default: the parent session's level, else the project's `.claude/workflows/settings.json` priority, else normal";
+export const WorkflowStartInputSchema = z.object({
+    workflow: z.string().optional().describe('Name of the workflow to start. Defaults to "master"'),
+    actor: z.string().optional().describe("Identity of the agent performing this action"),
+    parent_session_id: z.string().optional().describe("Parent session ID for sub-agent tracking"),
+    cwd: z.string().optional().describe(START_CWD_DESCRIPTION),
+    priority: PriorityLevelSchema.optional().describe(START_PRIORITY_DESCRIPTION),
+});
+export const WorkflowTransitionInputSchema = z.object({
+    session_id: z.string().describe("Session identifier"),
+    transition: z.string().describe("Name of the transition to take"),
+    actor: z.string().optional().describe("Identity of the agent performing this action"),
+});
+/** The one `status` key that is not a context key: the session's current transitions (a context key of this name wins). */
+export const STATUS_ROUTES_KEY = "routes";
+export const STATUS_KEY_DESCRIPTION = "Return only this context key's FULL value (status cuts every value to 200 chars). `routes` (when the context has no such key): the session's transitions at its current state, `a|b|c`";
+export const WorkflowStatusInputSchema = z.object({
+    session_id: z.string().describe("Session identifier"),
+    key: z.string().optional().describe(STATUS_KEY_DESCRIPTION),
+});
+export const WorkflowContextSetInputSchema = z.object({
+    session_id: z.string().describe("Session identifier"),
+    key: z.string().describe("Context key"),
+    value: z.unknown().describe("Context value"),
+    actor: z.string().optional().describe("Identity of the agent performing this action"),
+});
+export const WorkflowModifyInputSchema = z.object({
+    session_id: z.string().describe("Session identifier"),
+    add_state: StateDefinitionSchema.extend({ name: z.string() })
+        .optional()
+        .describe("Add a new state to the current workflow"),
+    add_transition: z
+        .object({
+        from: z.string(),
+        name: z.string(),
+        to: z.string(),
+    })
+        .optional()
+        .describe("Add a transition between states"),
+    remove_transition: z
+        .object({
+        from: z.string(),
+        name: z.string(),
+    })
+        .optional()
+        .describe("Remove a transition"),
+});
+export const WorkflowCreateInputSchema = z.object({
+    name: z.string().min(1).describe("Workflow name (used as filename)"),
+    definition: z
+        .object({
+        description: z.string().optional(),
+        initial: z.string().min(1),
+        max_transitions: z.number().int().positive().optional(),
+        states: z.record(StateDefinitionSchema),
+    })
+        .describe("Full workflow definition"),
+});
+export const WorkflowAbortInputSchema = z.object({
+    session_id: z.string().describe("Session identifier"),
+});
+export const WorkflowListInputSchema = z.object({}).optional();
+export const WorkflowSessionsInputSchema = z.object({}).optional();
+// --- Constants ---
+export const MAX_STACK_DEPTH = 10;
+export const DEFAULT_MAX_TRANSITIONS = 50;
+export const LOCK_STALE_MS = 5000;
+export const KEEP_TERMINAL_SESSIONS = 3;
+/** A suspended session nobody resumed for this many days is abandoned (`WF_SUSPENDED_TTL_DAYS`). */
+export const DEFAULT_SUSPENDED_TTL_DAYS = 7;

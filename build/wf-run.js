@@ -1,0 +1,368 @@
+#!/usr/bin/env node
+// wf-run: run a heavy command under a lease from the machine-wide thread pool.
+//   wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--est-by-threads K:SEC,…] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]
+//   wf-run --status
+//   wf-run --usage [--since 90m|24h|2d]    per label over the leases that ended in the window: n, mean held, mean used, idle and overrun thread-minutes
+// The child gets WF_THREADS = the threads granted (absent for a lock-only or --efficiency run)
+// and WF_PRIORITY = this run's priority. Without --priority it is WF_PRIORITY from the environment
+// (a session exec's), else the project's `.claude/workflows/settings.json` `priority` level, else 0 (--status and --usage read neither);
+// the run keeps WF_PRIORITY_LEVEL so `set_priority` can re-rank it.
+// --est SEC is the run's expected time; without it the pool takes the p90 of the last runs of the
+// same label (its history, recorded when a run exits 0), once it has 3.
+// --fail-open: a pool that cannot be used (unwritable dir, broken config) runs the command
+// without a lease (one stderr line) instead of failing it; busy is still a wait.
+import { spawn } from "node:child_process";
+import os from "node:os";
+import { EX_TEMPFAIL, Pool, describeRequest, describeWait, formatStatus, resolvePoolDir, } from "./pool.js";
+import { curveOf } from "./estimate.js";
+import { DEFAULT_USAGE_WINDOW_MS, formatUsage, parseSince, readUsage, summarizeUsage, } from "./pool-usage.js";
+import { killProcessGroup } from "./process.js";
+import { projectDefaultPriority } from "./project-settings.js";
+import { LOCK_NAME_PATTERN, PRIORITY_LEVELS, PriorityLevelSchema, RESOURCE_THREADS_BUDGET, } from "./types.js";
+const USAGE = "usage: wf-run [--threads N|budget|MIN-MAX [--wait-full SEC]] [--lock NAME]… [--priority P] [--wait-timeout SEC] [--est SEC] [--est-by-threads K:SEC,…] [--label TEXT] [--efficiency] [--fail-open] -- <cmd> [args…]\n" +
+    "       wf-run --status\n" +
+    "       wf-run --usage [--since 90m|24h|2d]";
+const EX_USAGE = 64;
+const EX_NOEXEC = 126;
+const EX_NOTFOUND = 127;
+const LABEL_MAX = 80;
+const FORWARDED = ["SIGINT", "SIGTERM", "SIGHUP"];
+function parseArgs(argv) {
+    let status = false;
+    let usage = false;
+    let sinceMs = DEFAULT_USAGE_WINDOW_MS;
+    let sinceGiven = false;
+    let efficiency = false;
+    let failOpen = false;
+    // Default: 1 thread, none beside a --lock (a lock-only lease).
+    let threads;
+    let minThreads;
+    let waitFullSec;
+    const locks = [];
+    let priority;
+    let waitTimeoutSec;
+    let estSec;
+    let estByThreads;
+    let label;
+    let i = 0;
+    const value = (flag, inline) => {
+        if (inline !== undefined)
+            return inline;
+        const v = argv[++i];
+        if (v === undefined)
+            throw new Error(`${flag} needs a value`);
+        return v;
+    };
+    const integer = (flag, v, min) => {
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < min)
+            throw new Error(`${flag}: expected an integer >= ${min}, got "${v}"`);
+        return n;
+    };
+    const count = (flag, v) => v === RESOURCE_THREADS_BUDGET ? v : integer(flag, v, 1);
+    const seconds = (flag, v) => {
+        const n = Number(v);
+        if (!(n >= 0))
+            throw new Error(`${flag}: expected seconds >= 0, got "${v}"`);
+        return n;
+    };
+    for (; i < argv.length; i++) {
+        const arg = argv[i];
+        if (arg === "--") {
+            i++;
+            break;
+        }
+        if (!arg.startsWith("--"))
+            break;
+        const eq = arg.indexOf("=");
+        const flag = eq < 0 ? arg : arg.slice(0, eq);
+        const inline = eq < 0 ? undefined : arg.slice(eq + 1);
+        switch (flag) {
+            case "--status":
+                status = true;
+                break;
+            case "--usage":
+                usage = true;
+                break;
+            case "--since": {
+                const v = value(flag, inline);
+                const ms = parseSince(v);
+                if (ms === undefined)
+                    throw new Error(`${flag}: expected a window like 90m, 24h or 2d, got "${v}"`);
+                sinceMs = ms;
+                sinceGiven = true;
+                break;
+            }
+            case "--efficiency":
+                efficiency = true;
+                break;
+            case "--fail-open":
+                failOpen = true;
+                break;
+            case "--threads": {
+                const v = value(flag, inline);
+                const range = /^([^-]+)-([^-]+)$/.exec(v);
+                threads = count(flag, range ? range[2] : v);
+                minThreads = range ? integer(flag, range[1], 1) : undefined;
+                if (minThreads !== undefined && typeof threads === "number" && minThreads > threads)
+                    throw new Error(`${flag}: the min ${minThreads} exceeds the max ${threads}`);
+                break;
+            }
+            case "--wait-full":
+                waitFullSec = seconds(flag, value(flag, inline));
+                break;
+            case "--lock": {
+                const v = value(flag, inline);
+                if (!LOCK_NAME_PATTERN.test(v))
+                    throw new Error(`${flag}: a lock name is one word without whitespace, got "${v}"`);
+                locks.push(v);
+                break;
+            }
+            case "--priority":
+                priority = integer(flag, value(flag, inline), -Infinity);
+                break;
+            case "--label":
+                label = value(flag, inline);
+                break;
+            case "--wait-timeout":
+                waitTimeoutSec = seconds(flag, value(flag, inline));
+                break;
+            case "--est":
+                estSec = seconds(flag, value(flag, inline));
+                if (estSec === 0)
+                    throw new Error(`${flag}: expected seconds > 0`);
+                break;
+            case "--est-by-threads": {
+                estByThreads = new Map();
+                for (const pair of value(flag, inline).split(",")) {
+                    const m = /^(\d+):(.+)$/.exec(pair);
+                    const sec = m ? Number(m[2]) : NaN;
+                    if (!m || !(sec > 0) || !Number.isFinite(sec) || Number(m[1]) < 1)
+                        throw new Error(`${flag}: expected THREADS:SEC pairs, got "${pair}"`);
+                    estByThreads.set(Number(m[1]), sec);
+                }
+                break;
+            }
+            default:
+                throw new Error(`unknown option ${flag}`);
+        }
+    }
+    const command = argv.slice(i);
+    if (sinceGiven && !usage)
+        throw new Error("--since needs --usage");
+    if (!status && !usage && command.length === 0)
+        throw new Error("no command given");
+    if (waitFullSec !== undefined && minThreads === undefined)
+        throw new Error("--wait-full needs --threads MIN-MAX");
+    if (estByThreads !== undefined && minThreads === undefined)
+        throw new Error("--est-by-threads needs --threads MIN-MAX");
+    // A session exec's own priority (its level's plus its step's) is the default; outside a session
+    // the project's settings level is. --status and --usage queue nothing, so they read neither.
+    const queues = !status && !usage;
+    const inherited = priority === undefined && queues
+        ? (fromEnvironment() ?? fromProjectSettings(failOpen))
+        : undefined;
+    return {
+        status,
+        usage,
+        sinceMs,
+        threads: threads ?? (locks.length > 0 ? 0 : 1),
+        minThreads,
+        waitFullSec,
+        locks,
+        priority: priority ?? inherited?.priority ?? 0,
+        level: inherited?.level,
+        waitTimeoutSec,
+        estSec,
+        ...(estByThreads ? { estByThreads } : {}),
+        label,
+        efficiency,
+        failOpen,
+        command,
+    };
+}
+/** The level of the cwd project's settings file, as a priority and its level; a bad file is an error, or under --fail-open one stderr line and no default. */
+function fromProjectSettings(failOpen) {
+    let level;
+    try {
+        level = projectDefaultPriority(process.cwd());
+    }
+    catch (err) {
+        if (!failOpen)
+            throw err;
+        process.stderr.write(`wf-run: project settings ignored — ${err.message}\n`);
+    }
+    return level === undefined ? undefined : { priority: PRIORITY_LEVELS[level], level };
+}
+/** WF_PRIORITY (and WF_PRIORITY_LEVEL) of the environment; a malformed value counts as absent. */
+function fromEnvironment() {
+    const priority = Number(process.env.WF_PRIORITY);
+    if (process.env.WF_PRIORITY === undefined ||
+        process.env.WF_PRIORITY === "" ||
+        !Number.isInteger(priority))
+        return undefined;
+    const level = PriorityLevelSchema.safeParse(process.env.WF_PRIORITY_LEVEL);
+    return { priority, ...(level.success ? { level: level.data } : {}) };
+}
+/**
+ * Run the child in its own process group, forwarding signals to the group;
+ * resolves its exit code. `onSpawn` gets the group id once the child exists.
+ * WF_THREADS describes this run's own lease: `threads` when it has threads,
+ * never one inherited from an outer lease; WF_PRIORITY is this run's priority.
+ */
+function run(cmd, args, opts, threads, onSpawn) {
+    const { WF_THREADS: _threads, WF_PRIORITY: _priority, WF_PRIORITY_LEVEL: _level, ...env } = process.env;
+    if (threads !== undefined && threads > 0)
+        env.WF_THREADS = String(threads);
+    env.WF_PRIORITY = String(opts.priority);
+    if (opts.level)
+        env.WF_PRIORITY_LEVEL = opts.level;
+    // ast-grep-ignore: promise-without-reject -- the executor is synchronous, so a throw in it (spawn) rejects; the child's error/exit always settle
+    return new Promise(resolve => {
+        const child = spawn(cmd, args, { stdio: "inherit", detached: true, env });
+        if (child.pid && onSpawn) {
+            onSpawn(child.pid).catch(err => process.stderr.write(`wf-run: could not record the process group: ${err.message}\n`));
+        }
+        const forward = (signal) => {
+            if (child.pid)
+                killProcessGroup(child.pid, signal);
+        };
+        for (const s of FORWARDED)
+            process.on(s, forward);
+        const done = (code) => {
+            for (const s of FORWARDED)
+                process.off(s, forward);
+            resolve(code);
+        };
+        child.on("error", err => {
+            process.stderr.write(`wf-run: ${cmd}: ${err.message}\n`);
+            done(err.code === "ENOENT" ? EX_NOTFOUND : EX_NOEXEC);
+        });
+        child.on("exit", (code, signal) => done(code ?? 128 + (signal ? os.constants.signals[signal] : 0)));
+    });
+}
+async function main(argv) {
+    let opts;
+    try {
+        opts = parseArgs(argv);
+    }
+    catch (err) {
+        process.stderr.write(`wf-run: ${err.message}\n${USAGE}\n`);
+        return EX_USAGE;
+    }
+    const pool = new Pool(resolvePoolDir());
+    if (opts.status) {
+        process.stdout.write(formatStatus(await pool.measuredStatus(), pool.dir) + "\n");
+        return 0;
+    }
+    if (opts.usage) {
+        const rows = summarizeUsage(readUsage(pool.dir), Date.now(), opts.sinceMs);
+        process.stdout.write(formatUsage(rows, opts.sinceMs, pool.dir) + "\n");
+        return 0;
+    }
+    let [cmd, ...args] = opts.command;
+    // Background QoS: efficiency cores, lowest priority — outside the budget, but its locks still hold.
+    const efficient = opts.efficiency && process.platform === "darwin";
+    if (opts.efficiency && !efficient)
+        process.stderr.write(`wf-run: --efficiency needs macOS (taskpolicy); running through the pool instead\n`);
+    if (efficient) {
+        args = ["-b", cmd, ...args];
+        cmd = "taskpolicy";
+        if (opts.locks.length === 0)
+            return run(cmd, args, opts);
+    }
+    // A signal while waiting withdraws from the queue and exits as that signal would.
+    const ac = new AbortController();
+    let caught;
+    const onSignal = (signal) => {
+        caught = signal;
+        ac.abort();
+    };
+    for (const s of FORWARDED)
+        process.on(s, onSignal);
+    let threads = 0;
+    let minThreads;
+    let result;
+    try {
+        threads = efficient
+            ? 0
+            : opts.threads === RESOURCE_THREADS_BUDGET
+                ? pool.config().budget
+                : opts.threads;
+        // A max the budget clamps below the min still runs: the min clamps with it.
+        minThreads =
+            efficient || opts.minThreads === undefined ? undefined : Math.min(opts.minThreads, threads);
+        // the sizes' times for the range the pool will use; a range the points cannot cover has none
+        const known = new Map([...(opts.estByThreads ?? [])].map(([k, sec]) => [k, sec * 1000]));
+        const estCurve = minThreads === undefined || known.size === 0
+            ? undefined
+            : curveOf(known, minThreads, threads);
+        // points that cannot cover the range keep the wait_full pick; the pool still reads the lease's end off them
+        const partial = minThreads !== undefined && known.size > 0 && !estCurve;
+        if (partial)
+            process.stderr.write("wf-run: --est-by-threads names fewer than two sizes and not every size of the range — no estimate for the size pick (wait_full decides); the lease's end is read off the named sizes\n");
+        result = await pool.acquire({
+            threads,
+            minThreads,
+            waitFullMs: minThreads === undefined || opts.waitFullSec === undefined
+                ? undefined
+                : opts.waitFullSec * 1000,
+            locks: opts.locks,
+            priority: opts.priority,
+            level: opts.level,
+            label: opts.label ?? opts.command.join(" ").slice(0, LABEL_MAX),
+            cwd: process.cwd(),
+            sessionId: process.env.WF_SESSION_ID,
+            // a SIGKILLed wf-run cannot release: the reaper kills its detached child's group instead
+            ownsGroup: true,
+            ...(opts.estSec !== undefined ? { estMs: opts.estSec * 1000 } : {}),
+            ...(estCurve ? { estCurve } : partial ? { estCurve: Object.fromEntries(known) } : {}),
+        }, {
+            waitTimeoutMs: opts.waitTimeoutSec === undefined ? undefined : opts.waitTimeoutSec * 1000,
+            signal: ac.signal,
+            onProgress: (self, view) => process.stderr.write(describeWait(self, view) + "\n"),
+        });
+    }
+    catch (err) {
+        if (!opts.failOpen)
+            throw err;
+        // The pool, not the command, failed: run it unleased with the smallest share it asked for.
+        const share = efficient
+            ? undefined
+            : (opts.minThreads ?? (typeof opts.threads === "number" ? opts.threads : 1));
+        process.stderr.write(`wf-run: pool unavailable (${err.message}) — running without a lease\n`);
+        return run(cmd, args, opts, share);
+    }
+    finally {
+        for (const s of FORWARDED)
+            process.off(s, onSignal);
+    }
+    if (result.status !== "granted") {
+        if (result.status === "aborted")
+            return 128 + (caught ? os.constants.signals[caught] : 0);
+        const { view } = result;
+        process.stderr.write(`wf-run: busy — ${describeRequest({ threads, min_threads: minThreads, locks: opts.locks }, view.budget)} not free within ${opts.waitTimeoutSec}s ` +
+            `(held ${view.held}/${view.budget}, external ${view.external.toFixed(1)})\n`);
+        return EX_TEMPFAIL;
+    }
+    const { lease } = result;
+    // A SIGKILLed wf-run cannot release: the next pool pass kills the child's group, then frees the lease.
+    let code = 1;
+    try {
+        code = await run(cmd, args, opts, lease.threads, pgid => lease.attach(pgid));
+        return code;
+    }
+    finally {
+        await lease.release({ failed: code !== 0 }).catch((err) => {
+            if (!opts.failOpen)
+                throw err;
+            process.stderr.write(`wf-run: could not release the lease: ${err.message}\n`);
+        });
+    }
+}
+main(process.argv.slice(2)).then(code => {
+    process.exitCode = code;
+}, err => {
+    process.stderr.write(`wf-run: ${err.message}\n`);
+    process.exitCode = 1;
+});
