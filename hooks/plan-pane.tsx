@@ -550,8 +550,8 @@ function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, now: n
   return out
 }
 
-/** The Landed tree's rows, newest first, and the branch they were read from: the commits of the land branch carrying a `Slice:` trailer, then the ledger's landed task runs of the window that git does not show (each slice once). */
-async function lands($: any, queueFile: string, ledger: Ledger, header: string | undefined, own: Set<string>, now: number): Promise<{ lands: Land[]; branch: string }> {
+/** The Landed tree's rows, newest first, and the branch they were read from: the commits of the land branch carrying a `Slice:` trailer, then the ledger's landed task runs of the window that git does not show (each slice once). A slice whose queue line is still `running` has no row: its merge commit exists before the ledger and the mark, so the row would draw `?` figures and the task would leave the running group early. */
+async function lands($: any, queueFile: string, ledger: Ledger, header: string | undefined, own: Set<string>, running: Set<string>, now: number): Promise<{ lands: Land[]; branch: string }> {
   const repo = repoOf(queueFile)
   if (repo === queueFile) return { lands: [], branch: 'main' }
   const branch = await landBranchOf($, repo, header)
@@ -564,14 +564,14 @@ async function lands($: any, queueFile: string, ledger: Ledger, header: string |
   const fromGit: Land[] = String(run.stdout)
     .split('\n')
     .map(l => l.split('\t'))
-    .filter(p => p.length >= 3 && (p[2] ?? '').trim() !== '')
+    .filter(p => p.length >= 3 && (p[2] ?? '').trim() !== '' && !running.has((p[2] ?? '').trim()))
     .map(p => {
       const slice = (p[2] ?? '').trim()
       const { start, difficulty, usd, usdFloor } = landFigures(ledger, slice)
       const at = p[1] ?? ''
       return { sha: p[0] ?? '', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) }
     })
-  const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, now)
+  const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, now).filter(l => !running.has(l.slice))
   return { lands: extra.length === 0 ? fromGit : [...fromGit, ...extra].sort((a, b) => landMs(b.at, now) - landMs(a.at, now)), branch }
 }
 
@@ -728,7 +728,7 @@ async function build($: any): Promise<Snapshot> {
     }),
     ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(failedRecent, failedTotals) } : {}),
   }
-  const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), now) : { lands: [], branch: 'main' }
+  const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), new Set(queue.running.map(l => l.id)), now) : { lands: [], branch: 'main' }
   const landed = read.lands
   const recent = landed.filter(l => landMs(l.at, now) > now - 24 * 3600 * 1000).length
   const landedSum = landedUsd(landed)

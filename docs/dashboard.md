@@ -31,6 +31,7 @@ The pane's parts:
     - `parent $P` is the top-level Claude Code session's own spend recorded in the same 14 days, of the queue repo's own conversations only (ledger `parent_spend`, below). Its `project` is matched to the repo by Claude Code's project directory name.
     - `S%` is the parent's share of `$landed`, absent without a landed sum.
     - A title longer than the pane is cut with `…`.
+  - A slice whose queue line is still `running` has no Landed row, whatever git or the ledger show: the land's merge commit exists before the ledger entry and the queue mark, and a row drawn then would read `? —` while the task left the running group early. The row appears when the line is marked done.
   - The Landed section is a tree:
     - One foldable `▦ DD.MM (n) <day spend>` row per day. Today is open, the older days are folded until a click; a day the person folded or opened stays so past midnight.
     - Under it, one `▰▰▱▱▱ ◆ $cost start-end sha id` row per land.
