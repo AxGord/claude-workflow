@@ -1017,6 +1017,8 @@ export class Pool {
     try {
       for (;;) {
         if (opts.signal?.aborted) return await this._giveUp(self, "aborted", arrived);
+        // The clock before the pass: the pass judged the waiter at some instant after it.
+        const beforePass = Date.now();
         const view = await this._pass(self);
         if (view.leases.some(e => e.id === self.id)) return this._granted(self, arrived, view);
         const now = Date.now();
@@ -1030,7 +1032,10 @@ export class Pool {
         watcher ??= this._watch(() => wake?.());
         // A flexible waiter's window ending changes what it accepts: pass again right then.
         const until = view.waiting.find(e => e.id === self.id)?.full_until;
-        const window = until !== undefined && until > now ? until - now : Infinity;
+        // A window that ended after the pass began may have been judged still open: pass again at once (the next
+        // pass starts after it, so this cannot repeat); one over before it began was judged over: nothing to wait for.
+        const window =
+          until === undefined || until <= beforePass ? Infinity : Math.max(0, until - now);
         await sleep(Math.min(opts.pollMs ?? DEFAULT_POLL_MS, left, window), opts.signal, w => {
           wake = w;
         });
