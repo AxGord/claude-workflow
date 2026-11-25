@@ -96,6 +96,10 @@ then needs nothing.
 - **Stale sessions** the prompt lists: a session with an agent → SendMessage that agent asking where it
   stands; no answer or gone → for a task session, the fresh driver of the bullet above. A stale task session
   WITHOUT an agent is not yours to advance: hand back `NEEDS-PARENT task=<ID> session=<P> reason=stale, no agent see=state collect`.
+  A task session stale past the queue header's `stale_task_after: N` (minutes, default 60) comes with a ready
+  `NEEDS-PARENT task=<ID> session=<P> reason=stale … state=<s> agent=<id|none> see=state collect` line in the list:
+  hand it back once per session, verbatim (with ` driver=` and ` routes=` appended as for any NEEDS-PARENT), after the
+  ping above, whether or not the ping was answered; do not repeat it on later wakes unless the idle time doubled.
 - **Routing**: `slot_free` only on a LANDED or CLOSED line; `refill` only on main's `lines added`. `stalled` only when `tasks` is empty AND the
   last pick admitted nothing. `stop` only on main's word. Nothing ended → no transition; end the turn.
 - **A task that ended `stopped`**: the prompt's "a task session ended `stopped` → `stop`" is for a dispatcher that

@@ -252,7 +252,9 @@ states:
       agent is gone → spawn a fresh agent on the SAME session with the first one's prompt (it continues
       from `status`: the session holds the step) and `link_agent` it — for a driver that prompt is
       `status({session_id: P, key: "driver_call"})`. A stale task session P without an
-      agent is yours: `status(P)` and advance it.
+      agent is yours: `status(P)` and advance it. A `NEEDS-PARENT task=… reason=stale …` line in that list is a
+      task session stale past the queue header's `stale_task_after: N` (minutes, default 60): treat it as a
+      NEEDS-PARENT line of that task (above) once — look at its agent and state, then answer or tell the user.
 
       Route this session:
       - a task session reached its terminal (`done` / `closed` / `released`) → update `tasks`, then

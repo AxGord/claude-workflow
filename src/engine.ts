@@ -48,7 +48,7 @@ import {
   stagesSpawned,
 } from "./model-table.js";
 import { render } from "./template.js";
-import { markQueue } from "./queue.js";
+import { markQueue, readQueue, staleTaskAfter, STALE_TASK_AFTER_DEFAULT_MIN } from "./queue.js";
 import {
   DISPATCHER_AFTER_KEY,
   DISPATCHER_AGENT_KEY,
@@ -65,7 +65,14 @@ import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, takeOver, where } from "./takeover.js";
 import { secondRootRefusal } from "./session-scope.js";
 import { actionStateRefusal } from "./trust.js";
-import { activeParents, staleNote, staleness, unansweredAskLine, type Staleness } from "./stale.js";
+import {
+  activeParents,
+  formatSeconds,
+  staleNote,
+  staleness,
+  unansweredAskLine,
+  type Staleness,
+} from "./stale.js";
 import { openAsk } from "./event-fold.js";
 
 /** Template vars with an action's result laid over them; the lazy getters (`stale_sessions`) carried along. */
@@ -814,14 +821,32 @@ export class Engine {
       .filter((s): s is SessionState => !!s && s.stack.length > 0);
     const parents = activeParents(tree);
     const lines: string[] = [];
+    const limit = this._staleTaskLimit(sessionId);
     for (const s of tree) {
       const st = this.staleness(s, parents, now);
       if (!st) continue;
       const of = s.parent_session_id ? `, child of ${s.parent_session_id}` : "";
       const agent = s.agent_id ? `, agent ${s.agent_id}` : "";
       lines.push(`STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}`);
+      if (descendantsOnly && typeof s.context.task === "string" && st.idle_s >= limit * 60) {
+        const state = s.stack[s.active_frame].current_state;
+        lines.push(
+          `NEEDS-PARENT task=${s.context.task} session=${s.session_id} reason=stale ${formatSeconds(st.idle_s)}, no engine call since ${st.since} state=${state} agent=${s.agent_id ?? "none"} see=state collect`,
+        );
+      }
     }
     return lines;
+  }
+
+  /** Minutes a task session may stand STALE before it is raised: the dispatcher's queue header key, else the default. */
+  private _staleTaskLimit(sessionId: string): number {
+    const file = this._storage.read(sessionId)?.context.queue_file;
+    if (typeof file !== "string") return STALE_TASK_AFTER_DEFAULT_MIN;
+    try {
+      return staleTaskAfter(readQueue(file)) ?? STALE_TASK_AFTER_DEFAULT_MIN;
+    } catch {
+      return STALE_TASK_AFTER_DEFAULT_MIN;
+    }
   }
 
   /**

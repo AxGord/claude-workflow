@@ -1232,6 +1232,23 @@ export function lessonsEvery(queue: Queue): number | undefined {
   return Number(raw);
 }
 
+/** Minutes a running task session may stand STALE before the dispatcher's `collect` raises it as a NEEDS-PARENT line. */
+export const STALE_TASK_AFTER_DEFAULT_MIN = 60;
+
+/**
+ * The header's `stale_task_after: N` (a whole number of minutes ≥ 1): how long a task session may stay STALE
+ * before `collect` surfaces it as a NEEDS-PARENT line; absent = `STALE_TASK_AFTER_DEFAULT_MIN`.
+ */
+export function staleTaskAfter(queue: Queue): number | undefined {
+  const raw = queue.header.stale_task_after?.trim();
+  if (raw === undefined || raw === "") return undefined;
+  if (!/^[1-9]\d*$/.test(raw))
+    throw new QueueError(
+      `${queue.file}: stale_task_after: "${raw}" is not a whole number of minutes (1 or more)`,
+    );
+  return Number(raw);
+}
+
 /**
  * Pick under the lock and mark every admitted task running; `dryRun` reads without the lock or a write.
  * With the header's `archive_after_days: N`, the done / failed lines that ended more than N days ago
@@ -1242,6 +1259,7 @@ export async function pickQueue(
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<PickResult> {
   lessonsEvery(readQueue(file));
+  staleTaskAfter(readQueue(file));
   if (opts.dryRun === true) return { ...planPick(readQueue(file)), dryRun: true };
   return withQueueLock(file, () => {
     const days = archiveAfterDays(readQueue(file));

@@ -526,6 +526,7 @@ dispatcher:
 | Message | When | The main conversation's answer |
 |---|---|---|
 | a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task for over 10 minutes) | `SendMessage` to the `driver=` id, `task=<ID>: <route or decision>`: directly, never through the dispatcher; a route only from `routes=` |
+| `NEEDS-PARENT task=<ID> session=<P> reason=stale …` | a task session stale for `stale_task_after` minutes (queue header, whole number of 1 or more, default 60); `collect` lists it after the `STALE:` line, handed back once per session | `status` of P, answer its driver, or tell the user |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
 

@@ -1895,6 +1895,25 @@ describe("queue archive", () => {
       }
     });
   });
+  describe("stale_task_after (ENG-DISPATCHER-SURFACES-STALE-TASKS)", () => {
+    const withKey = (key: string): string => {
+      const file = yamlQueue("  - id: A\n    text: x\n    difficulty: 3\n");
+      fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("tasks:", `${key}\ntasks:`));
+      return file;
+    };
+    it("a value that is not a whole number of minutes refuses the pick", async () => {
+      for (const bad of ["often", "0", "-2", "2.5"]) {
+        const file = withKey(`stale_task_after: ${bad}`);
+        await expect(pickQueue(file)).rejects.toThrow("stale_task_after");
+        await expect(pickQueue(file, { dryRun: true })).rejects.toThrow("stale_task_after");
+      }
+    });
+    it("a whole number picks as before", async () => {
+      expect((await pickQueue(withKey("stale_task_after: 30"))).admitted.map(a => a.id)).toEqual([
+        "A",
+      ]);
+    });
+  });
   it("archive then pick admits a line whose after: is archived", async () => {
     const file = yamlQueue(FILE);
     const r = await archiveQueue(file, { olderThanDays: 30, now: NOW });
