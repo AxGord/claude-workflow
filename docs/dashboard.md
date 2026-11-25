@@ -441,7 +441,7 @@ One style for every view (sessions, session detail, workflow graphs, plan).
 | `POST` | `/api/session/:id/abandon` | Abandon a session |
 | `GET` | `/api/workflows` | List all workflow definitions, each with its `stations` (the live map's columns), `map: false` where set and, for a task workflow, its `driver` model and effort |
 | `GET` | `/api/queues` | Queue files named by sessions' `context.queue_file` |
-| `GET` | `/api/queue?file=<path>` | Every line of that queue with the picker's reason per pending line, its `kind` and the kind's glyph `mark` |
+| `GET` | `/api/queue?file=<path>` | Every line of that queue with the picker's reason per pending line, its `kind`, the kind's glyph `mark` and the workflow a pick starts for it (`workflow`, absent = the dispatcher's default) |
 | `GET` | `/api/ledger-rows?tasks=<id,id>` | The whole ledger's cost rows (JSON lines: `task`, `session_id`, `parent_session_id`, `spend.usd` with its `usd_partial` mark, `parent_spend.usd`) of those queue lines; the plan pane's Failed header sums them, since the plugin API cannot read a ledger over 4 MiB |
 
 Notes on the event log:

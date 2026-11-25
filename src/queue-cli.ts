@@ -242,7 +242,7 @@ async function main(args: string[]): Promise<number> {
       { create: sel.file === undefined },
     );
     process.stdout.write(
-      `${r.id}: added at line ${r.lineNo}${r.created ? `; the queue did not exist — created ${file}` : ""}\n`,
+      `${r.id}: added at line ${r.lineNo}${r.created ? `; the queue did not exist — created ${file}` : ""}${r.runs !== undefined ? `; ${r.runs}` : ""}\n`,
     );
     for (const w of r.warnings ?? []) process.stderr.write(`warning: ${w}\n`);
     return 0;
@@ -264,6 +264,7 @@ async function main(args: string[]): Promise<number> {
       o.get("--from")?.[0],
     );
     process.stdout.write(`${r.task}\n`);
+    if (r.runs !== undefined) process.stderr.write(`${r.runs}\n`);
     for (const w of r.warnings ?? []) process.stderr.write(`warning: ${w}\n`);
     return 0;
   }

@@ -1426,7 +1426,7 @@ export function registerTools(
         "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
         "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of its own repo (another repo is unaffected), and while it waits only for running lines of its repo, no later line of that repo is admitted (`held for exclusive <ID>`; header `exclusive_hold: no` turns that off); `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
         "header `overlap: files` = only file entries conflict, a directory or glob is a hint); sets each admitted task running under the queue's lock, so two calls never admit one task. `backlog` tasks are never admitted. Returns id, " +
-        "model, effort, repo (absolute), workflow (when set), difficulty (1..10, when set: " +
+        "model, effort, repo (absolute), workflow (when set: the line's own, else `research-task` for a research line whose repo or queue project has it), difficulty (1..10, when set: " +
         "the task workflow's model_table maps it to model/effort), kind (bug|feature|research; feature when the task has none), sweep (when set: the line's command, data for the project's workflow, no pick rule reads it) and text per admitted task. `batch_size: 0` = paused: nothing is admitted. " +
         "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
       inputSchema: z
@@ -1529,7 +1529,7 @@ export function registerTools(
         "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, kind: bug|feature|research (absent = feature; any other value is refused), priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], owner, sweep, on_end_tell_parent (one line: the step the parent owes when the line ends; the dispatcher hands it back once as `OWED task=<ID> status=<done|failed> sha=<sha>: <text>`), exclusive, breaking, parked, text, notes: [{from, date, text}]}`; `ended` (the day a line reached done or failed) is queue_mark's: a new task cannot set it. " +
         "The line records where it was written: `base` (HEAD of the line's repo — `repo:` or the queue's project; left out when that is not a git repo) and `text_hash` (short sha256 of text + touches + owner (+ sweep when set)), both set by queue_add / queue_edit only; `ended` (queue_mark's) and `restored` (the archive restore's) are never set on a new line. " +
         "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
-        "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10 (REQUIRED on a pending line: `difficulty: <1-10> is required on a pending line`; backlog, `parked` and `model: —` lines need none), a `kind:` of bug|feature|research. Goes after `after_id`, before `before_id`, " +
+        "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10 (REQUIRED on a pending line: `difficulty: <1-10> is required on a pending line`; backlog, `parked` and `model: —` lines need none), a `kind:` of bug|feature|research (a research line without `workflow:` runs `research-task` when its repo or the queue's project has one; the answer says `runs workflow <name>` and warns on a research line with a non-research workflow). Goes after `after_id`, before `before_id`, " +
         "else last. A queue addressed by `queue` or by default that does not exist yet is CREATED (`batch_size: 1`, `tasks: []`) and the answer says so (a full `file` path that does not exist is an error, never created).",
       inputSchema: z
         .object({
@@ -1559,7 +1559,7 @@ export function registerTools(
           content: [
             {
               type: "text",
-              text: `${r.id}: added at line ${r.lineNo}${made}${(r.warnings ?? []).map(w => `\nwarning: ${w}`).join("")}${refillHint(file)}`,
+              text: `${r.id}: added at line ${r.lineNo}${made}${r.runs !== undefined ? `; ${r.runs}` : ""}${(r.warnings ?? []).map(w => `\nwarning: ${w}`).join("")}${refillHint(file)}`,
             },
           ],
         };
@@ -1606,6 +1606,7 @@ export function registerTools(
               type: "text",
               text:
                 r.task +
+                (r.runs !== undefined ? `\n${r.runs}` : "") +
                 (r.warnings ?? []).map(w => `\nwarning: ${w}`).join("") +
                 refillHint(resolveQueueFile(args)),
             },

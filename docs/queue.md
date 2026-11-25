@@ -110,8 +110,10 @@ A pick fills the window (`batch_size` minus the running tasks) in `priority:` or
     - Any other value refuses the pick (exit 2) while marks, edits and `queue_header` still work;
 - name a `repo:` that resolves (absolute path; a name = the `base:` repo of that basename, else the directory of that name beside the queue's project; none = the queue's project);
 - name, in `workflow:` if any, one word: the task's own task workflow (default: the dispatcher's `task_workflow`). It is started with the task's repo as `cwd`, so it may live in that repo's `.claude/workflows/` — one queue can mix tasks of several repos, each run by its repo's procedure;
+  - a `kind: research` line with none runs `research-task` when `.claude/workflows/research-task.yaml` (or `.yml`) exists in its repo or in the queue's project;
+  - `queue_add` / `queue_edit` say `runs workflow <name>` for it, and warn when a research line names a workflow with no `research` in its name, or when neither has a `research-task`;
 - carry, in `difficulty:` if any, a whole number 1..10 (`-` = none): what the task workflow's `model_table` turns into the agents' model and effort (below);
-- carry, in `kind:` if any, `bug`, `feature` or `research` (`-` or absent = `feature`): the task's type. The pick only reports it (`queue_next`'s admitted line, the exec form's last column); a task workflow reads it as `kind` the way it reads `difficulty`.
+- carry, in `kind:` if any, `bug`, `feature` or `research` (`-` or absent = `feature`): the task's type. The pick reports it (`queue_next`'s admitted line, the exec form's last column) and, for `research`, chooses the workflow (above); a task workflow reads it as `kind` the way it reads `difficulty`.
 
 Each admitted task is set `running` under the queue's lock (`<file>.lock`, an atomic mkdir), so two picks — two tools, two processes — never admit one task. `batch_size: 0` is the pause: nothing new is admitted, running tasks finish; the pick answers `window 0 — paused: <the reason>`.
 
@@ -175,7 +177,7 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
 
 **From an exec**
 
-- `"$WF_PLUGIN_ROOT/scripts/wf-queue" [<file>|--queue NAME] [--dry-run] [--explain|--explain-all]` (also the `wf-queue` bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty<TAB>kind` per admitted task, and the summary on stderr. `-` = no `workflow:` / `difficulty:`; `kind` is `feature` when the line has none.
+- `"$WF_PLUGIN_ROOT/scripts/wf-queue" [<file>|--queue NAME] [--dry-run] [--explain|--explain-all]` (also the `wf-queue` bin) prints `ID<TAB>model<TAB>effort<TAB>repo<TAB>workflow<TAB>difficulty<TAB>kind` per admitted task, and the summary on stderr. `-` = no workflow (the dispatcher's `task_workflow`) / no `difficulty:`; `workflow` is the line's own, or `research-task` for a research line of a repo that has it; `kind` is `feature` when the line has none.
 - Exit codes:
   - 0: admitted;
   - 10: none, but running tasks run;

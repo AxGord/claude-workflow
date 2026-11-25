@@ -18,7 +18,7 @@
 // `touches:` to its FILE entries (a regular file under the task's repo, or a path that does not
 // exist whose last segment holds a `.`): a directory or glob entry is a hint that conflicts with
 // nothing. A bad `overlap:` refuses the pick only; marks and edits still work. `workflow:` names the
-// task's own task workflow (the dispatcher's default otherwise); `difficulty:` (1..10) is what a
+// task's own task workflow (the dispatcher's default otherwise; a `kind: research` line without one runs the repo's `research-task` when it has one); `difficulty:` (1..10) is what a
 // task workflow's `model_table` maps to model/effort; `kind:` (`bug|feature|research`, absent = feature) is the
 // task's type, reported by the pick. `backlog` tasks are never picked. A write that leaves a pending
 // line (not parked, not `model: —`) with no `difficulty:` is refused; lines already without one stay.
@@ -418,6 +418,59 @@ function workflowOf(line: QueueLine): string | undefined | null {
   return ID_RE.test(v) ? v : null;
 }
 
+/** The workflow a `kind: research` line runs when it names none (the project's own, when it has it). */
+export const RESEARCH_WORKFLOW = "research-task";
+
+/**
+ * True when a session started in `repo` finds `research-task`: in the repo's own `.claude/workflows/`
+ * or in the queue's project, the server tier every session also loads (`.yaml` or `.yml`).
+ */
+function hasResearchWorkflow(queue: Queue, repo: string): boolean {
+  const roots = [repo, projectRoot(path.dirname(queue.file))];
+  return roots.some(root =>
+    [".yaml", ".yml"].some(ext =>
+      fs.existsSync(path.join(root, ".claude", "workflows", `${RESEARCH_WORKFLOW}${ext}`)),
+    ),
+  );
+}
+
+/**
+ * The workflow a pick starts for `line` in `repo`: its own `workflow:`; else, for `kind: research`, the
+ * repo's (or the queue project's) `research-task` when it has one; else undefined (the dispatcher's `task_workflow`).
+ */
+function effectiveWorkflow(queue: Queue, line: QueueLine, repo: string): string | undefined {
+  const own = workflowOf(line) ?? undefined;
+  if (own !== undefined) return own;
+  return kindOf(line) === "research" && hasResearchWorkflow(queue, repo)
+    ? RESEARCH_WORKFLOW
+    : undefined;
+}
+
+/** The workflow a line will run, as an answer says it: the line's own, the research pick, else the project default. */
+function runsNote(queue: Queue, line: QueueLine): string[] {
+  const repo = resolveRepo(queue, line);
+  if (repo === null || kindOf(line) === null || workflowOf(line) === null) return [];
+  const wf = effectiveWorkflow(queue, line, repo);
+  if (wf !== undefined) return [`runs workflow ${wf}`];
+  return kindOf(line) === "research" ? ["runs the project's default task workflow"] : [];
+}
+
+/** Warnings for a `kind: research` line whose workflow is not a research one. */
+function kindWorkflowWarnings(queue: Queue, line: QueueLine): string[] {
+  if (kindOf(line) !== "research") return [];
+  const own = workflowOf(line);
+  if (typeof own === "string" && !own.includes("research"))
+    return [
+      `${line.id} is kind: research but runs workflow ${own}: the pane draws ${kindMark({ kind: "research" })} and the line runs ${own}; a research line without workflow: runs ${RESEARCH_WORKFLOW}`,
+    ];
+  const repo = resolveRepo(queue, line);
+  if (own === undefined && repo !== null && !hasResearchWorkflow(queue, repo))
+    return [
+      `${line.id} is kind: research but neither ${repo} nor the queue's project has .claude/workflows/${RESEARCH_WORKFLOW}.yaml: it runs the project's default task workflow`,
+    ];
+  return [];
+}
+
 function ownerOf(line: QueueLine): string | null {
   const v = line.meta.owner;
   if (v === undefined) return null;
@@ -811,7 +864,7 @@ export function planPick(
       }
     }
     if (why === null && repo !== null) {
-      const workflow = workflowOf(l) ?? undefined;
+      const workflow = effectiveWorkflow(queue, l, repo);
       const difficulty = difficultyOf(l) ?? undefined;
       const priority = priorityOf(l);
       const kind = kindOf(l) ?? "feature";
@@ -867,6 +920,8 @@ export interface QueueLineView {
   readonly kind: Kind;
   /** The kind's glyph (`kindMark`), the one the dashboard's views and the plan pane draw after the difficulty bar. */
   readonly mark: string;
+  /** The workflow a pick starts for the line: its own `workflow:`, or `research-task` for a research line of a project that has it. Absent = the dispatcher's default. */
+  readonly workflow?: string;
   readonly model?: string;
   readonly after?: string;
   /** The queue ids `after` names, as the picker resolves them. */
@@ -952,6 +1007,14 @@ function unblockedByRunning(
   return new Map(after.admitted.map((a, i) => [a.id, i]));
 }
 
+/** `effectiveWorkflow` of a line whose repo and workflow read; undefined otherwise. */
+function workflowView(queue: Queue, line: QueueLine): string | undefined {
+  const repo = resolveRepo(queue, line);
+  return repo === null || workflowOf(line) === null
+    ? undefined
+    : effectiveWorkflow(queue, line, repo);
+}
+
 /** Every line of a queue with, for each pending one, the picker's reason evaluated without the window. */
 export function describeQueue(queue: Queue): {
   readonly file: string;
@@ -987,6 +1050,7 @@ export function describeQueue(queue: Queue): {
       ...(l.meta.difficulty !== undefined ? { difficulty: l.meta.difficulty } : {}),
       kind: kindOf(l) ?? "feature",
       mark: kindMark({ kind: kindOf(l) }),
+      ...(workflowView(queue, l) !== undefined ? { workflow: workflowView(queue, l) } : {}),
       ...(l.meta.model !== undefined ? { model: l.meta.model } : {}),
       ...(l.meta.after !== undefined ? { after: l.meta.after } : {}),
       ...(l.meta.owner !== undefined ? { owner: l.meta.owner } : {}),
@@ -1953,7 +2017,9 @@ export interface AddResult {
   readonly lineNo: number;
   /** True when the queue file did not exist and this call created it. */
   readonly created?: true;
-  /** Notes on the written line (`touches:` entries the picker cannot run in a worktree). */
+  /** The workflow the line will run, set for a research line and a line with its own `workflow:`. */
+  readonly runs?: string;
+  /** Notes on the written line (`touches:` entries the picker cannot run in a worktree; a research line on a non-research workflow). */
   readonly warnings?: readonly string[];
 }
 
@@ -2067,11 +2133,15 @@ export async function addQueueLine(
   }
   await writing(file, place, check);
   const lineNo = lineNoOf(fs.readFileSync(abs, "utf8"), id);
-  const warnings = touchesWarnings(readQueue(abs), lineOf(readQueue(abs), id));
+  const written = readQueue(abs);
+  const line = lineOf(written, id);
+  const warnings = [...touchesWarnings(written, line), ...kindWorkflowWarnings(written, line)];
+  const runs = runsNote(written, line)[0];
   return {
     id,
     lineNo,
     ...(created ? { created: true as const } : {}),
+    ...(runs !== undefined ? { runs } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
   };
 }
@@ -2080,6 +2150,8 @@ export interface EditResult {
   readonly id: string;
   /** The task as written (YAML). */
   readonly task: string;
+  /** The workflow the line will run, as AddResult.runs (set when kind, workflow or repo was edited). */
+  readonly runs?: string;
   /** Notes on the written line, as AddResult.warnings. */
   readonly warnings?: readonly string[];
 }
@@ -2138,10 +2210,18 @@ export async function editQueueLine(
       if (why !== null) throw new QueueError(why);
     },
   );
-  if (!("touches" in set) && !("repo" in set)) return done;
+  const reads = ["touches", "repo", "kind", "workflow"].some(k => k in set);
+  if (!reads) return done;
   const q = readQueue(file);
-  const warnings = touchesWarnings(q, lineOf(q, id));
-  return warnings.length > 0 ? { ...done, warnings } : done;
+  const line = lineOf(q, id);
+  const warnings = [...touchesWarnings(q, line), ...kindWorkflowWarnings(q, line)];
+  const runs =
+    "kind" in set || "workflow" in set || "repo" in set ? runsNote(q, line)[0] : undefined;
+  return {
+    ...done,
+    ...(runs !== undefined ? { runs } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 export interface HeaderResult {
