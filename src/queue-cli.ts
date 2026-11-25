@@ -30,6 +30,9 @@ import { promisify } from "node:util";
 import YAML from "yaml";
 import { fileLessons, formatLessons, takeTriage } from "./lessons-file.js";
 import { appendMarkdown, jsonToYaml, markdownToYaml } from "./queue-convert.js";
+import { Storage } from "./storage.js";
+import { stateDir } from "./workflow-dirs.js";
+import { windowNudge } from "./window-nudge.js";
 import {
   QUEUE_EXIT,
   QueueError,
@@ -42,6 +45,7 @@ import {
   formatTask,
   markQueue,
   pickQueue,
+  planPick,
   readQueue,
   refuseArchivedIds,
   restoreQueue,
@@ -52,6 +56,7 @@ import {
   setQueueHeaderKey,
   setQueueWindow,
   STATUSES,
+  type HeaderResult,
   type MarkTarget,
   type Status,
 } from "./queue.js";
@@ -137,6 +142,21 @@ async function out(text: string): Promise<void> {
     cb: (err?: Error | null) => void,
   ) => boolean;
   await promisify(write)(text);
+}
+
+/**
+ * The dispatcher nudge of a window change (`windowNudge`), read from the state directory the engine
+ * server writes (`STATE_DIR`); an absent directory or an unreadable session is no nudge, never an error.
+ */
+function windowNudgeLines(file: string, r: HeaderResult): string[] {
+  try {
+    const dir = stateDir();
+    if (r.to <= r.from || !fs.existsSync(dir)) return [];
+    const sessions = new Storage(dir, { eventLog: false }).readAll();
+    return windowNudge(sessions, file, r, planPick(readQueue(file)).admitted.length);
+  } catch {
+    return [];
+  }
 }
 
 /** The triage file: `--triage`, else the header's `lessons_triage:` (relative = beside the queue), else `../backups/slice-logs/lessons-triage.txt` of the queue's directory. */
@@ -304,7 +324,7 @@ async function main(args: string[]): Promise<number> {
     const reason = o.get("--reason")?.[0];
     if (reason === undefined) throw new QueueError("--batch-size needs --reason TEXT");
     const r = await setQueueWindow(file, n, reason, o.get("--until")?.[0]);
-    process.stdout.write(`${formatWindow(r)}\n`);
+    process.stdout.write(`${[formatWindow(r), ...windowNudgeLines(file, r)].join("\n")}\n`);
     return 0;
   }
   if (op === "--header-set") {

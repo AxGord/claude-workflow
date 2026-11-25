@@ -74,6 +74,10 @@ then needs nothing.
     admitted: start them first) or `collect` again (nothing admitted: nothing to do). Never take it on your own
     (no polling of the queue), only on main's message. If `transition` refuses it (an heir's own `collect` has no `refill`), hand back
     `NEEDS-PARENT task=? session=<D> reason=refill refused (heir collect has no refill) see=state collect`; no retry.
+  - `retry` (at `paused` only: main raised the window; `queue_header` answers with this call) → ONE call:
+    `transition({session_id: D, transition: "retry"})`, no `set`. The reply is the next `dispatch` (new lines
+    admitted: start them first), `collect` or `paused` again (nothing to admit: hand back no second HANDOVER).
+    At any other state: no transition, answer main in one line that D is not at `paused`.
   - `continue` → `status({session_id: D})` and carry on from the state it shows.
   - `stop` → `transition({session_id: D, transition: "stop"})`, then HANDOVER.
   - `RETIRE new=<agent id>` → § Rotation.
@@ -108,7 +112,8 @@ then needs nothing.
 
 ## States that are not yours
 `paused`, `pick_failed`, `cross_check`, `report`, any state a project added, a terminal: take no transition.
-Hand back HANDOVER (§ Hand-backs) and wait. Main drives D there; its `continue` brings you back.
+Hand back HANDOVER (§ Hand-backs) and wait. Main drives D there; its `continue` brings you back. The one
+exception is `paused` and main's message `retry` (§ `collect`): a raised window lifts the pause through you.
 
 ## Hand-backs — the only three things main gets
 Each is ONE `SendMessage` to `main` whose message is exactly the text below, and you carry on afterwards: a

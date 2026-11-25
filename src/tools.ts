@@ -17,6 +17,7 @@ import {
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
 import { withProgress, type ProgressSink } from "./progress.js";
+import { windowNudge } from "./window-nudge.js";
 import { activeParents, staleNote } from "./stale.js";
 import { scopeVerdict } from "./session-scope.js";
 import {
@@ -43,6 +44,7 @@ import {
   resolveQueueFile,
   setQueueHeaderKey,
   setQueueWindow,
+  type HeaderResult,
   type MarkTarget,
   type PickResult,
 } from "./queue.js";
@@ -390,6 +392,16 @@ function refillHint(file: string): string {
       : "";
   } catch {
     return "";
+  }
+}
+
+/** The dispatcher nudge of a window change (`windowNudge`): what a pick would admit now, read after the write. */
+function windowNudgeLines(storage: Storage, file: string, r: HeaderResult): string[] {
+  try {
+    if (r.to <= r.from) return [];
+    return windowNudge(storage.readAll(), file, r, planPick(readQueue(file)).admitted.length);
+  } catch {
+    return [];
   }
 }
 
@@ -1472,7 +1484,8 @@ export function registerTools(
         "And/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line: while a pending `exclusive: true` line waits only for running " +
         "lines of its repo, no later line of that repo is admitted; `null` removes the key = on). " +
         '`until: "<TASK-ID> done"` with the window makes it temporary: the engine restores the window and reason it replaced at the mark of that line that leaves running (done, failed or released), so a raised window is never left raised; a plain window set meanwhile drops the pending revert. ' +
-        "One call sets the window, either key or all; the other header keys are untouched.",
+        "One call sets the window, either key or all; the other header keys are untouched. " +
+        "When the window grows and a live dispatcher session holds the queue, the answer adds one line naming that session, its state and the call that makes it use the new window (`lines added` to its agent at `collect`, `retry` at `paused`; `transition` `refill` / `retry` when main drives it); a hand edit of the file is not noticed.",
       inputSchema: z
         .object({
           ...QUEUE_SEL,
@@ -1523,7 +1536,7 @@ export function registerTools(
         const lines: string[] = [];
         if (args.batch_size !== undefined && args.reason !== undefined) {
           const r = await setQueueWindow(file, args.batch_size, args.reason, args.until);
-          lines.push(formatWindow(r));
+          lines.push(formatWindow(r), ...windowNudgeLines(storage, file, r));
         }
         if (args.archive_after_days !== undefined)
           lines.push(

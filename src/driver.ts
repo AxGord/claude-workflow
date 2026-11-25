@@ -174,6 +174,7 @@ export function renderDispatcherCall(i: DispatcherCallInput): string {
     "Your duties in this mode, here because the engine cannot tell you later:",
     "- a route you name is one of the line's `routes=` (the engine's TRANSITIONS of that state at that moment): never a route you remember, the state may lack it;",
     "- `lines added` to the dispatcher after a `queue_add` / `queue_edit` / `queue_mark` answer says `note: a pick would admit N line(s) now…` (the refill; the dispatcher never polls the queue);",
+    "- a raised window (`queue_header` / `wf-queue --batch-size`, a lifted pause): the answer names this dispatcher session, its state and the call, `lines added` at `collect` or `retry` at `paused`; an edit of the queue file by hand is noticed by nobody;",
     "- a `CLOSED` line = the task session ended without landing (closed, released or stopped): the dispatcher freed the slot, and when the task workflow's terminal declares `queue_mark:` (bundled `batch-task` and its heirs) the engine has already failed or released its queue line; under any other task workflow the line may still be `running` and is yours to mark; a follow-up `queue_add` is yours to decide;",
     '- a window change meant to end with a task: `queue_header` with `until: "<TASK-ID> done"`, so the engine restores it at that line\'s mark; never a raised window you must remember to lower;',
     "- a NEEDS-PARENT the dispatcher repeats with `reason=unanswered <n>…` is a question no answer reached for over 10 minutes: answer that driver again, directly.",

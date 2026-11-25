@@ -177,7 +177,7 @@ states:
       The queue is paused (`batch_size: 0`) and none of its tasks runs:
       {{stderr}}
       Tell the user the pause and its reason (the comment above). When they lift it (`queue_header({file:
-      "{{context.queue_file}}", batch_size: N, reason})`, or their own edit) → `retry`; to end the run now → `report`.
+      "{{context.queue_file}}", batch_size: N, reason})`, or their own edit) → `retry` (the `queue_header` answer names this session and the call: a hand edit of the file is not noticed by anything); to end the run now → `report`.
     transitions:
       retry: pick
       report: report
@@ -260,7 +260,7 @@ states:
       - a task session ended `stopped` (under `batch-task` and its heirs the engine marked its queue line failed) → `stop`. Under a dispatcher agent (`dispatcher:`) the
         agent frees that slot as a CLOSED line instead and tells the parent: this bullet is for a dispatching session driven by hand.
       - the main conversation says lines were added, unparked, re-prioritised or freed of their `after:` while a slot is
-        free (`queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…` then) → `refill` (the pick runs
+        free (`queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…` then; so does `queue_header` when it raises the window and names this session) → `refill` (the pick runs
         again without a land; admits nothing when no slot is free or no line is admissible, and `collect` stays). Never poll for it.
       - task sessions still running, none ended → END your turn here, no transition.
       - none of YOURS runs and the last pick admitted nothing (exit 10: the running tasks left belong to

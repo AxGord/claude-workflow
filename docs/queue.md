@@ -148,6 +148,13 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
     - a plain window set meanwhile drops the pending revert, and the answer names it;
   - and/or `archive_after_days: N` (a whole number ≥ 1; `null` removes the key);
   - and/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line, see the pick rules; `null` removes the key = on).
+  - A window that GROWS (`wf-queue --batch-size` too) admits nothing by itself: a dispatcher at `collect` moves only on a land's `slot_free` or main's `refill`, one at `paused` only on `retry`.
+    - When a live dispatcher session holds the queue (a root, not suspended session whose context names that `queue_file` and a `task_workflow`), the answer adds one line per such session: its id, its state and the exact call.
+    - A dispatcher agent holds the session: `SendMessage({ to: "<agent id>", message: "lines added" })` at `collect` (only when a pick would admit lines now), `message: "retry"` at `paused` (always).
+    - The main conversation driving the session itself: `transition` `refill` / `retry`.
+    - At `dispatch` or `pick` the line says to send it once the session stands at `collect`; at another state, or for a shrunk window, nothing is added.
+    - No hook does it: a PostToolUse hook cannot `SendMessage` an agent, and a `transition` it made would hand the next prompt to the hook instead of the agent that drives the session. The caller of `queue_header` sends.
+    - A hand edit of the queue file is noticed by nothing: send the dispatcher the same message yourself.
   - One call sets the window, a key or several; a set of one leaves the other keys as they are. No other key is settable here (the rest of the header is written when the queue is made).
 - Archive (no MCP tool): keeps the queue file small.
   - The header key `archive_after_days: N` (set with `queue_header` / `wf-queue --header-set`; absent = no archiving) makes every pick (`queue_next`, `wf-queue`), under its lock and before admitting, move the `done` and `failed` lines whose `ended:` is more than N days ago to `<queue>.archive.yaml` beside the queue (`queue.yaml` → `queue.archive.yaml`), appending, under the queue's lock. The line is moved whole, its text and notes unchanged.
@@ -493,7 +500,7 @@ dispatcher:
   - A project heir that overrides `dispatch` keeps the flag, or its own `revisit_prompt` carries the recipe.
 - The block also carries main's duties in this mode, once (the engine tells them at the moment they apply, so main need not remember them):
   - answer a task driver directly, a route only from the line's `routes=`;
-  - `lines added` for the refill;
+  - `lines added` for the refill, `retry` at `paused` (both named by the answer of a `queue_header` that raises the window);
   - what a `CLOSED` line means: the slot is free; the engine already failed or released the queue line when the task workflow's terminal declares `queue_mark:` (bundled `batch-task` and its heirs), otherwise the line is still the main conversation's to mark;
   - a window change as `queue_header` with `until`, and what a repeated `reason=unanswered` question is.
 - `status({ session_id, key: "routes" })` answers the session's transitions at its current state, `a|b|c` (`(none)` at a state with none; a context key named `routes` wins). The dispatcher reads it to put `routes=` on a `NEEDS-PARENT` line.
@@ -504,7 +511,8 @@ dispatcher:
 
 - `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`.
 - `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`; a `CLOSED` line for a `stopped` task also sends `LESSONS` at once.
-- `collect`, on main's message `lines added` (sent when `queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…`) it takes `refill` with no `set`: the pick runs again without a land.
+- `paused`, on main's message `retry` (`queue_header` names it when it raises the window) it takes `retry` with no `set`; every other message at a state it does not drive stays main's `continue`.
+- `collect`, on main's message `lines added` (sent when `queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…`, or `queue_header` raises the window) it takes `refill` with no `set`: the pick runs again without a land.
   - A project heir with its own `collect` must add `refill: pick` to its transitions (the state is replaced whole); without it the transition is refused and the dispatcher hands back `NEEDS-PARENT`.
   - `collect` absorbs `WAITING` lines and notifications, and relays a stray worker or reviewer line to that task's driver.
 - A driver that ended with no last line is pinged once, then re-spawned from the task session's `driver_call`.
