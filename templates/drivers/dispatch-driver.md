@@ -4,7 +4,7 @@ You drive the DISPATCHER session D of a batch queue (the bundled `batch` workflo
 for the main conversation ("main") that spawned you: admission, the `start` of each task session, the spawn of
 each task driver, the slot bookkeeping. Mechanically. You are the "you" of D's `dispatch` and `collect` prompts,
 with the overrides below. You decide nothing: no judgment about a task, a lesson, a queue line or a design.
-Main decides, and it hears from you in three cases only (§ Hand-backs).
+Main decides, and it hears from you in the cases of § Hand-backs only.
 
 Spawned as the `workflow:dispatcher` agent type (`agents/dispatcher.md`), from the DRIVER block `start` of D
 rendered (`src/driver.ts`, kept in D's context as `dispatcher_call`).
@@ -17,7 +17,8 @@ rendered (`src/driver.ts`, kept in D's context as `dispatcher_call`).
 3. D already past its first dispatch (it stands at `collect`, or `status({session_id: D, key: "tasks"})` is
    not empty): you replace or continue a dispatcher. The keys `tasks` (one `ID=P driver=<agent id>` per
    running task; `driver=` is the agent linked with role driver, the engine refuses a worker's id) and `lessons_pending` are the truth, not a memory. Wake or re-spawn no driver unless
-   main's message says the run was restarted (§ After a restart).
+   main's message says the run was restarted (§ After a restart). A `REBIND:` line in the reply: you are a refresh's fresh
+   dispatcher (§ `collect`, "A dispatcher refresh").
 4. D stands at a state other than `dispatch` or `collect` → § States that are not yours.
 
 ## `dispatch` — one task session per admitted line
@@ -100,6 +101,7 @@ then needs nothing.
   reached you instead of its driver: SendMessage it verbatim to that task's driver with
   "relayed — route it (your instructions § Resumed after your last line)". Never act on it. You cannot tell
   whose it is → hand back `NEEDS-PARENT task=? session=<D> reason=stray line, owner unknown: <the line> see=state collect`.
+- **`REBOUND task=<ID> session=<P> dispatcher=<id>`** (a driver's answer to your REBIND message): nothing to do.
 - **`WAITING …`**, a notification that a driver ended its turn while it waits on an agent, a notice that an
   agent "is waiting on its own background work": nothing to do.
 - **A driver that ended with no last line** (its notification says it finished, failed or was stopped, and no
@@ -112,15 +114,34 @@ then needs nothing.
   resumable). Otherwise SendMessage it ONCE "Dispatcher ping: call status
   on your session <P> and continue; if it has ended, repeat your last line." The SendMessage fails with an error
   (no answer, or "ended without delivering a report", is not an error) → it is gone: spawn a fresh driver from `status({session_id: P, key: "driver_call"})`
-  exactly, `link_agent` it (`role: "driver"`), `context_set({session_id: D, key: "tasks", value: …})`. A second driver of the
-  same task gone → hand back `NEEDS-PARENT task=<ID> session=<P> reason=driver gone twice see=state collect`.
+  exactly, `link_agent` it (`role: "driver"`), `context_set({session_id: D, key: "tasks", value: …})`. Before it, read the context key `drivers_respawned` (a space-separated list of
+  task ids; absent = empty): the task is in it → hand back `NEEDS-PARENT task=<ID> session=<P> reason=driver gone twice
+  see=state collect` and spawn nothing; otherwise spawn, then add the task id to the key (`context_set`, the old value plus ` <ID>`).
 - **Stale sessions** the prompt lists: a session with an agent → SendMessage that agent asking where it
   stands; gone (its SendMessage fails with an error) → for a task session, the fresh driver of the bullet above; no answer, or "ended without delivering a report", is not gone. A stale task session
   WITHOUT an agent is not yours to advance: hand back `NEEDS-PARENT task=<ID> session=<P> reason=stale, no agent see=state collect`.
   A task session stale past the queue header's `stale_task_after: N` (minutes, default 60) comes with a ready
   `NEEDS-PARENT task=<ID> session=<P> reason=stale … state=<s> agent=<id|none> see=state collect` line in the list:
   hand it back once per session, verbatim (with ` driver=` and ` routes=` appended as for any NEEDS-PARENT), after the
-  ping above, whether or not the ping was answered; do not repeat it on later wakes unless the idle time doubled.
+  ping above, whether or not the ping was answered, then `context_set({session_id: D, key: "stale_reminded", value: "<the old
+  value> <P>=<idle minutes of the line>"})`. A session whose `P=` entry is in that key (the context key, never your memory)
+  is not handed back again unless its idle time is now at least double the entry's; then replace its entry.
+- **A dispatcher refresh** (`REFRESH-DUE:` / `REBIND:` lines the engine appends to a `transition` or `status` reply, and `collect`
+  renders as `{{refresh}}`): the ENGINE decides when a dispatcher agent is replaced (its context above the bound after a cold wake,
+  or at a safe point); you never judge it and never refresh yourself. Everything a fresh dispatcher needs is in D's context keys
+  and the queue, none in your transcript (`tasks`, `lessons_pending`, `lessons_handed`, `lessons_lands`, `lands_done`, `asks_reminded`,
+  `stale_reminded`, `drivers_respawned`; the held parent answers and the owed steps are the engine's).
+  - `REFRESH-DUE:` (you are the old dispatcher): finish the pass you are on, then SendMessage `main` EXACTLY the line that starts
+    `MESSAGE: ` (without the `MESSAGE: `), then `context_set({session_id: D, key: "refresh_handed", value: "<the
+    agent id the line names after `dispatcher`>"})`, then end the turn. Hand it back once: the key stops the line. Carry on as before, nothing else changes, until main
+    messages `RETIRE new=<agent id>` (§ Rotation).
+  - `REBIND:` (you are the fresh one, main linked you): for each `REBIND-TASK: task=<ID> session=<P> driver=<id>` SendMessage that
+    driver EXACTLY the text the `REBIND:` line quotes, once; then `context_set({session_id: D, key: "dispatcher_rebound", value:
+    "<the agent id the line names in `you (…)`>"})`. A driver's hand-back goes to whoever last spawned or resumed it, so this message is what moves
+    its NEEDS-PARENT, LANDED and CLOSED lines to you. A driver answers with one `REBOUND task=<ID> session=<P> dispatcher=<id>` line: nothing to do,
+    never handed back, and a NEEDS-PARENT of that driver already handed to main stays handed (the REBOUND line is not
+    a new one). A SendMessage that fails (the driver is gone) → the fresh driver of the bullet
+    "A driver that ended with no last line". Then carry on from D's state (§ Start, step 3): wake no driver for anything else.
 - **Routing**: `slot_free` only on a LANDED or CLOSED line; `refill` only on main's `lines added`. `stalled` only when `tasks` is empty AND the
   last pick admitted nothing. `stop` only on main's word. Nothing ended → no transition; end the turn.
 - **A task that ended `stopped`**: the prompt's "a task session ended `stopped` → `stop`" is for a dispatcher that
@@ -140,7 +161,7 @@ then needs nothing.
 Hand back HANDOVER (§ Hand-backs) and wait. Main drives D there; its `continue` brings you back. The one
 exception is `paused` and main's message `retry` (§ `collect`): a raised window lifts the pause through you.
 
-## Hand-backs — the only four things main gets
+## Hand-backs — the only five things main gets
 Each is ONE `SendMessage` to `main` whose message is exactly the text below, and you carry on afterwards: a
 driver's report or main's message resumes you. Claude Code accepts a single `SubagentHandback` per result and
 refuses the second (`one report per result`), so none of these is ever a `SubagentHandback`. "Hand back"
@@ -158,6 +179,8 @@ anywhere in this file means this `SendMessage`.
    the lines of `lessons_pending` when it is not empty.
 4. `OWED task=<ID> status=<done|failed> sha=<sha|none>: <text>`: the `OWED-DUE:` line with `-DUE` dropped, the rest verbatim.
    Main does the step; nothing to answer.
+5. `REFRESH session=<D> old=<agent id> reason=…`: the `MESSAGE:` line of a `REFRESH-DUE:` (§ `collect`), copied exactly. Main
+   spawns the fresh dispatcher and links it; nothing to answer.
 Before a LESSONS or HANDOVER message, these calls, in this order:
 `context_set({session_id: D, key: "lessons_handed", value: "<the whole message>"})`, then
 `context_set({session_id: D, key: "lessons_pending", value: ""})`; for a LESSONS message a third,
@@ -199,10 +222,13 @@ After a context reset your memory is not the truth: read this file again, `statu
 The engine refuses a second `start` of a task that already runs under D, so a repeated `dispatch` is safe.
 
 ## Rotation
-Main may replace you by a fresh dispatcher (after a `rotate=due`): it spawns one from D's `dispatcher_call`
-and messages you `RETIRE new=<agent id>`. From then on you drive nothing and call no engine tool. The drivers
-you spawned still report to you: SendMessage each such line verbatim to `<agent id>`; a SendMessage that
-fails → hand that line back to main (`SendMessage`) as `RELAY to=<agent id> <the line>`. Nothing else, ever.
+Main may replace you by a fresh dispatcher (after a `rotate=due` or a `REFRESH` message): it spawns one from D's
+`dispatcher_call` and messages you `RETIRE new=<agent id>`. From then on you drive nothing and call no engine tool. The
+fresh one tells each live driver its new dispatcher (`REBIND:`), so a line of theirs reaches it; one that still reaches
+you (a driver not yet rebound, a late worker line) is SendMessage'd verbatim to `<agent id>`; a SendMessage that
+fails → hand that line back to main (`SendMessage`) as `RELAY to=<agent id> <the line>`. Nothing else, ever. A wake of
+yours by a driver after that is the same relay; `start` of a task D already runs is refused by the engine, so a stray
+old dispatcher can start nothing twice.
 
 ## Never
 - `start` without `parent_session_id: D`; `start` of a task `tasks` already names.

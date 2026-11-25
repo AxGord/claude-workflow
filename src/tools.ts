@@ -127,6 +127,16 @@ function unshownOwed(engine: Engine, sessionId: string, body: string): string[] 
   }
 }
 
+/** The `REFRESH-DUE:` / `REBIND:` lines a dispatching session holds, unless `body` already shows them: the engine's hand-over of a long-lived dispatcher stays in view. */
+function unshownRefresh(engine: Engine, sessionId: string, body: string): string[] {
+  try {
+    return engine.refreshLines(sessionId).filter(line => !body.includes(line));
+  } catch {
+    // a notice never fails the call it rides on
+    return [];
+  }
+}
+
 /**
  * `staleNotice` unless `body` already shows every line of it — a prompt that renders
  * `{{stale_sessions}}` (a revisit's digest does not render it, so the notice comes back there).
@@ -764,6 +774,7 @@ export function registerTools(
           ...unansweredNotice(engine, sid),
           ...unshownParentAnswers(engine, sid, body),
           ...unshownOwed(engine, sid, body),
+          ...unshownRefresh(engine, sid, body),
         ];
         const text = [
           ...(starved.length > 0 ? [...starved, ""] : []),
@@ -861,6 +872,7 @@ export function registerTools(
             ...unansweredNotice(engine, sid),
             ...unshownParentAnswers(engine, sid, body),
             ...unshownOwed(engine, sid, body),
+            ...unshownRefresh(engine, sid, body),
           ];
           const text =
             (warning ? warning + "\n\n" : "") +

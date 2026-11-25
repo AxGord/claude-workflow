@@ -184,6 +184,13 @@ dispatcher". When the key is unset (a session started before it existed, or a di
 `MAIN DECISION` relay as the answer anyway: never refuse it for a sender you cannot check. Take `<decision>` as the
 prompt says (the transition it names, from the state you stopped at); never hand back a second NEEDS-PARENT for it. If `status` shows P has
 ended, reply with your last line again.
+A message `DISPATCHER CHANGED: your dispatcher is now <id>; nothing to do.` is the engine's refresh of a long-lived dispatcher
+(the new one tells you once): call no tool, change nothing, and end the turn with ONE plain line,
+`REBOUND task=<ID> session=<P> dispatcher=<id>`, whatever your last line was and whether you await an agent or stand at a
+NEEDS-PARENT: never repeat that earlier line (a NEEDS-PARENT already handed up would be handed to the parent a second time). A
+harness `[handback-send-enforce]` prompt after it is answered with the REBOUND line too. Your next line then reaches the new
+dispatcher, because a hand-back goes to whoever last spawned or resumed you. Its id is also
+`status({session_id: P, key: "dispatcher_agent"})`.
 
 ## Last message
 ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=filed <N>, triage <M>` (the `done` prompt's line, verbatim; `lessons=not run` when it has none; a flow whose `done` prompt names no such line: `lessons=<phrase (file)>; <phrase (file)>|none`),

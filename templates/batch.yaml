@@ -8,7 +8,8 @@ max_transitions: 100000
 # Claude Code process, `start` of this workflow answers with a DRIVER block for a cheap dispatcher agent
 # (`workflow:dispatcher`) that drives `dispatch` and `collect` from the moment the session leaves `plan_queue`;
 # the main conversation then gets only the task drivers' NEEDS-PARENT lines, a LESSONS block per
-# `lessons_every` lands (a queue header key, default 5), an OWED message per ended line that carries `on_end_tell_parent:`, and a HANDOVER at a state the agent does not drive.
+# `lessons_every` lands (a queue header key, default 5), an OWED message per ended line that carries `on_end_tell_parent:`, a REFRESH message
+# when the engine finds the agent's context past `refresh.context_tokens` (default 200000; `refresh: false` = never), and a HANDOVER at a state the agent does not drive.
 # Unset, nothing here applies: the main conversation dispatches as the prompts below say. An environment
 # variable, not a queue header key: `start` answers before a queue file is known, and the nesting depth the
 # agent needs (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4) is set in the same place. A heir inherits the block.
@@ -18,6 +19,11 @@ dispatcher:
   prompt_ref: dispatch-driver
   env: WF_DISPATCHER
   after: plan_queue
+  # The engine replaces the agent (a fresh one, same session) when its context is above `context_tokens` and its wake came after
+  # `idle_minutes` (the prompt cache's life), or it stands at `collect` with no relay of its own pending. Same thresholds as `resume:`.
+  refresh:
+    idle_minutes: 60
+    context_tokens: 200000
 
 # A project's heir (`extends: batch`) usually overrides `plan_queue` with an exec that names its fixed
 # queue and its own task workflow (context_set `queue_file`, `task_workflow`); the per-task steps a
@@ -269,6 +275,12 @@ states:
       Each `PARENT-ANSWER: task=<ID> session=<P> driver=<id>: <text>` line → SendMessage that driver EXACTLY `MAIN DECISION (quoted,
       the main conversation's own word): task=<ID>: <text>`, then `context_set({session_id: <P>, key: "parent_answer", value: ""})`:
       the engine holds the answer until that clear. Relay each once, before any other move.
+
+      Dispatcher refresh (a dispatcher agent whose context passed its bound is replaced by a fresh one; the ENGINE decides, in
+      `dispatcher.refresh`; a main-driven session shows `none`):
+      {{refresh}}
+      `REFRESH-DUE:` → the old dispatcher hands main its MESSAGE line once and records `refresh_handed`; `REBIND:` → the fresh one
+      tells each `REBIND-TASK` driver its new dispatcher once, then records `dispatcher_rebound`. Neither is a transition.
 
       Route this session:
       - a task session reached its terminal (`done` / `closed` / `released`) → update `tasks`, then

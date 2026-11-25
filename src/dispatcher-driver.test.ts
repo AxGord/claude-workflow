@@ -283,6 +283,7 @@ describe("the loader checks `dispatcher:`", () => {
       prompt_ref: "dispatch-driver",
       env: OPT_IN,
       after: "plan_queue",
+      refresh: { idle_minutes: 60, context_tokens: 200000 },
     });
     expect(loader.get("batch")?.driver).toBeUndefined();
     expect(loader.get("batch-task")?.dispatcher).toBeUndefined();

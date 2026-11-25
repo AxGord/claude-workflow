@@ -575,6 +575,7 @@ dispatcher:
 | `NEEDS-PARENT task=<ID> session=<P> reason=stale …` | a task session stale for `stale_task_after` minutes (queue header, whole number of 1 or more, default 60); `collect` lists it after the `STALE:` line, handed back once per session | `status` of P, answer its driver, or tell the user |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
+| `REFRESH session=<D> old=<agent id> reason=…` | the engine found the dispatcher's context past its bound (see "Refresh") | spawn a fresh dispatcher from `dispatcher_call`, `link_agent` it (role `driver`), `SendMessage` the old one `RETIRE new=<its id>`; nothing to answer |
 
 - A decision that still reaches the dispatcher, `task=<ID>: <decision>`, is relayed to the driver as `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>`. The driver takes a decision in that form as the parent's own answer to its NEEDS-PARENT (a bare relay was once read as the dispatcher asking, and answered with a second NEEDS-PARENT).
 - The lessons are copied, never judged or turned into queue lines by the agent. The last block handed is also in the context key `lessons_handed`.
@@ -589,6 +590,19 @@ dispatcher:
 - Rotation: the `LESSONS` line ends `rotate=due` when the lands have reached or passed a multiple of 4×N since the previous `LESSONS` message.
   - The lands are counted in the context key `lands_done`, which the agent updates in each `slot_free` `set`, not from its memory; `lessons_lands` holds the count at the previous message, so a message sent off the exact multiple still rotates.
   - The main conversation may then spawn a fresh dispatcher from `dispatcher_call` and send the old one `RETIRE new=<agent id>`; the old one only relays its drivers' late lines.
+- Refresh: the engine, not the agent, decides when a long-lived dispatcher is replaced. Each wake after the prompt cache's life (60 minutes) re-writes the whole context into the cache, which cost more in one campaign than every driver resume.
+  - The bound is the `refresh:` key of the workflow's `dispatcher:` block: `{ idle_minutes: 60, context_tokens: 200000 }` (both default as shown, the same two thresholds as a task workflow's `resume:`); `refresh: false` turns it off.
+  - On each entry to `collect` the engine reads the dispatcher agent's last turn from its transcript.
+    - Context above `context_tokens` and a wake after `idle_minutes` of silence on the session = due, whatever the agent holds. Writes under 3 minutes apart are one wake; the idle is the silence before its first write.
+    - Context above it while warm = due only at a safe point (no parent answer to relay, no owed step).
+    - A reading it cannot make (no transcript) is never due.
+  - Due is recorded on the session (`dispatcher_refresh`) and rendered as `{{refresh}}` in bundled `collect`, and appended to the `transition` / `status` reply of a heir's own `collect`: a `REFRESH-DUE:` line and a `MESSAGE:` line the agent copies to main verbatim, then records `refresh_handed`. It keeps working until main acts.
+  - Main spawns the fresh dispatcher itself (a replacement the old one spawned would be the old one's child, and report to it), links it with role `driver` and messages the old one `RETIRE new=<id>`: the old one drives nothing from then on.
+  - Hand-backs go to whoever last spawned or resumed an agent, so the fresh dispatcher is shown a `REBIND:` list (`tasks` entries with an agent driver), keyed on `refresh_handed`.
+    - It `SendMessage`s each driver once `DISPATCHER CHANGED: your dispatcher is now <id>; nothing to do.`.
+    - The driver answers with one `REBOUND task=<ID> session=<P> dispatcher=<id>` line, never its earlier last line, so a NEEDS-PARENT already handed up is not handed again.
+    - The dispatcher then records `dispatcher_rebound`, which ends the list. The task sessions already carry the new `dispatcher_agent`.
+  - Everything a fresh dispatcher needs is in the session's context keys and the queue: `tasks`, `lessons_pending`, `lessons_handed`, `lessons_lands`, `lands_done`, `asks_reminded`, `stale_reminded` (`P=<idle minutes>` of each stale session handed back), `drivers_respawned` (task ids whose driver was re-spawned once); held parent answers and owed steps are the engine's. A stray wake of the old agent can start nothing twice: `start` of a running task is refused.
 
 **Switching it on mid-campaign**
 

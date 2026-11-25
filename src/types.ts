@@ -139,6 +139,18 @@ export const DriverObjectSchema = z
   .strict();
 
 /**
+ * A dispatcher's `refresh:` — when the engine hands a long-lived dispatcher over to a fresh one (the
+ * block's `refresh: false` = never): the same two thresholds as a task workflow's `resume:`,
+ * `idle_minutes` (default 60, the prompt cache's life) and `context_tokens` (default 200000).
+ */
+export const DispatcherRefreshSchema = z
+  .object({
+    idle_minutes: z.number().positive().optional(),
+    context_tokens: z.number().int().positive().optional(),
+  })
+  .strict();
+
+/**
  * A dispatching workflow's `dispatcher:` — the cheap agent that drives the DISPATCHER session itself
  * (admission, task starts, driver spawns, slot bookkeeping) for the main conversation. Opt-in:
  * `env` = the environment variable that turns it on (absent = always on); off, the workflow is as if
@@ -146,6 +158,7 @@ export const DriverObjectSchema = z
  * queue); the reply that leaves it repeats the block. `prompt_ref` / `agent_type` as in `driver:`
  * (default type `workflow:dispatcher`). Unlike `driver:` it changes nothing but `start`'s answer:
  * no `agent_step`, no one-agent-per-visit reading of the session's children.
+ * `refresh` = see `DispatcherRefreshSchema`.
  */
 export const DispatcherObjectSchema = z
   .object({
@@ -158,6 +171,7 @@ export const DispatcherObjectSchema = z
       .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "an environment variable name")
       .optional(),
     after: z.string().min(1).optional(),
+    refresh: z.union([z.literal(false), DispatcherRefreshSchema]).optional(),
   })
   .strict();
 
@@ -223,6 +237,20 @@ export interface ResumeChoice {
   readonly at: string;
   /** The text `{{resume}}` renders to. */
   readonly instruction: string;
+}
+
+export type DispatcherRefreshSpec = z.infer<typeof DispatcherRefreshSchema>;
+
+/** The engine's decision to hand a dispatcher agent over, recorded when its session entered `collect` with the agent past its bounds. */
+export interface DispatcherRefresh {
+  /** The dispatcher agent that was due. */
+  readonly agent: string;
+  readonly reason: string;
+  /** Its context: the last turn's size. */
+  readonly context: number;
+  /** Whole minutes since the session's previous engine call; absent when unknown. */
+  readonly idle_minutes?: number;
+  readonly at: string;
 }
 
 export type Driver = z.infer<typeof DriverObjectSchema>;
@@ -522,6 +550,10 @@ export interface SessionState {
   readonly agent_step?: AgentStep;
   /** The engine's resume-or-respawn choice at the latest entered state that declares `resume:`. */
   readonly resume_choice?: ResumeChoice;
+  /** A dispatching session: the wake its latest write belongs to (`at`) and the idle before that wake's first write (`idle_ms`). */
+  readonly wake?: { readonly at: string; readonly idle_ms: number };
+  /** A dispatching session whose dispatcher agent is past its refresh bounds: the engine's decision (`refresh.ts`). */
+  readonly dispatcher_refresh?: DispatcherRefresh;
   readonly running_exec?: RunningExec;
   /**
    * The action state a server began and has not routed yet, written before its

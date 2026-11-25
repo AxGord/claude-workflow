@@ -19,6 +19,7 @@ import type {
   Driver,
   AgentStep,
   AgentLink,
+  DispatcherRefreshSpec,
   Resume,
   ResumeChoice,
   ResumeStep,
@@ -34,6 +35,15 @@ import {
   PriorityLevelSchema,
 } from "./types.js";
 import { decideResume, resumeInstruction } from "./resume.js";
+import {
+  REBOUND_KEY,
+  REFRESH_HANDED_KEY,
+  WAKE_GAP_MS,
+  decideRefresh,
+  rebindLines,
+  refreshDueLines,
+  type RefreshDecision,
+} from "./refresh.js";
 import { projectNameOf, projectRoot } from "./pool.js";
 import { projectDefaultPriority } from "./project-settings.js";
 import { LEDGER_FILE, type Storage } from "./storage.js";
@@ -702,6 +712,7 @@ export class Engine {
     let updated: SessionState = this._withEntry({
       ...session,
       ...skillUpdate,
+      ...this._wakeStamp(session, now),
       stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
       updated_at: now,
       history: [...session.history, historyEntry],
@@ -1389,6 +1400,7 @@ export class Engine {
     return this._withModel(
       {
         ...session,
+        ...this._wakeStamp(session, now),
         context: { ...session.context, [key]: value },
         updated_at: now,
         history: [
@@ -1480,7 +1492,127 @@ export class Engine {
     session: SessionState,
     changed: ReadonlySet<string> = new Set(),
   ): SessionState {
-    return this._withResume(this._withModel(session, changed));
+    return this._withRefresh(this._withResume(this._withModel(session, changed)));
+  }
+
+  /**
+   * A dispatching session's wake stamp for a write at `now`: a write after `WAKE_GAP_MS` of silence starts a wake whose
+   * idle is that silence (the first write of a wake is the only one that sees it: a `context_set` always precedes the
+   * `transition`, so the transition alone would read about zero); a nearer one keeps the wake it belongs to.
+   */
+  private _wakeStamp(session: SessionState, now: string): { wake?: SessionState["wake"] } {
+    if (typeof session.context[DISPATCHER_CALL_KEY] !== "string") return {};
+    const gap = Date.parse(now) - Date.parse(session.updated_at);
+    if (session.wake && !(gap >= WAKE_GAP_MS)) return {};
+    return { wake: { at: now, idle_ms: Number.isNaN(gap) ? 0 : Math.max(0, gap) } };
+  }
+
+  /** The bounds of the dispatcher agent's refresh, when this session is a dispatching one with it on (a `dispatcher_call`, `refresh` not `false`). */
+  private _refreshSpec(session: SessionState): DispatcherRefreshSpec | undefined {
+    if (session.stack.length === 0 || typeof session.context[DISPATCHER_CALL_KEY] !== "string")
+      return undefined;
+    try {
+      const refresh = this._getWorkflow(session.session_id, session.stack[0].workflow).dispatcher
+        ?.refresh;
+      return refresh === false ? undefined : (refresh ?? {});
+    } catch {
+      return undefined; // a workflow that is gone declares nothing to refresh
+    }
+  }
+
+  /**
+   * Whether the dispatcher agent of a session standing at `collect` is due now: its transcript's last turn against
+   * the bound, the idle since the session's previous engine call against the cache's life. undefined: not at
+   * `collect`, no refresh declared, or the agent's session is already being rebound.
+   */
+  private _refreshDecision(session: SessionState): RefreshDecision | undefined {
+    const spec = this._refreshSpec(session);
+    if (!spec || session.stack[session.active_frame].current_state !== "collect") return undefined;
+    const agent = session.agent_id ?? "";
+    const reading =
+      agent !== "" && isAgentId(agent) ? agentReadingOf(agent, session.claude_session_id) : {};
+    // a reading with no write yet in this wake (a `status` first) is the silence so far; else the wake's recorded idle
+    const since = Date.now() - Date.parse(session.updated_at);
+    const idleMs = Number.isNaN(since)
+      ? undefined
+      : since >= WAKE_GAP_MS || !session.wake
+        ? Math.max(0, since)
+        : session.wake.idle_ms;
+    let safePoint = false;
+    try {
+      safePoint =
+        this.parentAnswerLines(session.session_id).length === 0 &&
+        this.owedLines(session.session_id).length === 0;
+    } catch {
+      safePoint = false;
+    }
+    return decideRefresh(spec, { agent, idleMs, context: reading.context, safePoint });
+  }
+
+  /**
+   * The old agent's id while its replacement is not yet bound: the old one recorded `refresh_handed`, a different agent
+   * is linked now, and that agent has not recorded `dispatcher_rebound`. Keyed on the context, not on a decision
+   * recorded at `collect` entry, so a refresh first seen on a `status` reply is rebound the same way.
+   */
+  private static _rebinding(session: SessionState): string | undefined {
+    const old = session.context[REFRESH_HANDED_KEY];
+    const agent = session.agent_id;
+    return typeof old === "string" &&
+      old !== "" &&
+      agent &&
+      old !== agent &&
+      session.context[REBOUND_KEY] !== agent
+      ? old
+      : undefined;
+  }
+
+  /** `session` with the decision to replace its dispatcher agent recorded, when the state just entered is `collect` and the agent is due; once per agent. */
+  private _withRefresh(session: SessionState): SessionState {
+    const rec = session.dispatcher_refresh;
+    if (Engine._rebinding(session) || (rec && rec.agent === session.agent_id)) return session;
+    const d = this._refreshDecision(session);
+    if (!d?.due || !session.agent_id) return session;
+    const reading = agentReadingOf(session.agent_id, session.claude_session_id);
+    return {
+      ...session,
+      dispatcher_refresh: {
+        agent: session.agent_id,
+        reason: d.reason,
+        context: reading.context ?? 0,
+        ...(d.idle === undefined ? {} : { idle_minutes: d.idle }),
+        at: new Date().toISOString(),
+      },
+    };
+  }
+
+  /**
+   * The lines `{{refresh}}` renders and a reply appends: the old dispatcher's REFRESH-DUE (recorded at entry, else
+   * read now) until it has handed the message to main; the fresh one's REBIND list until it records the rebind.
+   */
+  public refreshLines(sessionId: string): string[] {
+    const s = this._storage.read(sessionId);
+    if (!s || s.stack.length === 0 || this._refreshSpec(s) === undefined) return [];
+    const agent = s.agent_id ?? "";
+    const rebinding = Engine._rebinding(s);
+    if (rebinding)
+      return rebindLines({
+        session: sessionId,
+        old: rebinding,
+        fresh: agent,
+        drivers: taskEntries(s.context.tasks)
+          .filter(e => isAgentId(e.driver))
+          .map(e => ({ task: e.label, session: e.session, driver: e.driver })),
+      });
+    if (agent === "" || s.context[REFRESH_HANDED_KEY] === agent) return [];
+    const rec = s.dispatcher_refresh?.agent === agent ? s.dispatcher_refresh : undefined;
+    const decision = rec ? undefined : this._refreshDecision(s);
+    if (!rec && !decision?.due) return [];
+    return refreshDueLines({
+      session: sessionId,
+      agent,
+      reason: rec?.reason ?? decision?.reason ?? "",
+      running: taskEntries(s.context.tasks).length,
+    });
   }
 
   /** The workflow and `resume:` step of the state `session` is in, when both are declared. */
@@ -1764,6 +1896,10 @@ export class Engine {
     // the parent's recorded answers the dispatcher has not relayed yet
     Object.defineProperty(vars, "parent_answers", {
       get: () => this.parentAnswerLines(session.session_id).join("\n") || "none",
+    });
+    // the engine's decision to replace the dispatcher agent (or to rebind its drivers to the fresh one)
+    Object.defineProperty(vars, "refresh", {
+      get: () => this.refreshLines(session.session_id).join("\n") || "none",
     });
     // the owed steps of lines that ended, not yet handed to the parent
     Object.defineProperty(vars, "owed_steps", {
