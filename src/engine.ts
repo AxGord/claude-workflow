@@ -62,7 +62,7 @@ import {
 } from "./driver.js";
 import { currentStep, linkedAgentLines, type IsRoute } from "./agent-link.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
-import { activeSubtree, takeOver, where } from "./takeover.js";
+import { activeSubtree, dispatcherHolds, takeOver, where } from "./takeover.js";
 import { secondRootRefusal } from "./session-scope.js";
 import { actionStateRefusal } from "./trust.js";
 import {
@@ -74,6 +74,13 @@ import {
   type Staleness,
 } from "./stale.js";
 import { openAsk } from "./event-fold.js";
+
+/**
+ * The moves out of `collect` taken once a task has ended or the window has run dry (the pick then refills or ends
+ * the run), refused while an answer is unrelayed. `refill` and `stop` stay free: `refill` ends no task and
+ * re-enters `collect`, `stop` is the main conversation's own word; either way the answer stays held on its session.
+ */
+const PARENT_ANSWER_GUARDED: ReadonlySet<string> = new Set(["slot_free", "stalled"]);
 
 /** Template vars with an action's result laid over them; the lazy getters (`stale_sessions`) carried along. */
 function withResult(vars: Record<string, unknown>, result: ActionResult): Record<string, unknown> {
@@ -569,6 +576,15 @@ export class Engine {
       throw new Error(`Transition "${transitionName}" not available. Available: ${available}`);
     }
 
+    // a dispatching session's `collect` cannot end while a task holds a parent answer nobody relayed
+    if (frame.current_state === "collect" && PARENT_ANSWER_GUARDED.has(transitionName)) {
+      const held = this.parentAnswerLines(sessionId);
+      if (held.length > 0)
+        throw new Error(
+          `Transition "${transitionName}" refused: a task holds a parent_answer not yet relayed (unrelayed). SendMessage each to its driver as \`MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <text>\`, then context_set the task session's \`parent_answer\` to "":\n${held.join("\n")}`,
+        );
+    }
+
     // Check max_transitions
     const maxTransitions = wf.max_transitions ?? DEFAULT_MAX_TRANSITIONS;
     if (frame.total_transitions >= maxTransitions && !isClosingMove(wf, requested)) {
@@ -850,6 +866,45 @@ export class Engine {
   }
 
   /**
+   * One `PARENT-ANSWER:` line per active task session below `sessionId` whose context holds a non-empty
+   * `parent_answer` (what the parent recorded for its NEEDS-PARENT, `<route or decision>`): the task, its
+   * session, the driver of the dispatcher's `tasks` key (else the linked agent) and the text. The dispatcher
+   * relays it to that driver, then clears the key; until then the engine holds it.
+   */
+  public parentAnswerLines(sessionId: string): string[] {
+    const root = this._storage.read(sessionId);
+    const drivers = new Map<string, string>();
+    const tasks = root?.context.tasks;
+    if (typeof tasks === "string")
+      for (const m of tasks.matchAll(/(?:^|\s)[^\s=]+=([0-9a-f]{8})\s+driver=(\S+)/g))
+        drivers.set(m[1], m[2]);
+    const lines: string[] = [];
+    for (const id of activeSubtree(this._storage, sessionId).slice(1)) {
+      const s = this._storage.read(id);
+      const text = s?.context.parent_answer;
+      if (!s || typeof text !== "string" || text.trim() === "") continue;
+      const task = typeof s.context.task === "string" ? s.context.task : "?";
+      const driver = drivers.get(id) ?? s.agent_id ?? "none";
+      lines.push(`PARENT-ANSWER: task=${task} session=${id} driver=${driver}: ${text.trim()}`);
+    }
+    return lines;
+  }
+
+  /** The note a `context_set` of `parent_answer` on task session `sessionId` answers with: who relays it and how. */
+  public parentAnswerNote(sessionId: string): string | undefined {
+    const task = this._storage.read(sessionId);
+    const dispatcher = task?.parent_session_id
+      ? this._storage.read(task.parent_session_id)
+      : undefined;
+    if (!task || !dispatcher || dispatcher.stack.length === 0) return undefined;
+    const held =
+      "held by the engine until the dispatcher relays it to the task's driver and clears the key";
+    if (dispatcherHolds(dispatcher) && dispatcher.agent_id)
+      return `note: parent_answer ${held}; wake the dispatcher: SendMessage({ to: "${dispatcher.agent_id}", message: "answer" }) — no SendMessage to the driver.`;
+    return `note: parent_answer ${held}; the dispatching session ${dispatcher.session_id} shows it in its \`collect\` prompt and cannot leave \`collect\` while it stands.`;
+  }
+
+  /**
    * One `UNANSWERED:` line per driver question in `sessionId`'s active sub-tree that has stood open past
    * `ASK_UNANSWERED_AFTER_S`: a decision that never reached its driver stays visible on the next pass.
    */
@@ -858,7 +913,10 @@ export class Engine {
     for (const id of activeSubtree(this._storage, sessionId).slice(1)) {
       const s = this._storage.read(id);
       const ask = s ? openAsk(s) : null;
-      const line = s && ask ? unansweredAskLine(s, ask, now) : undefined;
+      // an answer the engine holds is waiting for the dispatcher, not lost: no repeat of the question
+      const answered =
+        typeof s?.context.parent_answer === "string" && s.context.parent_answer.trim() !== "";
+      const line = s && ask && !answered ? unansweredAskLine(s, ask, now) : undefined;
       if (line) lines.push(line);
     }
     return lines;
@@ -1470,6 +1528,10 @@ export class Engine {
     // read only by a template that names it: it walks the session's sub-tree
     Object.defineProperty(vars, "stale_sessions", {
       get: () => this.staleLines(session.session_id, true).join("\n") || "none",
+    });
+    // the parent's recorded answers the dispatcher has not relayed yet
+    Object.defineProperty(vars, "parent_answers", {
+      get: () => this.parentAnswerLines(session.session_id).join("\n") || "none",
     });
     const ar = session.last_action_result;
     if (ar) {

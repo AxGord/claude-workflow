@@ -256,6 +256,13 @@ states:
       task session stale past the queue header's `stale_task_after: N` (minutes, default 60): treat it as a
       NEEDS-PARENT line of that task (above) once — look at its agent and state, then answer or tell the user.
 
+      Parent answers the engine holds (the parent's answer to a task's NEEDS-PARENT, recorded as the task session's `parent_answer`
+      key; `slot_free` and `stalled` are refused while one stands):
+      {{parent_answers}}
+      Each `PARENT-ANSWER: task=<ID> session=<P> driver=<id>: <text>` line → SendMessage that driver EXACTLY `MAIN DECISION (quoted,
+      the main conversation's own word): task=<ID>: <text>`, then `context_set({session_id: <P>, key: "parent_answer", value: ""})`:
+      the engine holds the answer until that clear. Relay each once, before any other move.
+
       Route this session:
       - a task session reached its terminal (`done` / `closed` / `released`) → update `tasks`, then
         `slot_free` (the pick runs again and refills the freed slot).

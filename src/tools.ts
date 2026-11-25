@@ -104,6 +104,19 @@ export function unansweredNotice(engine: Engine, sessionId: string): string[] {
 }
 
 /**
+ * The `PARENT-ANSWER:` lines a dispatching session still holds, unless `body` already shows them (a revisit's
+ * short reply does not render `{{parent_answers}}`): a lost wake leaves the held answer in view on the next reply.
+ */
+function unshownParentAnswers(engine: Engine, sessionId: string, body: string): string[] {
+  try {
+    return engine.parentAnswerLines(sessionId).filter(line => !body.includes(line));
+  } catch {
+    // a notice never fails the call it rides on
+    return [];
+  }
+}
+
+/**
  * `staleNotice` unless `body` already shows every line of it — a prompt that renders
  * `{{stale_sessions}}` (a revisit's digest does not render it, so the notice comes back there).
  */
@@ -735,7 +748,10 @@ export function registerTools(
         const starved = starvationLines(storage, sid);
         const body = formatStatus(status, { showSessionId: true, forceFullPrompt: true });
         const stale = unshownStale(engine, sid, body);
-        const unanswered = unansweredNotice(engine, sid);
+        const unanswered = [
+          ...unansweredNotice(engine, sid),
+          ...unshownParentAnswers(engine, sid, body),
+        ];
         const text = [
           ...(starved.length > 0 ? [...starved, ""] : []),
           ...(stale.length > 0 ? [...stale, ""] : []),
@@ -829,6 +845,7 @@ export function registerTools(
             ...starvationLines(storage, sid),
             ...unshownStale(engine, sid, body),
             ...unansweredNotice(engine, sid),
+            ...unshownParentAnswers(engine, sid, body),
           ];
           const text =
             (warning ? warning + "\n\n" : "") +
@@ -872,10 +889,13 @@ export function registerTools(
           engine.assertNotSuspended(sid);
           const warning = engine.assertOwnership(sid, args.force);
           const derived = await engine.setContext(sid, args.key, args.value, args.actor);
+          const answerNote =
+            args.key === "parent_answer" ? engine.parentAnswerNote(sid) : undefined;
           const text =
             (warning ? warning + "\n" : "") +
             `Context "${args.key}" set successfully.` +
-            (derived ? `\nmodel_table: ${derived}` : "");
+            (derived ? `\nmodel_table: ${derived}` : "") +
+            (answerNote ? `\n${answerNote}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {

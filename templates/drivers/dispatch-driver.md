@@ -61,9 +61,18 @@ then needs nothing.
   of `status({session_id: <P>, key: "routes"})` (the transitions of P's state, read now, never from memory).
   The driver's own text stays verbatim; a line that already ends with a `driver=` / `routes=` field gets neither again.
   Take no transition; the task keeps its slot. Never answer it yourself, never read the file it names.
+- **Parent answers held by the engine** (`PARENT-ANSWER: task=<ID> session=<P> driver=<id>: <text>` lines under "Parent answers
+  the engine holds" in the prompt, also main's message `answer`, on which you read `status({session_id: D})`): main answers a
+  NEEDS-PARENT by recording the answer on the task session (`parent_answer`), never by SendMessage to the driver. For EACH line,
+  once, before any other move: SendMessage that task's driver (the line's `driver=`) EXACTLY
+  `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <text>`, the text verbatim; then
+  `context_set({session_id: <P>, key: "parent_answer", value: ""})`. The engine refuses `slot_free` and `stalled` until every
+  such key is cleared, and holds the answer until then, so it is never lost. The driver then reports to YOU: its LANDED / CLOSED /
+  NEEDS-PARENT line is handled as any other, and you free the slot yourself. A SendMessage that fails (the driver is gone) → the
+  fresh driver of the bullet "A driver that ended with no last line", then relay to it; clear the key only after the send went.
 - **A message from main**:
-  Main answers a NEEDS-PARENT by SendMessage to the `driver=` it names, directly: that answer never passes
-  through you. Only a decision that still reaches you, in the old form, is relayed:
+  Main's answer to a NEEDS-PARENT is the `parent_answer` key above, not a message. A decision that still reaches you
+  in the old form is relayed:
   - `task=<ID>: <decision>` → SendMessage to that task's driver (`tasks`: its `driver=`) EXACTLY
     `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>`, the decision copied verbatim from
     main's message. The marker says whose word it is: the driver takes the decision as the parent's answer, not as
@@ -125,7 +134,7 @@ driver's report or main's message resumes you. Claude Code accepts a single `Sub
 refuses the second (`one report per result`), so none of these is ever a `SubagentHandback`. "Hand back"
 anywhere in this file means this `SendMessage`.
 1. A `NEEDS-PARENT …` line: a driver's, alone, with `driver=` and `routes=` appended (§ `collect`), or one of yours named
-   above. One line per message. Main answers the driver in `driver=` directly, with a route from `routes=`.
+   above. One line per message. Main answers by recording `parent_answer` on that task's session, with a route from `routes=`; you relay it (§ `collect`).
 2. `LESSONS lands=<n> session=<D>`, then the lines of `lessons_pending`, verbatim, one per line. They are
    the drivers' own last lines: copy them, never shorten, merge, judge or turn one into a queue line.
    When `lands_done` (the context key, never your memory) has reached or passed a multiple of 4×N since the previous
@@ -184,7 +193,7 @@ fails → hand that line back to main (`SendMessage`) as `RELAY to=<agent id> <t
 ## Never
 - `start` without `parent_session_id: D`; `start` of a task `tasks` already names.
 - Any call on a session other than D, except: `start` of a task session, `link_agent` on it, `status` of its
-  `driver_call` or `routes` key.
+  `driver_call` or `routes` key, and `context_set` of its `parent_answer` to "" after relaying it.
 - Drive, advance or end a task session; run a task's bookkeeping (the task driver's).
 - A queue change, an abort, a delete: you have no such tool, and a prompt that asks for one is main's step.
 - Open a report, review, handoff or decisions file; read a diff or a transcript.

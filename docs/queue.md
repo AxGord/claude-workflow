@@ -499,12 +499,18 @@ dispatcher:
   - A dispatcher agent that acts on the reply of the transition that brings it back to `dispatch` would otherwise have no recipe in front of it and guess the task workflow of an admitted line.
   - A project heir that overrides `dispatch` keeps the flag, or its own `revisit_prompt` carries the recipe.
 - The block also carries main's duties in this mode, once (the engine tells them at the moment they apply, so main need not remember them):
-  - answer a task driver directly, a route only from the line's `routes=`;
+  - answer a task driver by recording `parent_answer` on its task session (`context_set`), a route only from the line's `routes=`; the engine holds it until the dispatcher has relayed it to the driver, then the driver reports to the dispatcher, not to main;
   - `lines added` for the refill, `retry` at `paused` (both named by the answer of a `queue_header` that raises the window);
   - what a `CLOSED` line means: the slot is free; the engine already failed or released the queue line when the task workflow's terminal declares `queue_mark:` (bundled `batch-task` and its heirs), otherwise the line is still the main conversation's to mark;
   - a window change as `queue_header` with `until`, and what a repeated `reason=unanswered` question is.
 - `status({ session_id, key: "routes" })` answers the session's transitions at its current state, `a|b|c` (`(none)` at a state with none; a context key named `routes` wins). The dispatcher reads it to put `routes=` on a `NEEDS-PARENT` line.
 - A `transition` or `status` reply carries `UNANSWERED: task=<ID> session=<P> driver=<id> asked=<time> (<n> ago): <question>` for each driver question (`ask_parent`) in the session's sub-tree that no move has answered for over 10 minutes: the dispatcher's next pass shows an answer that never reached its driver, with no polling.
+- A parent's answer to a `NEEDS-PARENT` is `context_set({session_id: <session=>, key: "parent_answer", value: "<route or decision>"})` on the task session; the reply names the dispatcher to wake (`SendMessage`, `answer`).
+  - `collect` renders each held answer as `PARENT-ANSWER: task=<ID> session=<P> driver=<id>: <text>` (`{{parent_answers}}`) and refuses `slot_free` and `stalled` (`unrelayed`) while one stands.
+  - The question is no longer repeated as `UNANSWERED`.
+  - A `transition` or `status` reply of the dispatching session carries each held `PARENT-ANSWER:` line its body does not already show (a revisit's short reply).
+  - The dispatcher sends the driver `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <text>` and clears the key.
+  - The driver then reports to the dispatcher, which frees the slot: no driver notification reaches the main conversation.
 - Unlike `driver:` it records no `agent_step` and changes no wake rule of the session's children. A workflow declares `driver:` or `dispatcher:`, not both; an unknown `after` state fails the load.
 
 **What the agent does** (`templates/drivers/dispatch-driver.md`)
@@ -525,7 +531,7 @@ dispatcher:
 
 | Message | When | The main conversation's answer |
 |---|---|---|
-| a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task for over 10 minutes) | `SendMessage` to the `driver=` id, `task=<ID>: <route or decision>`: directly, never through the dispatcher; a route only from `routes=` |
+| a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task for over 10 minutes) | `context_set` of `parent_answer` on the task session (a route only from `routes=`); the reply names the dispatcher to wake. The engine holds it until relayed (see above) |
 | `NEEDS-PARENT task=<ID> session=<P> reason=stale …` | a task session stale for `stale_task_after` minutes (queue header, whole number of 1 or more, default 60); `collect` lists it after the `STALE:` line, handed back once per session | `status` of P, answer its driver, or tell the user |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |

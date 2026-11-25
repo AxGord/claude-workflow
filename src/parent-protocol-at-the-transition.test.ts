@@ -109,12 +109,12 @@ const statusOf = (file: string, id: string): string =>
   readQueue(file).lines.find(l => l.id === id)!.status;
 
 describe("(1) a NEEDS-PARENT carries what main needs to answer: the driver and the state's routes", () => {
-  it("the dispatcher reads routes with status key `routes`, appends driver= and routes=, and main answers the driver", () => {
+  it("the dispatcher reads routes with status key `routes`, appends driver= and routes=, and main answers through the engine", () => {
     const md = read("templates/drivers/dispatch-driver.md");
     expect(md).toContain("` driver=<the agent id of that task in `tasks`>`");
     expect(md).toContain('`status({session_id: <P>, key: "routes"})`');
     expect(md).toContain("` routes=<a|b|c>`");
-    expect(md).toContain("Main answers the driver in `driver=` directly");
+    expect(md).toContain("Main answers by recording `parent_answer` on that task's session");
     expect(md).toContain("`driver_call` or `routes` key");
   });
 
@@ -140,13 +140,15 @@ describe("(1) a NEEDS-PARENT carries what main needs to answer: the driver and t
     expect((await m.call("status", { session_id: d, key: "routes" })).text).toBe("mine");
   });
 
-  it("the DRIVER block tells main to answer the driver directly, routes only from the line, and lists the duties", async () => {
+  it("the DRIVER block tells main to record the answer in the engine, routes only from the line, and lists the duties", async () => {
     process.env.WF_DISPATCHER = "1";
     const m = mount(new Loader(TEMPLATES, tmp(), null));
     const block = (await m.call("start", { workflow: "batch" })).text;
     expect(block).toContain("`NEEDS-PARENT … driver=<agent id> routes=<a|b|c>` line");
-    expect(block).toContain("answer THAT driver directly: SendMessage to the `driver=` id");
-    expect(block).toContain("never to the dispatcher");
+    expect(block).toContain(
+      'record the answer in the engine: `context_set({session_id: <its session=>, key: "parent_answer"',
+    );
+    expect(block).toContain("no SendMessage to the driver");
     expect(block).not.toContain("SendMessage your decision to the DISPATCHER");
   });
 });
@@ -454,11 +456,11 @@ describe("(5) an answer that never reached a driver is visible on the next event
   });
 });
 
-describe("the driver's side: a direct answer from main", () => {
+describe("the driver's side: an answer relayed by the dispatcher, a direct one still taken", () => {
   it("both driver instruction files take `task=<ID>: <route>` from main as the answer", () => {
     for (const f of ["templates/drivers/task-driver.md", "agents/driver.md"]) {
       const md = read(f);
-      expect(md).toContain("The main conversation also answers directly");
+      expect(md).toContain("sent to your agent id directly by the main conversation");
       expect(md).toContain("`driver=`");
       expect(md).toContain("`closed` / `released` / `stopped`");
     }

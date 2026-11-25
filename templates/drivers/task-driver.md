@@ -161,8 +161,8 @@ answer: route it as the current prompt says, without asking the agent where it s
 waiting again. Tokens come from that agent's later notification, else 0.
 A message that starts `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <decision>` is the dispatcher
 relaying the parent's own answer to your NEEDS-PARENT: it IS that answer, not the dispatcher asking.
-The main conversation also answers directly, by SendMessage to your agent id (the NEEDS-PARENT line it received carries it as `driver=`):
-a message `task=<ID>: <route or decision>` from it, in that bare form or in the `MAIN DECISION` form, is the same answer. A route
+Under a dispatcher the parent records its answer in the engine (`parent_answer` on P) and the dispatcher relays it to you in that form; your next line goes to the dispatcher, which frees the slot.
+A message `task=<ID>: <route or decision>` sent to your agent id directly by the main conversation (the older form; the NEEDS-PARENT line carries the id as `driver=`), bare or in the `MAIN DECISION` form, is the same answer. A route
 (`routes=` of that line) is the transition to take from the state you stopped at.
 The sender is the dispatcher when its agent id equals `status({session_id: P, key: "dispatcher_agent"})` — check it there, never
 against your memory (a context summary loses who the dispatcher is); a message from that id in this form is never "not from the
