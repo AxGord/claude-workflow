@@ -145,6 +145,12 @@ const BAR_W = ' '.repeat(5)
 /** The second line of a two-line row sits this far in from its first line's indent. */
 const TAB = '    '
 
+/** What keeps a Next row from starting (`QueueLine.wait`), dim, cut to the `room` cells left on its line so the id is never the part that is cut; nothing when there is none or the room is under a few cells. */
+function waitTail(wait: string | undefined, room: number): PaneNode {
+  if (wait === undefined || wait === '' || room < 8) return null
+  return text({ dimColor: true }, fitCells(` ${wait}`, room))
+}
+
 /** A section lays out as one: its rows are on one line each when every row fits `columns`, else on two lines each. */
 export function fitsOneLine(rows: string[], columns: number): boolean {
   return rows.every(r => cells(r) <= columns)
@@ -728,12 +734,12 @@ export function paneTree(input: PaneInput): PaneNode {
         ? [...nextRows.slice(0, showReady), null, ...(nextMore ? nextRows.slice(showReady) : [])].map(l =>
             l === null ? (nextRows.length > showReady ? moreRow('next-more', `+${nextRows.length - showReady} more ${q.ready.length > 0 ? 'can start (dependencies done)' : 'start once the running lines end'}, in the picker's order`, '  ') : null) :
             nextTwo
-              // two lines: bar, kind; the id indented under them, the priority glyph after it
+              // two lines: bar, kind; the id indented under them, the priority glyph after it, then what keeps it waiting
               ? col(
                   text({}, '  ', level(l.difficulty), ' ', kindOf(l.id)),
-                  text({}, '  ', TAB, fitCells(l.id, Math.max(1, columns - 4 - TAB.length)), ' ', prioCell(l.priority)),
+                  text({}, '  ', TAB, fitCells(l.id, Math.max(1, columns - 4 - TAB.length)), ' ', prioCell(l.priority), waitTail(l.wait, columns - 2 - TAB.length - cells(l.id) - 2)),
                 )
-              : text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', l.id, ' ', prioCell(l.priority)),
+              : text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', l.id, ' ', prioCell(l.priority), waitTail(l.wait, columns - cells(`  ${BAR_W} ${markOf(l.id)} ${l.id} `) - 1)),
           )
         : null,
       header('lands', TONE.ok, landedHeading(s.lands.length, s.landedUsd, s.parentUsd, s.landBranch)),

@@ -16,6 +16,7 @@ import type {
   Snapshot,
 } from "../types/index.js";
 import type { EventKind, WfEvent } from "./event-fold.js";
+import { waitTail } from "./queue-wait.js";
 import { kindMark, type MapLayout, type MapWorkflow } from "./map-layout.js";
 
 /** One event: ms after `ReplayFile.start`, its kind, the index of its session in `ReplayFile.sessions`, its data. */
@@ -855,6 +856,10 @@ function queueAt(file: ReplayFile, lines: readonly Seen[], at: number): PendingV
       ready.push(row);
       continue;
     }
+    const wait = waitTail(
+      why,
+      left.length === 0 && against !== undefined ? { how: against[0], id: against[1] } : undefined,
+    );
     waiting.push({ id: q.id, why, difficulty: q.difficulty, priority: q.priority });
     const running = (id: string): boolean => started(id) && !ended(id);
     if (
@@ -863,7 +868,7 @@ function queueAt(file: ReplayFile, lines: readonly Seen[], at: number): PendingV
       left.every(running) &&
       (against === undefined || running(against[1]))
     )
-      unblocked.push(row);
+      unblocked.push({ ...row, wait });
   }
   return {
     pending,

@@ -40,6 +40,8 @@ export type QueueLine = {
   after: string[]
   /** urgent / high / low; absent = normal */
   priority?: string
+  /** a `unblocked` row only: what keeps the line from starting, as the picker words it (`waits: <id> (overlap)`, `after: <id> (running)`); absent: nothing, the line is next to admit */
+  wait?: string
 }
 
 /** A `failed` queue line: `recent` = it ended within the last two days (queue_mark's `ended`; a line with none is older), its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured); `usdFloor` stands in when a run recorded only a partial sum (an agent unmeasured): a lower bound drawn `≥$x`, never added to a total. */

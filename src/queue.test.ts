@@ -1571,6 +1571,30 @@ describe("describeQueue", () => {
     expect(reasons.F).toMatch(/^overlaps /);
   });
 
+  it("wait: a pending line the picker keeps out carries the Next row's tail, cut from its refusal; a ready line and a non-pending one carry none", () => {
+    const wait = Object.fromEntries(describeQueue(q).lines.map(l => [l.id, l.wait]));
+    expect(wait.B).toBe("waits: A (overlap)");
+    expect(wait.D).toBe("after: B (pending)");
+    expect(wait.E).toBe("parent-run");
+    expect(wait.F).toBe("waits: A (overlap)");
+    expect(wait.C).toBeUndefined();
+    expect(wait.A).toBeUndefined();
+    const parked = describeQueue(
+      parseMd(
+        [
+          "# x",
+          "batch_size: 2",
+          "## Tasks",
+          "- [>] A | repo: /tmp | touches: src/a.ts | text of a is long enough to be prose here",
+          "- [ ] P ⏸ | repo: /tmp | touches: src/p.ts | text of p is long enough to be prose here",
+          "",
+        ].join("\n"),
+        "/tmp/q.md",
+      ),
+    ).lines;
+    expect(parked.find(l => l.id === "P")?.wait).toBe("parked");
+  });
+
   it("admitOrder: every pending line carries its place in the picker's visiting order (priority, then file order), whatever keeps it out; other lines carry none", () => {
     const md = (id: string, rest: string) =>
       `- [ ] ${id} | repo: /tmp | ${rest} | text of ${id} is long enough to be prose here`;

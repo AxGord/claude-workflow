@@ -20,6 +20,7 @@ The pane's parts:
     - While no line is admittable but lines run, it lists what the running ones unblock instead: the pending lines kept out only by them, in the order the picker admits them once they end.
       - GET `/api/queue` gives each such line `unblockOrder`, from the picker's own pass with the running lines done.
       - A parked, backlog, parent-run or `after:`-a-pending line is not listed, nor is anything under a pause.
+    - A row of that list ends in a dim tail, what keeps it from starting: `waits: <id> (overlap)` (also `(exclusive)`, `(breaking)`), `after: <id> (running)`, `breaking`. It is cut from the picker's own refusal (`waitTail`; `/api/queue` gives it as `wait`), and cut with `…` before the id is. A line next to admit has none.
     - It has the same cap and `+N more` fold; nothing to list = `nothing ready`.
     - The priority is a coloured one-cell glyph after the id, one space after the id, never padded to a column: `⇈` urgent red, `↑` high orange, `↓` low grey, normal none and a blank cell.
     - The dashboard's plan rows use the same glyphs, and its `next:` strip lists the same unblocked rows.

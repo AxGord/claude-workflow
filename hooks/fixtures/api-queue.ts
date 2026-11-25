@@ -65,6 +65,7 @@ export const API_QUEUE = {
       "notes": 0,
       "text": "w",
       "reason": "after: NEXT-1 (pending)",
+      "wait": "after: NEXT-1 (pending)",
       "admitOrder": 2
     },
     {
@@ -79,6 +80,7 @@ export const API_QUEUE = {
       "notes": 0,
       "text": "p",
       "reason": "parked",
+      "wait": "parked",
       "admitOrder": 3
     },
     {

@@ -258,6 +258,13 @@ describe("snapshotAt plays the queue: Waiting -> Next -> Running as the lines' s
     const s = snapshotAt(file, 75).queue;
     expect(s?.ready).toEqual([]);
     expect(s?.unblocked.map(l => l.id)).toEqual(["O", "Y", "W"]);
+    // each row's tail is the pick's refusal, as the live pane draws it
+    expect(s?.unblocked.map(l => l.wait)).toEqual([
+      "waits: N (overlap)",
+      "after: A (running)",
+      "waits: A (overlap)",
+    ]);
+    expect(s?.ready.map(l => l.wait)).toEqual([]);
     // a line that waits for one that has not started is not unblocked by the lines running
     expect(snapshotAt(file, 55).queue?.unblocked.map(l => l.id)).toEqual(["A", "O"]);
   });

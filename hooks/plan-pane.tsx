@@ -156,7 +156,7 @@ export function landShasOf(api: { lines?: { id: string; landedSha?: string }[] }
 }
 
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; landedSha?: string; ended?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; wait?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; landedSha?: string; ended?: string }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }, now: number = Date.now()): QueueView {
@@ -170,6 +170,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     after: (l.after ?? '').split(',').map(a => a.trim()).filter(a => a !== ''),
     priority: l.priority ?? '',
     reason: l.reason ?? '',
+    ...(l.wait ? { wait: l.wait } : {}),
   }))
   const order = new Map(api.lines.map(l => [l.id, l.pickOrder ?? 0]))
   const admitOrder = new Map(api.lines.flatMap(l => (l.admitOrder === undefined ? [] : [[l.id, l.admitOrder] as const])))

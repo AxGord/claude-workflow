@@ -684,7 +684,7 @@ test('the Waiting tab draws the top row first: the high line, though it sits bel
 
 // the engine's /api/queue answer for one running exclusive line and pending lines of its repo: `unblockOrder` is the picker's own
 // pass with the running lines done; a line kept out by something else (`after:` a pending line) has none
-const unblockQueue = (pending: { id: string; unblockOrder?: number; priority?: string }[]) => {
+const unblockQueue = (pending: { id: string; unblockOrder?: number; priority?: string; wait?: string; reason?: string }[]) => {
   const base = API_QUEUE.lines.find(l => l.id === 'NEXT-1')!
   const mk = (id: string, status: string, extra: object = {}) => ({ ...base, id, status, priority: undefined, pickOrder: undefined, ...extra })
   return {
@@ -720,6 +720,34 @@ test('Next: with a running exclusive line the pane lists the two lines it unbloc
   } finally {
     API_QUEUE.lines.splice(0, API_QUEUE.lines.length, ...saved)
   }
+})
+
+test('Next: an unblocked row carries the picker\'s wait as a dim tail, cut before the id; a ready row carries none', async ($, on) => {
+  engine(on, true)
+  const view = queueView('/proj/q.yaml', unblockQueue([
+    { id: 'P-1', unblockOrder: 0, wait: 'waits: EXCL-RUN (overlap)' },
+    { id: 'P-2', unblockOrder: 1, wait: 'after: EXCL-RUN (running)' },
+  ]) as never)
+  expect(view.unblocked.map(l => l.wait)).toEqual(['waits: EXCL-RUN (overlap)', 'after: EXCL-RUN (running)'])
+  const saved = API_QUEUE.lines.splice(0, API_QUEUE.lines.length)
+  API_QUEUE.lines.push(...(unblockQueue([
+    { id: 'P-1', unblockOrder: 0, wait: 'waits: EXCL-RUN (overlap)' },
+    { id: 'P-2', unblockOrder: 1, wait: 'after: EXCL-RUN (running)' },
+  ]).lines as never[]))
+  try {
+    const wide = (await paneTexts($, 100, [])).join('\n')
+    expect(wide).toContain('waits: EXCL-RUN (overlap)')
+    expect(wide).toContain('after: EXCL-RUN (running)')
+    // a narrow pane cuts the tail with an ellipsis and keeps the id whole
+    const narrow = await paneTexts($, 24, [])
+    expect(narrow.some(t => /P-1/.test(t))).toBe(true)
+    expect(narrow.join('\n')).not.toContain('waits: EXCL-RUN (overlap)')
+    expect(narrow.some(t => /waits: .*…/.test(t))).toBe(true)
+  } finally {
+    API_QUEUE.lines.splice(0, API_QUEUE.lines.length, ...saved)
+  }
+  // an admissible line (the default queue's ready rows) has no tail
+  expect(queueView('/proj/q.yaml', API_QUEUE as never).ready.every(l => l.wait === undefined)).toBe(true)
 })
 
 test('Next: nothing pending keeps `nothing ready`', async ($, on) => {

@@ -31,6 +31,7 @@ import YAML, { type Document, isMap, isScalar, isSeq, Scalar, type YAMLMap, YAML
 import { projectRoot } from "./pool.js";
 import { kindMark } from "./map-layout.js";
 import { difficultyError, parseDifficulty } from "./model-table.js";
+import { waitTail } from "./queue-wait.js";
 import { DIFFICULTY_MAX } from "./types.js";
 
 export const QUEUE_EXIT = {
@@ -898,6 +899,8 @@ export interface QueueLineView {
   readonly text: string;
   /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
   readonly reason?: string;
+  /** Pending lines the picker keeps out: the short tail a Next row draws (`waits: <id> (overlap)`, `after: <id> (running)`, `parked`, `breaking`), cut from the same refusal as `reason` (`waitTail`). */
+  readonly wait?: string;
   /** A ready line's place in the picker's order (priority, then file order). */
   readonly pickOrder?: number;
   /**
@@ -959,7 +962,8 @@ export function describeQueue(queue: Queue): {
   readonly archivedIds?: readonly string[];
   readonly lines: readonly QueueLineView[];
 } {
-  const plan = planPick(queue, { ignoreWindow: true });
+  const blocks = new Map<string, PickBlock>();
+  const plan = planPick(queue, { ignoreWindow: true, blocks });
   const landBranch = queue.header.land_branch?.trim() ?? "";
   const why = new Map(plan.reasons.map(r => [r.id, r.why]));
   const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
@@ -1003,6 +1007,9 @@ export function describeQueue(queue: Queue): {
       text: l.text,
       ...(l.status === "pending"
         ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }
+        : {}),
+      ...(l.status === "pending" && !ready.has(l.id)
+        ? { wait: waitTail(why.get(l.id) ?? "?", blocks.get(l.id)?.against) }
         : {}),
       ...(ready.has(l.id) ? { pickOrder: ready.get(l.id) } : {}),
       ...(unblock.has(l.id) ? { unblockOrder: unblock.get(l.id) } : {}),
