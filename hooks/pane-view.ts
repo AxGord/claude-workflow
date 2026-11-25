@@ -203,12 +203,26 @@ export function failedHeading(count: number, spend: FailedSpend | undefined): st
   return `${head}${measured > 0 ? ' · ' + usdText(spend.usd) + (spend.parentUsd > 0 ? ` (parent ${usdText(spend.parentUsd)})` : '') : ''}${spend.missing === count ? ' · no ledger rows' : spend.missing > 0 ? ` · ${spend.missing} not in the ledger` : ''}${unmeasured}`
 }
 
-/** The role an agent plays for the workflow its session runs. */
+/** The role a workflow's name gives its agent: reviewer, worker or recon; else the workflow's own name, never `driver` (only a workflow's `driver:` block makes an agent its driver). */
 export function roleOf(workflow: string): string {
   if (/review/.test(workflow)) return 'reviewer'
   if (/worker/.test(workflow)) return 'worker'
   if (/recon/.test(workflow)) return 'recon'
-  return 'driver'
+  return workflow
+}
+
+/** What a session's agent is: the role the snapshot read (`driver`, or the stage its parent's step spawned it on), else the workflow's name. */
+export function roleOfRow(r: SessionRow): string {
+  return r.role !== undefined && r.role !== '' ? r.role : roleOf(r.workflow)
+}
+
+/** The stage names a state's text reads as `context.model_<x>` / `context.effort_<x>` (the engine's `stagesRead`; `model_step` and the like are not stages). */
+export function stagesOfState(state: unknown): string[] {
+  const names = new Set<string>()
+  for (const m of JSON.stringify(state ?? null).matchAll(/context\.(?:model|effort)_([a-z][a-z_]*)/g)) {
+    if (!['model', 'effort', 'step', 'reached'].includes(m[1]!)) names.add(m[1]!)
+  }
+  return [...names]
 }
 
 /** Difficulty as a five-cell track (one cell per two points): its fill the level, its colour the model the table gives it — 1–3 sonnet (green), 4–6 sonnet/high (yellow), 7–10 opus (red). */
@@ -413,7 +427,7 @@ function singleTaskBody(s: Snapshot, input: PaneInput, room: number): PaneNode {
         dim(e.ms > 0 ? ` in ${spanText(e.ms)}` : ''), e.at > 0 ? dim(` ${sinceText(now - e.at)} ago`) : '')],
     }
   }
-  const agentSeg = (r: SessionRow): Seg[] => [dim(` · ${roleOf(r.workflow)}`), modelSeg(r), dim(` · agent ${r.agent.slice(0, 7)}`)]
+  const agentSeg = (r: SessionRow): Seg[] => [dim(` · ${roleOfRow(r)}`), modelSeg(r), dim(` · agent ${r.agent.slice(0, 7)}`)]
   const items: Item[] = []
   if (main.agent !== '') items.push({ primary: row('  ', { t: '◇ ', p: { color: TONE.info } }, 'agent', ...agentSeg(main), main.agentAt !== undefined ? dim(` ${sinceText(now - main.agentAt)}`) : ''), live: [], last: [], isLastOnly: false })
   const self = execLines(main, '    ')

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- plan pane (ENG-PANE-ROLE-NOT-DRIVER-BY-DEFAULT): `roleOf(workflow)` of `hooks/pane-view.ts` returned `driver` for every workflow whose name held none of review / worker / recon, so a stage agent of another workflow (plan, fix, a project's own stage) was drawn `driver · sonnet|opus` with the stage's model. The role now comes from what the agent is: the snapshot's `SessionRow.role` is `driver` when the session's workflow declares a `driver:` block (read from `/api/workflows`), else the stage the parent's step reads (`agent_step` of the session file, the stage names that parent state's text reads as `context.model_<x>`, the source the event log's model in force uses), else absent and the pane names the agent by its workflow (`reviewer` / `worker` / `recon` by name, otherwise the workflow's own name), never `driver`. The Landed / `✓ landed` end line of a driver needs the dashboard's answer for that reason. Pins: `src/pane-role-not-driver-by-default.test.ts` (a plan-stage row is not `driver`, a row with role `driver` is) and `hooks/plan-pane.test.tsx` (a stage agent of a session file with `agent_step` is named by its stage, the pipeline's driver stays `driver`), failing with the change removed. `docs/dashboard.md` says so; README and the bundled skill do not describe the role label.
+
 ## 0.3.0 - 2026-11-22
 
 What a user meets since 0.2.0, grouped; every change has its own entry below. This is a minor release: workflow YAML gains `queue_mark:` on a terminal state, a `routes` status key and `collect`'s `refill` transition.

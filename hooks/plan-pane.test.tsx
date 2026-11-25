@@ -45,6 +45,9 @@ const NOW = Date.parse('2026-11-07T10:05:00Z')
 /** What a session file reads as; a test that needs an agent linked to it swaps it. */
 let sessionText = SESSION
 
+/** A child session file beside the root's (its stage agent); undefined: none. */
+let childText: string | undefined
+
 /** How far past NOW the non-ticking clock reads (a test moves it to cross midnight). */
 let clockShift = 0
 
@@ -66,6 +69,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
   fetched.splice(0)
   ran.splice(0)
   sessionText = SESSION
+  childText = undefined
   clockShift = 0
   sessionTouch = 0
   queueDown = false
@@ -81,6 +85,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
   on('fs.list', () => ({
     value: [
       { name: 'wf-root.json', kind: 'file', size: 1, mtimeMs: Date.parse('2026-11-07T10:04:00Z') + sessionTouch },
+      ...(childText !== undefined ? [{ name: 'wf-child.json', kind: 'file', size: 1, mtimeMs: Date.parse('2026-11-07T10:04:00Z') }] : []),
       ...(landed ? [{ name: 'ledger.jsonl', kind: 'file', size: 9, mtimeMs: 1 }] : []),
     ],
   }))
@@ -89,6 +94,7 @@ function engine(on: any, withQueue: boolean, landed?: { git: string | ((req: unk
       if (waitFileText === undefined) throw new Error('ENOENT')
       return { value: waitFileText }
     }
+    if (e.path.endsWith('wf-child.json')) return { value: childText ?? '' }
     return { value: e.path.endsWith('ledger.jsonl') ? (landed?.ledger ?? '') : withQueue ? sessionText : sessionText.replace(`"queue_file":"${QUEUE}"`, '"x":1') }
   })
   on('process.run', (_: unknown, e: unknown) => {
@@ -607,6 +613,8 @@ test('a row too long inside a folded day does not put the open days on two lines
 
 test('a driver\'s end notification drawn more than 2 days after its land still says landed: the land is looked up from the agent\'s own time, not the clock', async ($, on) => {
   engine(on, true, { git: 'aaa111\t07.11 09:00\tENG-X', ledger: '' })
+  // the agent is a driver because its workflow declares a `driver:` block, which the pane reads from the dashboard
+  workflowsReply = JSON.stringify({ batch: { name: 'batch', driver: { model: 'haiku', effort: 'medium' }, states: {} } })
   sessionText = LINKED
   on('ui.render', ($: any, e: any) => {
     const { Text } = $.ui.resolve(e)
@@ -1411,7 +1419,7 @@ function singleLines(sessions: SessionRow[], opt: { rows?: number; columns?: num
 
 /** A full single-task view: a pipeline with an agent, a child running an exec, a last exec, history, and the pool. */
 const FULL = (): SessionRow[] => [
-  sessionRow({ agent: 'agent-0123456789', agentAt: T0 - 30 * MIN, model: 'opus', visit: 2, recent: MOVES, next: ['approve→land', 'rework→work'], lastExec: { state: 'gate', code: 1, ms: 93_000, at: T0 - 6 * MIN } }),
+  sessionRow({ agent: 'agent-0123456789', agentAt: T0 - 30 * MIN, role: 'driver', model: 'opus', visit: 2, recent: MOVES, next: ['approve→land', 'rework→work'], lastExec: { state: 'gate', code: 1, ms: 93_000, at: T0 - 6 * MIN } }),
   sessionRow({ id: 'c1', parent: '94fe30d6-aaaa-bbbb', workflow: 'slice-worker', state: 'sync_gate_run', tag: '', since: T0 - 2 * MIN, isWorking: true, agent: 'worker-9876543', model: 'sonnet',
     exec: { state: 'sync_gate_run', since: T0 - 75_000, command: 'node bin/dev.js   slice-gate\nsecond line', timeoutMs: 600_000 } }),
 ]
@@ -1566,6 +1574,35 @@ test('the pane of a session with no queue draws the exec in flight, the last exi
   expect(texts).toContain('    ❯ node bin/dev.js slice-gate 1m15s/10m00s')
   expect(texts).toContain('  ◇ agent · driver · opus · agent agent-0 35m')
   expect(texts.some(t => /^ {2}next /.test(t) && t.includes('ok→review') && t.includes('err→work'))).toBe(true)
+  await ui.unmount()
+})
+
+test('a stage agent of a workflow with no `driver:` block is named by the stage its parent\'s step read, never `driver`', async ($, on) => {
+  engine(on, false)
+  workflowsReply = JSON.stringify({
+    ...JSON.parse(WORKFLOWS),
+    'slice-plan': { name: 'slice-plan', states: { draft: { type: 'prompt' } } },
+    'slice-pipeline': { name: 'slice-pipeline', driver: { model: 'haiku', effort: 'medium' }, states: { plan_spawn: { type: 'prompt', prompt: 'spawn with model {{context.model_plan}}' } } },
+  })
+  sessionText = EXEC_SESSION
+  childText = JSON.stringify({
+    session_id: 'wf-child',
+    parent_session_id: '94fe30d6-aaaa-bbbb',
+    claude_session_id: SID,
+    started_at: '2026-11-07T10:00:00Z',
+    agent_id: 'plan-9876543',
+    agent_step: { workflow: 'slice-pipeline', state: 'plan_spawn', visit: 1 },
+    stack: [{ workflow: 'slice-plan', current_state: 'draft', state_visits: { draft: 1 } }],
+    history: [],
+  })
+  sessionTouch = 1000
+  await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string)
+  expect(texts).toContain('  ◇ agent · driver · haiku · agent agent-0 35m')
+  const planRow = texts.find(t => /slice-plan/.test(t))
+  expect(planRow).toMatch(/· plan · agent plan-98/)
+  expect(planRow).not.toMatch(/driver/)
   await ui.unmount()
 })
 

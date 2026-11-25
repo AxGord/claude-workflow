@@ -16,6 +16,8 @@ export type SessionRow = {
   recent: { from: string; to: string; at: number }[]
   /** where the current state can go, from the workflow's graph (`name→target`, exec `code→target`); empty unknown */
   next: string[]
+  /** what the linked agent is: `driver` (the session's workflow declares a `driver:` block), else the stage its parent's step spawned it on; absent: the pane names it by its workflow */
+  role?: string
   /** the model the workflow's agent runs on, from the workflow's `driver:` block of the dashboard's /api/workflows; absent: the workflow declares none, or the dashboard did not answer */
   model?: string
   /** ms since the epoch of the last `link_agent` of the session; absent: none */

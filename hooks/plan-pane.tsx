@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { AgentSeen, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
-import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOf, spawnLine, statusBandTree, TONE, two } from './pane-view'
+import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOfRow, spawnLine, stagesOfState, statusBandTree, TONE, two } from './pane-view'
 import type { Move, PaneAction, PaneEl, PaneNode } from './pane-view'
 
 const PANE = 'workflow-plan'
@@ -11,7 +11,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-10' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-11' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -30,13 +30,15 @@ const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { sh
 const GRAPH_TTL_MS = 5 * 60 * 1000
 const RECENT = 6
 
-type Parsed = { mtime: number; row: SessionRow | null; claude: string; queueFile: string; execRc: string }
+type Parsed = { mtime: number; row: SessionRow | null; claude: string; queueFile: string; execRc: string; step: { workflow: string; state: string } | null }
 /** Parsed state files by name, re-read only when the file's mtime moved. */
 const cache = new Map<string, Parsed>()
-/** What the dashboard's workflow definitions give one state: where it goes, and for an exec the command and the timeout in ms (the engine's default when the definition names none). */
-type StateInfo = { next: string[]; command: string; timeoutMs: number }
-/** workflow → its agent's model ('' none) and state → what it gives; empty until the dashboard answers. */
-let graph = new Map<string, { model: string; states: Map<string, StateInfo> }>()
+/** What the dashboard's workflow definitions give one state: where it goes, and for an exec the command and the timeout in ms (the engine's default when the definition names none), and the stages whose model its text reads. */
+type StateInfo = { next: string[]; command: string; timeoutMs: number; stages: string[] }
+/** What one workflow gives: its driver block's model ('' none), whether it declares a `driver:` (its agent IS the driver), and state → what it gives. */
+type WorkflowInfo = { model: string; isDriver: boolean; states: Map<string, StateInfo> }
+/** workflow → what it gives; empty until the dashboard answers. */
+let graph = new Map<string, WorkflowInfo>()
 let graphAt = 0
 /** An exec whose definition names no `timeout` runs under the engine's default (`DEFAULT_EXEC_TIMEOUT`). */
 const DEFAULT_EXEC_TIMEOUT_MS = 30_000
@@ -78,7 +80,7 @@ async function loadGraph($: any, now: number): Promise<void> {
   const res = await $.http.fetch(`${DASHBOARD}/api/workflows`).catch(() => undefined)
   // an unanswered read is not kept: the next refresh asks again, so a dashboard that comes up later fills the graph at once
   if (!res || !res.ok) return
-  const next = new Map<string, { model: string; states: Map<string, StateInfo> }>()
+  const next = new Map<string, WorkflowInfo>()
   try {
     for (const [name, wf] of Object.entries(JSON.parse(res.text) as Record<string, any>)) {
       const states = new Map<string, StateInfo>()
@@ -88,9 +90,10 @@ async function loadGraph($: any, now: number): Promise<void> {
           next: exits(d),
           command: typeof d.command === 'string' ? d.command : '',
           timeoutMs: typeof d.timeout === 'number' && d.timeout > 0 ? d.timeout : DEFAULT_EXEC_TIMEOUT_MS,
+          stages: stagesOfState(d),
         })
       }
-      next.set(name, { model: typeof wf?.driver?.model === 'string' ? wf.driver.model : '', states })
+      next.set(name, { model: typeof wf?.driver?.model === 'string' ? wf.driver.model : '', isDriver: wf?.driver !== undefined && wf.driver !== null, states })
     }
   } catch {
     return
@@ -105,7 +108,7 @@ function parseSession(text: string): Parsed | null {
   const claude = typeof j.claude_session_id === 'string' ? j.claude_session_id : ''
   const ctx = (j.context ?? {}) as Record<string, unknown>
   const queueFile = !j.parent_session_id && typeof ctx.queue_file === 'string' ? ctx.queue_file : ''
-  if (stack.length === 0) return { mtime: 0, row: null, claude, queueFile: '', execRc: '' }
+  if (stack.length === 0) return { mtime: 0, row: null, claude, queueFile: '', execRc: '', step: null }
   const frame = stack[j.active_frame ?? 0] ?? stack[stack.length - 1]
   // the queue line a task session runs: slice-pipeline names it `slice`, engine-task and the generic task workflows `task`
   const tag = typeof ctx.slice === 'string' ? ctx.slice : typeof ctx.task === 'string' && /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(ctx.task) ? ctx.task : ''
@@ -116,11 +119,14 @@ function parseSession(text: string): Parsed | null {
   const ended = Array.isArray(j.history) ? [...j.history].reverse().find((h: any) => typeof h?.exit_code === 'number') : undefined
   const links = Array.isArray(j.agent_links) ? j.agent_links : []
   const agentAt = Date.parse(String(links.at(-1)?.at ?? ''))
+  // the parent's step the agent was linked at: recorded only under a session of a `driver:` workflow, so its presence says a stage agent
+  const at = j.agent_step as { workflow?: unknown; state?: unknown } | undefined
   return {
     mtime: 0,
     claude,
     queueFile,
     execRc: typeof run?.rc === 'string' ? run.rc : '',
+    step: typeof at?.workflow === 'string' && typeof at.state === 'string' ? { workflow: at.workflow, state: at.state } : null,
     row: {
       id: String(j.session_id ?? ''),
       parent: String(j.parent_session_id ?? ''),
@@ -710,8 +716,12 @@ async function build($: any): Promise<Snapshot> {
     const info = exec ? wf?.states.get(exec.state) : undefined
     // the pool wait the engine has counted against the exec's deadline sits beside its exit-code file
     const waited = exec && p.execRc !== '' ? Number(await $.fs.read(`${p.execRc}.wait`).catch(() => '')) : 0
+    // what the agent IS: the driver of a `driver:` workflow, else the stage the parent's step spawned it on; absent: the pane names it by its workflow
+    const stage = p.step ? graph.get(p.step.workflow)?.states.get(p.step.state)?.stages[0] : undefined
+    const role = wf?.isDriver ? 'driver' : stage
     sessions.push({
       ...p.row,
+      ...(role !== undefined ? { role } : {}),
       next: wf?.states.get(p.row.state)?.next ?? [],
       ...(wf && wf.model !== '' ? { model: wf.model } : {}),
       ...(exec ? { exec: { ...exec, command: info?.command ?? '', timeoutMs: info?.timeoutMs ?? 0, ...(Number.isFinite(waited) && waited > 0 ? { waitMs: waited } : {}) } } : {}),
@@ -765,7 +775,7 @@ async function refresh($: any): Promise<Snapshot> {
     if (r.agent === '') continue
     let top = r
     for (let i = 0; i < 8 && top.tag === '' && top.parent !== ''; i++) top = s.sessions.find(x => x.id === top.parent) ?? top
-    seen[r.agent] = { label: top.tag !== '' ? top.tag : r.workflow, role: roleOf(r.workflow), state: r.state, at: s.at }
+    seen[r.agent] = { label: top.tag !== '' ? top.tag : r.workflow, role: roleOfRow(r), state: r.state, at: s.at }
   }
   if (Object.keys(seen).length > 0) {
     await update($, agentsSeen, old => {
@@ -1024,11 +1034,11 @@ export const register: Register = on => {
       return (
         <Text>
           <Text color={TONE.info}>⚙ [{top.tag !== '' ? top.tag : live.workflow}] </Text>
-          <Text dimColor>{spawn?.role ?? roleOf(live.workflow)}</Text>
+          <Text dimColor>{spawn?.role ?? roleOfRow(live)}</Text>
           {modelText}
           <Text dimColor> · </Text>
           {live.workflow} @ <Text weight="bold">{live.state}</Text>
-          {leaf.id !== live.id ? <Text> › {roleOf(leaf.workflow)} @ <Text weight="bold">{leaf.state}</Text></Text> : null}
+          {leaf.id !== live.id ? <Text> › {roleOfRow(leaf)} @ <Text weight="bold">{leaf.state}</Text></Text> : null}
           <Text dimColor> {age(now - leaf.since)} </Text>
           <Link href={`${DASHBOARD}/map/${encodeURIComponent(top.id)}`} label="lane ↗" />
         </Text>

@@ -90,7 +90,7 @@ The pane's parts:
 - **No work queue: the single-task view.** A session with no `context.queue_file` has no tabs: the pane is one screen of sections top to bottom, each left out when it has nothing to show and folded when the pane is short.
   1. The current session: `workflow[task] @ state`, the time in the state and the visit (from the second), the states passed (`done a → b → state`, from the session's last moves) and the transitions the state offers (`next`, from `/api/workflows`; the same text as the Sessions card).
   2. `▶ Running under it (n)`:
-     - the session's linked agent (role, model, id, age since `link_agent`);
+     - the session's linked agent (role, model, id, age since `link_agent`); the role is `driver` only for the agent of a session whose workflow declares a `driver:` block, else the stage the parent's step spawned it on (`plan`, `execute`, `review`, ...), else the workflow's name (`reviewer`, `worker` and `recon` by name), never `driver` by default;
      - the child sessions as a tree, another root session's too (workflow, task, state, time in it, and their agent);
      - an exec in flight under the session that runs it: `❯ <command> <elapsed>/<timeout>`, the command's first line from the workflow's definition;
      - the last exec's exit (`last exec <state> exit N in <time> <age> ago`, green at 0, red otherwise) while no exec runs.
