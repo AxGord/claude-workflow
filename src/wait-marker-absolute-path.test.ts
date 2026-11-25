@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { expandRules } from "./brief-rules.js";
 
 // The wait recipe the shipped prompts teach is EXECUTED here from a cwd that is not the task's logs
 // directory (Claude Code resets an agent's shell cwd to the project root after a call that cds outside
@@ -22,7 +23,7 @@ afterEach(() => {
 describe("the detached-wait recipe in the shipped prompts and docs", () => {
   for (const rel of SOURCES) {
     it(`${rel}: starting it from the project root leaves the root untouched`, () => {
-      const text = fs.readFileSync(path.join(ROOT, rel), "utf8");
+      const text = expandRules(fs.readFileSync(path.join(ROOT, rel), "utf8"));
       const recipe = /`(nohup sh -c [^`]+)`/.exec(text)?.[1];
       expect(recipe, "the start recipe is in the file").toBeDefined();
 
@@ -73,7 +74,7 @@ describe("the detached-wait recipe in the shipped prompts and docs", () => {
       "README.md",
     ];
     for (const rel of files) {
-      const text = fs.readFileSync(path.join(ROOT, rel), "utf8");
+      const text = expandRules(fs.readFileSync(path.join(ROOT, rel), "utf8"));
       expect(text.match(/(?<![\w/}>])L\.(done|log|pid)\b/g), rel).toBeNull();
     }
   });

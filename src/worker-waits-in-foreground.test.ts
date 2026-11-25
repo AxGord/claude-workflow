@@ -3,11 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { expandRules } from "./brief-rules.js";
 import { decideReadOnly } from "./read-only-gate.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
-const flat = (p: string) => read(p).replace(/\s+/g, " ");
+const flat = (p: string) => expandRules(read(p)).replace(/\s+/g, " ");
 
 // A brief a driver hands to an agent it spawns: the file, where it starts and where it ends.
 type Brief = { file: string; from: string; to: string; readOnly: boolean };
@@ -89,7 +90,7 @@ describe("an agent waits in the foreground and never ends a turn with live work"
           /read-only gate refuses a redirect, `\$\( \)` and `sleep`, so you cannot detach a command or loop on a marker: a command that would outlast one call .* you do not run; name it in your verdict as unverified/,
         );
       } else {
-        const d = file.startsWith("templates/") ? "{{context.wt}}.log" : "{{context.wt}}-logs";
+        const d = "{{context.wt}}.log";
         expect(brief).toContain(
           `nohup sh -c '<cmd>; echo $? > ${d}/L.done' > ${d}/L.log 2>&1 & echo $! > ${d}/L.pid`,
         );

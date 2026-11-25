@@ -16,6 +16,7 @@ import {
   ModelRowObjectSchema,
   ModelChoiceObjectSchema,
 } from "./types.js";
+import { carryRules, expandRules } from "./brief-rules.js";
 import { stationWarnings } from "./stations.js";
 import { driverRefError } from "./driver.js";
 import { POOL_GATE_FILE } from "./pool-gate.js";
@@ -356,7 +357,7 @@ export class Loader {
       ) {
         try {
           const merged = WorkflowDefinitionSchema.parse(
-            Loader._resolve(tiers, name, found.tier, []),
+            Loader._expandRules(Loader._resolve(tiers, name, found.tier, [])),
           );
           const errors = this._validate(merged);
           if (errors.length === 0) {
@@ -451,8 +452,41 @@ export class Loader {
       driver: own.driver ?? base.driver,
       dispatcher: own.dispatcher ?? base.dispatcher,
       map: own.map ?? base.map,
-      states: { ...base.states, ...own.states },
+      states: Loader._carryRules(base.states, own.states),
     };
+  }
+
+  /**
+   * The base's states with the heir's laid over by name; a replaced state keeps the engine's brief
+   * rules (`{{rules.NAME}}`) its base prompt names, unless it names or drops them itself.
+   */
+  private static _carryRules(
+    base: WorkflowFile["states"],
+    own: WorkflowFile["states"],
+  ): WorkflowFile["states"] {
+    const states = { ...base, ...own };
+    for (const [name, state] of Object.entries(own ?? {})) {
+      const prompt = carryRules(base?.[name]?.prompt, state.prompt);
+      if (prompt !== undefined && prompt !== state.prompt) states[name] = { ...state, prompt };
+    }
+    return states;
+  }
+
+  /** A resolved definition with the `{{rules.NAME}}` markers of its state prompts expanded. */
+  private static _expandRules(def: object): object {
+    const states = (def as { states?: WorkflowFile["states"] }).states;
+    if (!states) return def;
+    const expanded = Object.fromEntries(
+      Object.entries(states).map(([name, state]) => {
+        if (state.prompt === undefined) return [name, state];
+        try {
+          return [name, { ...state, prompt: expandRules(state.prompt) }];
+        } catch (err) {
+          throw new Error(`state "${name}": ${(err as Error).message}`);
+        }
+      }),
+    );
+    return { ...def, states: expanded };
   }
 
   /**
@@ -467,7 +501,7 @@ export class Loader {
     for (const [name, entry] of tier) {
       try {
         const errors = this._validate(
-          WorkflowDefinitionSchema.parse(Loader._resolve([tier], name, 0, [])),
+          WorkflowDefinitionSchema.parse(Loader._expandRules(Loader._resolve([tier], name, 0, []))),
         );
         if (errors.length > 0)
           broken.push({ name, file: entry.file, reason: errors.join("; "), stale: false });

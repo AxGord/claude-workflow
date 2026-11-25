@@ -2,12 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { expandRules } from "./brief-rules.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), "utf8");
 
 describe("a worker never ends its turn with live background work", () => {
-  const batch = read("templates/batch-task.yaml");
+  const batch = expandRules(read("templates/batch-task.yaml"));
   const cut = batch.indexOf("You review task");
   const worker = batch.slice(0, cut);
   const reviewerText = batch.slice(cut);

@@ -100,6 +100,24 @@ replaced whole, not merged key by key; new states are added). `initial`, `max_tr
   run on the merged result.
 - Without `extends`, `initial` and `states` are required.
 
+**The engine's brief rules survive a replaced state.** A bundled prompt that spawns a worker or a
+reviewer names the engine's protocol rules for that agent (waits in the foreground, the `DELIVERED`
+hand-back line) as a block: `{{rules.worker_waits}}`, `{{rules.reviewer_waits}}`. The loader expands
+the marker once, at load, from one source (`src/brief-rules.ts`); only the block's `{{context.*}}`
+placeholders are left for the render.
+
+A heir that replaces such a state whole would lose the paragraph, so the loader carries over every
+block the base prompt names that the heir's prompt neither names nor drops. It appends the block to
+the heir's prompt under a line saying whom the rules are for, and the driver relays it into its brief.
+In the heir's own prompt:
+
+- write `{{rules.worker_waits}}` (or `{{rules.reviewer_waits}}`) where the rules belong in its brief;
+  a block the heir names is never carried a second time;
+- write `{{rules.none}}` to drop every carried block of that state (it expands to nothing);
+- an unknown name (`{{rules.nope}}`) fails the load, and `wf-validate` reports it.
+
+A heir that copied the paragraph by hand keeps working but now carries it twice: delete its copy.
+
 **Extension points.** The bundled workflows expose the steps a project usually wants to own as
 states with contract names; bundled, each keeps the old behaviour (the agent does it, or nothing):
 
