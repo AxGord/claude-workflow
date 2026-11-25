@@ -9,6 +9,8 @@ description: hxq — structural Haxe READ/query CLI (every agent that reads .hx)
 
 > **`hxq` runs every read and write op; `apq` is the same engine (installed beside it, the docs' name).** Never `node bin/apq.js`; never `cd` (hxq is on PATH, cwd-independent; scratch probes: `hxq probe '<code>'`).
 
+> **Allowed reads (the hook refuses the rest):** `.hx` → `hxq show <file> --select '<sel>'` / `--outline` / `search` / `refs` / `mentions`; a known line range of a non-.hx file → Read with offset+limit; project json → `apq get <file> <path>`. Never grep/sed/cat/head/tail a `.hx` or project json, never a whole-file Read of a `.hx`, never pipe hxq into head/grep (`--limit N`).
+
 **Path arguments: prefer relative.** `hxq` respects CWD; relative paths give shorter hit lines (`<file>:line:col`) than absolute. Use absolute only for files outside the current project.
 
 **Works on ANY `.hx`, including EXTERNAL forks / other repos.** hxq parses by the anyparse grammar regardless of which project a file lives in — `refs`/`uses`/`ast`/`search`/`source` all work cross-project (e.g. querying a `haxe-formatter` fork for ground-truth). Pass the absolute path. Do NOT grep / `node -e readFileSync` / `git show` a fork `.hx` — that is the recurring crutch reflex. Query it structurally (`refs`/`ast`) or read raw lines with `hxq source` (gate-blessed, below; **inside a sandboxed agent use the alias `hxq show`** — a shell sandbox refuses any command carrying the token `source`, since it reads as the builtin that executes a file). Most fork files parse; only the few that genuinely skip-parse need `hxq source` (which reads raw bytes regardless of parse status).
@@ -56,40 +58,33 @@ A `--select` that matches nothing says WHY: an unknown kind (with did-you-mean o
 |---|---|
 | Where value X declared / read / written | `refs X <dir> --decls / --reads / --writes` |
 | Who consumes type T (field/param/return/generics) | `uses T <dir>` |
-| Full change-impact for type T (incl. `.field` access) | `blast T <dir>` |
 | List all top-level type decls across a scope (cross-file) | `symbols <scope> [--kind ClassDecl/…]` |
 | Which files import a module (cross-file) | `importers <module> <scope>` |
 | Declaration site(s) of ONE named type + ambiguity check | `declares <type> <scope>` (matches simple name or qualified path; >1 row = ambiguous, 0 = not declared) |
 | Run analysis checks + report violations | `lint <scope> [--rule <id>]… [--all] [--no-oracle] [--format text\|json]` — `--no-oracle` only while iterating on a file you just edited, NEVER for a gate (verdict). `--list-rules <files…>` = what RUNS here (on/off per apqlint.json chain); bare `--list-rules` = the registry, not what runs. `--rule <id>` force-enables a config-disabled rule. Suppression: trailing `// noqa` / `// noqa: r1, r2` only (`// noqa[r]` suppresses nothing). `--fix` → `hxq-write`. Full semantics: references/lint.md |
 | Every occurrence of name X (incl. case-patterns) | `mentions X <dir>` |
-| Who does function F call (direct/transitive) | `callees 'Type.method' <scope> [--depth N] [--kinds call,ref,new,virtual,contains]` — APPROXIMATE graph (name + declared-type resolution); out-of-scope `[external]`; unresolved sites counted on stderr |
 | Who calls function F (direct/transitive) | `callers 'Type.method' <scope> [--depth N]` (same graph, in-edges) |
-| Is B reachable from A + through which chain | `reach --from 'A.m' --to 'B.n' <scope> [--to …] [--max-paths N]` (`--to` repeatable, `Type.*` patterns; BFS shortest path per pair; default kinds call,ref,new,virtual) |
-| Along which lines does a god-type split | `clusters <TypeName> <scope> [--hubs N]` — components of intra-type call edges after hubs; ⚠️ scope = the type's own package dir, never whole src/ (minutes of CPU) |
 | Main-thread stall candidates | `lint <scope> --rule thread-safety` (config-driven: `sinks` in apqlint.json; findings are CANDIDATES) |
-| Measure a rule's precision/recall against a labelled truth file | `lint-score --truth <truth.json> <report.json>` (key = family+function+subject; exit 1 = a real-long/recall entry lost, 2 = nothing scoreable) |
-| ONLY switch case-patterns `case Foo:` / `case Foo(_):` | `cases Foo <dir>` |
 | Decls carrying `@:meta` | `meta @:meta <dir>` |
 | Match expression / statement shape with metavars | `search 'pattern with $x' <dir>` |
 | Find string-literal / annotation key | `lit '<text>' <dir>` |
 | Find text in comments / TODO / doc-comment | `lit '<text>' <dir> --include-comments` or `--kind Comment` |
 | Find text in `#if`/`#elseif` directive lines (condition text is NOT a node — plain lit/search can't see it) | `lit '<text>' <dir> --include-directives` or `--kind Directive` |
 | **Branch BODIES of every `#if` region mentioning a define** (what runs under a flag) | `cond <DEFINE> <scope> [--active\|--inactive] [--names] [--max-body N]` |
-| **Retire a define — fold every `#if` region it decides, keep the live branch** (WRITE-twin of `cond`) | `resolve-define <DEFINE> <scope> [--undefined] [--write] [--list] [--reformat]` |
 | Subtree at line:col / by selector | `ast file.hx --at L:C` / `--select Kind:name` |
 | Filter `--select` by arity | `--min-children N` / `--max-children N` |
 | Cap rendered child count per level | `--depth N --children-limit M` |
 | Inline-source AST/writer probe (no /tmp) | `probe '<code>' [ast-options]` / `probe -` (stdin) |
-| Structural AST diff between files | `diff a.hx b.hx` (`--flat`, `--limit N`) |
 | **What a commit range changed, by MEANING** (review a diff without raw `git diff`/`git show`) | `changed <base>..<tip> [paths]` — per file: `layout` / `imports` / `renamed old -> new` / `declarations` (+/−/~ by name, with `--select` address) / `values` (JSON key paths +/−/~ old -> new) / `text`; `--names` names only; `--diff <file>[#<sel>]` prints each changed declaration's lines (`-`/`+`, 2 lines context), `#<sel>` one declaration in full |
 | **A value in a project JSON document** (arms records, apq.json, apqlint.json) — grep on it is refused by the gate | `apq get <file> <path>` (dotted path, `a.0.b`; `.` the whole document; `--select '<sel>'` starts from a node); `apq get --where <path>=<value> <file|dir|glob>…` names the record holding a value, across several documents |
-| Single-file PARSE OK/FAIL probe | `recon --probe <file>` |
 | **Which `.hx` files plugin can't parse** | `self-status [<dir>]` (`--strict` exits non-zero on any skip-parse) |
 | Sanity-check direct-child count at root | `ast file.hx --count` / `probe '<code>' --count` |
 | **View file lines** (no parse; any/skip-parse file; Edit-anchorable) — **dedented by the window's MINIMUM indentation**, so it shows raw columns only when the window includes a column-0 line | `source <file> [--range L:L2]` |
 | **A file's or type's MAP — headers + line windows, no bodies** (read this before any body) | `source <file> --outline` / `source <file> --outline --select 'ClassDecl:<T>'` — one row per decl/member: `<from>-<to>  <selector>  <header>`; a member's outline is its signature |
 | **Read ONE node's raw source BY NAME / position** | `source <file> --select 'FnMember:<name>'` / `--at <l>:<c>` (inside a sandbox: alias `show`). A node over the read budget prints its first lines and names the rest on stderr (`--full` for all, `--range L1:L2` for the tail). A file >120 lines with no `--range/--select/--at` is REFUSED with a selector menu; `--all` for the whole file |
 | Decls carrying `@:tag(arg)` (exact arg, NOT substring) | `meta '@:tag(arg)' <dir>` |
+Rows for `blast`, `callees`, `reach`, `clusters`, `lint-score`, `cases`, `resolve-define`, `diff`, `recon --probe` (rarely used): `references/commands.md`.
+
 **A 0-hit `callers` is not proof of absence — and it SAYS so.** Note the graph resolves receivers by NAME, not by a typer: an un-annotated local, a `using` extension, a `Null<T>`/`Dynamic` return, a `new T().m()` receiver all leave the site unresolved and therefore silent. Before turning a thin `callers` result into "only tests call this" / "dead code", cross-check with `hxq mentions <name> <dir>`, and for a member that may be inherited or overridden also query the SUPERTYPE's declaration (`hxq refs <name> <dir> --decls` lists every declaration of the name — an `abstract` one has no body, so it terminates a chain even though it IS the call target).
 
 **Confusion-buster:** `refs` = VALUE bindings, `uses` = TYPE positions, `search` = AST SHAPES, `lit` = CAPTURED STRING CONTENT in leaves. They are not interchangeable. **Neither `refs` nor `uses` catches `expr.field` on a value of type T** — use `blast <Type>` (union + heuristic field-access; `--all` to disable smart 20-hit cap on heuristic section).

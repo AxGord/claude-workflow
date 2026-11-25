@@ -59,15 +59,12 @@ mutation ops. The complete contracts, safety boundaries, writer-emit
 caveats and recipes live in ../hxq/references/ops.md — read it before the FIRST
 mutation op of a session; the index below only names what exists.
 
-Span-splice refactoring ops: rename (in-file / --scope cross-file) ·
-inline · extract-var · change-sig · move · move-member (--closure
---scaffold) · extract-interface · pull-up / push-down ·
-extract-superclass · add-param · remove-param · inline-method ·
-introduce-parameter-object · make-final.
+Span-splice refactoring ops: rename (in-file / --scope cross-file) · extract-var · move-member (--closure
+--scaffold) · move.
 Writer-emit ops (canonical-gated): add-member · add-import · replace-node ·
 add-element · remove-element · remove-import · remove-member · safe-delete ·
-encapsulate-field · set-doc · set-modifier · set-comment · rewrite ·
-comment-rewrite · resolve-define · patch · extract-method · add-meta.
+set-doc · set-modifier · rewrite · comment-rewrite · patch · add-meta.
+Other ops (inline, change-sig, add/remove-param, extract-interface/-method/-superclass, pull-up/push-down, inline-method, introduce-parameter-object, make-final, encapsulate-field, set-comment, resolve-define; rarely used): contracts in ../hxq/references/ops.md.
 JSON files (`test/testkit/arms/<package>.json`, `apqlint.json`, `hxformat.json`): add-element
 (--after/--before/--append/--sorted) · remove-element · replace-node · ast ·
 source work on a `.json` path, format-preserving — NEVER python/sed/jq for
