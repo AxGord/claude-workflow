@@ -115,6 +115,8 @@ function unshownStale(engine: Engine, sessionId: string, body: string): string[]
 interface FormatOptions {
   readonly showSessionId: boolean;
   readonly forceFullPrompt: boolean;
+  /** The caller just took a transition of a state that offers exactly these routes: a short-form reply need not list them again. */
+  readonly sameRoutesAsBefore: boolean;
 }
 
 function formatStateHeader(status: StatusResult): string {
@@ -148,9 +150,14 @@ const CONTEXT_KEY_LIMIT = 40;
  * listed by name only.
  */
 export function formatContext(context: Record<string, unknown>): string[] {
+  const entries = contextEntries(context);
+  return entries.length === 0 ? [] : ["CONTEXT:", ...entries.map(e => e.line)];
+}
+
+/** The lines of `formatContext` after its header, each with the key it shows (`…` for the folded rest). */
+function contextEntries(context: Record<string, unknown>): { key: string; line: string }[] {
   const keys = Object.keys(context);
-  if (keys.length === 0) return [];
-  const lines = ["CONTEXT:"];
+  const entries: { key: string; line: string }[] = [];
   for (const key of keys.slice(0, CONTEXT_KEY_LIMIT)) {
     const raw = context[key];
     const text = (typeof raw === "string" ? raw : (JSON.stringify(raw) ?? String(raw))).replace(
@@ -161,11 +168,38 @@ export function formatContext(context: Record<string, unknown>): string[] {
       text.length > CONTEXT_VALUE_LIMIT
         ? `${text.slice(0, CONTEXT_VALUE_LIMIT)}… [${text.length} chars; status key="${key}" for all]`
         : text;
-    lines.push(`  ${key}: ${cut}`);
+    entries.push({ key, line: `  ${key}: ${cut}` });
   }
   const rest = keys.slice(CONTEXT_KEY_LIMIT);
-  if (rest.length > 0) lines.push(`  … ${rest.length} more: ${rest.join(", ")}`);
-  return lines;
+  if (rest.length > 0)
+    entries.push({ key: "…", line: `  … ${rest.length} more: ${rest.join(", ")}` });
+  return entries;
+}
+
+/** What a session's earlier `status` reply showed the caller: the context lines and how much of the history. */
+interface StatusSeen {
+  readonly lines: ReadonlyMap<string, string>;
+  readonly historyLength: number;
+}
+
+/**
+ * `formatContext` against what the same session's earlier `status` reply already showed: a key whose
+ * line is unchanged is named, not repeated; a changed or new key is listed whole.
+ */
+export function formatContextDelta(
+  context: Record<string, unknown>,
+  seen: ReadonlyMap<string, string> | undefined,
+): string[] {
+  const entries = contextEntries(context);
+  if (entries.length === 0) return [];
+  if (seen === undefined) return ["CONTEXT:", ...entries.map(e => e.line)];
+  const changed = entries.filter(e => seen.get(e.key) !== e.line);
+  const same = entries.filter(e => seen.get(e.key) === e.line).map(e => e.key);
+  if (same.length === 0) return ["CONTEXT:", ...changed.map(e => e.line)];
+  const note = `unchanged since your last status: ${same.join(", ")}; status({ full: true }) lists them`;
+  return changed.length === 0
+    ? [`CONTEXT: ${note}`]
+    : ["CONTEXT:", ...changed.map(e => e.line), `  (${note})`];
 }
 
 // Memory of digest_on_repeat states whose FULL prompt already went out once
@@ -174,12 +208,18 @@ export function formatContext(context: Record<string, unknown>): string[] {
 // per-process context-epoch marker on every start; a changed marker forgets
 // every delivery.
 const deliveredFullPrompts = new Set<string>();
+// What `status` already showed per session, and whether `start` already printed the rules in full:
+// kept for the same context epoch, forgotten with the delivered prompts.
+const statusSeen = new Map<string, StatusSeen>();
+let rulesDelivered = false;
 let contextEpochFile: string | null = null;
 let seenContextEpoch = "";
 
 /** Test seam: forget which digest_on_repeat prompts were already delivered. */
 export function resetDeliveredPrompts(): void {
   deliveredFullPrompts.clear();
+  statusSeen.clear();
+  rulesDelivered = false;
 }
 
 /** The context-epoch marker the SessionStart hook rewrites on /clear and /compact; null = none. */
@@ -201,7 +241,7 @@ function syncContextEpoch(): void {
   }
   if (epoch === seenContextEpoch) return;
   seenContextEpoch = epoch;
-  deliveredFullPrompts.clear();
+  resetDeliveredPrompts();
 }
 
 const START_FORCE_DESCRIPTION =
@@ -215,6 +255,27 @@ const CALLER_DESCRIPTION =
 
 const START_REPLY_DESCRIPTION =
   "Reply shape. \"id\": answer `SESSION: <id> @ <state>` only (plus the DRIVER block of a `driver:` workflow, or of a `dispatcher:` one whose opt-in is set), without the state's prompt and the rules; the session's own agent reads the prompt with status. For a parent that starts a child only to pass the id on.";
+
+const FULL_DESCRIPTION =
+  "true: the whole text, as a first reply gives it, even where this context already received a part of it (the rules, the unchanged context keys and history of an earlier status)";
+
+const RULES_FULL =
+  "WORKFLOW RULES:\n" +
+  "- Transitions in real-time only — never batch multiple transitions in one step.\n" +
+  "- Complete each state fully before transitioning to the next.\n" +
+  "- On tool errors: stop and investigate before continuing.\n" +
+  '- To advance: transition({ transition: "<name>" })';
+
+const RULES_SHORT =
+  'WORKFLOW RULES (as in your first start reply): one transition at a time, in real time; finish each state first; on a tool error stop and investigate; advance with transition({ transition: "<name>" }). start({ full: true }) prints them whole.';
+
+/** The rules block of a `start` reply: whole the first time in a context (or on request), one line after. */
+function workflowRules(full: boolean): string {
+  syncContextEpoch();
+  const whole = full || !rulesDelivered;
+  rulesDelivered = true;
+  return whole ? RULES_FULL : RULES_SHORT;
+}
 
 /** One context value whole, as status({ key }) returns it: a string as is, anything else as JSON. */
 export function formatContextValue(context: Record<string, unknown>, key: string): string {
@@ -235,8 +296,9 @@ export function formatRoutes(available: Readonly<Record<string, unknown>>): stri
 }
 
 export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> = {}): string {
-  const { showSessionId = false, forceFullPrompt = false } = opts;
+  const { showSessionId = false, forceFullPrompt = false, sameRoutesAsBefore = false } = opts;
   const parts: string[] = [];
+  let shortForm = false;
 
   if (showSessionId) parts.push(`SESSION: ${status.sessionId}`);
 
@@ -252,6 +314,7 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
     status.visitCount > 1 &&
     status.currentState.full_on_revisit !== true
   ) {
+    shortForm = true;
     if (status.revisitPrompt === undefined) {
       parts.push(
         `Revisit #${status.visitCount} — follow the instructions from your first visit to this state.`,
@@ -266,6 +329,7 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
     digestable &&
     deliveredFullPrompts.has(digestKey)
   ) {
+    shortForm = true;
     parts.push(
       `This state's full prompt was already delivered earlier in this context — follow those instructions.`,
     );
@@ -285,7 +349,11 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
   const transitionNames = Object.keys(status.availableTransitions);
   if (transitionNames.length > 0) {
     parts.push("");
-    parts.push("TRANSITIONS: " + transitionNames.join(", "));
+    parts.push(
+      shortForm && sameRoutesAsBefore && status.revisitPrompt === undefined
+        ? "TRANSITIONS: unchanged — the routes of the state you just left"
+        : "TRANSITIONS: " + transitionNames.join(", "),
+    );
   }
 
   if (status.taskOps.length > 0) {
@@ -529,7 +597,7 @@ export function registerTools(
     "start",
     {
       description:
-        "Start a workflow. Returns the first prompt, session ID, and available transitions. A start without parent_session_id while this process already has an active root session is refused (a sub-agent never gets a root: pass parent_session_id).",
+        "Start a workflow. Returns the first prompt, session ID, and available transitions (the rules block is one line after the first start in a context; `full: true` prints it whole). A start without parent_session_id while this process already has an active root session is refused (a sub-agent never gets a root: pass parent_session_id).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
@@ -551,6 +619,7 @@ export function registerTools(
               "Context keys the session starts with (e.g. a dispatched task's `task`, `queue_file`, `difficulty`); not `cwd`",
             ),
           reply: z.literal("id").optional().describe(START_REPLY_DESCRIPTION),
+          full: z.boolean().optional().describe(FULL_DESCRIPTION),
           force: z.string().min(1).optional().describe(START_FORCE_DESCRIPTION),
         })
         .strict(),
@@ -579,13 +648,10 @@ export function registerTools(
             (args.reply === "id"
               ? `SESSION: ${status.sessionId} @ ${status.currentStateName}` +
                 (status.driverCall ? `\n\n${status.driverCall}` : "")
-              : formatStatus(status, { showSessionId: true }) +
-                "\n\n---\nWORKFLOW RULES:\n" +
-                "- Transitions in real-time only — never batch multiple transitions in one step.\n" +
-                "- Complete each state fully before transitioning to the next.\n" +
-                "- On tool errors: stop and investigate before continuing.\n" +
-                '- To advance: transition({ transition: "<name>" })\n' +
-                "---" +
+              : formatStatus(status, { showSessionId: true, forceFullPrompt: args.full === true }) +
+                "\n\n---\n" +
+                workflowRules(args.full === true) +
+                "\n---" +
                 (status.driverCall ? `\n\n${status.driverCall}` : ""));
           return { content: [{ type: "text", text }] };
         } catch (err) {
@@ -602,12 +668,13 @@ export function registerTools(
     "status",
     {
       description:
-        "Get current state, full stack, available transitions, and history for a session. With `key`: only that context value, in full.",
+        "Get current state, full stack, available transitions, and history for a session. With `key`: only that context value, in full. A repeat status of a session in the same context names the context keys that did not change and lists only the history entries since the last one; `full: true` gives everything.",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
           session_id: z.string().optional().describe("Session identifier"),
           key: z.string().optional().describe(STATUS_KEY_DESCRIPTION),
+          full: z.boolean().optional().describe(FULL_DESCRIPTION),
         })
         .strict(),
     },
@@ -631,7 +698,13 @@ export function registerTools(
           return {
             content: [{ type: "text", text: formatContextValue(status.context, args.key) }],
           };
-        const historyLines = status.history.slice(-10).map(h => {
+        syncContextEpoch();
+        const seen = args.full === true ? undefined : statusSeen.get(sid);
+        const entries =
+          seen !== undefined && status.history.length >= seen.historyLength
+            ? status.history.slice(Math.max(seen.historyLength, status.history.length - 10))
+            : status.history.slice(-10);
+        const historyLines = entries.map(h => {
           const actorStr = h.actor ? ` [${h.actor}]` : "";
           const detailStr = h.detail ? ` (${h.detail})` : "";
           if (h.event === "action")
@@ -643,8 +716,20 @@ export function registerTools(
             return `  [${h.frame}] ${h.event}${h.workflow ? ` (${h.workflow})` : ""}${actorStr} at ${h.at}`;
           return `  [${h.frame}] ${h.from} --${h.via}--> ${h.to}${detailStr}${actorStr} at ${h.at}`;
         });
+        const historyBlock =
+          seen !== undefined && status.history.length >= seen.historyLength
+            ? entries.length === 0
+              ? [
+                  "RECENT HISTORY: nothing new since your last status; status({ full: true }) lists the last 10",
+                ]
+              : ["RECENT HISTORY (since your last status):", ...historyLines]
+            : ["RECENT HISTORY:", ...historyLines];
 
-        const contextLines = formatContext(status.context);
+        const contextLines = formatContextDelta(status.context, seen?.lines);
+        statusSeen.set(sid, {
+          lines: new Map(contextEntries(status.context).map(e => [e.key, e.line])),
+          historyLength: status.history.length,
+        });
         const linked = engine.linkedAgentLines(sid);
         const suspendedAt = storage.read(sid)?.suspended_at;
         const starved = starvationLines(storage, sid);
@@ -665,8 +750,7 @@ export function registerTools(
           ...(linked.length > 0 ? ["", ...linked] : []),
           ...(contextLines.length > 0 ? ["", ...contextLines] : []),
           "",
-          "RECENT HISTORY:",
-          ...historyLines,
+          ...historyBlock,
         ].join("\n");
 
         return { content: [{ type: "text", text }] };
@@ -727,11 +811,20 @@ export function registerTools(
             const text = `${warning ? warning + "\n\n" : ""}${formatAdopted(adopted, how)}\n\nTransition "${args.transition}" was NOT taken${setKeys.length > 0 ? ` and its \`set\` keys were NOT written` : ""} — the session moved on; choose from the state above.`;
             return { content: [{ type: "text", text }], isError: true };
           }
+          const leaving = Object.keys(engine.getStatus(sid).availableTransitions);
           const status = await withProgress(progress, () =>
             engine.transition(sid, args.transition, args.actor, args.set),
           );
           const setLine = setKeys.length > 0 ? `Context set: ${setKeys.join(", ")}.\n\n` : "";
-          const body = setLine + formatStatus(status);
+          const arriving = Object.keys(status.availableTransitions);
+          const body =
+            setLine +
+            formatStatus(status, {
+              sameRoutesAsBefore:
+                leaving.length > 0 &&
+                leaving.length === arriving.length &&
+                leaving.every((n, i) => n === arriving[i]),
+            });
           const notices = [
             ...starvationLines(storage, sid),
             ...unshownStale(engine, sid, body),

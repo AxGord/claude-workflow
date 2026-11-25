@@ -148,7 +148,7 @@ path. `/api/workflows` returns the result as `stations: [{name, script, terminal
 prompt was delivered once in the agent's current context, later deliveries send a
 2-line digest ("already delivered earlier — status() for the full text")
 instead — for large prompts re-delivered every task (routing rubrics,
-doc-sync/reflect ceremony). `status()` always returns the full text; a
+doc-sync/reflect ceremony). `status()` always returns the full text of the state's prompt (its CONTEXT and RECENT HISTORY blocks are the part that shortens: a repeat status names the unchanged context keys and lists the history since the last one, `full: true` gives all); a
 template reload clears the delivered-set, and so does a context reset —
 every SessionStart (`/clear`, `/compact`, `/resume`) rewrites a per-process
 marker (`$STATE_DIR/context-epoch-<claude pid>`) that the server checks on

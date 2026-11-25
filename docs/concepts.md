@@ -190,9 +190,9 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | Tool | Description | Key Parameters |
 |------|-------------|----------------|
 | `list` | List all available workflow definitions; a file that failed to load is listed under `BROKEN (did not load)` with the loader's reason | — |
-| `start` | Start a workflow, return initial prompt | `workflow`, `actor`, `parent_session_id`, `cwd`, `priority`, `context`, `reply`, `force` |
-| `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key` |
-| `transition` | Advance to next state (auto push/pop sub-workflows); `set` writes context keys first, in the same call | `session_id`, `transition`, `set`, `caller_session_id`, `force` + `reason` |
+| `start` | Start a workflow, return initial prompt; rules block whole once per context, one line after (`full: true`: whole) | `workflow`, `actor`, `parent_session_id`, `cwd`, `priority`, `context`, `reply`, `full`, `force` |
+| `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key`, `full` |
+| `transition` | Advance to next state (auto push/pop sub-workflows); `set` writes context keys first, in the same call; a revisit reply with the routes of the state just left says `TRANSITIONS: unchanged` | `session_id`, `transition`, `set`, `caller_session_id`, `force` + `reason` |
 | `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
 | `modify` | Runtime overlay — add/change/remove states and transitions (an `exec`/`fetch` state is refused) | `session_id`, `add_state`, `add_transition` |
 | `create` | Create new workflow definition (saves YAML; an `exec`/`fetch` state is refused) | `name`, `definition`, `scope` |
@@ -215,6 +215,8 @@ Notes on the tools above:
 - `start`, `cwd`: an absolute existing dir — a sub-agent's worktree.
 - `start`, `priority`: `low` / `normal` / `high` / `urgent`; default: the parent's level, else `normal`.
 - `start`, `context`: a string map the session starts with; not `cwd`.
+- `start`, `full: true`: the whole text, as a first reply gives it. The rules block of a `start` is whole once per context and one line after (same four rules); the state's prompt is not touched by it.
+- `status`, `full: true`: everything. A repeat `status` of a session in the same context names the unchanged context keys and lists only the history after the last one; the state's prompt is always whole. `/clear`, `/compact` and a restart begin a new context, which gets everything again.
 - `start`, `reply: "id"`: answer only `SESSION: <id> @ <state>`, no prompt or rules.
 - `start`, `force: "<reason>"`: a second root. Without `parent_session_id`, a start in a process that already has an active root is refused, naming the root by workflow and state, never its id. A sub-agent never gets a root.
 - `start`: a workflow with `driver:` ends the answer with the driver's Agent call.

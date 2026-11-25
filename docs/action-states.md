@@ -440,7 +440,7 @@ Action states can be chained — `exec` → `exec` → `fetch` → `prompt` — 
 On a revisit of a prompt state the engine sends only "Revisit #N — follow the instructions from your first visit". A state whose prompt carries per-visit data (for example the `{{stdout}}` of the exec before it) can set `revisit_prompt`, a template rendered with the same variables as `prompt`, shown on revisits instead of that line.
 
 - Absent = the generic line.
-- `status()` (and any forced full prompt) still returns the full `prompt`, and so does a state with `full_on_revisit: true` (it wins over `revisit_prompt`).
+- `status()` (and any forced full prompt) still returns the full `prompt` (its CONTEXT and RECENT HISTORY blocks shorten on a repeat status of a session in one context; `status({ full: true })` gives all), and so does a state with `full_on_revisit: true` (it wins over `revisit_prompt`).
 
 ```yaml
 dispatch:
