@@ -465,6 +465,26 @@ export function agentContextOf(
   return file === undefined ? undefined : lastTurnContext(file);
 }
 
+/**
+ * What an agent's transcript says of it now: `activeAt` = when the file last changed (ms), `context` = its
+ * last turn's size. Each is absent when the transcript cannot be found or read (`lastTurnContext`).
+ */
+export function agentReadingOf(
+  agentId: string,
+  claudeSessionId: string | undefined,
+  projects: string = projectsDir(),
+): { activeAt?: number; context?: number } {
+  const file = transcriptOf(bareId(agentId), claudeSessionId ? [claudeSessionId] : [], projects);
+  if (file === undefined) return {};
+  let activeAt: number | undefined;
+  try {
+    activeAt = fs.statSync(file).mtimeMs;
+  } catch {
+    activeAt = undefined;
+  }
+  return { activeAt, context: lastTurnContext(file) };
+}
+
 /** The conversation's own transcript and the project directory it lives under: `<projects>/<project>/<conversation>.jsonl`. */
 function conversationTranscript(
   conversation: string,

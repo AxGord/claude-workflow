@@ -19,6 +19,9 @@ import type {
   Driver,
   AgentStep,
   AgentLink,
+  Resume,
+  ResumeChoice,
+  ResumeStep,
 } from "./types.js";
 import {
   MAX_STACK_DEPTH,
@@ -30,6 +33,7 @@ import {
   ROLE_NAME,
   PriorityLevelSchema,
 } from "./types.js";
+import { decideResume, resumeInstruction } from "./resume.js";
 import { projectNameOf, projectRoot } from "./pool.js";
 import { projectDefaultPriority } from "./project-settings.js";
 import { LEDGER_FILE, type Storage } from "./storage.js";
@@ -40,7 +44,14 @@ import type { ExecPhase } from "./progress.js";
 import { EXIT_CODE_TIMEOUT, Executor } from "./executor.js";
 import { killProcessGroup } from "./process.js";
 import { ledgerEntry, rootSessionIdOf, type LedgerEntry, type LedgerSpend } from "./ledger.js";
-import { agentContextOf, isAgentId, measureParentSpend, measureSpend, subtreeOf } from "./spend.js";
+import {
+  agentContextOf,
+  agentReadingOf,
+  isAgentId,
+  measureParentSpend,
+  measureSpend,
+  subtreeOf,
+} from "./spend.js";
 import {
   MODEL_KEYS,
   applyModelTable,
@@ -168,6 +179,23 @@ export interface ResumeResult {
   /** The routing-step test (exec / fetch / `station: false` states) of a session's own workflow: each parent is judged by its own. */
   readonly routeOf: (parent: SessionState) => IsRoute;
 }
+
+/** The `resume:` step a session is in: its spec, step, and where (frame, workflow, state, visit) it was entered. */
+interface ResumeFound {
+  readonly spec: Resume;
+  readonly step: ResumeStep;
+  readonly frame: number;
+  readonly workflow: string;
+  readonly state: string;
+  readonly visit: number;
+}
+
+/** A recorded choice belongs to the step entered now: the same frame, workflow, state and visit. */
+const sameStep = (rec: ResumeChoice, found: ResumeFound): boolean =>
+  rec.frame === found.frame &&
+  rec.workflow === found.workflow &&
+  rec.state === found.state &&
+  rec.visit === found.visit;
 
 export class Engine {
   private static readonly GLOBAL_WORKFLOWS = new Set([
@@ -418,7 +446,7 @@ export class Engine {
       throw new Error(
         `${difficultyError(initial[MODEL_KEYS.difficulty])} (the workflow's model_table maps it)`,
       );
-    const modelled = this._withModel(created, new Set(Object.keys(initial)));
+    const modelled = this._withEntry(created, new Set(Object.keys(initial)));
     // Kept in the context: a dispatcher after a restart or compaction re-spawns the driver from it.
     // The opt-in is read once, here: the key's presence is what later calls go by.
     const dispatcherCall =
@@ -646,7 +674,7 @@ export class Engine {
         }
       : {};
 
-    let updated: SessionState = this._withModel({
+    let updated: SessionState = this._withEntry({
       ...session,
       ...skillUpdate,
       stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
@@ -1399,6 +1427,104 @@ export class Engine {
     return used ? { ...derived, context: used } : derived;
   }
 
+  /** `_withModel`, then the choice of the `resume:` step the entered state declares: for every write that ENTERS a state. */
+  private _withEntry(
+    session: SessionState,
+    changed: ReadonlySet<string> = new Set(),
+  ): SessionState {
+    return this._withResume(this._withModel(session, changed));
+  }
+
+  /** The workflow and `resume:` step of the state `session` is in, when both are declared. */
+  private _resumeStepOf(session: SessionState): ResumeFound | undefined {
+    if (session.stack.length === 0) return undefined;
+    const frame = session.stack[session.active_frame];
+    let spec: Resume | undefined;
+    let state: StateDefinition | undefined;
+    try {
+      spec = this._getWorkflow(session.session_id, frame.workflow).resume;
+      state = this._resolveState(session, frame.workflow, frame.current_state);
+    } catch {
+      return undefined; // a frame whose workflow is gone has no step to read; the move itself reports it
+    }
+    if (!spec || !state?.resume) return undefined;
+    return {
+      spec,
+      step: state.resume,
+      frame: session.active_frame,
+      workflow: frame.workflow,
+      state: frame.current_state,
+      visit: frame.state_visits[frame.current_state] ?? 0,
+    };
+  }
+
+  /** The choice for the `resume:` step `session` is in, from the agent's transcript now (pure: nothing is stored). */
+  private _resumeChoice(session: SessionState, found: ResumeFound): ResumeChoice {
+    const { spec, step } = found;
+    const now = Date.now();
+    const vars = this._buildTemplateVars(session, false);
+    const text = (key: string | undefined): string => {
+      const v = key === undefined ? undefined : session.context[key];
+      return typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
+    };
+    const agent = text(spec.agent);
+    let reading: { activeAt?: number; context?: number } = {};
+    if (agent !== "" && isAgentId(agent))
+      reading = agentReadingOf(agent, session.claude_session_id);
+    const keyed = text(spec.tokens);
+    const context =
+      reading.context ??
+      (keyed !== "" && Number.isFinite(Number(keyed)) ? Number(keyed) : undefined);
+    const idleMs = reading.activeAt === undefined ? undefined : Math.max(0, now - reading.activeAt);
+    const decided = decideResume(spec, step, { agent, idleMs, context });
+    const partial = { choice: decided.choice, agent, reason: decided.reason };
+    return {
+      frame: found.frame,
+      workflow: found.workflow,
+      state: found.state,
+      visit: found.visit,
+      ...partial,
+      ...(idleMs === undefined ? {} : { idle_minutes: Math.floor(idleMs / 60_000) }),
+      ...(context === undefined
+        ? {}
+        : { context, context_source: reading.context === undefined ? "tokens" : "transcript" }),
+      at: new Date(now).toISOString(),
+      instruction: resumeInstruction(partial, spec, {
+        message: render(step.message, vars),
+        brief: step.brief === undefined ? undefined : render(step.brief, vars),
+        model: spec.model === undefined ? undefined : render(spec.model, vars).trim(),
+        effort: spec.effort === undefined ? undefined : render(spec.effort, vars).trim(),
+        after: spec.after_respawn === undefined ? undefined : render(spec.after_respawn, vars),
+      }),
+    };
+  }
+
+  /** `session` with the choice of the `resume:` step it just entered recorded; the same object when its state has none. */
+  private _withResume(session: SessionState): SessionState {
+    const found = this._resumeStepOf(session);
+    return found ? { ...session, resume_choice: this._resumeChoice(session, found) } : session;
+  }
+
+  /** What `{{resume}}` renders to: the choice recorded at entry, else one made now (a session stored before the step was declared). */
+  private _resumeInstruction(session: SessionState): string {
+    const found = this._resumeStepOf(session);
+    if (!found) return "";
+    const rec = session.resume_choice;
+    return rec && sameStep(rec, found)
+      ? rec.instruction
+      : this._resumeChoice(session, found).instruction;
+  }
+
+  /** The line `status` shows for the recorded choice of the state the session is in (empty when none). */
+  public resumeChoiceLine(sessionId: string): string | undefined {
+    const s = this._storage.read(sessionId);
+    const rec = s?.resume_choice;
+    if (!s || !rec) return undefined;
+    const found = this._resumeStepOf(s);
+    if (!found || !sameStep(rec, found)) return undefined;
+    return `RESUME CHOICE at ${rec.state} (visit ${rec.visit}): ${rec.choice} agent ${rec.agent === "" ? "(none)" : rec.agent} — ${rec.reason}${rec.context_source ? ` [context from ${rec.context_source}]` : ""} at ${rec.at}`;
+  }
+
   private _isActionState(state: StateDefinition | undefined): boolean {
     return state?.type === "exec" || state?.type === "fetch";
   }
@@ -1498,7 +1624,7 @@ export class Engine {
     const globalKey = `${frame.workflow}:${targetStateName}`;
     const prevGlobal = session.global_state_visits ?? {};
 
-    let updated: SessionState = this._withModel({
+    let updated: SessionState = this._withEntry({
       ...session,
       stack: session.stack.map((f, i) => (i === session.active_frame ? updatedFrame : f)),
       updated_at: now,
@@ -1560,7 +1686,7 @@ export class Engine {
     return { name, state, visits, exhausted };
   }
 
-  private _buildTemplateVars(session: SessionState): Record<string, unknown> {
+  private _buildTemplateVars(session: SessionState, withResume = true): Record<string, unknown> {
     // visits/root_workflow let action states route on engine-known facts
     // (fix loops taken, running as a spawned sub-agent) with no agent turn.
     const vars: Record<string, unknown> = {
@@ -1582,6 +1708,11 @@ export class Engine {
     Object.defineProperty(vars, "stale_sessions", {
       get: () => this.staleLines(session.session_id, true).join("\n") || "none",
     });
+    // the resume-or-respawn instruction of the state now entered (a `resume:` step): ONE of the two, never both
+    if (withResume)
+      Object.defineProperty(vars, "resume", {
+        get: () => this._resumeInstruction(session),
+      });
     // the parent's recorded answers the dispatcher has not relayed yet
     Object.defineProperty(vars, "parent_answers", {
       get: () => this.parentAnswerLines(session.session_id).join("\n") || "none",
@@ -1935,7 +2066,7 @@ export class Engine {
       ctx = { ...ctx, ...Object.fromEntries(entries) };
     }
 
-    let updated: SessionState = this._withModel(
+    let updated: SessionState = this._withEntry(
       {
         ...session,
         context: ctx,
@@ -2033,22 +2164,23 @@ export class Engine {
       ],
       global_state_visits: { ...prevGlobal, [globalKey]: (prevGlobal[globalKey] ?? 0) + 1 },
     };
+    const entered = this._withResume(updated);
 
-    await this._storage.write(session.session_id, updated);
+    await this._storage.write(session.session_id, entered);
 
     // Check if the initial state of sub_workflow is itself a skill gate, sub_workflow, or action
-    const initialState = this._resolveState(updated, subName, wf.initial);
+    const initialState = this._resolveState(entered, subName, wf.initial);
     if (this._isSkillGate(initialState)) {
-      return this._handleSkillGate(updated, initialState!, taskOps ?? []);
+      return this._handleSkillGate(entered, initialState!, taskOps ?? []);
     }
     if (initialState?.sub_workflow) {
-      return this._pushSubWorkflow(updated, initialState, taskOps);
+      return this._pushSubWorkflow(entered, initialState, taskOps);
     }
     if (this._isActionState(initialState)) {
-      return this._executeActionState(updated, initialState!, taskOps ?? []);
+      return this._executeActionState(entered, initialState!, taskOps ?? []);
     }
 
-    return this._buildStatus(updated, taskOps);
+    return this._buildStatus(entered, taskOps);
   }
 
   /**
@@ -2181,7 +2313,7 @@ export class Engine {
 
     const globalKey = `${parentFrame.workflow}:${nextStateName}`;
     const prevGlobal = session.global_state_visits ?? {};
-    const updated: SessionState = this._withModel({
+    const updated: SessionState = this._withEntry({
       ...session,
       stack: newStack,
       active_frame: parentIdx,

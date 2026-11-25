@@ -88,8 +88,8 @@ states:
 ```
 
 The definition is the base's, with the heir's states laid over it by name (a same-named state is
-replaced whole, not merged key by key; new states are added). `initial`, `max_transitions` and
-`description` come from the heir where it sets them.
+replaced whole, not merged key by key; new states are added). `initial`, `max_transitions`,
+`description`, `model_table`, `resume`, `driver` and `dispatcher` come from the heir where it sets them.
 
 - A heir extending its OWN name inherits that
   name from the tiers below its file (project `coding` → global, else bundled `coding`); another name

@@ -755,6 +755,7 @@ export function registerTools(
           historyLength: status.history.length,
         });
         const linked = engine.linkedAgentLines(sid);
+        const resumeLine = engine.resumeChoiceLine(sid);
         const suspendedAt = storage.read(sid)?.suspended_at;
         const starved = starvationLines(storage, sid);
         const body = formatStatus(status, { showSessionId: true, forceFullPrompt: true });
@@ -776,6 +777,7 @@ export function registerTools(
             : []),
           body,
           ...(linked.length > 0 ? ["", ...linked] : []),
+          ...(resumeLine === undefined ? [] : ["", resumeLine]),
           ...(contextLines.length > 0 ? ["", ...contextLines] : []),
           "",
           ...historyBlock,

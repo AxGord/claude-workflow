@@ -161,6 +161,70 @@ export const DispatcherObjectSchema = z
   })
   .strict();
 
+/** A context key name: what `{{context.<key>}}` reads. */
+const CONTEXT_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * A task workflow's `resume:` — how the engine chooses, at a step that wakes an agent it already ran
+ * (a fix round's worker), between `SendMessage` to that agent and a fresh spawn with a handoff brief.
+ * `agent` = the context key holding the agent's id; `tokens` = the context key its tokens are kept in
+ * (read only when its transcript has no readable turn). The agent was warm when its transcript changed
+ * less than `idle_minutes` ago (default 60, the prompt cache's life): it is resumed. A cold one is
+ * respawned when its context is above `context_tokens` (default 50000). `model` / `effort` are
+ * templates for the spawn (empty = the step's usual); `after_respawn` is a template appended to the
+ * spawn instruction (what to record of the new agent).
+ */
+export const ResumeObjectSchema = z
+  .object({
+    agent: z.string().regex(CONTEXT_KEY, "a context key name"),
+    tokens: z.string().regex(CONTEXT_KEY, "a context key name").optional(),
+    idle_minutes: z.number().positive().optional(),
+    context_tokens: z.number().int().positive().optional(),
+    model: z.string().min(1).optional(),
+    effort: z.string().min(1).optional(),
+    after_respawn: z.string().min(1).optional(),
+  })
+  .strict();
+
+/**
+ * A state's `resume:` — the step the engine renders as `{{resume}}`: `message` is what goes to the
+ * agent when it is resumed (a template), `brief` the prompt of a fresh one (a template; required
+ * unless `never_respawn`). `never_respawn: true` marks a step whose agent is always resumed, however
+ * cold (a fix round whose worker's own reasoning matters).
+ */
+export const ResumeStepSchema = z
+  .object({
+    message: z.string().min(1),
+    brief: z.string().min(1).optional(),
+    never_respawn: z.boolean().optional(),
+  })
+  .strict();
+
+export type Resume = z.infer<typeof ResumeObjectSchema>;
+export type ResumeStep = z.infer<typeof ResumeStepSchema>;
+
+/** The engine's choice at a `resume:` step, recorded when the state is entered: what `{{resume}}` shows and `status` lists. */
+export interface ResumeChoice {
+  /** The stack frame and its workflow the state was entered in: a sub-workflow's own state of the same name is another step. */
+  readonly frame: number;
+  readonly workflow: string;
+  readonly state: string;
+  /** The state's visit number the choice was made at. */
+  readonly visit: number;
+  readonly choice: "resume" | "respawn";
+  /** The agent's id (empty when the context named none). */
+  readonly agent: string;
+  /** Whole minutes since the agent's transcript last changed; absent when it could not be found. */
+  readonly idle_minutes?: number;
+  /** The agent's context: its last turn's size, else the `tokens` key. */
+  readonly context?: number;
+  readonly context_source?: "transcript" | "tokens";
+  readonly reason: string;
+  readonly at: string;
+  /** The text `{{resume}}` renders to. */
+  readonly instruction: string;
+}
+
 export type Driver = z.infer<typeof DriverObjectSchema>;
 export type Dispatcher = z.infer<typeof DispatcherObjectSchema>;
 
@@ -169,6 +233,8 @@ export type Dispatcher = z.infer<typeof DispatcherObjectSchema>;
 export const StateDefinitionSchema = z
   .object({
     prompt: z.string().optional(),
+    // The resume-or-respawn step `{{resume}}` renders in this state's prompt (workflow-level `resume:` holds the thresholds)
+    resume: ResumeStepSchema.optional(),
     transitions: z.record(z.string()).optional(),
     terminal: z.boolean().optional(),
     outcome: z.enum(["complete", "fail"]).optional(),
@@ -264,6 +330,7 @@ export const WorkflowDefinitionSchema = z
     initial: z.string().min(1),
     max_transitions: z.number().int().positive().optional().default(50),
     model_table: ModelTableObjectSchema.optional(),
+    resume: ResumeObjectSchema.optional(),
     driver: DriverObjectSchema.optional(),
     dispatcher: DispatcherObjectSchema.optional(),
     // Live map: `false` keeps a root session of this workflow with no children (a conversation, not a task) off the map
@@ -277,7 +344,7 @@ export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
 /**
  * A workflow YAML file as written. With `extends: <workflow>` it is a heir:
  * the base's states plus its own (a state of the same name replaces the
- * base's whole), and `initial` / `max_transitions` / `description` / `model_table` / `driver` / `dispatcher` from the
+ * base's whole), and `initial` / `max_transitions` / `description` / `model_table` / `resume` / `driver` / `dispatcher` from the
  * heir where it sets them. Without `extends`, `initial` and `states` are required.
  */
 export const WorkflowFileObjectSchema = z
@@ -288,6 +355,7 @@ export const WorkflowFileObjectSchema = z
     initial: z.string().min(1).optional(),
     max_transitions: z.number().int().positive().optional(),
     model_table: ModelTableObjectSchema.optional(),
+    resume: ResumeObjectSchema.optional(),
     driver: DriverObjectSchema.optional(),
     dispatcher: DispatcherObjectSchema.optional(),
     map: z.boolean().optional(),
@@ -452,6 +520,8 @@ export interface SessionState {
   readonly agent_links?: readonly AgentLink[];
   /** The parent's step the driver's `link_agent` ran at; absent unless the parent was an active session of a `driver:` workflow then. */
   readonly agent_step?: AgentStep;
+  /** The engine's resume-or-respawn choice at the latest entered state that declares `resume:`. */
+  readonly resume_choice?: ResumeChoice;
   readonly running_exec?: RunningExec;
   /**
    * The action state a server began and has not routed yet, written before its

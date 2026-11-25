@@ -351,6 +351,38 @@ The bundled `batch-task` declares a stage-aware table (values calibrated on one 
 
 The driver writes the agents' tokens to `tokens_worker` / `tokens_review`; the ledger keeps them with the difficulty, model, effort and per-stage rows, so the table is tuned from data.
 
+#### Resume or respawn (`resume:`)
+
+A step that wakes an agent it already ran (a fix round's worker) can let the engine choose between `SendMessage` to that agent and a fresh spawn with a handoff brief. The agent's idle time and context decide, not the driver.
+
+```yaml
+resume:                     # workflow level
+  agent: worker_agent       # context key holding the agent's id
+  tokens: tokens_worker     # optional: context key read when the transcript has no readable turn
+  idle_minutes: 60          # optional, default 60: the prompt cache's life
+  context_tokens: 50000     # optional, default 50000
+  model: "{{context.model_fix}}"     # optional templates for the spawn
+  effort: "{{context.effort_fix}}"
+  after_respawn: "link_agent it to {{context.worker_session}}."   # optional
+states:
+  fix:
+    resume:                 # state level
+      message: "the cause: {{context.review_text}}"   # sent when resumed
+      brief: "a fix round of a previous worker's branch: …"   # prompt of a fresh agent
+      # never_respawn: true   # instead of a brief: always resume this step
+    prompt: "{{resume}}"
+    revisit_prompt: "{{resume}}"
+```
+
+- The engine decides when a state with `resume:` is entered, and renders `{{resume}}` as ONE instruction: `RESUME (...): SendMessage <agent> with: <message>` or `RESPAWN (...): do NOT SendMessage ...`, never both.
+- A revisit shows `revisit_prompt`, not the prompt: a `resume:` state needs `{{resume}}` in both (or `full_on_revisit: true`), else the load fails.
+- Resume when the agent's transcript changed less than `idle_minutes` ago (warm), however large its context.
+- A cold agent is resumed when its context is at most `context_tokens`, and respawned above it.
+- A `never_respawn` step always resumes. An unreadable transcript counts as unknown idle or context: resume.
+- Context is the transcript's last turn, else the `tokens` key. `status` lists `RESUME CHOICE` with the agent, the idle minutes, the context and the reason.
+- The choice is recorded on entering the state, including a sub-workflow's initial state and a workflow's first state.
+- A workflow with `resume:` and no step, a step without a workflow `resume:`, and a step with neither `brief` nor `never_respawn` fail the load. A heir inherits `resume:` unless it sets its own whole.
+
 #### The task's driver (`driver:`)
 
 A task workflow may name the cheap agent that runs its session for the dispatcher, so the dispatcher's own (long, expensive) context spends a few calls per task instead of every transition:

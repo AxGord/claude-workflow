@@ -21,6 +21,7 @@ import { stationWarnings } from "./stations.js";
 import { driverRefError } from "./driver.js";
 import { POOL_GATE_FILE } from "./pool-gate.js";
 import { modelTableErrors } from "./model-table.js";
+import { resumeErrors } from "./resume.js";
 import {
   TrustStore,
   actionStateNames,
@@ -449,6 +450,7 @@ export class Loader {
       initial: own.initial ?? base.initial,
       max_transitions: own.max_transitions ?? base.max_transitions,
       model_table: own.model_table ?? base.model_table,
+      resume: own.resume ?? base.resume,
       driver: own.driver ?? base.driver,
       dispatcher: own.dispatcher ?? base.dispatcher,
       map: own.map ?? base.map,
@@ -583,6 +585,7 @@ export class Loader {
     const hasTerminal = Object.values(wf.states).some(s => s.terminal);
     if (!hasTerminal) errors.push("no terminal state defined");
     if (wf.model_table) errors.push(...modelTableErrors(wf.model_table, stateNames, wf.states));
+    errors.push(...resumeErrors(wf));
     if (wf.driver) {
       const refError = driverRefError(wf.driver);
       if (refError) errors.push(refError);
