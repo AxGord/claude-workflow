@@ -238,7 +238,10 @@ describe("the README is a landing page, the reference lives on the site", () => 
     const rows = section("Documentation").join("\n");
     const pages = fs
       .readdirSync(path.join(ROOT, "docs"))
-      .filter(f => f.endsWith(".md") && f !== "index.md")
+      // worker-guide.md and decisions.md are the repository's own, in the config's srcExclude: not pages of the site
+      .filter(
+        f => f.endsWith(".md") && !["index.md", "worker-guide.md", "decisions.md"].includes(f),
+      )
       .map(f => f.slice(0, -3));
     for (const page of pages) expect(rows, page).toContain(`(${SITE}${page})`);
   });

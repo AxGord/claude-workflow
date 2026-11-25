@@ -82,7 +82,7 @@ states:
       {{context.task}} is `kind: bug`: it is reproduced before the worker starts (visit {{visits.repro}} of 4). Worktree {{context.wt}}.
       First visit — spawn ONE reproducer: Agent, model {{context.model}}, effort {{context.effort}} (`-` → high), prompt:
 
-        Reproduce engine bug {{context.task}} (its line in {{context.queue_file}}); no fix. Work ONLY in {{context.wt}}: (1) run the symptom the line describes, the real page or command, not a search of the source, `mkdir -p {{context.wt}}-logs` and write {{context.wt}}-logs/repro.txt: the first line the command, then its output. (2) Write a failing vitest test that holds the symptom by executing the behaviour the line names (a test that only reads source text, such as a regex over a .css or .ts file, reproduces a guess at the cause, not the symptom; when the line names a measurement, put it in repro.txt, or write a line starting not measured with the reason there): `src/<name>.test.ts` (uncommitted; change no other file: source edits are refused). Never commit, never push, no `git stash`, no workflow tool (mcp__plugin_workflow_wf__*); do not touch the main checkout. Your LAST message is one line: `REPRO-READY test=<the test file, relative to the worktree>`; a symptom no test can hold (an environment fault, a hang) → make repro.txt's first line `untestable: <why>` and answer `REPRO-UNTESTABLE`; the symptom does not appear → `REPRO-NONE <what you ran>`. {{rules.worker_waits}}
+        Reproduce engine bug {{context.task}} (its line in {{context.queue_file}}); no fix. FIRST read `{{context.wt}}/docs/worker-guide.md` and the engine's memory index (`~/.claude/projects/` + {{context.cwd}} with every `/` and `.` written as `-` + `/memory/MEMORY.md`, when it exists); the rules in your context for the project this session was started in (its language, linter, `hxq`, `.hx` gates) do not apply to engine code. Work ONLY in {{context.wt}}: (1) run the symptom the line describes, the real page or command, not a search of the source, `mkdir -p {{context.wt}}-logs` and write {{context.wt}}-logs/repro.txt: the first line the command, then its output. (2) Write a failing vitest test that holds the symptom by executing the behaviour the line names (a test that only reads source text, such as a regex over a .css or .ts file, reproduces a guess at the cause, not the symptom; when the line names a measurement, put it in repro.txt, or write a line starting not measured with the reason there): `src/<name>.test.ts` (uncommitted; change no other file: source edits are refused). Never commit, never push, no `git stash`, no workflow tool (mcp__plugin_workflow_wf__*); do not touch the main checkout. Your LAST message is one line: `REPRO-READY test=<the test file, relative to the worktree>`; a symptom no test can hold (an environment fault, a hang) → make repro.txt's first line `untestable: <why>` and answer `REPRO-UNTESTABLE`; the symptom does not appear → `REPRO-NONE <what you ran>`. {{rules.worker_waits}}
 
       context_set `repro_agent` = its id. A later visit (the output above is a REFUSED or NOT-REPRODUCED verdict): SendMessage `{{context.repro_agent}}` that output verbatim (it is gone → a fresh agent, same prompt, plus that output). END your turn. On its line: `REPRO-READY` → context_set `repro_test` = the test file, then `check`; `REPRO-UNTESTABLE` → `check`; `REPRO-NONE`, or a NOT-REPRODUCED it cannot turn red → `not_reproduced`.
     transitions:
@@ -160,7 +160,7 @@ states:
       First visit — spawn ONE worker: Agent, model {{context.model}}, effort {{context.effort}} (`-` → high),
       prompt:
 
-        You are the worker of engine slice {{context.task}}. Your brief is its line in {{context.queue_file}} (read
+        You are the worker of engine slice {{context.task}}. FIRST read `{{context.wt}}/docs/worker-guide.md` and the engine's memory index (`~/.claude/projects/` + {{context.cwd}} with every `/` and `.` written as `-` + `/memory/MEMORY.md`, when it exists). This is TypeScript, not the project this session was started in: the rules in your context for that project (its language, linter, `hxq`, `.hx` gates) do not apply to engine code. Your brief is its line in {{context.queue_file}} (read
         it there; it is self-contained). Work ONLY inside {{context.wt}} (branch {{context.branch}}): ONE commit on
         that branch (the author from the git global config, never another identity), `npm run check` green before
         it (it includes `check:ci`, the suite in a clean CI-like environment; run it as
@@ -407,7 +407,7 @@ states:
       First entry — spawn ONE reviewer: Agent, model {{context.review_model}}, effort {{context.review_effort}} (both empty → {{context.model}}, {{context.effort}}), prompt:
 
         Review engine slice {{context.task}} READ-ONLY: change no file, make no commit, call no workflow tool
-        (mcp__plugin_workflow_wf__*). The brief is its line in {{context.queue_file}}; the change is HEAD of
+        (mcp__plugin_workflow_wf__*). FIRST read `{{context.wt}}/docs/worker-guide.md` and the engine's memory index (`~/.claude/projects/` + {{context.cwd}} with every `/` and `.` written as `-` + `/memory/MEMORY.md`, when it exists); the rules in your context for the project this session was started in (its language, linter, `hxq`, `.hx` gates) do not apply to engine code. The brief is its line in {{context.queue_file}}; the change is HEAD of
         {{context.wt}}: first `git -C {{context.wt}} show --stat HEAD`, then ONE path per call, verbatim
         (`rtk proxy git -C {{context.wt}} show HEAD -- <path>`), src/ first — never the whole `show HEAD` or several
         paths at once (an output over the tool limit is persisted and then read again whole); the working-tree source
@@ -651,7 +651,7 @@ states:
       `{{context.worker_agent}}` (gone → a fresh worker: Agent, model {{context.model}}, effort {{context.effort}},
       on the worktree {{context.wt}}) with exactly:
 
-        Master moved under your reviewed branch {{context.branch}} and `git rebase master` conflicts. In
+        Master moved under your reviewed branch {{context.branch}} and `git rebase master` conflicts. A fresh worker reads `{{context.wt}}/docs/worker-guide.md` first: engine code is TypeScript, the rules in your context for the project this session was started in do not apply. In
         {{context.wt}}: rebase onto master and resolve every conflict KEEPING BOTH SIDES (master's change and
         yours; never drop either to make it apply), keep ONE commit, `npm run check` green (run as
         `{{context.cwd}}/scripts/check-leased.sh` from the worktree, never bare), clean worktree.

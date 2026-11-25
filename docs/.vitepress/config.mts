@@ -69,7 +69,8 @@ export default defineConfig({
       meta("name", "twitter:description", description),
     ];
   },
-  srcExclude: ["**/*.test.*"],
+  // The worker guide and the decisions record are for the agents working on this repository, not pages of the site.
+  srcExclude: ["**/*.test.*", "worker-guide.md", "decisions.md"],
   markdown: {
     // The text is full of `{{mustache}}` examples; Vue must not read them as interpolations.
     config(md) {

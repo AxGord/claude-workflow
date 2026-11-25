@@ -89,6 +89,15 @@ The engine's own slice workflow is a tracked file: `.claude/workflows/engine-tas
 - `regate_gate` has `max_visits: 2` with `on_exhausted: blocked`: a third `regate` runs nothing, and `parent_edited`, `close` or `stop` is the way on.
 - `src/task-blocked-regate-route.test.ts` pins it, with the relay form of the dispatcher (`dispatch-driver.md`, `task-driver.md`, `agents/driver.md`).
 
+**The worker guide and the memory index**
+
+A slice started from another project's session loads that project's `CLAUDE.md` and memory, never this repository's. The guide for it is `docs/worker-guide.md`, a file of its own and under 6 KB: this page is too long to read first.
+
+- The `repro`, `work` and `review` prompts of `engine-task` (and the fresh worker of `rebase_fix`) tell the agent to read `{{context.wt}}/docs/worker-guide.md` and the engine's memory index first, and that the rules of the session's own project (its language, linter, `hxq`, `.hx` gates) do not apply to engine code.
+- The memory index is `~/.claude/projects/<main checkout path with every / and . as ->/memory/MEMORY.md`; the prompt builds the path from `{{context.cwd}}`, so no machine path is committed.
+- `docs/decisions.md` is the append-only record of refuted hypotheses, one line each. The guide and the record are excluded from the site (`srcExclude`).
+- `src/engine-worker-guide.test.ts` pins these.
+
 **A browser in a worker's tree**
 
 The worker prompt forbids a bare `playwright install` (it replaces browsers in the machine-wide `~/Library/Caches/ms-playwright`, which every parallel slice's gate launches from) and prescribes this command, with the tests run under the same variable:
