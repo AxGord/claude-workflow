@@ -31,6 +31,10 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   needs the general-purpose tools, and a `workflow:*` type lacks them (`workflow:driver` has no
   Bash/Edit; `workflow:recon` and `workflow:reviewer` have no workflow tools, so they cannot drive a
   session).
+- `link_agent` takes the agent's `role`. The session a prompt names for the agent (the worker's own session W)
+  needs none. A link onto P itself passes `role: "worker"` for P's worker, `"decider"` for its decider: P's own
+  agent (`agent_id`, the one every STALE / UNANSWERED line and a wake name) is you, the driver, and a link of
+  another role never replaces it. Never link a worker onto P without a `role`. The `status`'s LINKED AGENTS lists such a link too, with its role.
 - Then WAIT: end your turn. The agent's notification wakes you. Never poll, never sleep.
 - Workers and reviewers answer with ONE line (`DONE … report=<file>`, `BLOCKED …`, `VERDICT X …
   review=<file> design=yes|no`); their full text is in the files they name. Do not open those files
@@ -112,7 +116,7 @@ from P's context; `<memory_index>` = P's context key `memory_index`, else omit t
 `DECIDED` -> route the fix as the prompt says, the worker's cause = the review line plus "read
 <wt>.log/decisions.md whole — the decider's decisions"; keep driving, and remember the file for `decided=`
 (last message). `ESCALATE` -> hand back (below) with its reason.
-On `DECIDED` or `ESCALATE`, FIRST `link_agent({session_id: P, agent_id: <the agentId the decider's Agent call
+On `DECIDED` or `ESCALATE`, FIRST `link_agent({session_id: P, role: "decider", agent_id: <the agentId the decider's Agent call
 returned>})`: its spend joins the task's ledger row. Then route or hand back.
 
 ## Stop and hand back — hand back ONE line (SubagentHandback), then stop

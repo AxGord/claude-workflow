@@ -90,7 +90,7 @@ export function renderDriverCall(i: DriverCallInput): string {
   const lines = [
     "---",
     `DRIVER — this workflow is driven by an agent, not by you. Spawn exactly this (Agent), then`,
-    `\`link_agent({session_id: "${i.sessionId}", agent_id: <its id>})\` and do not drive ${i.sessionId} yourself:`,
+    `\`link_agent({session_id: "${i.sessionId}", agent_id: <its id>, role: "driver"})\` and do not drive ${i.sessionId} yourself:`,
     `  model: ${i.driver.model}, effort: ${i.driver.effort}, run_in_background: true, subagent_type: ${JSON.stringify(i.driver.agent_type ?? DEFAULT_DRIVER_AGENT_TYPE)}, description: "drive ${i.task ?? i.sessionId}", prompt:`,
     prompt,
   ];
@@ -164,7 +164,7 @@ export function renderDispatcherCall(i: DispatcherCallInput): string {
   const lines = [
     "---",
     `DRIVER — the dispatcher${disp.env ? ` (opt-in ${disp.env} is set)` : ""}: ${when} this session is driven by an agent, not by you. Spawn exactly this (Agent), then`,
-    `\`link_agent({session_id: "${d}", agent_id: <its id>})\` and take no transition of ${d} while it drives:`,
+    `\`link_agent({session_id: "${d}", agent_id: <its id>, role: "driver"})\` and take no transition of ${d} while it drives:`,
     `  model: ${disp.model}, effort: ${disp.effort}, run_in_background: true, subagent_type: ${JSON.stringify(disp.agent_type ?? DEFAULT_DISPATCHER_AGENT_TYPE)}, description: "dispatch ${d}", prompt:`,
     prompt,
     "It messages you (SendMessage to main; Claude Code accepts one SubagentHandback per result, so it never uses it for these) ONLY with these four, and keeps running:",

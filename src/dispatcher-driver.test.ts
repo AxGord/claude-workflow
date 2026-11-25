@@ -173,7 +173,7 @@ describe("the opt-in is on: start answers with the dispatcher's DRIVER block", (
     expect(block).toContain(
       `model: haiku, effort: medium, run_in_background: true, subagent_type: "workflow:dispatcher", description: "dispatch ${d}", prompt:`,
     );
-    expect(block).toContain(`link_agent({session_id: "${d}", agent_id: <its id>})`);
+    expect(block).toContain(`link_agent({session_id: "${d}", agent_id: <its id>, role: "driver"})`);
     expect(block).toContain(`D = ${d}`);
     expect(block).toContain(path.join(TEMPLATES, "drivers", "dispatch-driver.md"));
     expect(block).not.toContain("WARNING");

@@ -234,12 +234,12 @@ export function dispatcherWakeLines(root: SessionState, indent: string, below: n
   if (!root.agent_id)
     return [
       head,
-      `${indent}  no agent linked — spawn it from ${STATUS_TOOL}({ session_id: '${id}', key: '${DISPATCHER_CALL_KEY}' }), link_agent it, then SendMessage it "restarted: wake the task drivers"`,
+      `${indent}  no agent linked — spawn it from ${STATUS_TOOL}({ session_id: '${id}', key: '${DISPATCHER_CALL_KEY}' }), link_agent it (role "driver"), then SendMessage it "restarted: wake the task drivers"`,
     ];
   return [
     head,
     `${indent}  SendMessage({ to: "${root.agent_id}", message: "Continue — the run was restarted: call ${STATUS_TOOL}({ session_id: '${id}' }) — NOT start(), NOT resume() — then wake each task driver of its \`tasks\` key as your instructions' § After a restart say." })`,
-    `${indent}  that SendMessage fails → spawn a fresh one from ${STATUS_TOOL}({ session_id: '${id}', key: '${DISPATCHER_CALL_KEY}' }), link_agent it, and send it the same message`,
+    `${indent}  that SendMessage fails → spawn a fresh one from ${STATUS_TOOL}({ session_id: '${id}', key: '${DISPATCHER_CALL_KEY}' }), link_agent it (role "driver"), and send it the same message`,
   ];
 }
 

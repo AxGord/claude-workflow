@@ -3,7 +3,7 @@
 // that state — a fix round — tells this visit's agent from an earlier visit's without any key a prompt
 // has to render. Any other parent records no step: nothing here applies to its agents. Pure.
 
-import type { AgentStep, SessionState } from "./types.js";
+import { DRIVER_ROLE, type AgentLink, type AgentStep, type SessionState } from "./types.js";
 
 /** The step a session stands at: its active frame's workflow, state and that state's visit. */
 export function currentStep(s: SessionState): AgentStep | undefined {
@@ -110,8 +110,35 @@ export function listedStanding(
 const MAX_LINES = 20;
 
 /**
+ * The non-driver agents linked onto `parent` itself (`link_agent` with a role other than `driver`:
+ * a worker, a decider), the latest link of each agent, at the state it stands at now — a workflow
+ * whose worker is no child session of its own has nothing else to list. An agent linked at this
+ * visit is `current`; at an earlier visit of the state it is an earlier visit's.
+ */
+function ownAgentRows(parent: SessionState, now: AgentStep): { visit: number; line: string }[] {
+  const latest = new Map<string, AgentLink>();
+  for (const l of parent.agent_links ?? [])
+    if (l.role && l.role !== DRIVER_ROLE) latest.set(l.agent_id, l);
+  const rows: { visit: number; line: string }[] = [];
+  for (const l of latest.values()) {
+    const at = l.step;
+    if (!at || at.workflow !== now.workflow || at.state !== now.state) continue;
+    const head = `  agent ${l.agent_id} (${l.role}, linked to this session itself): linked at visit ${at.visit}`;
+    rows.push({
+      visit: at.visit,
+      line:
+        at.visit >= now.visit
+          ? `${head} → current`
+          : `${head}, now visit ${now.visit} → an earlier visit's`,
+    });
+  }
+  return rows;
+}
+
+/**
  * status()'s LINKED AGENTS block: the agents linked to `parent`'s children at its current state, this
- * visit's first, and at a spawn state also the running agent linked at the state before it. Empty when there are none.
+ * visit's first, and at a spawn state also the running agent linked at the state before it; and the
+ * non-driver agents linked onto `parent` itself at this state. Empty when there are none.
  */
 export function linkedAgentLines(
   parent: SessionState,
@@ -125,7 +152,8 @@ export function linkedAgentLines(
     .map(c => ({ c, standing: listedStanding(c, now, parent, isRoute) }))
     .filter((r): r is { c: SessionState; standing: ListedStanding } => r.standing !== undefined)
     .sort((a, b) => b.c.agent_step!.visit - a.c.agent_step!.visit);
-  if (rows.length === 0) return [];
+  const own = ownAgentRows(parent, now).sort((a, b) => b.visit - a.visit);
+  if (rows.length + own.length === 0) return [];
   const lines = [
     `LINKED AGENTS at ${now.state} (visit ${now.visit}) — only a current one is this visit's agent:`,
   ];
@@ -144,6 +172,8 @@ export function linkedAgentLines(
         : `${head}, now visit ${now.visit} → ${standing === "stale" ? "stale (its session ended)" : "an earlier visit's (its session still runs)"}`,
     );
   }
-  if (rows.length > MAX_LINES) lines.push(`  … ${rows.length - MAX_LINES} more`);
+  for (const r of own.slice(0, Math.max(0, MAX_LINES - rows.length))) lines.push(r.line);
+  const total = rows.length + own.length;
+  if (total > MAX_LINES) lines.push(`  … ${total - MAX_LINES} more`);
   return lines;
 }

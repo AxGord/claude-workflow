@@ -13,6 +13,7 @@ import {
   START_PRIORITY_DESCRIPTION,
   STATUS_KEY_DESCRIPTION,
   STATUS_ROUTES_KEY,
+  ROLE_NAME,
   type SessionState,
 } from "./types.js";
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
@@ -1360,7 +1361,11 @@ export function registerTools(
         "Record which sub-agent (the Agent tool's agent id: 'a' and hex, never a placeholder: anything else is refused) drives a child session, so that after a restart resume() " +
         "of the parent names the agent to wake with SendMessage. Call it once the child session id is known (sessions() lists children). " +
         "It also records the parent's state and visit: status() of the parent marks the agent current at that visit, " +
-        "stale at a later visit of the state; linking again re-records it. Every agent linked stays on the session, so " +
+        "stale at a later visit of the state; linking again re-records it. `role` says what the agent is to that session: " +
+        "`driver` (the agent that drives it: the session's agent_id, which every STALE / NEEDS-PARENT / UNANSWERED line and a restart's wake name) or another " +
+        "(`worker`, `decider`, `reviewer`, ...), which never replaces the driver. Omitted: the first agent linked to a session is its driver, " +
+        "and on a session of a `driver:` workflow a different agent linked later is a worker; a spawner of a driver (the dispatcher) passes `driver`, " +
+        "a driver linking its worker onto the task session passes `worker`. Every agent linked stays on the session, so " +
         "the ledger's spend sums a respawned worker's earlier agents too. Each call is also recorded with its time, the parent's state and the stage that state spawns on, " +
         "so the ledger splits the spend per agent and stage (a worker linked again for a fix round splits at the call).",
       annotations: ENGINE_STATE_ONLY,
@@ -1373,18 +1378,30 @@ export function registerTools(
             .describe(
               "The Agent tool's id of that sub-agent ('a' and hex, e.g. a15bb6b2a76ef441c)",
             ),
+          role: z
+            .string()
+            .regex(ROLE_NAME)
+            .optional()
+            .describe(
+              "What the agent is to the session: `driver` (replaces the session's agent_id) or `worker` / `decider` / `reviewer` / ... (never does). Omitted: see the tool's description",
+            ),
         })
         .strict(),
     },
     async args => {
       try {
-        const step = await engine.linkAgent(args.session_id, args.agent_id);
+        const step = await engine.linkAgent(args.session_id, args.agent_id, args.role);
         const at = step ? ` at its parent's ${step.state} visit ${step.visit}` : "";
+        const driver = storage.read(args.session_id)?.agent_id;
+        const as =
+          driver !== undefined && driver !== args.agent_id
+            ? ` as ${args.role ?? "worker"}; the session's agent stays ${driver}`
+            : "";
         return {
           content: [
             {
               type: "text",
-              text: `Session "${args.session_id}" linked to agent ${args.agent_id}${at}.`,
+              text: `Session "${args.session_id}" linked to agent ${args.agent_id}${as}${at}.`,
             },
           ],
         };

@@ -203,7 +203,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `pool_status` | The machine-wide pool: one line per lease and waiter (as `wf-run --status`) | — |
 | `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
-| `link_agent` | Record the Agent-tool id (`a` and hex; anything else is refused) of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale) | `session_id`, `agent_id` |
+| `link_agent` | Record the Agent-tool id (`a` and hex; anything else is refused) of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale) | `session_id`, `agent_id`, `role?` (`driver` or another: see below) |
 | `queue_next` | Admit the next tasks of a YAML task queue and set them running (§ Task queue) | `queue`, `file`, `dry_run`, `explain` |
 | `queue_mark` | Move one task's status (`running` / `done` / `failed` / `released` / `promoted` / `shelved`; `retry` restarts a failed task) | `queue`, `file`, `id`, `to`, `note`, `retry`, `force` |
 | `queue_add` | Add a task (pending or backlog) to a queue, checked as a pick reads it | `queue`, `file`, `task`, `after_id`, `before_id` |
@@ -230,3 +230,7 @@ Notes on the tools above:
   - The reply starts with `Context set: <keys>.`. `context_set` has no value size limit, so `set` has none. `context_set` itself is unchanged, and a call without `set` behaves as before.
 - `abort`: its active descendants end with it; the cascade is logged to stderr with the caller and the session count. Refused for a root or a session with active descendants unless `caller_session_id` is the target or an ancestor of it, or `force: true` with a `reason`.
 - `link_agent`: every agent linked stays on the session (`linked_agents`). Every call is recorded with its time, the parent's state and that state's stage (`agent_links`) for the ledger's spend, in total and per agent and stage (`spend.by_agent`).
+- `link_agent` `role`: `driver` is the session's `agent_id`, and any other role (`worker`, `decider`, ...) never replaces it.
+  - No role: the first agent linked is the driver; on a session of a `driver:` workflow a different agent linked later is a worker.
+  - So the STALE, UNANSWERED and NEEDS-PARENT lines and a restart's wake name the driver.
+  - The pool's context reading of a session is the latest `worker` link's agent, else `agent_id`.

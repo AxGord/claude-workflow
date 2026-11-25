@@ -401,7 +401,17 @@ export interface AgentLink {
   readonly state?: string;
   /** The first stage that state spawns on (`stagesSpawned`); absent when it spawns none. */
   readonly stage?: string;
+  /** What the agent is to the session: `driver` (the agent that drives it) or another role (`worker`, `decider`, ...). Absent on a link made before roles. */
+  readonly role?: string;
+  /** The linked session's OWN step at the call; recorded for a non-driver link, which `agent_step` never holds. */
+  readonly step?: AgentStep;
 }
+
+/** The role of the agent that drives a session: the one `agent_id` names. */
+export const DRIVER_ROLE = "driver";
+
+/** What a role name may be: lower-case words joined by `-` or `_`. */
+export const ROLE_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 
 /** A session's foreground exec in flight, recorded so a resume can take it over. */
 export interface RunningExec extends DetachedRun {
@@ -434,13 +444,13 @@ export interface SessionState {
   readonly suspended_at?: string;
   /** The Claude Code conversation the session belongs to (`claude --resume` keeps it). */
   readonly claude_session_id?: string;
-  /** The Agent-tool id of the sub-agent driving this session (`link_agent`). */
+  /** The Agent-tool id of the sub-agent driving this session (`link_agent`, role `driver`): a later link of another role never replaces it. */
   readonly agent_id?: string;
-  /** Every agent `link_agent` ever linked to this session, in order (`agent_id` is only the latest: a respawned agent replaces it): what the ledger's spend sums. */
+  /** Every agent `link_agent` ever linked to this session, in order (`agent_id` is only the latest driver: a respawned driver replaces it): what the ledger's spend sums. */
   readonly linked_agents?: readonly string[];
   /** Every `link_agent` call on this session, in order: what the ledger attributes each agent's spend to a state and stage by. */
   readonly agent_links?: readonly AgentLink[];
-  /** The parent's step `link_agent` ran at; absent unless the parent was an active session of a `driver:` workflow then. */
+  /** The parent's step the driver's `link_agent` ran at; absent unless the parent was an active session of a `driver:` workflow then. */
   readonly agent_step?: AgentStep;
   readonly running_exec?: RunningExec;
   /**

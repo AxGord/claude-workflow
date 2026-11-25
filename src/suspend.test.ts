@@ -236,7 +236,7 @@ describe("suspend / resume", () => {
     const pending = engine.transition(sessionId, "next");
     for (let i = 0; i < 100 && !storage.read(sessionId)!.running_exec; i++)
       await new Promise(r => setTimeout(r, 10));
-    await engine.linkAgent(sessionId, "agent-abbbbbbbbbbbbbbbb");
+    await engine.linkAgent(sessionId, "agent-abbbbbbbbbbbbbbbb", "driver");
     await pending;
     expect(storage.read(sessionId)!.agent_id).toBe("agent-abbbbbbbbbbbbbbbb");
     // a respawn replaced agent_id, but every agent the session was linked to is kept

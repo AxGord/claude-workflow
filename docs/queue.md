@@ -448,6 +448,7 @@ A landed task's lessons are filed by a script, not read by the dispatcher on eve
   - Any other parent — a dispatcher whose `dispatch` adds an agent per visit — records none: its agents are never marked stale nor skipped.
   - The ledger's per-agent spend is independent of this: every `link_agent` call is also recorded with its time, the parent's state and that state's stage in `agent_links`, under any parent.
 - `status` of the parent lists `LINKED AGENTS at <state> (visit N)`: each child agent linked at the current state — `linked at visit N → current`, or `linked at visit 1, now visit 2 → stale` (the agent's session ended; an earlier visit's agent whose session still runs is named so).
+  - The non-driver agents linked onto the parent itself at this state (`role: "worker"` / `"decider"`) are listed too, so a workflow whose worker has no session of its own shows one.
 - At a `_spawn` state (`work_spawn`, `plan_spawn`) the running agent linked at the state the parent stood at just before it is also listed. Routing steps such as an exec `plan_route` are skipped: the agent's session started at the state before them. The line reads `→ live (its session still runs): SendMessage it, spawn no second agent`.
   - A worker linked while the parent stood at `work` is still the one the spawn state would start.
   - A recon agent or a warm reviewer linked elsewhere is never listed.

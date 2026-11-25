@@ -26,6 +26,8 @@ import {
   KEEP_TERMINAL_SESSIONS,
   DEFAULT_PRIORITY_LEVEL,
   DEFAULT_SUSPENDED_TTL_DAYS,
+  DRIVER_ROLE,
+  ROLE_NAME,
   PriorityLevelSchema,
 } from "./types.js";
 import { projectNameOf, projectRoot } from "./pool.js";
@@ -1149,41 +1151,63 @@ export class Engine {
   }
 
   /**
-   * Record the Agent-tool id of the sub-agent that drives a session, for a parent's resume, and —
-   * when the parent is a session of a `driver:` workflow, whose states run one agent per visit — the
-   * parent's step it was linked at (`agent_step`), so a later visit of that state tells it from this
-   * visit's agent. Any other parent (a dispatcher looping a spawning state) records no step, so its
-   * agents are never taken for an earlier visit's. Linking again re-records the step. Returns the
-   * step, or undefined when none is recorded.
+   * Record the Agent-tool id of a sub-agent of a session, for a parent's resume. `role` says what it
+   * is to the session: `driver` — the agent that drives it, the one `agent_id` names — or another
+   * (`worker`, `decider`, ...), kept in `linked_agents` and `agent_links` (the per-agent spend) and
+   * never in `agent_id`. A link without a role is the driver when none is linked yet, or when it is
+   * the same agent, or when the session's workflow declares no `driver:` (a respawned agent replaces
+   * the old one); on a session of a `driver:` workflow, a different agent without a role is a worker.
+   * A driver link also records, under a parent of a `driver:` workflow (one agent per state visit),
+   * the parent's step (`agent_step`), so a later visit of that state tells it from this visit's agent;
+   * a non-driver link records the session's own step on its `agent_links` row instead. Returns the
+   * parent's step, or undefined when none is recorded.
    */
-  public async linkAgent(sessionId: string, agentId: string): Promise<AgentStep | undefined> {
+  public async linkAgent(
+    sessionId: string,
+    agentId: string,
+    role?: string,
+  ): Promise<AgentStep | undefined> {
     if (!isAgentId(agentId))
       throw new Error(
         `"${agentId}" is not an agent id: link_agent takes the id the Agent tool returned for the spawned sub-agent ('a' and hex, e.g. a15bb6b2a76ef441c), never a placeholder`,
       );
-    const parentId = this._storage.read(sessionId)?.parent_session_id;
-    const parent = parentId ? this._storage.read(parentId) : null;
-    const step =
+    if (role !== undefined && !ROLE_NAME.test(role))
+      throw new Error(
+        `"${role}" is not a role: link_agent's role is lower-case words (driver, worker, decider, reviewer, ...)`,
+      );
+    const own = this._storage.read(sessionId);
+    const parent = own?.parent_session_id ? this._storage.read(own.parent_session_id) : null;
+    const ownDeclares = own !== null && own.stack.length > 0 && this._declaresDriver(own);
+    const parentStep =
       parent && parent.stack.length > 0 && this._declaresDriver(parent)
         ? currentStep(parent)
         : undefined;
-    const link = this._agentLink(parent, agentId);
-    const set = await this._storage.update(sessionId, cur =>
-      cur
-        ? {
-            ...cur,
-            agent_id: agentId,
-            agent_step: step,
-            linked_agents: cur.linked_agents?.includes(agentId)
-              ? cur.linked_agents
-              : [...(cur.linked_agents ?? []), agentId],
-            agent_links: [...(cur.agent_links ?? []), link],
-          }
-        : null,
-    );
+    let step: AgentStep | undefined;
+    let drives = false;
+    const set = await this._storage.update(sessionId, cur => {
+      if (!cur) return null;
+      drives =
+        role === undefined
+          ? !cur.agent_id || cur.agent_id === agentId || !ownDeclares
+          : role === DRIVER_ROLE;
+      step = drives ? parentStep : undefined;
+      const link: AgentLink = {
+        ...this._agentLink(parent, agentId),
+        role: role ?? (drives ? DRIVER_ROLE : "worker"),
+        ...(!drives && cur.stack.length > 0 ? { step: currentStep(cur) } : {}),
+      };
+      return {
+        ...cur,
+        ...(drives ? { agent_id: agentId, agent_step: step } : {}),
+        linked_agents: cur.linked_agents?.includes(agentId)
+          ? cur.linked_agents
+          : [...(cur.linked_agents ?? []), agentId],
+        agent_links: [...(cur.agent_links ?? []), link],
+      };
+    });
     if (!set) throw new Error(`Session "${sessionId}" not found`);
     // A dispatcher (re)linked: its live task sessions carry the new id.
-    if (typeof set.context[DISPATCHER_CALL_KEY] === "string") {
+    if (drives && typeof set.context[DISPATCHER_CALL_KEY] === "string") {
       for (const c of this._storage.readAll())
         if (c.parent_session_id === sessionId && c.stack.length > 0)
           await this._storage.update(c.session_id, cur =>

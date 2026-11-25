@@ -26,10 +26,10 @@ Follow the prompt's steps for each admitted line, with these rules:
   `SESSION: <P> @ <state>` and a DRIVER block. The new session's prompt is its driver's, never yours.
 - Spawn the DRIVER block's Agent call exactly: its model, effort, `subagent_type`, description and prompt, the
   prompt verbatim. A sub-agent's Agent tool has no `run_in_background`: omit it. Then
-  `link_agent({session_id: P, agent_id: <the id the Agent call returned>})`.
+  `link_agent({session_id: P, agent_id: <the id the Agent call returned>, role: "driver"})`.
 - `start` refused with `task "<ID>" already runs under … as session <P>` → that task was started before
   (a restart, a context reset): start nothing. The message names its agent; `no agent linked` → spawn its
-  driver from `status({session_id: P, key: "driver_call"})` exactly, then `link_agent`. A refusal that says
+  driver from `status({session_id: P, key: "driver_call"})` exactly, then `link_agent` (`role: "driver"`). A refusal that says
   the workflow declares no `driver:` names no `driver_call` (the session has none): main drives that task;
   keep it in `tasks` as `ID=P driver=main` and spawn nothing.
 - A `start` answer WITHOUT a DRIVER block (a task workflow with no `driver:`) → you never drive a task
@@ -106,7 +106,7 @@ then needs nothing.
   LANDED / CLOSED / NEEDS-PARENT of that task reached you): SendMessage it ONCE "Dispatcher ping: call status
   on your session <P> and continue; if it has ended, repeat your last line." The SendMessage fails, or it
   ends again with no line → it is gone: spawn a fresh driver from `status({session_id: P, key: "driver_call"})`
-  exactly, `link_agent` it, `context_set({session_id: D, key: "tasks", value: …})`. A second driver of the
+  exactly, `link_agent` it (`role: "driver"`), `context_set({session_id: D, key: "tasks", value: …})`. A second driver of the
   same task gone → hand back `NEEDS-PARENT task=<ID> session=<P> reason=driver gone twice see=state collect`.
 - **Stale sessions** the prompt lists: a session with an agent → SendMessage that agent asking where it
   stands; no answer or gone → for a task session, the fresh driver of the bullet above. A stale task session

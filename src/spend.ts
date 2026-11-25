@@ -447,16 +447,21 @@ function lastTurnOf(lines: readonly string[]): { context: number; closed: boolea
 }
 
 /**
- * The context of the agent linked to a session (`agent_id`, the latest if it was respawned): its last turn's
- * size (`lastTurnContext`). undefined when no agent is linked or its transcript cannot be found or read.
+ * The context of the WORKER of a session: the agent of its latest `worker` link, else its driver
+ * (`agent_id`, the latest if it was respawned) — a session no worker was linked to is run by one
+ * agent. A worker linked onto a session never replaces `agent_id`, the cheap driver's context says
+ * nothing of the work. Its last turn's size (`lastTurnContext`). undefined when no agent is linked
+ * or its transcript cannot be found or read.
  */
 export function agentContextOf(
-  session: Pick<SessionState, "agent_id" | "claude_session_id">,
+  session: Pick<SessionState, "agent_id" | "agent_links" | "claude_session_id">,
   projects: string = projectsDir(),
 ): number | undefined {
-  if (!session.agent_id) return undefined;
+  const worker = [...(session.agent_links ?? [])].reverse().find(l => l.role === "worker");
+  const agent = worker?.agent_id ?? session.agent_id;
+  if (!agent) return undefined;
   const conversations = session.claude_session_id ? [session.claude_session_id] : [];
-  const file = transcriptOf(bareId(session.agent_id), conversations, projects);
+  const file = transcriptOf(bareId(agent), conversations, projects);
   return file === undefined ? undefined : lastTurnContext(file);
 }
 

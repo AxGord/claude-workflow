@@ -32,7 +32,7 @@ When Claude Code exits (SessionEnd), its active sessions and their active descen
 - **`resume({ session_id })`** — the explicit path (startup, another account, `--fork-session`) — hands the session and its sub-tree to the current process and returns the session's state.
   - Its suspended sub-agent sessions are listed as agent → session → state, each with the `SendMessage` that wakes its agent; the agent continues ITS OWN session with `resume`, not a new `start`.
   - A suspended child no agent drives (no `agent_id` up to the resumed session) is taken for the caller's: `no agent linked — yours, unless a sub-agent you spawned runs it (then link_agent + SendMessage) → resume({ session_id })`.
-  - `link_agent({ session_id, agent_id })` records which agent drives a child session (call it after the spawn, once the child's session id is known), and the parent's state and visit it was linked at (see `driver:`).
+  - `link_agent({ session_id, agent_id, role? })` records which agent drives a child session (`role` `driver`, the default for the first agent, is the session's `agent_id`; `worker`, `decider`, ... are kept but never replace it) (call it after the spawn, once the child's session id is known), and the parent's state and visit it was linked at (see `driver:`).
 - **Another account** (the conversation cannot be resumed), or `--fork-session` (a new conversation id — the SessionStart hint lists nothing): `suspended()` lists the suspended sessions of this project (git root of the server's cwd; `all: true` for every project) — `resume` any of them.
 - **An exec in flight**: every foreground exec runs detached in its own process group, its output in files and its exit code written to a file when it ends (`$STATE_DIR/exec/`), so it outlives the server. The session records it (`running_exec`) while it runs.
   - `resume` of a session stopped in that exec state finishes it:
@@ -582,7 +582,7 @@ A line is written at: complete, fail, abort, cascade, and expiry of a suspended 
 
 Summed at the task's end from the transcripts of every agent that worked on it, over the session and all its descendants. Agents counted:
 
-- every agent `link_agent` ever linked to a session of the task (`agent_id` is only the latest; a respawned worker's predecessor is kept in `linked_agents`);
+- every agent `link_agent` ever linked to a session of the task (`agent_id` is only the latest driver; a respawned driver's predecessor and every non-driver agent are kept in `linked_agents`);
 - any context key `agent_id_<stage>` or `<role>_agent`, such as `recon_agent` / `worker_agent` / `reviewer_agent`.
 
 `spend.agents` counts them. Each turn is priced by its own model id at input, output, cache-read and cache-write rates:
