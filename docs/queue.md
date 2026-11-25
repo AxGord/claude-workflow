@@ -553,7 +553,7 @@ dispatcher:
 
 **What the agent does** (`templates/drivers/dispatch-driver.md`)
 
-- `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`.
+- `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`. A `tasks` entry (here or in `context_set`) whose `driver=` is not the agent linked with role `driver` to that task session is refused, and the error names that id; `driver=-` and a session with no linked driver are not checked.
 - `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`; a `CLOSED` line for a `stopped` task also sends `LESSONS` at once.
 - `paused`, on main's message `retry` (`queue_header` names it when it raises the window) it takes `retry` with no `set`; every other message at a state it does not drive stays main's `continue`.
 - `collect`, on main's message `lines added` (sent when `queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…`, or `queue_header` raises the window) it takes `refill` with no `set`: the pick runs again without a land.

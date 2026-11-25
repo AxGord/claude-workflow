@@ -214,6 +214,23 @@ export function dispatcherHolds(root: SessionState): boolean {
   return root.history.some(h => h.frame === 0 && h.from === after);
 }
 
+/** One `ID=P driver=<agent>` entry of a dispatcher's `tasks` key: its task label, session id and the driver written for it. */
+export interface TaskEntry {
+  readonly label: string;
+  readonly session: string;
+  readonly driver: string;
+}
+
+/** The `ID=P driver=<agent or ->` entries of a dispatcher's `tasks` value (an entry with no `driver=` is not listed). */
+export function taskEntries(tasks: unknown): TaskEntry[] {
+  if (typeof tasks !== "string") return [];
+  return [...tasks.matchAll(/(?:^|\s)([^\s=]+)=([0-9a-f]{8})\s+driver=(\S+)/g)].map(m => ({
+    label: m[1],
+    session: m[2],
+    driver: m[3],
+  }));
+}
+
 /** The task sessions a dispatcher's `tasks` key names (`ID=P driver=<agent>` entries): the P ids. */
 export function dispatcherTaskSessions(root: SessionState): Set<string> {
   const tasks = root.context.tasks;

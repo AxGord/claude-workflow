@@ -882,7 +882,7 @@ export function registerTools(
     "context_set",
     {
       description:
-        "Save key-value data in the session context for later use. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch).",
+        "Save key-value data in the session context for later use. A dispatcher's `tasks` entry (`ID=P driver=<id>`) whose id is not the agent linked with role `driver` to task session P is refused, naming the right id. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({

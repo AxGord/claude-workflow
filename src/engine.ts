@@ -82,7 +82,7 @@ import {
 } from "./driver.js";
 import { currentStep, linkedAgentLines, type IsRoute } from "./agent-link.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
-import { activeSubtree, dispatcherHolds, takeOver, where } from "./takeover.js";
+import { activeSubtree, dispatcherHolds, takeOver, taskEntries, where } from "./takeover.js";
 import { secondRootRefusal } from "./session-scope.js";
 import { actionStateRefusal } from "./trust.js";
 import {
@@ -911,10 +911,7 @@ export class Engine {
   public parentAnswerLines(sessionId: string): string[] {
     const root = this._storage.read(sessionId);
     const drivers = new Map<string, string>();
-    const tasks = root?.context.tasks;
-    if (typeof tasks === "string")
-      for (const m of tasks.matchAll(/(?:^|\s)[^\s=]+=([0-9a-f]{8})\s+driver=(\S+)/g))
-        drivers.set(m[1], m[2]);
+    for (const e of taskEntries(root?.context.tasks)) drivers.set(e.session, e.driver);
     const lines: string[] = [];
     for (const id of activeSubtree(this._storage, sessionId).slice(1)) {
       const s = this._storage.read(id);
@@ -1352,6 +1349,7 @@ export class Engine {
     value: unknown,
     actor?: string,
   ): SessionState {
+    if (key === "tasks") this._assertTaskDrivers(session, value);
     if (
       key === MODEL_KEYS.difficulty &&
       parseDifficulty(value) === null &&
@@ -1372,6 +1370,28 @@ export class Engine {
       },
       new Set([key]),
     );
+  }
+
+  /**
+   * A dispatcher's `tasks` value names, per task session below it, the task's DRIVER: an entry whose `driver=` is another
+   * agent (the worker, say) sends every later answer past the driver, so it is refused, with the linked driver named.
+   * A session with no linked driver, one whose workflow declares none, and `driver=-` are not checked.
+   */
+  private _assertTaskDrivers(session: SessionState, value: unknown): void {
+    const wrong: string[] = [];
+    for (const e of taskEntries(value)) {
+      if (e.driver === "-") continue;
+      const task = this._storage.read(e.session);
+      if (!task || task.parent_session_id !== session.session_id) continue;
+      if (!task.agent_id || task.agent_id === e.driver || !this._declaresDriver(task)) continue;
+      wrong.push(
+        `${e.label}=${e.session} driver=${e.driver} is not the driver of ${e.session}: write driver=${task.agent_id}`,
+      );
+    }
+    if (wrong.length > 0)
+      throw new Error(
+        `\`tasks\` refused, nothing written: ${wrong.join("; ")} (the agent linked with role "driver")`,
+      );
   }
 
   /** The `model_table` the session runs under — the nearest frame's workflow down the stack that declares one — and that frame's visits. */

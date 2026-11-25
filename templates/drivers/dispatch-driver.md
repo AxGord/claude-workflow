@@ -16,7 +16,7 @@ rendered (`src/driver.ts`, kept in D's context as `dispatcher_call`).
    key `lessons_every: <N>`. Absent, unreadable or not a number → N = 5.
 3. D already past its first dispatch (it stands at `collect`, or `status({session_id: D, key: "tasks"})` is
    not empty): you replace or continue a dispatcher. The keys `tasks` (one `ID=P driver=<agent id>` per
-   running task) and `lessons_pending` are the truth, not a memory. Wake or re-spawn no driver unless
+   running task; `driver=` is the agent linked with role driver, the engine refuses a worker's id) and `lessons_pending` are the truth, not a memory. Wake or re-spawn no driver unless
    main's message says the run was restarted (§ After a restart).
 4. D stands at a state other than `dispatch` or `collect` → § States that are not yours.
 

@@ -202,7 +202,8 @@ states:
          <its id>, role: "driver"})`. Do NOT drive P yourself: the driver runs its prompts and answers with one line.
          Without a DRIVER block, drive P by its prompts yourself, passing session_id P in every call.
       3. context_set `tasks` on THIS session ({{session_id}}): one `ID=P driver=<agent id or ->` per running
-         task session (all of them, not only the new ones) — after a context compression
+         task session (all of them, not only the new ones); `driver=` is the agent linked with `role: "driver"`, never a worker's
+         id (the engine refuses such an entry and names the right id) — after a context compression
          `status({session_id: "{{session_id}}", key: "tasks"})` and `sessions` are the truth, not your memory.
       Then transition `dispatched` and END your turn: agent notifications wake you in `collect`.
     transitions:
