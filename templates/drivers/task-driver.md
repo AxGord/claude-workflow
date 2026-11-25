@@ -36,6 +36,9 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   whole" — never paste the file's text.
 - Tokens: the agent's task-notification usage line is its context size at stop, not its spend: report
   the last value you saw for that role, never a sum over rounds.
+- A worker that stops on a usage limit ("You've hit your limit", a reset time): do not hand back and do not spawn a
+  fresh worker. End the turn on the WAITING line; after the reset, SendMessage the SAME worker to continue from its
+  files, and only a failed SendMessage means it is gone.
 - A transition into a long exec (the land) may outlive the call; its notification wakes you.
 - A `start` reply shows the NEW session's first prompt: it is the agent's you spawn, never yours — act on none of it.
 - When you end a turn to wait for an agent, the turn's last line is exactly

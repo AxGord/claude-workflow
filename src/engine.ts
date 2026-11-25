@@ -197,6 +197,31 @@ const sameStep = (rec: ResumeChoice, found: ResumeFound): boolean =>
   rec.state === found.state &&
   rec.visit === found.visit;
 
+/**
+ * A task driver ends its turn on WAITING while its worker runs, and Claude Code never delivers that turn to
+ * the dispatcher: the session's linked non-driver agent is the only trace. Names it, so a quiet driver is
+ * not pinged or re-spawned before the worker is looked at.
+ */
+function driverWaitNote(s: SessionState): string {
+  const driver = s.agent_id;
+  if (!driver) return "";
+  const now = currentStep(s);
+  const links = (s.agent_links ?? []).filter(
+    l =>
+      l.agent_id !== driver &&
+      l.role !== undefined &&
+      l.role !== DRIVER_ROLE &&
+      !!l.step &&
+      !!now &&
+      l.step.workflow === now.workflow &&
+      l.step.state === now.state &&
+      l.step.visit === now.visit,
+  );
+  const last = links[links.length - 1];
+  if (!last) return "";
+  return ` — the driver may be waiting on its ${last.role} ${last.agent_id}, linked at this step: wait, not gone; check that agent (status, SendMessage to the driver) before any ping; never spawn a driver while it lives`;
+}
+
 export class Engine {
   private static readonly GLOBAL_WORKFLOWS = new Set([
     "coding",
@@ -880,7 +905,10 @@ export class Engine {
       if (!st) continue;
       const of = s.parent_session_id ? `, child of ${s.parent_session_id}` : "";
       const agent = s.agent_id ? `, agent ${s.agent_id}` : "";
-      lines.push(`STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}`);
+      const wait = driverWaitNote(s);
+      lines.push(
+        `STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}${wait}`,
+      );
       if (descendantsOnly && typeof s.context.task === "string" && st.idle_s >= limit * 60) {
         const state = s.stack[s.active_frame].current_state;
         lines.push(

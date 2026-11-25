@@ -81,7 +81,7 @@ export function staleNotice(engine: Engine, sessionId: string): string[] {
     if (lines.length === 0) return [];
     return [
       ...lines,
-      "A STALE session's agent may be dead or stuck: SendMessage it; no answer → abort its session, or have a new agent continue it from status (the session holds the step).",
+      "A STALE session's agent may be dead or stuck: SendMessage it; only a SendMessage that fails with an error means it is gone (no answer, or an ended-without-report notice, is not) → abort its session, or have a new agent continue it from status (the session holds the step).",
     ];
   } catch {
     // a notice never fails the call it rides on

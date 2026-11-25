@@ -57,7 +57,8 @@ describe("link_agent: a worker linked after the driver", () => {
     const lines = engine.staleLines(disp, true).join("\n");
     expect(lines).toContain(`NEEDS-PARENT task=T1 session=${sid}`);
     expect(lines).toContain(`agent=${DRIVER} `);
-    expect(lines).not.toContain(WORKER);
+    expect(lines).not.toMatch(new RegExp(`(agent|driver)=${WORKER}`));
+    expect(lines).not.toContain("waiting on");
   });
 });
 

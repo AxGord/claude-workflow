@@ -103,13 +103,19 @@ then needs nothing.
 - **`WAITING …`**, a notification that a driver ended its turn while it waits on an agent, a notice that an
   agent "is waiting on its own background work": nothing to do.
 - **A driver that ended with no last line** (its notification says it finished, failed or was stopped, and no
-  LANDED / CLOSED / NEEDS-PARENT of that task reached you): SendMessage it ONCE "Dispatcher ping: call status
-  on your session <P> and continue; if it has ended, repeat your last line." The SendMessage fails, or it
-  ends again with no line → it is gone: spawn a fresh driver from `status({session_id: P, key: "driver_call"})`
+  LANDED / CLOSED / NEEDS-PARENT of that task reached you; "ended without delivering a report" is this case):
+  a driver waiting on its worker ends this way too, because Claude Code delivers only SubagentHandback text. First
+  `status({session_id: P})`: a STALE line that says the driver may be waiting on its worker, or a LINKED AGENTS
+  worker, means wait, not gone. Wake only the driver (`tasks`: its `driver=`), never the `agent=` of a STALE or
+  UNANSWERED line when it is another role. A fresh driver (`driver_call`) is spawned only after a SendMessage to the
+  driver FAILS with an error, never after a WAITING, a NEEDS-PARENT end or this text alone (a handed-back driver is
+  resumable). Otherwise SendMessage it ONCE "Dispatcher ping: call status
+  on your session <P> and continue; if it has ended, repeat your last line." The SendMessage fails with an error
+  (no answer, or "ended without delivering a report", is not an error) → it is gone: spawn a fresh driver from `status({session_id: P, key: "driver_call"})`
   exactly, `link_agent` it (`role: "driver"`), `context_set({session_id: D, key: "tasks", value: …})`. A second driver of the
   same task gone → hand back `NEEDS-PARENT task=<ID> session=<P> reason=driver gone twice see=state collect`.
 - **Stale sessions** the prompt lists: a session with an agent → SendMessage that agent asking where it
-  stands; no answer or gone → for a task session, the fresh driver of the bullet above. A stale task session
+  stands; gone (its SendMessage fails with an error) → for a task session, the fresh driver of the bullet above; no answer, or "ended without delivering a report", is not gone. A stale task session
   WITHOUT an agent is not yours to advance: hand back `NEEDS-PARENT task=<ID> session=<P> reason=stale, no agent see=state collect`.
   A task session stale past the queue header's `stale_task_after: N` (minutes, default 60) comes with a ready
   `NEEDS-PARENT task=<ID> session=<P> reason=stale … state=<s> agent=<id|none> see=state collect` line in the list:
