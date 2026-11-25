@@ -51,9 +51,14 @@ tasks:
 
 **Task keys**
 
-`id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, exclusive,
+`id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, exclusive,
 breaking, parked, ended, restored, added, base, text_hash, text, notes`.
 
+- `on_end_tell_parent` is a step the parent owes when the line ends (one non-empty line, set by `queue_add` / `queue_edit`, durable in the file): `on_end_tell_parent: after this lands, tell the sibling project`.
+  - Dispatcher mode: when the line reaches done or failed, the engine shows `OWED-DUE: task=<ID> status=<done|failed> sha=<landed sha|none>: <text>` in the `collect` prompt and on the next `transition` / `status` reply.
+  - The dispatcher hands the parent one `OWED task=… status=… sha=…: <text>` message and then sets its context key `owed_handed` to the id; the engine writes `owed_handed: <date>` on the queue line (engine-written, refused as input).
+  - The record is on the line, so a later dispatcher session on the same queue does not hand it again. Send-then-record makes it at least once: a crash between the two hands it again. A line without the field yields none.
+  - `GET /api/queue` carries it as `onEndTellParent`; the pick ignores it. Without a dispatcher agent, the `collect` prompt tells the main conversation to do the step.
 - `sweep` is the command a line runs over a whole tree (a lint rule's `--fix` over many files): one non-empty line, e.g. `sweep: hxq lint --rule r --fix src test`.
   - It is data for the project's workflow: the engine gives it no meaning, so it implies no `exclusive` and the pick ignores it. `queue_next` prints it as `| sweep: <command>` on the admitted line; `GET /api/queue` carries it as `sweep`.
   - A value that is empty or spans lines is refused with the key named; `""` / null removes it.

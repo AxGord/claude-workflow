@@ -70,6 +70,12 @@ then needs nothing.
   such key is cleared, and holds the answer until then, so it is never lost. The driver then reports to YOU: its LANDED / CLOSED /
   NEEDS-PARENT line is handled as any other, and you free the slot yourself. A SendMessage that fails (the driver is gone) → the
   fresh driver of the bullet "A driver that ended with no last line", then relay to it; clear the key only after the send went.
+- **`OWED-DUE: task=<ID> status=<done|failed> sha=<sha|none>: <text>`** lines the engine appends to a `transition` or `status`
+  reply, and `collect` renders as `{{owed_steps}}`: a queue line that carried `on_end_tell_parent: <text>` has ended, and its
+  step is owed to main. For each: hand it back as an OWED message (§ Hand-backs) FIRST, then
+  `context_set({session_id: D, key: "owed_handed", value: "<ID>"})`: the engine writes `owed_handed:` on that queue line and the
+  line stops being listed, in this session and in any later one on the queue. Send first, record second: a crash between the two
+  hands it again (at least once), never loses it. A line without the field yields none.
 - **A message from main**:
   Main's answer to a NEEDS-PARENT is the `parent_answer` key above, not a message. A decision that still reaches you
   in the old form is relayed:
@@ -128,7 +134,7 @@ then needs nothing.
 Hand back HANDOVER (§ Hand-backs) and wait. Main drives D there; its `continue` brings you back. The one
 exception is `paused` and main's message `retry` (§ `collect`): a raised window lifts the pause through you.
 
-## Hand-backs — the only three things main gets
+## Hand-backs — the only four things main gets
 Each is ONE `SendMessage` to `main` whose message is exactly the text below, and you carry on afterwards: a
 driver's report or main's message resumes you. Claude Code accepts a single `SubagentHandback` per result and
 refuses the second (`one report per result`), so none of these is ever a `SubagentHandback`. "Hand back"
@@ -144,6 +150,8 @@ anywhere in this file means this `SendMessage`.
    `wf-queue <queue> --lessons-take --triage <path>` (never per land, never by hand).
 3. `HANDOVER session=<D> state=<state> reason=<one line: the pick's last line, or the state's name>`, then
    the lines of `lessons_pending` when it is not empty.
+4. `OWED task=<ID> status=<done|failed> sha=<sha|none>: <text>`: the `OWED-DUE:` line with `-DUE` dropped, the rest verbatim.
+   Main does the step; nothing to answer.
 Before a LESSONS or HANDOVER message, these calls, in this order:
 `context_set({session_id: D, key: "lessons_handed", value: "<the whole message>"})`, then
 `context_set({session_id: D, key: "lessons_pending", value: ""})`; for a LESSONS message a third,

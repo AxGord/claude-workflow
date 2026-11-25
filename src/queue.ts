@@ -2,7 +2,7 @@
 // `batch_size: N` (the window; `0` = paused) with `reason:` (why it is that), `overlap:`, `base:`,
 // `archive_after_days: N` (a pick first archives the done / failed lines that ended over N days ago)
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
-// `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, exclusive,
+// `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, exclusive,
 // breaking, parked, ended, restored, added, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
@@ -70,6 +70,8 @@ export const TASK_KEYS = [
   "touches",
   "owner",
   "sweep",
+  "on_end_tell_parent",
+  "owed_handed",
   "exclusive",
   "breaking",
   "parked",
@@ -81,8 +83,9 @@ export const TASK_KEYS = [
   "text",
   "notes",
 ] as const;
-/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `added` by add, `base` / `text_hash` by add and edit): never set by a caller. */
+/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `owed_handed` by the engine once the owed step is handed to the parent, `added` by add, `base` / `text_hash` by add and edit): never set by a caller. */
 const STATE_KEYS: ReadonlySet<string> = new Set([
+  "owed_handed",
   "ended",
   "restored",
   "added",
@@ -261,6 +264,8 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "workflow",
     "owner",
     "sweep",
+    "on_end_tell_parent",
+    "owed_handed",
     "after",
     "touches",
     "ended",
@@ -417,6 +422,12 @@ function ownerOf(line: QueueLine): string | null {
   if (v === undefined) return null;
   const o = stripParens(v).trim().replace(/\s+/g, " ");
   return o === "" || o === "—" ? null : o;
+}
+
+/** The line's `on_end_tell_parent:` text, trimmed; null when absent or blank. Data for the dispatcher's OWED hand-back: no pick rule reads it. */
+export function owedTextOf(line: QueueLine): string | null {
+  const v = line.meta.on_end_tell_parent?.trim();
+  return v === undefined || v === "" ? null : v;
 }
 
 /** The line's `sweep:` command, trimmed; null when absent or blank. Carried as data: no pick rule reads it. */
@@ -864,6 +875,8 @@ export interface QueueLineView {
   readonly owner?: string;
   /** The line's `sweep:` command, when it has one. */
   readonly sweep?: string;
+  /** The line's `on_end_tell_parent:` text: the step the parent owes when the line ends (done or failed). */
+  readonly onEndTellParent?: string;
   readonly touches?: string;
   readonly notes: number;
   /** The date of the task's last note (a land writes one), when it has one. */
@@ -974,6 +987,7 @@ export function describeQueue(queue: Queue): {
       ...(l.meta.after !== undefined ? { after: l.meta.after } : {}),
       ...(l.meta.owner !== undefined ? { owner: l.meta.owner } : {}),
       ...(l.meta.sweep !== undefined ? { sweep: l.meta.sweep } : {}),
+      ...(owedTextOf(l) !== null ? { onEndTellParent: owedTextOf(l) ?? "" } : {}),
       ...(l.meta.touches !== undefined ? { touches: l.meta.touches } : {}),
       exclusive: exclusiveOf(l),
       paused: l.paused,
@@ -1844,6 +1858,41 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
     );
   if (has("sweep") && (sweepOf(line) === null || /[\n\r]/.test(line.meta.sweep ?? "")))
     throw new QueueError(`${line.id}: sweep: is one non-empty line (the command)`);
+  if (
+    has("on_end_tell_parent") &&
+    (owedTextOf(line) === null || /[\n\r]/.test(line.meta.on_end_tell_parent ?? ""))
+  )
+    throw new QueueError(
+      `${line.id}: on_end_tell_parent: is one non-empty line (the step the parent owes)`,
+    );
+}
+
+/**
+ * The `OWED-DUE:` lines of `queue`: a done or failed line carrying `on_end_tell_parent:` that has no `owed_handed:`
+ * (the day the engine recorded the hand-back on the line, so no later dispatcher session repeats it). The text is the
+ * owed step; `sha` is the line's `landed <sha>` note, else none.
+ */
+export function owedDueLines(queue: Queue): string[] {
+  const out: string[] = [];
+  for (const l of queue.lines) {
+    if ((l.status !== "done" && l.status !== "failed") || l.meta.owed_handed !== undefined)
+      continue;
+    const text = owedTextOf(l);
+    if (text === null) continue;
+    out.push(`OWED-DUE: task=${l.id} status=${l.status} sha=${landedShaOf(l) ?? "none"}: ${text}`);
+  }
+  return out;
+}
+
+/** Records on the line, under the queue lock, that its owed step was handed to the parent (`owed_handed: <today>`); a line without the field, or already recorded, is left as it is. */
+export async function markOwedHanded(file: string, id: string): Promise<boolean> {
+  if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
+  return writing(file, e => {
+    const line = lineOf(e.queue, id);
+    if (owedTextOf(line) === null || line.meta.owed_handed !== undefined) return false;
+    setOrdered(e, taskNode(e, line), "owed_handed", today());
+    return true;
+  });
 }
 
 /** Splits a list given as one string on its top-level commas (a `(…)` keeps its commas). */
@@ -1944,7 +1993,7 @@ export async function addQueueLine(
     throw new QueueError(
       `${id}: restored is written by the archive restore, not set on a new line`,
     );
-  for (const k of ["added", "base", "text_hash"])
+  for (const k of ["added", "base", "text_hash", "owed_handed"])
     if (task[k] !== undefined)
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
   const status = task.status ?? "pending";
@@ -2046,7 +2095,7 @@ export async function editQueueLine(
     if (k === "ended") throw new QueueError(`${id}: ended is written by queue_mark, not set`);
     else if (k === "restored")
       throw new QueueError(`${id}: restored is written by the archive restore, not set`);
-    else if (k === "added" || k === "base" || k === "text_hash")
+    else if (k === "added" || k === "base" || k === "text_hash" || k === "owed_handed")
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
     else if (!EDIT_KEYS.has(k))
       throw new QueueError(`unknown field "${k}" (keys: ${[...EDIT_KEYS].join(", ")})`);

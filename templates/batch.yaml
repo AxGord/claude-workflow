@@ -8,7 +8,7 @@ max_transitions: 100000
 # Claude Code process, `start` of this workflow answers with a DRIVER block for a cheap dispatcher agent
 # (`workflow:dispatcher`) that drives `dispatch` and `collect` from the moment the session leaves `plan_queue`;
 # the main conversation then gets only the task drivers' NEEDS-PARENT lines, a LESSONS block per
-# `lessons_every` lands (a queue header key, default 5) and a HANDOVER at a state the agent does not drive.
+# `lessons_every` lands (a queue header key, default 5), an OWED message per ended line that carries `on_end_tell_parent:`, and a HANDOVER at a state the agent does not drive.
 # Unset, nothing here applies: the main conversation dispatches as the prompts below say. An environment
 # variable, not a queue header key: `start` answers before a queue file is known, and the nesting depth the
 # agent needs (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=4) is set in the same place. A heir inherits the block.
@@ -255,6 +255,12 @@ states:
       agent is yours: `status(P)` and advance it. A `NEEDS-PARENT task=… reason=stale …` line in that list is a
       task session stale past the queue header's `stale_task_after: N` (minutes, default 60): treat it as a
       NEEDS-PARENT line of that task (above) once — look at its agent and state, then answer or tell the user.
+
+      Owed steps (a queue line carrying `on_end_tell_parent: <text>` has ended, done or failed, and its step is not yet handed
+      over; the engine writes `owed_handed:` on the queue line when you `context_set` the key `owed_handed` to its id):
+      {{owed_steps}}
+      Each `OWED-DUE: task=<ID> status=<s> sha=<sha>: <text>` line is the user's / the parent's own step: do it (a main-driven
+      dispatcher: tell the user), then `context_set` `owed_handed` to `<ID>`. Never twice.
 
       Parent answers the engine holds (the parent's answer to a task's NEEDS-PARENT, recorded as the task session's `parent_answer`
       key; `slot_free` and `stalled` are refused while one stands):

@@ -177,7 +177,7 @@ describe("the opt-in is on: start answers with the dispatcher's DRIVER block", (
     expect(block).toContain(`D = ${d}`);
     expect(block).toContain(path.join(TEMPLATES, "drivers", "dispatch-driver.md"));
     expect(block).not.toContain("WARNING");
-    for (const kind of ["NEEDS-PARENT", "LESSONS lands=", "HANDOVER session="])
+    for (const kind of ["NEEDS-PARENT", "LESSONS lands=", "HANDOVER session=", "OWED task=<ID>"])
       expect(block).toContain(kind);
     expect(block.split("\n").filter(l => l.includes(SPAWN_DEPTH_ENV))).toEqual([
       expect.stringContaining(`set ${SPAWN_DEPTH_ENV}=4 (this engine process sees: unset)`),
@@ -331,7 +331,7 @@ describe("the shipped dispatcher agent type", () => {
     for (const t of ["SendMessage", "SubagentHandback", "Read"]) expect(rules).toContain(t);
   });
 
-  it("the instructions ask for no tool the type lacks, and name the three hand-backs", () => {
+  it("the instructions ask for no tool the type lacks, and name the four hand-backs", () => {
     const rules = read("templates/drivers/dispatch-driver.md");
     for (const name of [
       "abort",
@@ -342,7 +342,12 @@ describe("the shipped dispatcher agent type", () => {
       "sessions",
     ])
       expect(rules).not.toMatch(new RegExp(`\\b${name}\\(`, "u"));
-    for (const line of ["NEEDS-PARENT", "LESSONS lands=<n> session=<D>", "HANDOVER session=<D>"])
+    for (const line of [
+      "NEEDS-PARENT",
+      "LESSONS lands=<n> session=<D>",
+      "HANDOVER session=<D>",
+      "OWED task=<ID>",
+    ])
       expect(rules).toContain(line);
     expect(rules).toContain("DISPATCHING session=<D> running=");
     expect(rules).toContain("lessons_every");

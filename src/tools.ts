@@ -116,6 +116,16 @@ function unshownParentAnswers(engine: Engine, sessionId: string, body: string): 
   }
 }
 
+/** The `OWED-DUE:` lines a dispatching session holds, unless `body` already shows them: an owed step stays in view until handed to the parent. */
+function unshownOwed(engine: Engine, sessionId: string, body: string): string[] {
+  try {
+    return engine.owedLines(sessionId).filter(line => !body.includes(line));
+  } catch {
+    // a notice never fails the call it rides on
+    return [];
+  }
+}
+
 /**
  * `staleNotice` unless `body` already shows every line of it — a prompt that renders
  * `{{stale_sessions}}` (a revisit's digest does not render it, so the notice comes back there).
@@ -751,6 +761,7 @@ export function registerTools(
         const unanswered = [
           ...unansweredNotice(engine, sid),
           ...unshownParentAnswers(engine, sid, body),
+          ...unshownOwed(engine, sid, body),
         ];
         const text = [
           ...(starved.length > 0 ? [...starved, ""] : []),
@@ -846,6 +857,7 @@ export function registerTools(
             ...unshownStale(engine, sid, body),
             ...unansweredNotice(engine, sid),
             ...unshownParentAnswers(engine, sid, body),
+            ...unshownOwed(engine, sid, body),
           ];
           const text =
             (warning ? warning + "\n\n" : "") +
@@ -1390,7 +1402,7 @@ export function registerTools(
     "queue_next",
     {
       description:
-        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, exclusive, breaking, parked, ended, restored, base, text_hash, text, notes}`): " +
+        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, exclusive, breaking, parked, ended, restored, base, text_hash, text, notes}`): " +
         "fills the window (batch_size minus the running tasks) in `priority:` order (urgent, high, normal, low; file order within one) with pending tasks whose `after:` ids are all done, " +
         "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
         "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of its own repo (another repo is unaffected), and while it waits only for running lines of its repo, no later line of that repo is admitted (`held for exclusive <ID>`; header `exclusive_hold: no` turns that off); `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
@@ -1495,7 +1507,7 @@ export function registerTools(
     {
       description:
         "Add a task to a YAML task queue under its lock (the lock queue_next / queue_mark take, so no status " +
-        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, kind: bug|feature|research (absent = feature; any other value is refused), priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], owner, sweep, exclusive, breaking, parked, text, notes: [{from, date, text}]}`; `ended` (the day a line reached done or failed) is queue_mark's: a new task cannot set it. " +
+        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, kind: bug|feature|research (absent = feature; any other value is refused), priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], owner, sweep, on_end_tell_parent (one line: the step the parent owes when the line ends; the dispatcher hands it back once as `OWED task=<ID> status=<done|failed> sha=<sha>: <text>`), exclusive, breaking, parked, text, notes: [{from, date, text}]}`; `ended` (the day a line reached done or failed) is queue_mark's: a new task cannot set it. " +
         "The line records where it was written: `base` (HEAD of the line's repo — `repo:` or the queue's project; left out when that is not a git repo) and `text_hash` (short sha256 of text + touches + owner (+ sweep when set)), both set by queue_add / queue_edit only; `ended` (queue_mark's) and `restored` (the archive restore's) are never set on a new line. " +
         "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10 (REQUIRED on a pending line: `difficulty: <1-10> is required on a pending line`; backlog, `parked` and `model: —` lines need none), a `kind:` of bug|feature|research. Goes after `after_id`, before `before_id`, " +
@@ -1544,7 +1556,7 @@ export function registerTools(
     {
       description:
         "Change one task's fields in a YAML task queue under the queue's lock: `set: { field: value }` " +
-        '(difficulty, kind: bug|feature|research — anything else is refused, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, owner, sweep (one non-empty line: a command for the workflow of the project, no pick rule), exclusive, breaking, parked, text (`ended` is set by queue_mark only, read-only here; so is `restored` (written by the archive restore); so are `base` / `text_hash`: an edit that changes text, touches, owner, sweep or repo rewrites both — base = HEAD of its repo now — and any other edit leaves them); `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
+        '(difficulty, kind: bug|feature|research — anything else is refused, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, owner, sweep (one non-empty line: a command for the workflow of the project, no pick rule), on_end_tell_parent (one non-empty line: the step the parent owes when the line ends; the dispatcher hands it back once as `OWED …`), exclusive, breaking, parked, text (`ended` is set by queue_mark only, read-only here; so is `restored` (written by the archive restore); so are `base` / `text_hash`: an edit that changes text, touches, owner, sweep or repo rewrites both — base = HEAD of its repo now — and any other edit leaves them); `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
         "(appended to `notes:` as `{from, date, text}`, `from` default `parent`). The status is queue_mark's. " +
         "A set field keeps its place; values are checked as queue_add checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused (a line already without one stays editable). Returns the task as written (YAML).",
       inputSchema: z

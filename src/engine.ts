@@ -48,7 +48,14 @@ import {
   stagesSpawned,
 } from "./model-table.js";
 import { render } from "./template.js";
-import { markQueue, readQueue, staleTaskAfter, STALE_TASK_AFTER_DEFAULT_MIN } from "./queue.js";
+import {
+  markOwedHanded,
+  markQueue,
+  owedDueLines,
+  readQueue,
+  staleTaskAfter,
+  STALE_TASK_AFTER_DEFAULT_MIN,
+} from "./queue.js";
 import {
   DISPATCHER_AFTER_KEY,
   DISPATCHER_AGENT_KEY,
@@ -890,6 +897,23 @@ export class Engine {
     return lines;
   }
 
+  /**
+   * One `OWED-DUE:` line per ended (done or failed) queue line of the session's `queue_file` that carries
+   * `on_end_tell_parent:` and has no `owed_handed:` of its own: the record is on the queue line (written by
+   * `setContext` of `owed_handed`), so it outlives this session and a later dispatcher on the same queue repeats nothing.
+   */
+  public owedLines(sessionId: string): string[] {
+    const ctx = this._storage.read(sessionId)?.context;
+    const file = ctx?.queue_file;
+    // the dispatching session only (it names the task workflow); a task session carries `queue_file` too
+    if (typeof file !== "string" || typeof ctx?.task_workflow !== "string") return [];
+    try {
+      return owedDueLines(readQueue(file));
+    } catch {
+      return [];
+    }
+  }
+
   /** The note a `context_set` of `parent_answer` on task session `sessionId` answers with: who relays it and how. */
   public parentAnswerNote(sessionId: string): string | undefined {
     const task = this._storage.read(sessionId);
@@ -1257,6 +1281,11 @@ export class Engine {
     const updated = this._withKey(session, key, value, actor);
 
     await this._storage.write(sessionId, updated);
+    // the dispatcher's `owed_handed` (the ids it handed to the parent) is recorded on the queue lines themselves
+    const queueFile = session.context.queue_file;
+    if (key === "owed_handed" && typeof value === "string" && typeof queueFile === "string")
+      for (const id of value.split(/\s+/).filter(Boolean))
+        await markOwedHanded(queueFile, id).catch(() => false);
     const last = updated.history[updated.history.length - 1];
     return last.event === "model" ? last.detail : undefined;
   }
@@ -1532,6 +1561,10 @@ export class Engine {
     // the parent's recorded answers the dispatcher has not relayed yet
     Object.defineProperty(vars, "parent_answers", {
       get: () => this.parentAnswerLines(session.session_id).join("\n") || "none",
+    });
+    // the owed steps of lines that ended, not yet handed to the parent
+    Object.defineProperty(vars, "owed_steps", {
+      get: () => this.owedLines(session.session_id).join("\n") || "none",
     });
     const ar = session.last_action_result;
     if (ar) {
