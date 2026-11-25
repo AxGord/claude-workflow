@@ -1,10 +1,28 @@
 name: Pages
 
-# Builds the VitePress site (docs/) and deploys it to GitHub Pages on a push to master.
+# Builds the VitePress site (docs/) and deploys it to GitHub Pages on a push to master that changed what the site reads.
 # One-time setup in the repository: Settings > Pages > Source: GitHub Actions.
+# The deploy is tried twice: a GitHub-side 500 from the Pages API is not the site's fault, and a re-run by hand is the only other cure.
 on:
   push:
     branches: [master]
+    # Every input of `npm run docs:build`: the site (docs/), the tsc build it starts with (src/, tsconfig.json), and what the
+    # config, the theme and the exporter read outside docs/: dashboard/, hooks/, types/, the workflow files at the top of
+    # templates/ (not its skills or their history: a `*` does not cross `/`) and the two scripts the build runs.
+    paths:
+      - docs/**
+      - src/**
+      - dashboard/**
+      - hooks/**
+      - types/**
+      - templates/*.yaml
+      - templates/*.yml
+      - scripts/brand.mjs
+      - scripts/export-workflows.mjs
+      - tsconfig.json
+      - package.json
+      - package-lock.json
+      - .github/workflows/pages.yml
   workflow_dispatch:
 
 permissions:
@@ -26,9 +44,9 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - run: npm run docs:build
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/.vitepress/dist
 
@@ -37,7 +55,15 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment_retry.outputs.page_url || steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+      - name: Wait before the second deploy
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 60
+      # Runs only when the first deploy failed; with no continue-on-error, the job fails only when both did.
+      - id: deployment_retry
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v5

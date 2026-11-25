@@ -104,7 +104,7 @@ describe("the Pages workflow", () => {
     expect(PAGES).toContain("branches: [master]");
     expect(PAGES).toContain("npm run docs:build");
     expect(PAGES).toContain("path: docs/.vitepress/dist");
-    expect(PAGES).toContain("actions/deploy-pages@v4");
+    expect(PAGES).toContain("actions/deploy-pages@v5");
     expect(PAGES).toContain("pages: write");
     expect(PAGES).toContain("id-token: write");
   });

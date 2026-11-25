@@ -192,7 +192,7 @@ The rules lease every vitest form (`npx`, `npm exec`, `node_modules/.bin`, bare)
 | `scripts/record-scene.mjs` | `npm run docs:record`: builds the site, plays the landing's stage frame by frame in headless Chromium through the page's `?record` seek hook, and encodes `docs/media/scene.gif` with ffmpeg |
 | `scripts/scene-capture.mjs` | The scene as a headless page for the recorders: builds and serves the site, opens `/?record`, pins the landing's own 16:9 stage to the 1920x1080 frame at scale 1; shared by `record-scene.mjs` and `video/render.mjs` |
 | `video/` | `npm run video`: the voiced intro. `script.md` (narration), `storyboard.json` (card or replay range per phrase), `tts.py` (Kokoro / Chatterbox, one cached WAV per phrase), `render.mjs` (plan, frames, audio, SRT, ffmpeg), `README.md` (setup, voices) |
-| `.github/workflows/pages.yml` | Builds the VitePress site and deploys it to GitHub Pages on a push to `master` |
+| `.github/workflows/pages.yml` | Builds the VitePress site and deploys it to GitHub Pages on a push to `master` that changed a site input; the deploy is tried twice |
 | `dashboard/` | The page: `index.html`, `map.js`, `scene-dom.js`, `graph.js`, `stable.js`, `tokens.css`, `components.css` |
 | `src/types.ts` | Zod schemas, TypeScript types, constants |
 
@@ -497,3 +497,9 @@ After the push check: the Actions run is green; branch `release` exists; the tag
 ### Deploy
 
 `.github/workflows/pages.yml` builds the site and deploys it to GitHub Pages on a push to `master` (once: Settings > Pages > Source: GitHub Actions).
+
+The push trigger has a `paths:` filter: `docs/`, `src/`, `dashboard/`, `hooks/`, `types/`, the workflow files at the top of `templates/` (`*.yaml`, `*.yml`; not its skills or `skills-history.txt`), `scripts/brand.mjs`, `scripts/export-workflows.mjs`, `tsconfig.json`, `package.json`, `package-lock.json` and the workflow itself.
+
+A commit that touches none of them (a skills-only or CLAUDE.md-only one) deploys nothing; `workflow_dispatch` still deploys by hand. A new file the config, the theme or the exporter reads from outside `docs/` needs its path in that list (`src/pages-deploy-resilient.test.ts` reads the imports and fails when one is not covered).
+
+The deploy job tries `actions/deploy-pages` twice: the first step has `continue-on-error`, a 60 s wait and the second step run only when it failed, and the job fails only when both did. A GitHub-side 500 (`Failed to create deployment`) thus no longer needs a re-run by hand. The three Pages actions are on the Node 24 majors (`configure-pages@v6`, `upload-pages-artifact@v5`, `deploy-pages@v5`).
