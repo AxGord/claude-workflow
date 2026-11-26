@@ -13,8 +13,13 @@
   <img src="docs/media/scene.gif" alt="The live workflow map with the Claude Code window and its plan pane over it, replayed from real sessions" width="100%">
 </p>
 
-A Claude Code plugin that drives agents through YAML-defined state machines. The engine tracks the state,
-enforces the guards and hands the agent one prompt at a time; a web dashboard shows everything that runs.
+**Claude Workflow** is an independent, open-source (MIT) plugin for Claude Code that drives agents through
+YAML-defined state machines. The engine tracks the state, enforces the guards and hands the agent one prompt
+at a time; a web dashboard shows everything that runs. It is a plugin you install, not a feature of Claude Code,
+and it is not affiliated with or endorsed by Anthropic. It has been public on GitHub and npm since 1 March 2026,
+before Claude Code's built-in Workflow tool became available (v2.1.146, 20 May 2026) and was announced as
+"dynamic workflows" (v2.1.154, 28 May 2026). The two work differently and their files coexist; see
+[How this differs from Claude Code's built-in Workflow][vs].
 
 ## Why
 
@@ -116,6 +121,7 @@ The full documentation is the site **https://axgord.github.io/claude-workflow/**
 | [Thread pool](https://axgord.github.io/claude-workflow/pool) | Why parallel agents queue: leases, budget, priority, `wf-run` |
 | [Task queue and dispatch](https://axgord.github.io/claude-workflow/queue) | `queue_next`, `wf-queue`, the model table, drivers, agent types, the curator (`wf-curator`) |
 | [Dashboard and plan pane](https://axgord.github.io/claude-workflow/dashboard) | The plan pane, the live map, the status line |
+| [How this differs from Claude Code's built-in Workflow](https://axgord.github.io/claude-workflow/vs-claude-code-workflow) | A side-by-side of the built-in Workflow tool and this plugin, and how their files coexist |
 | [FAQ](https://axgord.github.io/claude-workflow/faq) | Troubleshooting |
 | [Development](https://axgord.github.io/claude-workflow/development) | Commands, source layout, the site, the replay, the banner |
 
@@ -135,3 +141,4 @@ MIT
 [concepts]: https://axgord.github.io/claude-workflow/concepts
 [restart]: https://axgord.github.io/claude-workflow/action-states#restart-suspend-and-resume
 [dashboard]: https://axgord.github.io/claude-workflow/dashboard
+[vs]: https://axgord.github.io/claude-workflow/vs-claude-code-workflow
