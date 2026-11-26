@@ -544,6 +544,23 @@ work:
   transitions: { done: review }
 ```
 
+### Delivery — `delivers`
+
+A driver that waits for a sub-agent is woken by the agent's end-of-turn notification. A command the agent started and left running keeps its turn open, so the notification never comes though the work is done. A prompt state can name the context key the agent delivers to; the write of that key is the delivery.
+
+```yaml
+investigate:
+  prompt: "Spawn the investigator; it writes report_text and ends"
+  delivers: { key: report_text, tokens: tokens_worker, agent: investigator_agent }   # or `delivers: report_text`
+  transitions: { reported: check }
+```
+
+- `key` is the deliverable. `tokens` is the context key the engine fills with the agent's tokens; `agent` is the context key that holds the agent's id (absent, the latest non-driver agent linked to the session at this visit). Both are optional. A load error on a terminal, `sub_workflow`, `exec` or `fetch` state.
+- A `context_set` of a non-empty `key` while the session stands at the state is the delivery. It is recorded once per visit; a write after the session moved on, or of another key, is an ordinary write.
+- `tokens` = what the key held at the visit's first delivery + the agent's last turn's context read from its transcript (a second delivery in the visit is not counted twice). No readable transcript leaves the key to the notification.
+- The answer to the agent says the delivery is recorded. When its session (or a session below it) still owns a live pool waiter or lease (`WF_SESSION_ID`, or a command run in the session's `wt` worktree; an exec's own lease is not counted), it also names it: wait for it or stop it before the last message.
+- `status` and `transition` of the session and of every session above it add `DELIVERY: session <id> (...) — agent <a> set <key> at <time>` while the session stands at that step. The driver takes the state's transition at once; the agent's notification, when it comes later, is a no-op. A dispatcher that sees the line (or a STALE line saying the agent already delivered) sends the driver one message.
+
 ### Strict schema
 
 An unknown key in a workflow, a state, a `retry:`, `resource:`, `fanout:` or `model_table:` block fails that workflow's load (stderr names the file, the state, the key and the nearest known key) — a typo is never silently ignored.

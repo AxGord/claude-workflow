@@ -214,6 +214,33 @@ export const ResumeStepSchema = z
   })
   .strict();
 
+/**
+ * A state's `delivers:` — the context key the agent the state waits on writes its deliverable to (a bare
+ * string is the key alone). The `context_set` of that key while the session stands at the state is the
+ * DELIVERY: the engine records it (`SessionState.delivery`), tells the driver and the dispatcher at their
+ * next `status` / `transition`, and fills `tokens` (the context key an agent's tokens are kept in) from the
+ * agent's transcript. `agent` = the context key holding the agent's id; absent, the latest non-driver agent
+ * linked to the session at this visit of the state.
+ */
+export const DeliversObjectSchema = z
+  .object({
+    key: z.string().regex(CONTEXT_KEY, "a context key name"),
+    tokens: z.string().regex(CONTEXT_KEY, "a context key name").optional(),
+    agent: z.string().regex(CONTEXT_KEY, "a context key name").optional(),
+  })
+  .strict();
+
+export const DeliversSchema = z.union([
+  z.string().regex(CONTEXT_KEY, "a context key name"),
+  DeliversObjectSchema,
+]);
+
+export type Delivers = z.infer<typeof DeliversObjectSchema>;
+
+/** A state's `delivers:` in its one object form (the bare key is `{ key }`). */
+export const deliversOf = (d: z.infer<typeof DeliversSchema> | undefined): Delivers | undefined =>
+  d === undefined ? undefined : typeof d === "string" ? { key: d } : d;
+
 export type Resume = z.infer<typeof ResumeObjectSchema>;
 export type ResumeStep = z.infer<typeof ResumeStepSchema>;
 
@@ -263,6 +290,8 @@ export const StateDefinitionSchema = z
     prompt: z.string().optional(),
     // The resume-or-respawn step `{{resume}}` renders in this state's prompt (workflow-level `resume:` holds the thresholds)
     resume: ResumeStepSchema.optional(),
+    // The context key the agent this state waits on delivers to: its `context_set` is the delivery (see `DeliversObjectSchema`)
+    delivers: DeliversSchema.optional(),
     transitions: z.record(z.string()).optional(),
     terminal: z.boolean().optional(),
     outcome: z.enum(["complete", "fail"]).optional(),
@@ -509,6 +538,19 @@ export const DRIVER_ROLE = "driver";
 /** What a role name may be: lower-case words joined by `-` or `_`. */
 export const ROLE_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 
+/**
+ * An agent's delivery at a state that declares `delivers:`: the `context_set` of the deliverable key at
+ * this step. It stands only while the session is still at the step it was made at (a move off it ends it).
+ */
+export interface Delivery extends AgentStep {
+  readonly key: string;
+  readonly at: string;
+  /** The agent the tokens were read from (its transcript), when one could be named. */
+  readonly agent?: string;
+  /** The tokens context key the engine filled, and what it wrote: the value the key held when the step's first delivery came, plus the agent's context. */
+  readonly tokens?: { readonly key: string; readonly base: number; readonly value: number };
+}
+
 /** A session's foreground exec in flight, recorded so a resume can take it over. */
 export interface RunningExec extends DetachedRun {
   readonly frame: number;
@@ -550,6 +592,8 @@ export interface SessionState {
   readonly agent_step?: AgentStep;
   /** The engine's resume-or-respawn choice at the latest entered state that declares `resume:`. */
   readonly resume_choice?: ResumeChoice;
+  /** The latest delivery of a state's `delivers:` key; live only while the session stands at the step it names. */
+  readonly delivery?: Delivery;
   /** A dispatching session: the wake its latest write belongs to (`at`) and the idle before that wake's first write (`idle_ms`). */
   readonly wake?: { readonly at: string; readonly idle_ms: number };
   /** A dispatching session whose dispatcher agent is past its refresh bounds: the engine's decision (`refresh.ts`). */

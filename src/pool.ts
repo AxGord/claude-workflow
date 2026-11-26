@@ -953,6 +953,37 @@ export class Pool {
     return mine.length === 0 ? undefined : Math.min(...mine.map(e => e.arrived));
   }
 
+  /**
+   * The live waiters and leases a `wf-run` of an agent holds for `owner`, read from `pool.json` without an
+   * admission pass or a write: an entry names one of `owner.sessions` (`WF_SESSION_ID`), or ran in one of
+   * `owner.dirs` (a worktree the session owns, where an agent's own `wf-run` leaves no session id). The
+   * engine's own exec leases (they carry a `step`) are not the agent's. A waiter is live while its `pid`
+   * is; a lease while its `pid` or its process group is.
+   */
+  heldBy(owner: {
+    readonly sessions: ReadonlySet<string>;
+    readonly dirs: readonly string[];
+  }): PoolEntry[] {
+    const fp = path.join(this.dir, POOL_FILE);
+    let raw: string;
+    try {
+      raw = fs.readFileSync(fp, "utf8");
+    } catch {
+      return [];
+    }
+    const state = readState(raw, fp);
+    const mine = (e: PoolEntry): boolean =>
+      e.step === undefined &&
+      ((e.session_id !== "" && owner.sessions.has(e.session_id)) ||
+        owner.dirs.some(
+          d => e.cwd === d || e.cwd.startsWith(d.endsWith(path.sep) ? d : d + path.sep),
+        ));
+    const alive = (e: PoolEntry): boolean =>
+      this._probes.isAlive(e.pid) ||
+      (e.started !== undefined && e.pgid !== undefined && this._probes.isGroupAlive(e.pgid));
+    return [...state.leases, ...state.waiting].filter(e => mine(e) && alive(e));
+  }
+
   /** Reap dead entries, grant what fits, and report the pool. */
   status(): Promise<PoolView> {
     return this._pass();

@@ -39,6 +39,7 @@ Agent                       Engine                          Storage
 7. When any bundled template fails to reload (schema, `extends` or validation) the whole previous bundled set keeps serving and `list` shows the failure with its reason; a workflow that failed to load is never reported as `not found`
 8. Runtime overlays: `modify` adds, changes or removes states and transitions of one session without touching the YAML files
 9. The SessionStart hook provisions the bundled skills, keeps unedited copies current and injects the workflow context
+10. A delivery is the agent's `context_set` of its state's `delivers:` key, not the end of its turn: the engine records it, sets the tokens key from the agent's transcript, and shows the driver and its dispatcher a `DELIVERY:` line at their next `status` / `transition` ([Delivery](/action-states#delivery-—-delivers))
 
 ## Bundled Workflows
 
@@ -194,7 +195,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `start` | Start a workflow, return initial prompt; rules block whole once per context, one line after (`full: true`: whole) | `workflow`, `actor`, `parent_session_id`, `cwd`, `priority`, `context`, `reply`, `full`, `force` |
 | `status` | Get current state, stack, transitions, context (values cut to 200 chars), history — of any session, incl. a finished child; with `key`, only that context value, whole | `session_id`, `key`, `full` |
 | `transition` | Advance to next state (auto push/pop sub-workflows); `set` writes context keys first, in the same call; a revisit reply with the routes of the state just left says `TRANSITIONS: unchanged` | `session_id`, `transition`, `set`, `caller_session_id`, `force` + `reason` |
-| `context_set` | Save key-value data in session context | `session_id`, `key`, `value` |
+| `context_set` | Save key-value data in session context; the key a state's `delivers:` names, written at that state, is a DELIVERY (the answer says so, and warns of a live pool waiter or lease the session still owns) | `session_id`, `key`, `value` |
 | `modify` | Runtime overlay — add/change/remove states and transitions (an `exec`/`fetch` state is refused) | `session_id`, `add_state`, `add_transition` |
 | `create` | Create new workflow definition (saves YAML; an `exec`/`fetch` state is refused) | `name`, `definition`, `scope` |
 | `delete` | Delete a workflow definition | `name`, `scope` |

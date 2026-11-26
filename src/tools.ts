@@ -90,6 +90,20 @@ export function staleNotice(engine: Engine, sessionId: string): string[] {
 }
 
 /**
+ * The `DELIVERY:` lines of `sessionId`'s active sub-tree (`Engine.deliveryLines`): an agent whose state declares
+ * `delivers:` has written its deliverable, so the session's driver and the dispatcher above it see at their next
+ * `status` / `transition` that the step may be taken without the agent's notification.
+ */
+export function deliveryNotice(engine: Engine, sessionId: string): string[] {
+  try {
+    return engine.deliveryLines(sessionId);
+  } catch {
+    // a notice never fails the call it rides on
+    return [];
+  }
+}
+
+/**
  * The driver questions below `sessionId` that no move has answered for `ASK_UNANSWERED_AFTER_S`
  * (`Engine.unansweredAskLines`): what a parent sees at its next `status` / `transition`, so an answer
  * that never reached its driver does not leave the task idle unseen. No clock, no polling: it rides on
@@ -780,6 +794,7 @@ export function registerTools(
         const starved = starvationLines(storage, sid);
         const body = formatStatus(status, { showSessionId: true, forceFullPrompt: true });
         const stale = unshownStale(engine, sid, body);
+        const delivered = deliveryNotice(engine, sid);
         const unanswered = [
           ...unansweredNotice(engine, sid),
           ...unshownParentAnswers(engine, sid, body),
@@ -789,6 +804,7 @@ export function registerTools(
         const text = [
           ...(starved.length > 0 ? [...starved, ""] : []),
           ...(stale.length > 0 ? [...stale, ""] : []),
+          ...(delivered.length > 0 ? [...delivered, ""] : []),
           ...(unanswered.length > 0 ? [...unanswered, ""] : []),
           ...(suspendedAt
             ? [
@@ -879,6 +895,7 @@ export function registerTools(
           const notices = [
             ...starvationLines(storage, sid),
             ...unshownStale(engine, sid, body),
+            ...deliveryNotice(engine, sid),
             ...unansweredNotice(engine, sid),
             ...unshownParentAnswers(engine, sid, body),
             ...unshownOwed(engine, sid, body),
@@ -905,7 +922,7 @@ export function registerTools(
     "context_set",
     {
       description:
-        "Save key-value data in the session context for later use. A dispatcher's `tasks` entry (`ID=P driver=<id>`) whose id is not the agent linked with role `driver` to task session P is refused, naming the right id. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch).",
+        "Save key-value data in the session context for later use. A dispatcher's `tasks` entry (`ID=P driver=<id>`) whose id is not the agent linked with role `driver` to task session P is refused, naming the right id. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch). The key a state's `delivers:` names, written while the session stands at that state, is a DELIVERY: the answer says so, and warns when the session still owns a live pool waiter or lease (stop or await it before your last message).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
@@ -926,14 +943,20 @@ export function registerTools(
           const sid = engine.resolveSessionId(args.session_id);
           engine.assertNotSuspended(sid);
           const warning = engine.assertOwnership(sid, args.force);
-          const derived = await engine.setContext(sid, args.key, args.value, args.actor);
+          const { derived, note: deliveryNote } = await engine.setContextDelivering(
+            sid,
+            args.key,
+            args.value,
+            args.actor,
+          );
           const answerNote =
             args.key === "parent_answer" ? engine.parentAnswerNote(sid) : undefined;
           const text =
             (warning ? warning + "\n" : "") +
             `Context "${args.key}" set successfully.` +
             (derived ? `\nmodel_table: ${derived}` : "") +
-            (answerNote ? `\n${answerNote}` : "");
+            (answerNote ? `\n${answerNote}` : "") +
+            (deliveryNote ? `\n${deliveryNote}` : "");
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {

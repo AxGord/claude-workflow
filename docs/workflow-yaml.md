@@ -39,6 +39,7 @@ states:
   - when the session enters it, the engine marks the session's own queue line (context `queue_file` and `task`) that is still `running` `failed` / `released`, noted `ended <state>: the pipeline made no mark`;
   - a line already marked, a missing queue and a missing line leave the end of the session as it is;
   - bundled `batch-task` declares it on `closed`, `stopped` (`failed`) and `released`, so no task session that ends leaves its line `running`.
+- `delivers: <key>` (or `{ key, tokens?, agent? }`) on a prompt state: the context key the agent the state waits on writes its deliverable to; its `context_set` is a delivery the driver acts on without waiting for the agent's end of turn (on a terminal, `sub_workflow`, `exec` or `fetch` state it is a load error): see [Delivery](/action-states#delivery-—-delivers).
 
 ## Three-Tier Loading
 

@@ -19,6 +19,7 @@ import type {
   Driver,
   AgentStep,
   AgentLink,
+  Delivery,
   DispatcherRefreshSpec,
   Resume,
   ResumeChoice,
@@ -98,6 +99,7 @@ import {
   resolveDriverRef,
 } from "./driver.js";
 import { currentStep, linkedAgentLines, type IsRoute } from "./agent-link.js";
+import { deliveryLine, liveDelivery, waiterWarning, withDelivery } from "./delivery.js";
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, dispatcherHolds, takeOver, taskEntries, where } from "./takeover.js";
 import { secondRootRefusal } from "./session-scope.js";
@@ -235,8 +237,12 @@ function driverWaitNote(s: SessionState): string {
       l.step.visit === now.visit,
   );
   const last = links[links.length - 1];
-  if (!last) return "";
-  return ` — the driver may be waiting on its ${last.role} ${last.agent_id}, linked at this step: wait, not gone; check that agent (status, SendMessage to the driver) before any ping; never spawn a driver while it lives`;
+  const delivered = liveDelivery(s);
+  const deliveredNote = delivered
+    ? `; the agent already delivered \`${delivered.key}\` at ${delivered.at} (its turn has not ended): SendMessage the driver once to take the state's transition from status, no notification needed`
+    : "";
+  if (!last) return deliveredNote === "" ? "" : ` —${deliveredNote.slice(1)}`;
+  return ` — the driver may be waiting on its ${last.role} ${last.agent_id}, linked at this step: wait, not gone; check that agent (status, SendMessage to the driver) before any ping; never spawn a driver while it lives${deliveredNote}`;
 }
 
 export class Engine {
@@ -1408,9 +1414,24 @@ export class Engine {
     value: unknown,
     actor?: string,
   ): Promise<string | undefined> {
+    return (await this.setContextDelivering(sessionId, key, value, actor)).derived;
+  }
+
+  /**
+   * `setContext`, also answering the delivery the write made: the key was the `delivers:` key of the step the
+   * session stands at (`delivery`, with the tokens key the engine filled). The reply to the agent that wrote it.
+   */
+  public async setContextDelivering(
+    sessionId: string,
+    key: string,
+    value: unknown,
+    actor?: string,
+  ): Promise<{ derived: string | undefined; delivery?: Delivery; note?: string }> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
-    const updated = this._withKey(session, key, value, actor);
+    const keyed = this._withKey(session, key, value, actor);
+    const updated = this._withDelivered(keyed, key, value);
+    const delivery = updated.delivery !== keyed.delivery ? updated.delivery : undefined;
 
     await this._storage.write(sessionId, updated);
     // the dispatcher's `owed_handed` (the ids it handed to the parent) is recorded on the queue lines themselves
@@ -1418,8 +1439,94 @@ export class Engine {
     if (key === "owed_handed" && typeof value === "string" && typeof queueFile === "string")
       for (const id of value.split(/\s+/).filter(Boolean))
         await markOwedHanded(queueFile, id).catch(() => false);
-    const last = updated.history[updated.history.length - 1];
-    return last.event === "model" ? last.detail : undefined;
+    const last = keyed.history[keyed.history.length - 1];
+    return {
+      derived: last.event === "model" ? last.detail : undefined,
+      ...(delivery ? { delivery, note: this._deliveryNote(updated, delivery) } : {}),
+    };
+  }
+
+  /** `session` with the delivery this write of `key` made, when it is the `delivers:` key of its step and not empty. */
+  private _withDelivered(session: SessionState, key: string, value: unknown): SessionState {
+    if (session.stack.length === 0 || value === undefined || value === null || value === "")
+      return session;
+    const frame = session.stack[session.active_frame];
+    let state: StateDefinition | undefined;
+    try {
+      state = frame && this._resolveState(session, frame.workflow, frame.current_state);
+    } catch {
+      return session; // a frame whose workflow is gone has no state to deliver at
+    }
+    return withDelivery(
+      session,
+      state,
+      key,
+      new Date().toISOString(),
+      agent => agentReadingOf(agent, session.claude_session_id).context,
+    );
+  }
+
+  /**
+   * What the agent that made `delivery` is told: it is recorded and the driver goes on without the end of its turn,
+   * plus the warning when its session still owns a live pool waiter or lease.
+   */
+  private _deliveryNote(session: SessionState, delivery: Delivery): string {
+    const tree = activeSubtree(this._storage, session.session_id)
+      .map(id => this._storage.read(id))
+      .filter((s): s is SessionState => !!s);
+    const dirs = new Set<string>();
+    for (const s of tree) {
+      const wt = s.context.wt;
+      if (typeof wt === "string" && path.isAbsolute(wt)) dirs.add(wt);
+      const cwd = s.context.cwd;
+      if (
+        s.session_id !== session.session_id &&
+        typeof cwd === "string" &&
+        path.isAbsolute(cwd) &&
+        cwd !== s.context.project_root
+      )
+        dirs.add(cwd);
+    }
+    let held: ReturnType<Executor["pool"]["heldBy"]> = [];
+    try {
+      held = this._executor.pool.heldBy({
+        sessions: new Set(tree.map(s => s.session_id)),
+        dirs: [...dirs],
+      });
+    } catch {
+      held = []; // an unreadable pool names no waiter; the delivery stands
+    }
+    const head = `Delivery of "${delivery.key}" recorded: the driver takes the next step without waiting for your turn to end${
+      delivery.tokens
+        ? `; \`${delivery.tokens.key}\` = ${delivery.tokens.value} set from your transcript`
+        : ""
+    }.`;
+    return [head, waiterWarning(delivery.key, held)].filter(Boolean).join("\n");
+  }
+
+  /**
+   * One `DELIVERY:` line per session of `sessionId`'s active sub-tree (itself included) that stands at a step whose
+   * agent has delivered: what the driver of the session and the dispatcher above it see at their next `status` /
+   * `transition`, so a delivery needs no notification to be noticed.
+   */
+  public deliveryLines(sessionId: string): string[] {
+    const lines: string[] = [];
+    for (const id of activeSubtree(this._storage, sessionId)) {
+      const s = this._storage.read(id);
+      if (!s || s.stack.length === 0 || !liveDelivery(s)) continue;
+      const frame = s.stack[s.active_frame];
+      let routes: string[] = [];
+      try {
+        routes = Object.keys(
+          this._resolveState(s, frame.workflow, frame.current_state)?.transitions ?? {},
+        );
+      } catch {
+        routes = [];
+      }
+      const line = deliveryLine(s, routes);
+      if (line) lines.push(line);
+    }
+    return lines;
   }
 
   /**

@@ -120,6 +120,9 @@ then needs nothing.
   exactly, `link_agent` it (`role: "driver"`), `context_set({session_id: D, key: "tasks", value: …})`. Before it, read the context key `drivers_respawned` (a space-separated list of
   task ids; absent = empty): the task is in it → hand back `NEEDS-PARENT task=<ID> session=<P> reason=driver gone twice
   see=state collect` and spawn nothing; otherwise spawn, then add the task id to the key (`context_set`, the old value plus ` <ID>`).
+- **A `DELIVERY:` line** (`status` / `transition` of D, or a STALE line that says the agent already delivered): the
+  agent of that task session has written its deliverable, and its driver, asleep in a wait, never hears of it. SendMessage
+  that driver (`tasks`: its `driver=`) ONCE "Delivery is in: call status on your session <P> and continue." Never the agent.
 - **Stale sessions** the prompt lists: a session with an agent → SendMessage that agent asking where it
   stands; gone (its SendMessage fails with an error) → for a task session, the fresh driver of the bullet above; no answer, or "ended without delivering a report", is not gone. A stale task session
   WITHOUT an agent is not yours to advance: hand back `NEEDS-PARENT task=<ID> session=<P> reason=stale, no agent see=state collect`.

@@ -178,6 +178,7 @@ The rules lease every vitest form (`npx`, `npm exec`, `node_modules/.bin`, bare)
 | `src/lessons-file.ts` | `wf-queue --lessons`: a landed task's lesson records as queue lines (unverified → backlog, arm-rot-on-base → pending) or triage-file rows, rerun-safe |
 | `src/process.ts` | Process-group kill and pid liveness |
 | `src/stale.ts` | Stall detection: a state's `stale_after` (type defaults) and whether a session is STALE |
+| `src/delivery.ts` | A state's `delivers:` key: the delivery record, the tokens read from the agent's transcript, the `DELIVERY:` line and the live-pool-entry warning |
 | `src/template.ts` | Mustache-style `{{var}}` template rendering for action parameters |
 | `src/dashboard.ts` | Express REST API + static file serving |
 | `src/dashboard-routes.ts` | The dashboard's route table (path <-> view), shared by the page and the tests |

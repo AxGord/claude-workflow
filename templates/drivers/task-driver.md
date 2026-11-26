@@ -29,6 +29,12 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   agent (`agent_id`, the one every STALE / UNANSWERED line and a wake name) is you, the driver, and a link of
   another role never replaces it. Never link a worker onto P without a `role`. The `status`'s LINKED AGENTS lists such a link too, with its role.
 - Then WAIT: end your turn. The agent's notification wakes you. Never poll, never sleep.
+- A `DELIVERY:` line in a `status` or `transition` reply of P (or in the message that woke you) says the awaited agent
+  already set its state's deliverable key: that IS its answer, the agent's turn may never end. Take the state's
+  transition now. The engine has set the tokens key it names: set no tokens. When the prompt says to read the answer from
+  the agent's one line, the key's value is that answer (`status` with `key`). The agent's notification, if it comes after
+  you moved on, is a no-op: set no tokens, transition nothing, end the turn with the WAITING line of the current step.
+  Whichever of the delivery and the notification comes first wins, once.
 - Workers and reviewers answer with ONE line (`DONE … report=<file>`, `BLOCKED …`, `VERDICT X …
   review=<file> design=yes|no`); their full text is in the files they name. Do not open those files
   unless a prompt needs a value from them.

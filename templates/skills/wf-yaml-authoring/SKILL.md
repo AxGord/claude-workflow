@@ -174,6 +174,8 @@ continues from `status` — the session holds the step); `transition` appends th
 single-step prompt state (one agent turn of an hour) its own `stale_after`; a state waiting for the
 user `stale_after: 0` (bundled `batch` `paused`).
 
+**delivers** (per prompt state; a bare context key, or `{ key, tokens?, agent? }`): the key the agent this state waits on writes its deliverable to. The agent's `context_set` of `key` while the session stands at the state is the DELIVERY, so a driver need not wait for the end of the agent's turn (a command it left running keeps that open for good). The engine records it once per visit, sets `tokens` (a context key) to what it held plus the agent's last turn's context read from its transcript (`agent` = the context key holding the agent's id; absent, the latest non-driver agent linked to the session at this visit), answers the AGENT with the record and, when its session still owns a live pool waiter or lease, with a WARNING naming it (wait for it or stop it before the last message), and adds `DELIVERY: session <id> (...) — agent <a> set <key> at <time>` to the `status` / `transition` of the session and of its parents: the driver then takes the state's transition without the notification (that notification, later, is a no-op), and a dispatcher messages the driver once. A load error on a terminal, `sub_workflow`, `exec` or `fetch` state.
+
 ### Routing Modes
 
 **Simple** — binary success/error:

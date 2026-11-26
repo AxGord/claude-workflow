@@ -688,6 +688,11 @@ export class Loader {
           `state "${name}" stale_after is never read on a ${state.terminal ? "terminal" : "sub_workflow"} state`,
         );
 
+      if (state.delivers !== undefined && (state.terminal || state.sub_workflow || isAction))
+        errors.push(
+          `state "${name}" delivers is read only on a prompt state (the one an agent's deliverable is awaited at)`,
+        );
+
       if (
         state.queue_mark !== undefined &&
         (!state.terminal || Object.keys(state.transitions ?? {}).length > 0)
