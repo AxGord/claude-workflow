@@ -749,6 +749,8 @@ export function snapshotAt(file: ReplayFile, at: number): Snapshot {
     failed: failed.length,
     pending: pendingNow.pending,
     running: running.map(r => line(r, "running")),
+    // a replay records no human waits
+    awaiting: [],
     ready: pendingNow.ready,
     unblocked: pendingNow.unblocked,
     waiting: pendingNow.waiting,

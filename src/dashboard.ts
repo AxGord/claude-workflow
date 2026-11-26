@@ -14,6 +14,7 @@ import { measureSpend, subtreeOf } from "./spend.js";
 import { buildCost } from "./calibration.js";
 import { buildTimeline, localDay } from "./timeline.js";
 import { describeQueue, readQueue, QueueError } from "./queue.js";
+import { recordHumanAnswer } from "./human-wait.js";
 
 /** An operator file in the state directory: state name -> stage group, over the timeline's defaults. */
 const TIMELINE_GROUPS_FILE = "timeline-groups.conf";
@@ -199,6 +200,23 @@ export function buildApp(
       return;
     }
     res.json(buildCost(storage.readLedger(), from, to));
+  });
+
+  // The owner's answer to a human wait, from the Plan page's `Awaiting you` section: JSON `{route, text}` (a JSON body
+  // needs a CORS preflight a foreign page cannot pass, so a link elsewhere cannot answer for the owner).
+  app.post("/api/session/:id/answer", async (req, res) => {
+    const body = (req.body ?? {}) as { route?: unknown; text?: unknown };
+    if (!req.is("application/json") || typeof body.route !== "string") {
+      res.status(400).json({ error: "a JSON body {route, text} is required" });
+      return;
+    }
+    try {
+      const text = typeof body.text === "string" ? body.text : "";
+      const r = await recordHumanAnswer(storage, req.params.id, body.route, text, "dashboard");
+      res.json({ session_id: r.session.session_id, route: body.route, note: r.note });
+    } catch (err) {
+      res.status(409).json({ error: (err as Error).message });
+    }
   });
 
   // Abandon a session via REST (used by SessionEnd hook)

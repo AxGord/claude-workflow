@@ -398,7 +398,7 @@ describe("the instructions the refresh rests on", () => {
   const rules = read("templates/drivers/dispatch-driver.md");
 
   it("the dispatcher's instructions hand REFRESH to main once, rebind the drivers once, and keep no memory of their own", () => {
-    expect(rules).toContain("the only five things main gets");
+    expect(rules).toContain("the only six things main gets");
     expect(rules).toContain("`REFRESH session=<D> old=<agent id> reason=…`");
     expect(rules).toContain('key: "refresh_handed"');
     expect(rules).toContain('key: "dispatcher_rebound"');
@@ -419,7 +419,7 @@ describe("the instructions the refresh rests on", () => {
     }
   });
   it("the DRIVER block tells main the fifth message and its three steps", () => {
-    expect(read("src/driver.ts")).toContain("ONLY with these five");
+    expect(read("src/driver.ts")).toContain("ONLY with these six");
     expect(read("src/driver.ts")).toContain("`REFRESH session=<D> old=<agent id> reason=…`");
   });
 });

@@ -343,7 +343,7 @@ function elements(n: PaneNode): PaneEl[] {
   return [el, ...(el.el === 'link' ? [] : el.children.flatMap(elements))]
 }
 
-const EMPTY_QUEUE = { file: '/q', window: 3, done: 0, failed: 0, pending: 0, running: [], ready: [], unblocked: [], waiting: [], failedLines: [], marks: {} }
+const EMPTY_QUEUE = { file: '/q', window: 3, done: 0, failed: 0, pending: 0, running: [], awaiting: [], ready: [], unblocked: [], waiting: [], failedLines: [], marks: {} }
 
 /** The pane's tree on a view, with or without a work queue. */
 function treeOn(tab: View, withQueue = true): PaneEl[] {

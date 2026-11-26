@@ -53,18 +53,28 @@ export function hashContent(raw: string | Uint8Array): string {
   return createHash("sha256").update(raw).digest("hex");
 }
 
+/**
+ * A state that makes the engine run something: an exec or fetch, or a human wait with a `stop:` command (run when
+ * the session ends). Each needs the same consent.
+ */
+export function runsCommand(s: { type?: string; human?: { stop?: string } } | undefined): boolean {
+  return s?.type === "exec" || s?.type === "fetch" || s?.human?.stop !== undefined;
+}
+
 /** Why a tool call may not bring an exec/fetch state: that is a command or request run with no one's approval. */
 export function actionStateRefusal(what: string): string {
   return (
-    `${what}: exec/fetch states are not accepted from modify or create (the command would run with ` +
+    `${what}: exec/fetch states are not accepted from modify or create, nor a human wait's stop command (the command would run with ` +
     `nothing the user approved). Write the state in a workflow YAML file under .claude/workflows/ of a project the user trusted (accepted in Claude Code, or \`${wfTrustCommand()} <project>\` run by the USER in a terminal).`
   );
 }
 
-/** The names of the exec/fetch states a workflow file declares itself (not inherited ones). */
-export function actionStateNames(states: Record<string, { type?: string }> | undefined): string[] {
+/** The names of the states a workflow file declares itself (not inherited ones) that run something (`runsCommand`). */
+export function actionStateNames(
+  states: Record<string, { type?: string; human?: { stop?: string } }> | undefined,
+): string[] {
   return Object.entries(states ?? {})
-    .filter(([, s]) => s.type === "exec" || s.type === "fetch")
+    .filter(([, s]) => runsCommand(s))
     .map(([name]) => name);
 }
 
@@ -274,6 +284,8 @@ export function actionFilesIn(dir: string, store: TrustStore, root: string): Act
         const s = states[n];
         const extra = (label: string, v: unknown): string[] =>
           v === undefined ? [] : [`    ${label}: ${typeof v === "string" ? v : JSON.stringify(v)}`];
+        if (s.type !== "exec" && s.type !== "fetch")
+          return [`${n} (human wait stop): ${s.human?.stop}`];
         return s.type === "exec"
           ? [
               `${n} (exec): ${s.command}`,

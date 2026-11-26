@@ -44,7 +44,8 @@ export const QUEUE_EXIT = {
 } as const;
 export type PickCode = 0 | 10 | 11 | 12;
 
-export const STATUSES = ["pending", "running", "done", "failed", "backlog"] as const;
+/** `awaiting`: the task's session stands at a human wait state (`human:`): the line holds no window slot, and only the pick's resume admits it again, once answered. */
+export const STATUSES = ["pending", "running", "awaiting", "done", "failed", "backlog"] as const;
 export type Status = (typeof STATUSES)[number];
 
 export const MARK_TARGETS = {
@@ -74,6 +75,9 @@ export const TASK_KEYS = [
   "sweep",
   "on_end_tell_parent",
   "owed_handed",
+  "human_gate",
+  "human_passed",
+  "human_wait",
   "exclusive",
   "breaking",
   "parked",
@@ -85,9 +89,11 @@ export const TASK_KEYS = [
   "text",
   "notes",
 ] as const;
-/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `owed_handed` by the engine once the owed step is handed to the parent, `added` by add, `base` / `text_hash` by add and edit): never set by a caller. */
+/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `owed_handed` by the engine once the owed step is handed to the parent, `added` by add, `base` / `text_hash` by add and edit, `human_wait` / `human_passed` by a human wait state): never set by a caller. */
 const STATE_KEYS: ReadonlySet<string> = new Set([
   "owed_handed",
+  "human_passed",
+  "human_wait",
   "ended",
   "restored",
   "added",
@@ -137,6 +143,23 @@ export interface QueueLine {
   readonly notes: readonly QueueNote[];
   /** Task keys this server does not know (written by newer code): kept on write, inert for the pick. */
   readonly unknownKeys: readonly string[];
+  /** An `awaiting` line's wait, as the engine recorded it (`human_wait:`). */
+  readonly humanWait?: HumanWaitRecord;
+}
+
+/**
+ * The `human_wait:` mapping the engine writes on a line whose session entered a human wait state: when, which
+ * session and state, the question and what to show. `answered` / `route` are written by the answer; the pick
+ * then resumes the line before any pending one.
+ */
+export interface HumanWaitRecord {
+  readonly since: string;
+  readonly session: string;
+  readonly state: string;
+  readonly question: string;
+  readonly show: readonly string[];
+  readonly answered?: string;
+  readonly route?: string;
 }
 
 export interface Queue {
@@ -178,6 +201,8 @@ export interface AdmittedTask {
   readonly priority?: Priority;
   /** The task's `sweep:` when set: the command a sweep line runs over its tree. Data for the project's workflow; the pick gives it no meaning. */
   readonly sweep?: string;
+  /** An answered `awaiting` line the pick resumes: its session, which keeps its state; no new session is started. */
+  readonly resume?: string;
   readonly text: string;
 }
 
@@ -203,6 +228,10 @@ export interface PickResult {
   }[];
   /** What the curator admission did this pick (`curator: added <ID> (...)`, or why a config kept it out). */
   readonly curator?: string;
+  /** The `awaiting` lines the pick did not resume, oldest wait first: `<ID> (answered <route>)` or `<ID> (since <time>)`. */
+  readonly awaiting?: readonly string[];
+  /** Admitted lines whose text asks for an owner's look or approval while the line has no `human_gate:` (`humanGateHint`). */
+  readonly gateHints?: readonly string[];
 }
 
 /** `unknown key priority on X: ignored by this server` — one line per task with unknown keys. */
@@ -270,6 +299,8 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "sweep",
     "on_end_tell_parent",
     "owed_handed",
+    "human_gate",
+    "human_passed",
     "after",
     "touches",
     "ended",
@@ -289,6 +320,7 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
       throw new QueueError(`${at} (${id}): ${k}: is true or false`);
   if (o.exclusive === true) meta.exclusive = "yes";
   if (o.breaking === true) meta.breaking = "yes";
+  const humanWait = parseHumanWait(o.human_wait, `${at} (${id})`);
   return {
     index,
     status,
@@ -298,8 +330,68 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     text: o.text === undefined || o.text === null ? "" : str(o.text).trim(),
     notes: parseNotes(o.notes, `${at} (${id})`),
     unknownKeys,
+    ...(humanWait ? { humanWait } : {}),
   };
 }
+
+function parseHumanWait(v: unknown, at: string): HumanWaitRecord | undefined {
+  if (v === undefined || v === null) return undefined;
+  const o = typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  const text = (k: string): string | undefined =>
+    typeof o[k] === "string" && o[k] !== "" ? o[k] : undefined;
+  const since = text("since");
+  const session = text("session");
+  const state = text("state");
+  if (since === undefined || session === undefined || state === undefined)
+    throw new QueueError(
+      `${at}: human_wait: is the engine's {since, session, state, question, show}`,
+    );
+  const answered = text("answered");
+  const route = text("route");
+  return {
+    since,
+    session,
+    state,
+    question: text("question") ?? "",
+    show: Array.isArray(o.show) ? o.show.map(str).filter(s => s !== "") : [],
+    ...(answered !== undefined ? { answered } : {}),
+    ...(route !== undefined ? { route } : {}),
+  };
+}
+
+/** `human_gate:` is one word: the kind of look the owner gives (`look`, `approve`). */
+const HUMAN_GATE_RE = /^[a-z][a-z0-9_-]*$/;
+
+/**
+ * Words in a line's text that ask for an owner's look or approval before the land. A line that says so without
+ * `human_gate:` would land unseen: the pick and `queue_add` / `queue_edit` warn, they never refuse.
+ */
+const HUMAN_LOOK_RE =
+  /\b(?:hold before land|look: ?true|(?:owner|user|human)(?:'s)? (?:look|approval|sign-?off)|(?:owner|user|human) (?:looks? at|approves?|compares?)|(?:wait|pause) for (?:the )?(?:owner|user|human))\b/i;
+
+/** The phrase of `line`'s text that asks for an owner's look while the line has no `human_gate:`, or null. */
+export function humanGateHint(line: QueueLine): string | null {
+  if (line.meta.human_gate !== undefined) return null;
+  const m = HUMAN_LOOK_RE.exec(line.text);
+  return m === null ? null : m[0];
+}
+
+/** The line's gate when it is still to be passed: its `human_gate:` kind while no `human_passed:` is recorded; null otherwise. */
+export function gateDue(file: string, id: string): string | null {
+  const line = lineOf(readQueue(file), id);
+  return line.meta.human_gate !== undefined && line.meta.human_passed === undefined
+    ? line.meta.human_gate
+    : null;
+}
+
+/** `queue_add` / `queue_edit`'s warning for a pending line whose text asks for an owner's look and carries no `human_gate:`. */
+function gateWarnings(line: QueueLine): string[] {
+  const phrase = line.status === "pending" ? humanGateHint(line) : null;
+  return phrase === null ? [] : [gateHintNote(line, phrase)];
+}
+
+const gateHintNote = (line: QueueLine, phrase: string): string =>
+  `${line.id}: its text asks for an owner's look ("${phrase}") but the line has no human_gate: key — it would land unseen; queue_edit set human_gate: look`;
 
 export function parseQueue(
   text: string,
@@ -771,7 +863,9 @@ export function planPick(
     throw new QueueError(queue.overlapError);
   const byId = new Map(queue.lines.map(l => [l.id, l]));
   const running = queue.lines.filter(l => l.status === "running");
-  const taken: QueueLine[] = [...running];
+  // an awaiting line holds no window slot, but keeps its touches / owner / exclusive claim: its worktree waits for the answer
+  const awaiting = queue.lines.filter(l => l.status === "awaiting");
+  const taken: QueueLine[] = [...running, ...awaiting];
   const admitted: AdmittedTask[] = [];
   const reasons: { id: string; why: string; index: number }[] = [];
   const overtakes: string[] = [];
@@ -781,8 +875,47 @@ export function planPick(
   /** The pending exclusive lines waiting only for running lines of their repo: the repo key each holds. */
   const holds: { readonly id: string; readonly key: string | null }[] = [];
   const repoKeys = new Map<QueueLine, string | null>(
-    running.map(l => [l, repoKey(resolveRepo(queue, l))]),
+    taken.map(l => [l, repoKey(resolveRepo(queue, l))]),
   );
+  // answered waits come back first, before any pending line: by priority, then the longest wait
+  const waitingLeft: string[] = [];
+  const answered = awaiting
+    .filter(l => l.humanWait?.answered !== undefined)
+    .sort(
+      (a, b) =>
+        priorityRank(a) - priorityRank(b) ||
+        (a.humanWait?.since ?? "").localeCompare(b.humanWait?.since ?? "") ||
+        a.index - b.index,
+    );
+  for (const l of opts.only === undefined ? answered : []) {
+    const w = l.humanWait as HumanWaitRecord;
+    const room = queue.batchSize > 0 && (opts.ignoreWindow === true || free > admitted.length);
+    if (!room) {
+      waitingLeft.push(`${l.id} (answered ${w.route ?? "?"}, resumes first)`);
+      continue;
+    }
+    const repo = resolveRepo(queue, l) ?? "";
+    const workflow = repo === "" ? undefined : effectiveWorkflow(queue, l, repo);
+    const difficulty = difficultyOf(l) ?? undefined;
+    const priority = priorityOf(l);
+    admitted.push({
+      id: l.id,
+      model: l.meta.model ?? "opus",
+      effort: l.meta.effort ?? "-",
+      repo,
+      ...(workflow ? { workflow } : {}),
+      ...(difficulty !== undefined ? { difficulty } : {}),
+      kind: kindOf(l) ?? "feature",
+      ...(priority !== null && priority !== "normal" ? { priority } : {}),
+      resume: w.session,
+      text: l.text,
+    });
+  }
+  for (const l of [...awaiting].sort((a, b) =>
+    (a.humanWait?.since ?? "").localeCompare(b.humanWait?.since ?? ""),
+  ))
+    if (l.humanWait?.answered === undefined)
+      waitingLeft.push(`${l.id} (since ${l.humanWait?.since ?? "?"})`);
   const ignoredIn = ignoredByRepo(
     queue,
     opts.only === undefined ? queue.lines.filter(l => l.status === "pending") : [],
@@ -891,10 +1024,15 @@ export function planPick(
       if (block !== undefined) opts.blocks?.set(l.id, block);
     }
   }
+  const gateHints = admitted.flatMap(a => {
+    const line = byId.get(a.id);
+    const phrase = line === undefined ? null : humanGateHint(line);
+    return line === undefined || phrase === null ? [] : [gateHintNote(line, phrase)];
+  });
   const code: PickCode =
     admitted.length > 0
       ? QUEUE_EXIT.ADMITTED
-      : running.length > 0
+      : running.length > 0 || awaiting.length > 0
         ? QUEUE_EXIT.WAIT
         : queue.batchSize === 0
           ? QUEUE_EXIT.PAUSED
@@ -908,6 +1046,8 @@ export function planPick(
     pending: queue.lines.filter(l => l.status === "pending").length,
     admitted,
     ...(overtakes.length > 0 ? { overtakes } : {}),
+    ...(waitingLeft.length > 0 ? { awaiting: waitingLeft } : {}),
+    ...(gateHints.length > 0 ? { gateHints } : {}),
     reasons: reasons.sort((a, b) => a.index - b.index).map(({ id, why }) => ({ id, why })),
     unknownKeys: queue.lines
       .filter(l => l.unknownKeys.length > 0)
@@ -954,6 +1094,12 @@ export interface QueueLineView {
   readonly base?: string;
   /** The short hash of that text, touches, owner and sweep (`lineTextHash`); absent on an older line. */
   readonly textHash?: string;
+  /** The line's `human_gate:` kind: it lands only after its task passed a human wait. */
+  readonly humanGate?: string;
+  /** When the task passed its human wait (`human_passed:`). */
+  readonly humanPassed?: string;
+  /** An `awaiting` line's wait: the question, what to show, since when, and the answer once recorded. */
+  readonly humanWait?: HumanWaitRecord;
   readonly text: string;
   /** Pending lines only: `ready`, or the picker's own reason (window ignored). */
   readonly reason?: string;
@@ -1032,8 +1178,9 @@ export function describeQueue(queue: Queue): {
   const plan = planPick(queue, { ignoreWindow: true, blocks });
   const landBranch = queue.header.land_branch?.trim() ?? "";
   const why = new Map(plan.reasons.map(r => [r.id, r.why]));
-  const ready = new Map(plan.admitted.map((a, i) => [a.id, i]));
-  const unblock = unblockedByRunning(queue, plan);
+  const fresh = plan.admitted.filter(a => a.resume === undefined);
+  const ready = new Map(fresh.map((a, i) => [a.id, i]));
+  const unblock = unblockedByRunning(queue, { admitted: fresh });
   const byId = new Map(queue.lines.map(l => [l.id, l]));
   const admit = new Map(
     queue.lines
@@ -1071,6 +1218,9 @@ export function describeQueue(queue: Queue): {
       ...(l.meta.added !== undefined ? { added: l.meta.added } : {}),
       ...(l.meta.base !== undefined ? { base: l.meta.base } : {}),
       ...(l.meta.text_hash !== undefined ? { textHash: l.meta.text_hash } : {}),
+      ...(l.meta.human_gate !== undefined ? { humanGate: l.meta.human_gate } : {}),
+      ...(l.meta.human_passed !== undefined ? { humanPassed: l.meta.human_passed } : {}),
+      ...(l.humanWait !== undefined ? { humanWait: l.humanWait } : {}),
       text: l.text,
       ...(l.status === "pending"
         ? { reason: ready.has(l.id) ? "ready" : (why.get(l.id) ?? "?") }
@@ -1375,8 +1525,16 @@ export async function pickQueue(
       const plan = planPick(queue);
       if (plan.admitted.length > 0 || queue !== e.queue) {
         const ids = new Set(plan.admitted.map(a => a.id));
-        for (const l of queue.lines)
-          if (ids.has(l.id) && l.status === "pending") taskNode(e, l).set("status", "running");
+        for (const l of queue.lines) {
+          if (!ids.has(l.id)) continue;
+          if (l.status === "pending") taskNode(e, l).set("status", "running");
+          if (l.status === "awaiting") {
+            // resumed: the answer is on its session now, the wait record goes
+            const node = taskNode(e, l);
+            node.set("status", "running");
+            node.delete("human_wait");
+          }
+        }
         if (!writeText(e.queue, e.doc.toString(YAML_OUT))) return false;
       }
       return {
@@ -1813,6 +1971,14 @@ export async function markQueue(
       const why = difficultyRequired({ ...line, status: "pending" });
       if (why !== null) throw new QueueError(why);
     }
+    if (
+      status === "done" &&
+      line.meta.human_gate !== undefined &&
+      line.meta.human_passed === undefined
+    )
+      throw new QueueError(
+        `${id} carries human_gate: ${line.meta.human_gate} and has not passed its human wait: it cannot land unseen (the task's human wait state records the pass when the owner's answer is taken; removing human_gate: with queue_edit is the owner's call)`,
+      );
     const node = taskNode(e, line);
     node.set("status", status);
     if (status === "done" || status === "failed") setOrdered(e, node, "ended", today());
@@ -1949,6 +2115,10 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
     throw new QueueError(
       `${line.id}: priority: "${line.meta.priority}" is not one of ${PRIORITIES.join(", ")}`,
     );
+  if (has("human_gate") && !HUMAN_GATE_RE.test(line.meta.human_gate ?? ""))
+    throw new QueueError(
+      `${line.id}: human_gate: is one lower-case word, the kind of look the owner gives (\`look\`, \`approve\`)`,
+    );
   if (has("sweep") && (sweepOf(line) === null || /[\n\r]/.test(line.meta.sweep ?? "")))
     throw new QueueError(`${line.id}: sweep: is one non-empty line (the command)`);
   if (
@@ -1975,6 +2145,99 @@ export function owedDueLines(queue: Queue): string[] {
     out.push(`OWED-DUE: task=${l.id} status=${l.status} sha=${landedShaOf(l) ?? "none"}: ${text}`);
   }
   return out;
+}
+
+/**
+ * The line's session entered a human wait: running → awaiting under the lock, with the wait's record (`human_wait:`);
+ * a pass recorded earlier (`human_passed:`) is dropped, so a new round must be passed again. The window slot is free
+ * from this write on. A line already awaiting for the same session gets the new record.
+ */
+export async function markAwaiting(
+  file: string,
+  id: string,
+  wait: Omit<HumanWaitRecord, "answered" | "route">,
+): Promise<void> {
+  if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
+  await writing(file, e => {
+    const line = lineOf(e.queue, id);
+    const again = line.status === "awaiting" && line.humanWait?.session === wait.session;
+    if (line.status !== "running" && !again)
+      throw new QueueError(`${id} is ${line.status}, expected running`);
+    const node = taskNode(e, line);
+    node.set("status", "awaiting");
+    node.delete("human_passed");
+    const { show, ...rest } = wait;
+    const record = { ...rest, ...(show.length > 0 ? { show: [...show] } : {}) };
+    setOrdered(e, node, "human_wait", e.doc.createNode(record));
+  });
+}
+
+/** The owner's answer reached the line's session: `answered:` and `route:` on its `human_wait:`, so the pick resumes it first. */
+export async function markAnswered(
+  file: string,
+  id: string,
+  session: string,
+  route: string,
+  at: string = new Date().toISOString(),
+): Promise<void> {
+  if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
+  await writing(file, e => {
+    const line = lineOf(e.queue, id);
+    if (line.status !== "awaiting" || line.humanWait?.session !== session)
+      throw new QueueError(`${id} is ${line.status}, not awaiting session ${session}`);
+    const wait = taskNode(e, line).get("human_wait", true);
+    if (!isMap(wait)) throw new QueueError(`${id}: human_wait: is not a mapping`);
+    wait.set("answered", at);
+    wait.set("route", route);
+  });
+}
+
+/** The answer was taken by a move out of the wait before a pick resumed the line: awaiting (this session) → running. */
+export async function takeAwaiting(file: string, id: string, session: string): Promise<boolean> {
+  if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
+  // `writing` reads a `false` answer as a failed write: the answer is wrapped
+  const r = await writing(file, e => {
+    const line = lineOf(e.queue, id);
+    if (line.status !== "awaiting" || line.humanWait?.session !== session) return { taken: false };
+    const node = taskNode(e, line);
+    node.set("status", "running");
+    node.delete("human_wait");
+    return { taken: true };
+  });
+  return r.taken;
+}
+
+/** A passing answer was taken: `human_passed: <time>` on a line that carries `human_gate:`; any other line is left as it is. */
+export async function markHumanPassed(file: string, id: string): Promise<boolean> {
+  if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
+  const r = await writing(file, e => {
+    const line = lineOf(e.queue, id);
+    if (line.meta.human_gate === undefined) return { set: false };
+    setOrdered(e, taskNode(e, line), "human_passed", new Date().toISOString());
+    return { set: true };
+  });
+  return r.set;
+}
+
+/** The session of an awaiting line ended without its answer (an abort): awaiting → failed, with the reason as a note. */
+export async function failAwaiting(
+  file: string,
+  id: string,
+  session: string,
+  note: string,
+): Promise<boolean> {
+  if (!ID_RE.test(id)) throw new QueueError(`refused task id "${id}"`);
+  const r = await writing(file, e => {
+    const line = lineOf(e.queue, id);
+    if (line.status !== "awaiting" || line.humanWait?.session !== session) return { failed: false };
+    const node = taskNode(e, line);
+    node.set("status", "failed");
+    node.delete("human_wait");
+    setOrdered(e, node, "ended", today());
+    addNote(e, node, note, "engine");
+    return { failed: true };
+  });
+  return r.failed;
 }
 
 /** Records on the line, under the queue lock, that its owed step was handed to the parent (`owed_handed: <today>`); a line without the field, or already recorded, is left as it is. */
@@ -2091,6 +2354,9 @@ export async function addQueueLine(
   for (const k of ["added", "base", "text_hash", "owed_handed"])
     if (task[k] !== undefined)
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
+  for (const k of ["human_wait", "human_passed"])
+    if (task[k] !== undefined)
+      throw new QueueError(`${id}: ${k} is written by the engine's human wait, not set`);
   const status = task.status ?? "pending";
   if (status !== "pending" && status !== "backlog")
     throw new QueueError(`${id}: a new task is pending or backlog, not ${str(status)}`);
@@ -2157,7 +2423,11 @@ export async function addQueueLine(
   const lineNo = lineNoOf(fs.readFileSync(abs, "utf8"), id);
   const written = readQueue(abs);
   const line = lineOf(written, id);
-  const warnings = [...touchesWarnings(written, line), ...kindWorkflowWarnings(written, line)];
+  const warnings = [
+    ...touchesWarnings(written, line),
+    ...kindWorkflowWarnings(written, line),
+    ...gateWarnings(line),
+  ];
   const runs = runsNote(written, line)[0];
   return {
     id,
@@ -2198,6 +2468,8 @@ export async function editQueueLine(
       throw new QueueError(`${id}: restored is written by the archive restore, not set`);
     else if (k === "added" || k === "base" || k === "text_hash" || k === "owed_handed")
       throw new QueueError(`${id}: ${k} is written by queue_add / queue_edit, not set`);
+    else if (k === "human_wait" || k === "human_passed")
+      throw new QueueError(`${id}: ${k} is written by the engine's human wait, not set`);
     else if (!EDIT_KEYS.has(k))
       throw new QueueError(`unknown field "${k}" (keys: ${[...EDIT_KEYS].join(", ")})`);
   const note = appendNote?.trim() || undefined;
@@ -2232,11 +2504,15 @@ export async function editQueueLine(
       if (why !== null) throw new QueueError(why);
     },
   );
-  const reads = ["touches", "repo", "kind", "workflow"].some(k => k in set);
+  const reads = ["touches", "repo", "kind", "workflow", "text", "human_gate"].some(k => k in set);
   if (!reads) return done;
   const q = readQueue(file);
   const line = lineOf(q, id);
-  const warnings = [...touchesWarnings(q, line), ...kindWorkflowWarnings(q, line)];
+  const warnings = [
+    ...touchesWarnings(q, line),
+    ...kindWorkflowWarnings(q, line),
+    ...gateWarnings(line),
+  ];
   const runs =
     "kind" in set || "workflow" in set || "repo" in set ? runsNote(q, line)[0] : undefined;
   return {
@@ -2418,10 +2694,14 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
   );
   if (r.batchSize === 0)
     out.push(`window 0 — paused${r.batchComment ? `: ${r.batchComment}` : ""}`);
+  if (r.awaiting !== undefined && r.awaiting.length > 0)
+    out.push(`awaiting a human (no slot held): ${r.awaiting.join(", ")}`);
   if (r.admitted.length === 0)
     out.push(
       r.code === QUEUE_EXIT.WAIT
-        ? "nothing admitted: wait for a running line to end"
+        ? r.running.length === 0
+          ? "nothing admitted and nothing runs: wait for a human answer (`answer`), then refill"
+          : "nothing admitted: wait for a running line to end"
         : r.code === QUEUE_EXIT.PAUSED
           ? "nothing admitted and nothing runs: paused"
           : "nothing admitted and nothing runs: the queue is done (what stays pending is blocked)",
@@ -2429,6 +2709,7 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
   if (r.archived !== undefined && r.archived.length > 0)
     out.push(`archived ${r.archived.length} old line(s) (archive_after_days)`);
   for (const o of r.overtakes ?? []) out.push(o);
+  for (const g of r.gateHints ?? []) out.push(`warning: ${g}`);
   if (r.curator !== undefined) out.push(r.curator);
   out.push(...explainLines(r.reasons, explain));
   for (const u of r.unknownKeys) out.push(unknownKeyNotice(u.id, u.keys));
@@ -2437,10 +2718,10 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
 
 /**
  * `ID\tmodel\teffort\trepo\tworkflow\tdifficulty\tkind` — one admitted line as the exec form prints it
- * (`-` = no `workflow:` / `difficulty:`; `kind` is `feature` when the line has none).
+ * (`-` = no `workflow:` / `difficulty:`; `kind` is `feature` when the line has none); a resumed wait adds an
+ * eighth column `resume=<session>`: its session goes on, no new one is started.
  */
 export function formatTask(a: AdmittedTask): string {
-  return [a.id, a.model, a.effort, a.repo, a.workflow ?? "-", a.difficulty ?? "-", a.kind].join(
-    "\t",
-  );
+  const row = [a.id, a.model, a.effort, a.repo, a.workflow ?? "-", a.difficulty ?? "-", a.kind];
+  return (a.resume === undefined ? row : [...row, `resume=${a.resume}`]).join("\t");
 }

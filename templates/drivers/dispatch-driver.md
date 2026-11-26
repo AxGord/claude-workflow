@@ -33,6 +33,9 @@ Follow the prompt's steps for each admitted line, with these rules:
   driver from `status({session_id: P, key: "driver_call"})` exactly, then `link_agent` (`role: "driver"`). A refusal that says
   the workflow declares no `driver:` names no `driver_call` (the session has none): main drives that task;
   keep it in `tasks` as `ID=P driver=main` and spawn nothing.
+- A row with an eighth column `resume=<P>` is an answered human wait: its session P goes on at the state it stopped at. Start
+  nothing: spawn its driver from `status({session_id: P, key: "driver_call"})` exactly, then
+  `link_agent({session_id: P, agent_id: <the id the Agent call returned>, role: "driver"})`; P goes into `tasks` like a started one.
 - A `CURATOR-…` line (workflow column `curator`) is admitted by the engine when the project's curator jobs are due:
   start it and spawn its driver like any line. Its last line is a NEEDS-PARENT (`reason=curator report ready`), handed
   to main as any other.
@@ -60,6 +63,10 @@ then needs nothing.
   without a question to answer. Where the task workflow's terminal declares `queue_mark:` (bundled `batch-task` and
   its heirs) the engine marked the queue line itself, so no line stays `running`; under another task workflow the line
   may still be `running`: say so in the LESSONS message. The slot is freed either way.
+- **`AWAITING task=<ID> session=<P> question=…`** (a driver's last line at a human wait): the task waits for its owner and its
+  queue line no longer holds a window slot. Hand the line to main verbatim (§ Hand-backs), then ONE call
+  `transition({session_id: D, transition: "slot_free", set: {tasks: "<without that task>"}})`: the pick fills the slot. Main
+  records the owner's answer with `answer` and messages you `answered`; the next pick resumes the line first (a `resume=` row).
 - **`NEEDS-PARENT task=<ID> session=<P> …`**: hand it to main alone (§ Hand-backs), with two fields appended
   that main needs to answer it: ` driver=<the agent id of that task in `tasks`>` and ` routes=<a|b|c>`, the answer
   of `status({session_id: <P>, key: "routes"})` (the transitions of P's state, read now, never from memory).
@@ -88,7 +95,7 @@ then needs nothing.
     main's message. The marker says whose word it is: the driver takes the decision as the parent's answer, not as
     your own request. Never relay it bare, reworded or as a question.
   - a worker's, reviewer's or driver's line it relays → as the next bullet.
-  - `lines added` (or `refill`) → ONE call: `transition({session_id: D, transition: "refill"})`, no `set`: no task
+  - `lines added`, `answered` (or `refill`) → ONE call: `transition({session_id: D, transition: "refill"})`, no `set`: no task
     ended, so `tasks`, `lessons_pending` and `lands_done` stay as they are. The reply is the next `dispatch` (new lines
     admitted: start them first) or `collect` again (nothing admitted: nothing to do). Never take it on your own
     (no polling of the queue), only on main's message. If `transition` refuses it (an heir's own `collect` has no `refill`), hand back
@@ -148,7 +155,7 @@ then needs nothing.
     never handed back, and a NEEDS-PARENT of that driver already handed to main stays handed (the REBOUND line is not
     a new one). A SendMessage that fails (the driver is gone) → the fresh driver of the bullet
     "A driver that ended with no last line". Then carry on from D's state (§ Start, step 3): wake no driver for anything else.
-- **Routing**: `slot_free` only on a LANDED or CLOSED line; `refill` only on main's `lines added`. `stalled` only when `tasks` is empty AND the
+- **Routing**: `slot_free` only on a LANDED, CLOSED or AWAITING line; `refill` only on main's `lines added` or `answered`. `stalled` only when `tasks` is empty AND the
   last pick admitted nothing. `stop` only on main's word. Nothing ended → no transition; end the turn.
 - **A task that ended `stopped`**: the prompt's "a task session ended `stopped` → `stop`" is for a dispatcher that
   drives the tasks itself, not for you. Under `batch-task` and its heirs the engine marked its queue line failed, and its driver's last line is
@@ -167,7 +174,7 @@ then needs nothing.
 Hand back HANDOVER (§ Hand-backs) and wait. Main drives D there; its `continue` brings you back. The one
 exception is `paused` and main's message `retry` (§ `collect`): a raised window lifts the pause through you.
 
-## Hand-backs — the only five things main gets
+## Hand-backs — the only six things main gets
 Each is ONE `SendMessage` to `main` whose message is exactly the text below, and you carry on afterwards: a
 driver's report or main's message resumes you. Claude Code accepts a single `SubagentHandback` per result and
 refuses the second (`one report per result`), so none of these is ever a `SubagentHandback`. "Hand back"
@@ -187,6 +194,8 @@ anywhere in this file means this `SendMessage`.
    Main does the step; nothing to answer.
 5. `REFRESH session=<D> old=<agent id> reason=…`: the `MESSAGE:` line of a `REFRESH-DUE:` (§ `collect`), copied exactly. Main
    spawns the fresh dispatcher and links it; nothing to answer.
+6. An `AWAITING task=<ID> session=<P> question=…` line, a driver's, verbatim. Main asks the user and records the answer with
+   `answer({session_id: P, route, text})`; it then messages you `answered`.
 Before a LESSONS or HANDOVER message, these calls, in this order:
 `context_set({session_id: D, key: "lessons_handed", value: "<the whole message>"})`, then
 `context_set({session_id: D, key: "lessons_pending", value: ""})`; for a LESSONS message a third,

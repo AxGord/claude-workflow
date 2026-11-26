@@ -280,6 +280,36 @@ export interface DispatcherRefresh {
   readonly at: string;
 }
 
+/**
+ * A human wait (`human:` on a prompt state): the task waits for its owner's answer. Entering it records the
+ * question and what to show, frees the task's window slot (its queue line goes `awaiting`) and holds the session
+ * at the state; an answer, recorded by the `answer` tool or the dashboard, is one of the state's transitions.
+ */
+export const HumanWaitSchema = z
+  .object({
+    // the question for the owner; a template like `prompt`
+    question: z.string().min(1),
+    // links and files to show beside it; each a template, a value of several lines gives one entry per line
+    show: z.array(z.string()).optional(),
+    // the context key the answer's text goes to when the session leaves the state (default `human_answer`)
+    answer_key: z
+      .string()
+      .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "answer_key is a context key name")
+      .optional(),
+    // the answers that pass the line's `human_gate:` (default: every one)
+    passes: z.array(z.string()).nonempty().optional(),
+    // the state a passing answer enters instead of its target when the repo's HEAD moved during the wait (the project's rebase route)
+    moved: z.string().optional(),
+    // a command run once in the session's cwd when the session ends: it stops what the wait holds (a preview server, a port)
+    stop: z.string().min(1).optional(),
+  })
+  .strict();
+
+export type HumanWaitSpec = z.infer<typeof HumanWaitSchema>;
+
+/** The default context key a human answer's text is written to. */
+export const HUMAN_ANSWER_KEY = "human_answer";
+
 export type Driver = z.infer<typeof DriverObjectSchema>;
 export type Dispatcher = z.infer<typeof DispatcherObjectSchema>;
 
@@ -310,6 +340,9 @@ export const StateDefinitionSchema = z
     // The state asks its parent a question: entering it logs an `ask` event, leaving it an `answer`
     // (the live workflow map draws the pair)
     ask: z.literal("parent").optional(),
+
+    // The state waits for a human (see `HumanWaitSchema`): its queue line frees the window slot until answered
+    human: HumanWaitSchema.optional(),
 
     // Live workflow map: `false` keeps the state out of the band's stations (an exec helper), `true`
     // makes it one off the shortest path, and on a terminal picks the success end (src/stations.ts)
@@ -465,6 +498,8 @@ export interface StackFrame {
   readonly current_state: string;
   readonly state_visits: Record<string, number>;
   readonly total_transitions: number;
+  /** The visits each state had when an answer left a human wait: `max_visits` of the other states counts from there, so an owner's round does not use up the worker's or reviewer's cap. */
+  readonly round_base?: Record<string, number>;
 }
 
 export interface HistoryEntry {
@@ -607,6 +642,40 @@ export interface SessionState {
   readonly pending_action?: PendingAction;
   /** Set while the step's exec waits for a pool lease past the pool's `starve_after`: since when, and why. */
   readonly pool_starved?: { readonly since: string; readonly note: string };
+  /** Set while the session stands at a human wait state. */
+  readonly human_wait?: HumanWait;
+  /** The `stop` commands of the human waits the session entered, run once when it ends. */
+  readonly human_holds?: readonly HumanHold[];
+}
+
+/** A human wait the session stands at (`human:`): what it asks, what it shows, and the answer once recorded. */
+export interface HumanWait {
+  readonly frame: number;
+  readonly state: string;
+  readonly visit: number;
+  readonly since: string;
+  readonly question: string;
+  readonly show: readonly string[];
+  /** The state's transitions: the answers it takes. */
+  readonly routes: readonly string[];
+  /** HEAD of the session's repo when the wait began; absent outside git. */
+  readonly head?: string;
+  readonly answer?: HumanAnswer;
+}
+
+export interface HumanAnswer {
+  readonly route: string;
+  readonly text: string;
+  readonly at: string;
+  /** Who recorded it: `main` (the `answer` tool), `dashboard`. */
+  readonly by: string;
+}
+
+/** What a human wait holds while the slot is free (a preview server): its `stop` command, run once when the session ends. */
+export interface HumanHold {
+  readonly state: string;
+  readonly command: string;
+  readonly cwd: string;
 }
 
 /** Where a session's unrouted action step is: its frame and state. */

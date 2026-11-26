@@ -685,7 +685,11 @@ export function paneTree(input: PaneInput): PaneNode {
     const nextRows = q.ready.length > 0 ? q.ready : q.unblocked
     const nextTwo = !fitsOneLine((nextMore ? nextRows : nextRows.slice(0, 10)).map(l => `  ${BAR_W} ${markOf(l.id)} ${l.id} ${prioGlyph(l.priority)?.glyph ?? ' '}`), columns)
     // the rows left for Next count lines: a two-line Running or Next row takes two
-    const spare = input.rows - 9 - q.running.length * (runTwo ? 2 : 1)
+    // an Awaiting section takes its header, two lines per row and one per link
+    // a snapshot of an older engine has no `awaiting`
+    const awaiting = q.awaiting ?? []
+    const awaitRows = awaiting.length === 0 ? 0 : 1 + awaiting.reduce((n, a) => n + 2 + a.show.length, 0)
+    const spare = input.rows - 9 - q.running.length * (runTwo ? 2 : 1) - awaitRows
     const showReady = Math.max(4, Math.min(10, Math.ceil(spare / (nextTwo ? 4 : 2))))
     // a row's cost sits right after its kind, right-aligned to the section's widest figure: it is never cut, the id is
     const costCol = (all: { usd?: number; usdFloor?: number }[]) => {
@@ -725,6 +729,19 @@ export function paneTree(input: PaneInput): PaneNode {
             return col(
               text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', fitCells(l.id, Math.max(1, columns - 10))),
               text({}, pad, text({ color: p ? TONE.info : TONE.warn }, fitCells(whereOf(l.id), Math.max(1, columns - pad.length - (since === '' ? 0 : cells(since) + 1)))), text({ dimColor: true }, ` ${since}`)),
+            )
+          })
+        : null,
+      awaiting.length > 0 ? header('awaiting', TONE.warn, `⏸ Awaiting you (${awaiting.length})`) : null,
+      awaiting.length > 0 && isOpen('awaiting')
+        ? awaiting.map(a => {
+            // the line, how long it has waited, then the question and each link indented under it
+            const waited = age(now - a.since)
+            const state = a.answered !== undefined ? `answered ${a.answered} · resumes first` : `waiting ${waited || '<1m'}`
+            return col(
+              text({}, '  ', level(a.difficulty), ' ', kindOf(a.id), ' ', fitCells(a.id, Math.max(1, columns - 10 - cells(state))), ' ', text({ color: a.answered !== undefined ? TONE.ok : TONE.warn }, state)),
+              text({}, '  ', TAB, fitCells(a.question, Math.max(1, columns - 2 - TAB.length))),
+              ...a.show.map(l => (/^https?:\/\//.test(l) ? text({}, '  ', TAB, link(l, fitCells(l, Math.max(1, columns - 2 - TAB.length)))) : text({ dimColor: true }, '  ', TAB, fitCells(l, Math.max(1, columns - 2 - TAB.length))))),
             )
           })
         : null,

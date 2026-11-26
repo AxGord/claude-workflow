@@ -7,7 +7,7 @@ import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import { Loader } from "./loader.js";
 import { Modifier } from "./modifier.js";
-import { TrustStore, hashContent } from "./trust.js";
+import { TrustStore, actionFilesIn, hashContent } from "./trust.js";
 import { runTrust, type TrustIO } from "./trust-run.js";
 import {
   InMemoryStorage,
@@ -482,5 +482,76 @@ describe("the docs do not tell users to auto-allow modify/create/delete", () => 
     expect(block).toContain("wf__start");
     for (const tool of ["modify", "create", "delete"]) expect(block).not.toContain(`wf__${tool}`);
     expect(doc).toContain("wf-trust");
+  });
+});
+
+describe("a human wait's stop command needs the same consent as an exec state", () => {
+  const stopFlow = (marker: string) => ({
+    initial: "a",
+    states: {
+      a: { prompt: "A", transitions: { go: "hold" } },
+      hold: { human: { question: "q", stop: touching(marker) }, transitions: { ok: "z" } },
+      z: { terminal: true },
+    },
+  });
+
+  it("an untrusted project file with one is not loaded, and wf-trust shows the command", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const marker = MARK();
+    const t = tiers({ project: { look: stopFlow(marker) } });
+    const loader = new Loader(t.bundled, t.global, t.project, t.store);
+    expect(loader.get("look")).toBeUndefined();
+    expect(loader.untrusted().map(u => u.name)).toEqual(["look"]);
+    expect(actionFilesIn(t.project, t.store, t.projectRoot)[0]?.lines).toEqual([
+      `hold (human wait stop): touch ${marker}`,
+    ]);
+  });
+
+  it("modify refuses a state with one and create refuses a definition with one", async () => {
+    const storage = new InMemoryStorage();
+    const r = createTestLoader({ multi: MULTI_STATE_WORKFLOW });
+    dirs.push(r.dir);
+    const engine = new Engine(storage, r.loader, new Executor());
+    const modifier = new Modifier(storage, r.loader);
+    modifier.setEngine(engine);
+    const { sessionId } = await engine.start("multi");
+    const marker = MARK();
+    await expect(
+      modifier.modify(sessionId, {
+        add_state: {
+          name: "evil",
+          human: { question: "q", stop: touching(marker) },
+          transitions: { ok: "c" },
+        },
+      }),
+    ).rejects.toThrow(/nor a human wait's stop command/u);
+    expect(storage.read(sessionId)!.overrides).toEqual({});
+    await expect(modifier.create("evil_wf", stopFlow(marker) as never)).rejects.toThrow(
+      /nor a human wait's stop command/u,
+    );
+  });
+
+  it("a stored overlay that adds or changes one is refused and its command never runs", async () => {
+    const storage = new InMemoryStorage();
+    const r = createTestLoader({ multi: MULTI_STATE_WORKFLOW });
+    dirs.push(r.dir);
+    const engine = new Engine(storage, r.loader, new Executor());
+    const { sessionId } = await engine.start("multi");
+    const marker = MARK();
+    const s = storage.read(sessionId)!;
+    await storage.write(sessionId, {
+      ...s,
+      overrides: {
+        multi: {
+          add_states: {
+            evil: { human: { question: "q", stop: touching(marker) }, transitions: { ok: "c" } },
+          },
+          add_transitions: [{ from: "a", name: "go_evil", to: "evil" }],
+        },
+      },
+    });
+    await expect(engine.transition(sessionId, "go_evil")).rejects.toThrow(/not accepted/u);
+    await engine.abort(sessionId);
+    expect(fs.existsSync(marker)).toBe(false);
   });
 });

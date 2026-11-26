@@ -594,6 +594,39 @@ function planWait(l, lines) {
   return escapeHtml(l.reason) + note;
 }
 
+// An awaiting line: the question, what to show, how long it has waited; under it the owner's answer form (one button per
+// answer of the wait state, a text for the owner's words), posted to /api/session/:id/answer.
+function planAwaitRow(l) {
+  const w = l.humanWait;
+  const sess = allSessions.find(s => s.session_id === w.session);
+  const routes = (sess && sess.human_wait && sess.human_wait.routes) || [];
+  const shown = (w.show || []).map(x => /^https?:\/\//.test(x)
+    ? `<a href="${escapeHtml(x)}" target="_blank" rel="noopener">${escapeHtml(x)}</a>`
+    : `<span class="mono">${escapeHtml(x)}</span>`).join(' · ');
+  const state = w.answered ? `answered <b>${escapeHtml(w.route || '?')}</b> · resumes first` : `waiting ${timeIn(w.since)}`;
+  const extra = `${escapeHtml(w.question)}${shown ? '<br>' + shown : ''}<br>${state} · <a href="/session/${encodeURIComponent(w.session)}">${escapeHtml(w.state)}</a>`;
+  const form = routes.length === 0 ? '' : `<div class="answer-form" data-answer-session="${escapeHtml(w.session)}">`
+    + `<textarea rows="2" placeholder="your words for the task (optional)"></textarea>`
+    + routes.map(r => `<button type="button" class="tl-btn" data-answer-route="${escapeHtml(r)}">${escapeHtml(r)}</button>`).join('')
+    + `<span class="answer-note"></span></div>`;
+  return planRow(l, extra, 'st-wait') + form;
+}
+
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest && ev.target.closest('[data-answer-route]');
+  if (!b) return;
+  const form = b.closest('[data-answer-session]');
+  const note = form.querySelector('.answer-note');
+  const res = await fetch('/api/session/' + encodeURIComponent(form.dataset.answerSession) + '/answer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ route: b.dataset.answerRoute, text: form.querySelector('textarea').value }),
+  }).catch(e => ({ ok: false, json: async () => ({ error: String(e) }) }));
+  const body = await res.json().catch(() => ({}));
+  note.textContent = res.ok ? body.note : 'refused: ' + (body.error || res.status);
+  refreshPlan();
+});
+
 function renderPlan(q) {
   const by = f => q.lines.filter(f);
   let h = `<div class="id mono">${escapeHtml(q.file)} — batch_size ${q.batchSize}</div>`;
@@ -617,6 +650,12 @@ function renderPlan(q) {
     const at = entered.length ? entered[entered.length - 1].at : s.started_at;
     return `<a href="/session/${encodeURIComponent(s.session_id)}">${escapeHtml(f.workflow + ' @ ' + f.current_state)}</a> · ${timeIn(at)}`;
   }, 'st-run');
+  // the lines that wait for the owner, the oldest wait first: they hold no slot, and an answered one resumes before Next
+  const awaiting = by(l => l.status === 'awaiting' && l.humanWait).sort((a, b) => a.humanWait.since.localeCompare(b.humanWait.since));
+  if (awaiting.length > 0) {
+    h += ui.label(`⏸ Awaiting you (${awaiting.length})`, true);
+    for (const l of awaiting) h += planAwaitRow(l);
+  }
   group('Ready', ready, () => '', '');
   group('Waiting', by(l => l.status === 'pending' && l.reason !== 'ready'), l => planWait(l, q.lines), 'st-wait');
   group('Failed', by(l => l.status === 'failed'), () => '', 'st-stop');

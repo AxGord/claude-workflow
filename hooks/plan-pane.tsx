@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { AgentSeen, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
+import type { AgentSeen, AwaitingLine, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
 import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOfRow, spawnLine, stagesOfState, statusBandTree, TONE, two } from './pane-view'
 import type { Move, PaneAction, PaneEl, PaneNode } from './pane-view'
 
@@ -156,7 +156,7 @@ export function landShasOf(api: { lines?: { id: string; landedSha?: string }[] }
 }
 
 /** One task of the engine's /api/queue answer (describeQueue). */
-type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; wait?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; landedSha?: string; ended?: string }
+type ApiLine = { id: string; status: QueueLine['status']; difficulty?: string; mark?: string; model?: string; after?: string; exclusive: boolean; paused: boolean; reason?: string; wait?: string; pickOrder?: number; unblockOrder?: number; admitOrder?: number; priority?: string; lastNote?: string; lastNoteDate?: string; landedSha?: string; ended?: string; humanWait?: { since: string; session: string; question?: string; show?: string[]; route?: string; answered?: string } }
 
 /** The Plan tab's queue, from the engine's /api/queue answer: the picker's own reasons, no parsing of the file here. */
 export function queueView(file: string, api: { batchSize: number; lines: ApiLine[] }, now: number = Date.now()): QueueView {
@@ -195,6 +195,7 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     failed: failedLines.filter(l => l.recent).length,
     pending: pending.length,
     running: lines.filter(l => l.status === 'running').map(strip),
+    awaiting: awaitingOf(api.lines),
     ready: pending.filter(l => l.reason === 'ready').sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0)).map(strip),
     unblocked: pending.filter(l => unblockOrder.has(l.id)).sort((a, b) => (unblockOrder.get(a.id) ?? 0) - (unblockOrder.get(b.id) ?? 0)).map(strip),
     // the picker's own visiting order (`admitOrder`: priority, then file order): the top row is the line that goes next once its wait clears
@@ -205,6 +206,26 @@ export function queueView(file: string, api: { batchSize: number; lines: ApiLine
     failedLines,
     marks: Object.fromEntries(api.lines.map(l => [l.id, l.mark ?? ' '])),
   }
+}
+
+/** The `awaiting` lines of an /api/queue answer, the oldest wait first. */
+export function awaitingOf(lines: ApiLine[]): AwaitingLine[] {
+  return lines
+    .filter(l => l.status === 'awaiting' && l.humanWait !== undefined)
+    .map(l => {
+      const w = l.humanWait!
+      return {
+        id: l.id,
+        difficulty: l.difficulty ?? '',
+        priority: l.priority ?? '',
+        session: w.session,
+        question: w.question ?? '',
+        show: Array.isArray(w.show) ? w.show : [],
+        since: Date.parse(w.since) || 0,
+        ...(w.answered !== undefined ? { answered: w.route ?? '?' } : {}),
+      }
+    })
+    .sort((a, b) => a.since - b.since)
 }
 
 async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string; landBranch?: string; taskIds?: string[]; shas?: Map<string, string> }> {

@@ -48,6 +48,7 @@ export function graphNodeKind(state, isCurrent, isInStack, liveKey) {
   if (state.type === 'exec') return state.background ? 'bg' : 'script';
   if (state.type === 'fetch') return 'fetch';
   if (state.terminal) return 'terminal';
+  if (state.human) return 'human';
   return '';
 }
 
@@ -260,6 +261,7 @@ export function stateDetailHtml(state) {
     if (state.success_prompt) html += box(state.success_prompt, 'Success Prompt');
     if (state.error_prompt) html += box(state.error_prompt, 'Error Prompt');
   } else {
+    if (state.human) html += box(state.human.question + (state.human.show?.length ? '\n' + state.human.show.join('\n') : ''), 'Waits for its owner');
     html += box(state.prompt || '(no prompt)', 'Prompt');
   }
   const transitions = state.transitions ? Object.entries(state.transitions) : [];
@@ -276,6 +278,7 @@ function stateRowHtml(name, wf, state) {
   if (state.sub_workflow) flags.push('sub: ' + state.sub_workflow);
   if (state.type === 'exec') flags.push(state.background ? 'exec (bg)' : 'exec');
   if (state.type === 'fetch') flags.push('fetch');
+  if (state.human) flags.push('human wait');
   if (state.skills && state.skills.length > 0) flags.push('skills: ' + state.skills.join(', '));
   const flagStr = flags.length > 0 ? ` <span class="muted">[${escapeHtml(flags.join(', '))}]</span>` : '';
   const mark = state.type === 'exec' ? square() : '';

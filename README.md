@@ -35,7 +35,7 @@ before Claude Code's built-in Workflow tool became available (v2.1.146, 20 May 2
 - **State machines in YAML** — states, transitions, prompts, nested sub-workflows ([Workflow YAML][yaml])
 - **Action states** — `exec` runs a command, `fetch` an HTTP request, routed by exit code ([Action states][action])
 - **Thread pool** — heavy builds and tests, agents' own included, share one machine-wide budget ([Thread pool][pool])
-- **Task queue** — a picker, a driver per task (moves on `delivers:`), model by difficulty, a curator ([Queue][queue])
+- **Task queue** — picker, driver per task (on `delivers:`), difficulty model, human waits, curator ([Queue][queue])
 - **Subagents** — driver, experimental dispatcher (off unless `WF_DISPATCHER`), recon, reviewer ([Agent types][agents])
 - **22 bundled workflows**, **29 bundled skills** (14 by default, 15 on request) ([Concepts][concepts])
 - **Survives a restart** — sessions are suspended, not lost; `claude --resume` continues them ([Restart][restart])

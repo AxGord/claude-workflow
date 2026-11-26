@@ -13,7 +13,7 @@ describe("ENG-DRIVER-HANDBACK-AFTER-NEEDS-PARENT", () => {
     it(`${f}: the WAITING-only answer is limited to a last line that is a WAITING line`, () => {
       expect(i).toBeGreaterThan(-1);
       expect(rule).toMatch(/last line/u);
-      expect(rule).toMatch(/NEEDS-PARENT, LANDED or CLOSED/u);
+      expect(rule).toMatch(/NEEDS-PARENT, AWAITING, LANDED or CLOSED/u);
       expect(rule).toMatch(/IS the request/u);
     });
 

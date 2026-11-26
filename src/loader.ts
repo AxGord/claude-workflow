@@ -673,8 +673,14 @@ export class Loader {
           errors.push(`state "${name}" action state cannot have transitions`);
       } else {
         // Non-action state validation
-        if (!state.prompt && !state.sub_workflow && !state.terminal && !state.skills?.length)
-          errors.push(`state "${name}" has no prompt, sub_workflow, terminal, or skills`);
+        if (
+          !state.prompt &&
+          !state.sub_workflow &&
+          !state.terminal &&
+          !state.skills?.length &&
+          !state.human
+        )
+          errors.push(`state "${name}" has no prompt, sub_workflow, terminal, skills or human`);
 
         if (state.sub_workflow && !state.on_complete)
           errors.push(`state "${name}" has sub_workflow but no on_complete`);
@@ -700,6 +706,27 @@ export class Loader {
         errors.push(
           `state "${name}" queue_mark is read only on a terminal state with no transitions (the one that ends the session)`,
         );
+
+      if (state.human !== undefined) {
+        const routes = Object.keys(state.transitions ?? {});
+        if (isAction || state.terminal || state.sub_workflow || state.skills?.length)
+          errors.push(
+            `state "${name}" human is a prompt state's: not on an exec, fetch, terminal, sub_workflow or skill gate`,
+          );
+        if (routes.length === 0)
+          errors.push(
+            `state "${name}" human needs transitions: each is an answer the owner may give`,
+          );
+        for (const p of state.human.passes ?? [])
+          if (!routes.includes(p))
+            errors.push(`state "${name}" human.passes "${p}" is not one of its transitions`);
+        if (state.human.moved !== undefined && !stateNames.has(state.human.moved))
+          errors.push(`state "${name}" human.moved → unknown state "${state.human.moved}"`);
+        if (state.delivers !== undefined)
+          errors.push(
+            `state "${name}" human and delivers exclude each other: a human answers, no agent delivers`,
+          );
+      }
 
       // terminal + transitions is allowed: "soft terminal" — considered complete
       // but can be re-entered via transitions (useful for top-level confirmation loops)

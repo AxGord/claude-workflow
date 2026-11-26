@@ -16,6 +16,7 @@ The pane's parts:
 
 - **Plan** — for a session whose root workflow has a work queue (`context.queue_file`). Its sections, top to bottom:
   - `▶ Running n/window`: each line's pipeline state and time in it.
+  - `⏸ Awaiting you (n)`, only while lines wait for their owner (status `awaiting`, § Human waits of [Queue](queue.md#human-waits)), the oldest wait first. Per line: its id, how long it has waited (or `answered <route> · resumes first`), the question, and each link or file to show. These lines hold no slot: they are not in Running.
   - `⏭ Next`: lines whose `after:` are done, in the picker's order: priority, then file order.
     - While no line is admittable but lines run, it lists what the running ones unblock instead: the pending lines kept out only by them, in the order the picker admits them once they end.
       - GET `/api/queue` gives each such line `unblockOrder`, from the picker's own pass with the running lines done.
@@ -192,6 +193,7 @@ The views:
 - **Sessions panel** — active sessions plus the most recent finished ones (terminal history is capped)
 - **Plan tab** — each queue named by a session's `context.queue_file`. It lists:
   - running lines (with the pipeline state and time in it, linked to the session);
+  - `⏸ Awaiting you`: the lines waiting for their owner, the oldest first, each with its question, links, wait and state. Under each, a text box and one button per answer: a press posts `{route, text}` as JSON to `POST /api/session/<id>/answer`, which records it as the `answer` tool does (a JSON body needs a CORS preflight, so no other page can answer for you);
   - ready lines in the picker's order (priority, then file order; the priority beside the id);
   - waiting lines with the picker's reason (window ignored);
   - failed lines;

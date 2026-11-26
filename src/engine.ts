@@ -80,7 +80,21 @@ import {
 } from "./model-table.js";
 import { render } from "./template.js";
 import {
+  answerKeyOf,
+  humanWaitBlock,
+  liveHumanWait,
+  recordHumanAnswer,
+  repoHead,
+  showEntries,
+  stopHumanHolds,
+  type RecordedAnswer,
+} from "./human-wait.js";
+import {
+  failAwaiting,
+  markAwaiting,
+  markHumanPassed,
   markOwedHanded,
+  takeAwaiting,
   markQueue,
   owedDueLines,
   readQueue,
@@ -103,7 +117,7 @@ import { deliveryLine, liveDelivery, waiterWarning, withDelivery } from "./deliv
 import { currentProgress, startHeartbeat } from "./progress.js";
 import { activeSubtree, dispatcherHolds, takeOver, taskEntries, where } from "./takeover.js";
 import { secondRootRefusal } from "./session-scope.js";
-import { actionStateRefusal } from "./trust.js";
+import { actionStateRefusal, runsCommand } from "./trust.js";
 import {
   activeParents,
   formatSeconds,
@@ -656,10 +670,25 @@ export class Engine {
     }
 
     const transitions = state.transitions ?? {};
-    const requested = transitions[transitionName];
+    let requested = transitions[transitionName];
     if (!requested) {
       const available = Object.keys(transitions).join(", ");
       throw new Error(`Transition "${transitionName}" not available. Available: ${available}`);
+    }
+
+    // a human wait is left only by the answer recorded for it, and that answer's route
+    const leaving = state.human ? this._humanLeave(session, state, transitionName) : undefined;
+    if (leaving !== undefined) {
+      if (keys.length > 0)
+        throw new Error(
+          `\`set\` cannot ride the move out of a human wait: the engine writes the answer's text into \`${leaving.key}\`; nothing was written`,
+        );
+      if (leaving.movedTo !== undefined) requested = leaving.movedTo;
+      session = {
+        ...session,
+        context: { ...session.context, [leaving.key]: leaving.text },
+        human_wait: undefined,
+      };
     }
 
     // a dispatching session's `collect` cannot end while a task holds a parent answer nobody relayed
@@ -668,6 +697,15 @@ export class Engine {
       if (held.length > 0)
         throw new Error(
           `Transition "${transitionName}" refused: a task holds a parent_answer not yet relayed (unrelayed). SendMessage each to its driver as \`MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <text>\`, then context_set the task session's \`parent_answer\` to "":\n${held.join("\n")}`,
+        );
+    }
+
+    // a dispatching session does not end its run while queue lines wait for their owner's answer
+    if (frame.current_state === "collect" && transitionName === "stalled") {
+      const waiting = this._awaitingLines(session);
+      if (waiting.length > 0)
+        throw new Error(
+          `Transition "stalled" refused: ${waiting.length} line(s) of the queue await their owner's answer (${waiting.join(", ")}): end the turn; \`refill\` once an answer is recorded`,
         );
     }
 
@@ -684,15 +722,18 @@ export class Engine {
 
     const now = new Date().toISOString();
 
+    // an answer starts the owner's round: the other states' max_visits count from here
+    const roundFrame: StackFrame =
+      leaving !== undefined ? { ...frame, round_base: { ...frame.state_visits } } : frame;
     const {
       name: targetStateName,
       state: targetState,
       visits: targetVisits,
       exhausted,
-    } = this._enterTarget(session, frame, requested);
+    } = this._enterTarget(session, roundFrame, requested);
 
     const updatedFrame: StackFrame = {
-      ...frame,
+      ...roundFrame,
       current_state: targetStateName,
       state_visits: { ...frame.state_visits, [targetStateName]: targetVisits },
       total_transitions: frame.total_transitions + 1,
@@ -734,6 +775,7 @@ export class Engine {
     });
 
     await this._storage.write(sessionId, updated);
+    if (leaving !== undefined) await this._takeHuman(updated, leaving.passes);
 
     const taskOps: TaskOp[] = [];
     if (state?.task) {
@@ -774,7 +816,181 @@ export class Engine {
       return this._executeActionState(updated, targetState!, taskOps);
     }
 
+    if (targetState?.human) return this._enterHuman(updated, targetState, taskOps);
+
     return this._buildStatus(updated, taskOps);
+  }
+
+  /**
+   * The move out of the human wait `state` by `route`: refused unless the recorded answer names that route.
+   * Gives the context key and text to write, whether the answer passes the line's gate, and the `moved:` state
+   * a passing answer enters instead when the repo's HEAD moved during the wait.
+   */
+  private _humanLeave(
+    session: SessionState,
+    state: StateDefinition,
+    route: string,
+  ): { key: string; text: string; passes: boolean; movedTo?: string } {
+    const spec = state.human!;
+    const wait = liveHumanWait(session);
+    const answer = wait?.answer;
+    if (!answer)
+      throw new Error(
+        `State "${session.stack[session.active_frame].current_state}" waits for a human answer: nothing moved. The owner answers with the \`answer\` tool (session ${session.session_id}, route one of ${Object.keys(state.transitions ?? {}).join(", ")}) or from the dashboard; a driver hands back its AWAITING line and stops`,
+      );
+    if (answer.route !== route)
+      throw new Error(
+        `Transition "${route}" refused: the owner's recorded answer is \`${answer.route}\` — take that one`,
+      );
+    const passes = spec.passes === undefined || spec.passes.includes(route);
+    const movedTo = passes ? this._movedTo(session, spec.moved, wait) : undefined;
+    return { key: answerKeyOf(spec), text: answer.text, passes, ...(movedTo ? { movedTo } : {}) };
+  }
+
+  /** The `moved:` state, when one is declared and the repo's HEAD is no longer the one the wait began at. */
+  private _movedTo(
+    session: SessionState,
+    moved: string | undefined,
+    wait: { readonly head?: string } | undefined,
+  ): string | undefined {
+    if (moved === undefined || wait?.head === undefined) return undefined;
+    const now = repoHead(Engine._cwdOf(session));
+    return now !== undefined && now !== wait.head ? moved : undefined;
+  }
+
+  /**
+   * Enter the human wait `state`: record what it asks and shows on the session, keep its `stop` command for the
+   * session's end, and — for a queue task — move its line to `awaiting`, which frees its window slot.
+   */
+  private async _enterHuman(
+    session: SessionState,
+    state: StateDefinition,
+    taskOps: TaskOp[],
+    actionPrompt?: string,
+  ): Promise<StatusResult> {
+    const spec = state.human!;
+    const frame = session.stack[session.active_frame];
+    const vars = this._buildTemplateVars(session, false);
+    const now = new Date().toISOString();
+    const cwd = Engine._cwdOf(session) ?? process.cwd();
+    const question = render(spec.question, vars).trim();
+    const show = showEntries((spec.show ?? []).map(v => render(v, vars)));
+    const head = repoHead(cwd);
+    const stop = spec.stop === undefined ? undefined : render(spec.stop, vars);
+    const holds = session.human_holds ?? [];
+    const hold = { state: frame.current_state, command: stop ?? "", cwd };
+    const kept =
+      stop === undefined || holds.some(h => h.command === hold.command && h.cwd === cwd)
+        ? holds
+        : [...holds, hold];
+    const updated: SessionState = {
+      ...session,
+      human_wait: {
+        frame: session.active_frame,
+        state: frame.current_state,
+        visit: frame.state_visits[frame.current_state] ?? 1,
+        since: now,
+        question,
+        show,
+        routes: Object.keys(state.transitions ?? {}),
+        ...(head !== undefined ? { head } : {}),
+      },
+      ...(kept.length > 0 ? { human_holds: kept } : {}),
+      updated_at: now,
+    };
+    await this._storage.write(session.session_id, updated);
+    const file = updated.context.queue_file;
+    const task = updated.context.task;
+    let note: string | undefined;
+    if (typeof file === "string" && typeof task === "string") {
+      try {
+        await markAwaiting(file, task, {
+          since: now,
+          session: updated.session_id,
+          state: frame.current_state,
+          question,
+          show,
+        });
+      } catch (err) {
+        note = `note: queue line ${task} was not marked awaiting (${(err as Error).message}): it keeps its window slot.`;
+      }
+    }
+    const status = this._buildStatus(updated, taskOps, actionPrompt);
+    return note === undefined ? status : { ...status, prompt: `${status.prompt}\n${note}` };
+  }
+
+  /**
+   * The answer was taken: a line still `awaiting` (the move came before a pick resumed it) runs again, and a passing
+   * answer is recorded on it (`human_passed:`) when it carries `human_gate:`. Never throws.
+   */
+  private async _takeHuman(session: SessionState, passes: boolean): Promise<void> {
+    const file = session.context.queue_file;
+    const task = session.context.task;
+    if (typeof file !== "string" || typeof task !== "string") return;
+    try {
+      await takeAwaiting(file, task, session.session_id);
+      if (passes) await markHumanPassed(file, task);
+    } catch {
+      // no queue, no line: the move stands; a land of a gated line is refused at its done mark
+    }
+  }
+
+  /** The owner's answer to the human wait `sessionId` stands at (the `answer` tool). */
+  public async answer(
+    sessionId: string,
+    route: string,
+    text: string,
+    by = "main",
+  ): Promise<RecordedAnswer> {
+    return recordHumanAnswer(this._storage, sessionId, route, text, by);
+  }
+
+  /**
+   * A session that ends: its human waits' `stop` commands run once, and a queue line still `awaiting` its answer
+   * (an abort at the wait) is failed, so no line stays awaiting with no session behind it. Never throws.
+   */
+  private async _endHuman(session: SessionState, why: string): Promise<void> {
+    if (session.human_holds?.length) stopHumanHolds(session.human_holds);
+    const wait = session.human_wait;
+    const file = session.context.queue_file;
+    const task = session.context.task;
+    if (wait === undefined || typeof file !== "string" || typeof task !== "string") return;
+    try {
+      await failAwaiting(
+        file,
+        task,
+        session.session_id,
+        `ended at the human wait ${wait.state} without an answer taken (${why})`,
+      );
+    } catch {
+      // no queue or line: the end stands
+    }
+  }
+
+  /** Whether the queue line of a session at a human wait is still `awaiting` (the pick has not resumed it); false on any read error. */
+  private _lineAwaiting(session: SessionState, state: StateDefinition | undefined): boolean {
+    const file = session.context.queue_file;
+    const task = session.context.task;
+    if (state?.human === undefined || typeof file !== "string" || typeof task !== "string")
+      return false;
+    try {
+      return readQueue(file).lines.some(l => l.id === task && l.status === "awaiting");
+    } catch {
+      return false;
+    }
+  }
+
+  /** The `awaiting` lines of a dispatching session's queue (its context names `queue_file` and `task_workflow`); [] on any read error. */
+  private _awaitingLines(session: SessionState): string[] {
+    const file = session.context.queue_file;
+    if (typeof file !== "string" || typeof session.context.task_workflow !== "string") return [];
+    try {
+      return readQueue(file)
+        .lines.filter(l => l.status === "awaiting")
+        .map(l => l.id);
+    } catch {
+      return [];
+    }
   }
 
   /** A session cwd must be an absolute path of an existing directory. */
@@ -842,6 +1058,7 @@ export class Engine {
     };
 
     await this._storage.write(sessionId, updated);
+    await this._endHuman(session, event);
     await this._finalize(updated);
     await this._cascadeAbandonChildren(sessionId);
     this._pruneTerminal();
@@ -906,7 +1123,7 @@ export class Engine {
     }
     const pid = session.context.claude_code_pid;
     const alive = typeof pid === "number" && Engine._isPidAlive(pid);
-    return staleness(session, state, parents, now, alive);
+    return staleness(session, state, parents, now, alive, this._lineAwaiting(session, state));
   }
 
   /**
@@ -2002,7 +2219,10 @@ export class Engine {
     let name = requested;
     let state = this._resolveState(session, frame.workflow, name);
     let visits = (frame.state_visits[name] ?? 0) + 1;
-    while (state?.max_visits && visits > state.max_visits) {
+    // a human wait's own cap counts every round; any other state's counts this round's visits
+    const inRound = (n: string, s: StateDefinition | undefined, v: number): number =>
+      s?.human ? v : v - (frame.round_base?.[n] ?? 0);
+    while (state?.max_visits && inRound(name, state, visits) > state.max_visits) {
       const next = state.on_exhausted;
       if (!next) throw new Error(`State "${name}" max_visits (${state.max_visits}) exceeded`);
       passed.push(name);
@@ -2456,6 +2676,8 @@ export class Engine {
       return this._executeActionState(updated, targetState!, taskOps, depth + 1);
     }
 
+    if (targetState?.human) return this._enterHuman(updated, targetState, taskOps, actionPrompt);
+
     return this._buildStatus(updated, taskOps, actionPrompt);
   }
 
@@ -2605,6 +2827,7 @@ export class Engine {
         outcome: outcome === "fail" ? "failed" : "completed",
       };
       await this._storage.write(session.session_id, updated);
+      await this._endHuman(session, outcome);
       await this._finalize(updated);
       await this._cascadeAbandonChildren(session.session_id);
       this._pruneTerminal();
@@ -2751,6 +2974,7 @@ export class Engine {
         outcome: "abandoned",
       };
       await this._storage.write(child.session_id, updated);
+      await this._endHuman(child, "cascade_abandon");
       await this._finalize(updated);
       await this._cascadeAbandonChildren(child.session_id);
     }
@@ -2959,7 +3183,7 @@ export class Engine {
   }
 
   /**
-   * A session's overlay (`modify`) never brings an exec/fetch state, nor changes what one runs, whatever
+   * A session's overlay (`modify`) never brings an exec/fetch state or a human wait's `stop`, nor changes what one runs, whatever
    * its stored file says: the command would run with no one's approval. A state the workflow itself
    * defines as an action state (`base`) keeps what it runs; its routing may still be overlaid.
    */
@@ -2968,10 +3192,11 @@ export class Engine {
     state: StateDefinition,
     base?: StateDefinition,
   ): StateDefinition {
-    if (state.type !== "exec" && state.type !== "fetch") return state;
+    if (!runsCommand(state)) return state;
     const runs = (d: StateDefinition | undefined): string =>
       JSON.stringify([
         d?.type,
+        d?.human?.stop,
         d?.command,
         d?.cwd,
         d?.env,
@@ -3083,6 +3308,13 @@ export class Engine {
         ? this._actionNote(session, state!)
         : `[sub_workflow: ${state?.sub_workflow ?? "unknown"}]`);
     let prompt = render(rawPrompt, vars);
+    const wait = state?.human ? liveHumanWait(session) : undefined;
+    if (wait !== undefined) {
+      const a = wait.answer;
+      const passes = a !== undefined && (state!.human!.passes ?? [a.route]).includes(a.route);
+      const movedTo = passes ? this._movedTo(session, state!.human!.moved, wait) : undefined;
+      prompt += `\n\n${humanWaitBlock(session, wait, answerKeyOf(state!.human), movedTo)}`;
+    }
 
     if (state?.include_workflows) {
       const projectWorkflows = this._getProjectWorkflows(session.session_id);
@@ -3116,7 +3348,8 @@ export class Engine {
         session.global_state_visits?.[`${frame.workflow}:${frame.current_state}`] ??
         frame.state_visits[frame.current_state] ??
         0,
-      forcePrompt: actionPrompt !== undefined,
+      // a human wait's block (the answer, or what to do without one) is new on every visit
+      forcePrompt: actionPrompt !== undefined || wait !== undefined,
       capWarning: this._capWarning(session, frame),
       revisitPrompt:
         state?.revisit_prompt === undefined ? undefined : render(state.revisit_prompt, vars),

@@ -55,7 +55,7 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
 - A harness prompt `[handback-send-enforce] Your report has not been delivered…` that arrives while P has not
   ended (not terminal) AND your last line is a WAITING line (you await an agent) is NOT a request to hand back: answer it
   with the WAITING line only (plus the once-per-wait probe of the next bullet, when it applies) — never a NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
-  a reason to hand back. When your last line is NEEDS-PARENT, LANDED or CLOSED, the enforce prompt IS the request:
+  a reason to hand back. When your last line is NEEDS-PARENT, AWAITING, LANDED or CLOSED, the enforce prompt IS the request:
   call `SubagentHandback` with that line (`blocked` and `recon_blocked` are not terminal, but you already ended there).
 - On a notification that says the agent "is waiting on its own background work": answer with the WAITING line only.
   The briefs forbid that state (a worker waits in FOREGROUND calls), so it is a worker that broke its brief, and a ping
@@ -134,6 +134,13 @@ Before the line, ONE `context_set({session_id: P, key: "ask_parent", value: "<th
 live map draws the question as a line from P's lane to the parent rail. It is your last engine call; the
 line follows at once.
 
+## A human wait — hand back AWAITING, then stop
+A reply with a `HUMAN WAIT … session=<P>` block that says `No answer yet` (a state with `human:`, e.g. `owner_look`): the task
+waits for its owner, and its queue line no longer holds a window slot. Take no transition: the engine refuses every one until the
+owner answers. Hand back ONE line, the block's own `AWAITING task=<ID> session=<P> question=<…>`, and stop.
+A fresh driver is spawned at the same state once the answer is recorded: its `status` shows `HUMAN-ANSWER route=<r> …`. Take
+exactly transition `<r>`, no `set` (the engine writes the owner's words into the state's answer key), then drive on as usual.
+
 ## The dispatcher's session is not yours
 Never call any tool on the dispatcher session (P's parent). A terminal prompt's `slot_free` / `stop`
 is the dispatcher's — do not act on it: reply with your last line instead.
@@ -194,5 +201,5 @@ dispatcher, because a hand-back goes to whoever last spawned or resumed you. Its
 
 ## Last message
 ONE line: `LANDED <sha> task=<ID> tokens worker=<n> review=<n> rounds=<n> lessons=filed <N>, triage <M>` (the `done` prompt's line, verbatim; `lessons=not run` when it has none; a flow whose `done` prompt names no such line: `lessons=<phrase (file)>; <phrase (file)>|none`),
-`CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released` / `stopped`: its terminal prompt gives the line; under a task workflow whose terminal declares `queue_mark:`, e.g. bundled `batch-task` and its heirs, the engine has already marked the queue line), or the NEEDS-PARENT line.
+`CLOSED task=<ID> reason=<short> lessons=…|none` (the session ended `closed` / `released` / `stopped`: its terminal prompt gives the line; under a task workflow whose terminal declares `queue_mark:`, e.g. bundled `batch-task` and its heirs, the engine has already marked the queue line), the NEEDS-PARENT line, or the AWAITING line of a human wait.
 When a decider answered `DECIDED`, the line gains a last field ` decided=<file>` (the decisions.md path).

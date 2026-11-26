@@ -144,6 +144,7 @@ svg text { font-family: var(--font); pointer-events: none; user-select: none; fi
 .g-node.script { --c: var(--warn); }
 .g-node.bg, .g-node.skill { --c: var(--skill); }
 .g-node.fetch, .g-node.terminal { --c: var(--model-sonnet); }
+.g-node.human { --c: var(--warn); stroke-dasharray: 4 3; }
 .g-node.live { --c: var(--model-sonnet); stroke-width: 2.5; filter: drop-shadow(0 0 6px var(--c)); }
 .g-node.live.haiku { --c: var(--model-haiku); }
 .g-node.live.opus { --c: var(--model-opus); }
@@ -290,3 +291,6 @@ text[data-group] { pointer-events: all; }
 .pool-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .pool-table th { color: var(--text-4); text-align: left; font-weight: 700; padding: 4px 8px; }
 .pool-table td { padding: 4px 8px; border-top: 1px solid var(--panel-border); white-space: nowrap; }
+.answer-form { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 2px 0 8px 22px; }
+.answer-form textarea { flex: 1 1 260px; font: inherit; font-size: 12px; background: var(--inset); color: var(--text-2); border: 1px solid var(--panel-border); border-radius: 6px; }
+.answer-note { font-size: 11px; color: var(--text-3); }

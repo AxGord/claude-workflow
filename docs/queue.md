@@ -29,7 +29,7 @@ overlap: files                # optional: only FILE entries of `touches:` confli
 land_branch: integration      # optional: the branch the plan pane's Landed tree reads (default: the repo's checked-out branch, else main)
 tasks:
   - id: T1
-    status: pending           # pending | running | done | failed | backlog
+    status: pending           # pending | running | awaiting | done | failed | backlog
     difficulty: 7
     kind: feature             # optional: bug | feature | research (absent = feature)
     touches: [src/engine]
@@ -51,8 +51,10 @@ tasks:
 
 **Task keys**
 
-`id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, exclusive,
-breaking, parked, ended, restored, added, base, text_hash, text, notes`.
+`id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, owed_handed,
+human_gate, human_passed, human_wait, exclusive, breaking, parked, ended, restored, added, base, text_hash, text, notes`.
+
+- `human_gate: <kind>` (one lower-case word, e.g. `look`): the line lands only after its task passed a human wait (§ Human waits). `human_passed` and `human_wait` are the engine's.
 
 - `on_end_tell_parent` is a step the parent owes when the line ends (one non-empty line, set by `queue_add` / `queue_edit`, durable in the file): `on_end_tell_parent: after this lands, tell the sibling project`.
   - Dispatcher mode: when the line reaches done or failed, the engine shows `OWED-DUE: task=<ID> status=<done|failed> sha=<landed sha|none>: <text>` in the `collect` prompt and on the next `transition` / `status` reply.
@@ -195,6 +197,44 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - `--restore <ID>` (an archived line back into the queue);
   - `--lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME]` (a landed task's lesson records as queue lines and triage rows; see "Lesson records");
   - `--lessons-take [--triage FILE]` (prints the triage file and empties it under the lock, after the rows are written out: a failed write leaves them in the file).
+
+#### Human waits
+
+A task that needs its owner's look (a preview to compare, a decision only the user can make) waits at a state with `human:` ([Workflow YAML](workflow-yaml.md#human-wait-human)) and gives its window slot back meanwhile.
+
+**The line's statuses**
+
+- Entering the wait moves the line `running` → `awaiting` and writes `human_wait: {since, session, state, question, show}` on it. The window counts running lines only, so the next pick admits another line.
+- The awaiting line keeps its `touches:`, `owner:` and `exclusive:` claim: a line that overlaps it still waits. `after:` it waits too: it is not done.
+- Nothing else takes it: the pick admits pending lines only, and `queue_mark` refuses a mark from `awaiting`.
+- With lines awaiting and none running the pick exits 10 (wait), not 11, and a dispatcher's `stalled` is refused.
+
+**The answer and the resume**
+
+- `answer({session_id, route, text?})` (or the dashboard's form) records the owner's answer on the session and `answered:` / `route:` on the line's `human_wait:`. Its reply names the call that wakes the dispatcher (`answered` to its agent, else `refill`).
+- The next pick admits answered lines first, before any pending line, by priority, then the longest wait. Each is a row with an eighth column `resume=<session>` (`queue_next`: `resume: <session>`): the line goes `running` and its `human_wait:` goes.
+- The dispatcher starts nothing for that row (`queue_next` prints it `RESUMED (running)`): it spawns the session's driver from `driver_call`. The driver stands at the wait, sees `HUMAN-ANSWER route=<r>`, and takes `<r>`.
+
+**The gate**
+
+- `queue_mark … done` of a line with `human_gate:` is refused until `human_passed:` is written. The engine writes it when an answer the state `passes` is taken; a new wait drops it.
+- `wf-queue <q> --gate <ID>` exits 10 (and prints the kind) while the gate is due, 0 otherwise.
+- Bundled `batch-task`: a reviewed MERGE goes to `look_route` (that check), then to `owner_look` (`go` → the land, `fix` → the worker with the owner's words in `owner_words`, `close` → blocked) or straight to the land.
+- A line whose text asks for an owner's look (`HOLD BEFORE LAND`, `owner's approval`, `look: true`, …) without `human_gate:` gets a warning from `queue_add`, `queue_edit` and the pick. It is never refused.
+
+**What a waiting task holds**
+
+- The session keeps its worktree, context and stack. Its driver ends with `AWAITING task=<ID> session=<P> question=…`, which the dispatcher hands to main.
+- The wait's `stop:` command (a preview server) is the session's: the pool does not count it. It runs when the session ends.
+- An abort at the wait, or the suspended session's expiry, fails the awaiting line with a note.
+
+**Migrating a project's own hold state**
+
+- A hold that asks the parent (`ask: parent`) after a green review keeps the window slot: give it `human:` with the same routes, and put `human_gate: <kind>` on the lines instead of a flag in their text.
+- Separate visit counters for the owner's rounds (an `extra_fix` beside `work`, a `review_look` beside `review`) are no longer needed: each answer starts a new round of the caps.
+- A hold's preview server: start it in the exec before the wait, and give the wait its `stop:`.
+- The `human_gate:` refusal comes at the `done` mark, after the merge. A land flow that does not extend `batch-task` must run `wf-queue <q> --gate <ID>` before it merges and route exit 10 to its `human:` state (as `batch-task`'s `look_route` does).
+- A task's NEEDS-PARENT that only the user can answer (a permission, a taste call) and that need not keep the slot: route it to a `human:` state.
 
 **Converting the old Markdown queue**
 

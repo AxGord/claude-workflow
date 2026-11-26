@@ -62,8 +62,13 @@ export function staleness(
   parents: ReadonlySet<string>,
   now: number,
   ownerAlive: boolean,
+  /** A human wait's queue line is still `awaiting` (answered or not): no slot is held, nobody is due to act. */
+  lineAwaiting = false,
 ): Staleness | undefined {
   if (session.stack.length === 0 || session.suspended_at || parents.has(session.session_id))
+    return undefined;
+  // a human wait waits for a person, then for a slot: no engine call is due until the answer is resumed
+  if (state?.human !== undefined && (session.human_wait?.answer === undefined || lineAwaiting))
     return undefined;
   const after = staleAfter(state);
   if (after <= 0) return undefined;

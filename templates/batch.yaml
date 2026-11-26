@@ -211,6 +211,9 @@ states:
          task session (all of them, not only the new ones); `driver=` is the agent linked with `role: "driver"`, never a worker's
          id (the engine refuses such an entry and names the right id) — after a context compression
          `status({session_id: "{{session_id}}", key: "tasks"})` and `sessions` are the truth, not your memory.
+      A row with an eighth column `resume=<P>` is an answered human wait: its session P goes on at its state, start
+      nothing. With a driver: spawn it from `status({session_id: P, key: "driver_call"})` exactly, then `link_agent`
+      (`role: "driver"`); without one drive P yourself (its `status` shows the answer to take). Add P to `tasks` (step 3).
       A `CURATOR-<date>-<n>` line (workflow column `curator`) is the engine's own: the project's curator jobs are due
       (`.claude/curator.yaml`), and the pick admitted the run into a free slot. Start it like any line; its driver ends
       with `NEEDS-PARENT … reason=curator report ready … see=<present.md>`, its line already done.
@@ -234,6 +237,10 @@ states:
         `lessons=<phrase (file)>; …|none` tail is the agents' own follow-ups, copied: turn each into a `queue_add` line, a memory note, or nothing.
         A trailing `decided=<file>` means a decider answered design choices without you: audit that file
         (`## <choice>` / `decision:` / `why:` blocks) and overrule a wrong one with a `queue_add` line.
+      - `AWAITING task=<ID> session=<P> question=…` → the task waits for its owner at a human wait state; its queue line is
+        `awaiting` and holds no window slot. Tell the user the question (the dashboard's `Awaiting you` section shows it with its
+        links); update `tasks` without the task, then `slot_free`. The user's answer → `answer({session_id: P, route, text: <their
+        words verbatim>})`, then `refill`: the pick resumes the line before any pending one.
       - `NEEDS-PARENT task=<ID> session=<P> reason=… see=<file>` (a route you name is one of `status({session_id: P, key:
         "routes"})`, the state's own transitions) → read only the named file. A design choice
         or a decision the prompt left open → SendMessage the driver your decision and tell it to continue;
@@ -286,10 +293,11 @@ states:
       tells each `REBIND-TASK` driver its new dispatcher once, then records `dispatcher_rebound`. Neither is a transition.
 
       Route this session:
-      - a task session reached its terminal (`done` / `closed` / `released`) → update `tasks`, then
+      - a task session reached its terminal (`done` / `closed` / `released`), or handed back AWAITING → update `tasks`, then
         `slot_free` (the pick runs again and refills the freed slot).
       - a task session ended `stopped` (under `batch-task` and its heirs the engine marked its queue line failed) → `stop`. Under a dispatcher agent (`dispatcher:`) the
         agent frees that slot as a CLOSED line instead and tells the parent: this bullet is for a dispatching session driven by hand.
+      - an owner's answer was recorded (`answer`; its reply names this session) → `refill`: the answered line resumes first.
       - the main conversation says lines were added, unparked, re-prioritised or freed of their `after:` while a slot is
         free (`queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…` then; so does `queue_header` when it raises the window and names this session) → `refill` (the pick runs
         again without a land; admits nothing when no slot is free or no line is admissible, and `collect` stays). Never poll for it.

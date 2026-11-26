@@ -486,12 +486,15 @@ export function formatQueueNext(r: PickResult, explain: boolean | "all"): string
   for (const a of r.admitted)
     lines.push(
       "",
-      `${r.dryRun ? "WOULD ADMIT" : "ADMITTED (running)"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}` +
+      `${r.dryRun ? "WOULD ADMIT" : a.resume !== undefined ? "RESUMED (running)" : "ADMITTED (running)"} ${a.id} | model: ${a.model} | effort: ${a.effort} | repo: ${a.repo}` +
         (a.workflow ? ` | workflow: ${a.workflow}` : "") +
         (a.difficulty !== undefined ? ` | difficulty: ${a.difficulty}` : "") +
         ` | kind: ${a.kind}` +
         (a.priority !== undefined ? ` | priority: ${a.priority}` : "") +
-        (a.sweep !== undefined ? ` | sweep: ${a.sweep}` : ""),
+        (a.sweep !== undefined ? ` | sweep: ${a.sweep}` : "") +
+        (a.resume !== undefined
+          ? ` | resume: ${a.resume} — an answered human wait: start nothing; spawn its driver from status({session_id: "${a.resume}", key: "driver_call"}) (no driver: drive ${a.resume} from its status)`
+          : ""),
       a.text,
     );
   return lines.join("\n");
@@ -1361,6 +1364,39 @@ export function registerTools(
           };
         }
       }),
+  );
+
+  // answer — the owner's answer to a task's human wait
+  server.registerTool(
+    "answer",
+    {
+      description:
+        "Record the owner's answer to a session that stands at a human wait state (`human:`; a task driver's `AWAITING task=<ID> session=<P>` line, " +
+        "the dashboard's `Awaiting you` section): `route` is one of the state's answers, `text` the owner's words verbatim (the engine writes them " +
+        "into the state's answer key when the task moves on). The task's queue line is marked answered: the next pick resumes it before any " +
+        "pending line (priority, then the longest wait), and the answer names the call that wakes the dispatcher. Call it only with the user's own answer.",
+      inputSchema: z
+        .object({
+          session_id: z.string().describe("The waiting session (the AWAITING line's session=)"),
+          route: z.string().describe("One of the wait state's answers (its transitions)"),
+          text: z
+            .string()
+            .optional()
+            .describe("The owner's words, verbatim (a fix list, a reason); default empty"),
+        })
+        .strict(),
+    },
+    async args => {
+      try {
+        const r = await engine.answer(args.session_id, args.route, args.text ?? "", "main");
+        return { content: [{ type: "text", text: r.note }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `ERROR: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
   );
 
   // 14. suspended

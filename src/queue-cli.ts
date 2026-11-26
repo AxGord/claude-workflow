@@ -9,6 +9,7 @@
 //   wf-queue <q> --running <ID> --retry [--note TEXT]   a failed task again: failed → running, its difficulty +1 (≤10)
 //   wf-queue <q> --running <ID> --force REASON    mark a line the picker would not admit; the reason goes to its notes
 //   wf-queue <q> --header <key>                   the header's value of <key> (empty when absent)
+//   wf-queue <q> --gate <ID>                      exit 10 (prints the kind) while the line's human_gate: is not passed; 0 otherwise
 //   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, difficulty: 3, touches: [a], text: …}`)
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
 //   wf-queue <q> --lessons <ID> --records <file>… [--triage <file>] [--repo <dir>: the filed repo only when the origin line is gone] [--workflow <name>]   (triage: the flag, else the header's `lessons_triage:`, else ../backups/slice-logs/lessons-triage.txt)  the lesson records of a landed task as queue lines / triage rows (src/lessons-file.ts); prints `lessons=filed N, triage M[, already K]`, exit 0 for any record, 2 for usage / an unreadable queue
@@ -37,6 +38,7 @@ import {
   QUEUE_EXIT,
   QueueError,
   addQueueLine,
+  gateDue,
   archiveQueue,
   editQueueLine,
   formatArchive,
@@ -62,7 +64,7 @@ import {
 } from "./queue.js";
 
 const USAGE =
-  "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--if-running] [--note TEXT] [--from WHO] | --header <key> | --path" +
+  "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--if-running] [--note TEXT] [--from WHO] | --header <key> | --gate <ID> | --path" +
   ' | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME] | --lessons-take [--triage FILE] | --batch-size <N> --reason TEXT [--until "<ID> done"] | --header-set archive_after_days=N|exclusive_hold=yes|no [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>' +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
@@ -213,6 +215,12 @@ async function main(args: string[]): Promise<number> {
     if (args.length !== 1) throw new QueueError(USAGE);
     process.stdout.write(file);
     return 0;
+  }
+  if (op === "--gate") {
+    if (!args[1] || args.length !== 2) throw new QueueError(USAGE);
+    const due = gateDue(file, args[1]);
+    process.stdout.write(due === null ? "no gate due\n" : `human_gate: ${due} due\n`);
+    return due === null ? 0 : QUEUE_EXIT.WAIT;
   }
   if (op === "--header") {
     if (!args[1] || args.length !== 2) throw new QueueError(USAGE);

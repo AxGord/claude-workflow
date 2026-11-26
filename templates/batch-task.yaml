@@ -1,5 +1,5 @@
 name: batch-task
-description: "One task of a `batch` queue — a child session a cheap DRIVER agent runs for the batch dispatcher (`driver:`): claim (the line's difficulty → model/effort by model_table) → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → work_check [exec: one clean commit on the branch] → review_scope [exec: the diff's class → the reviewer's model] → review (one reviewer agent; FIXES → work) → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done [exec: `[x]` + the record_file line] → lessons_file [exec: the agents' lesson records → queue lines / triage rows, never fails the land] → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
+description: "One task of a `batch` queue — a child session a cheap DRIVER agent runs for the batch dispatcher (`driver:`): claim (the line's difficulty → model/effort by model_table) → project_prepare [exec: a worktree beside the repo] → work (one worker agent) → work_check [exec: one clean commit on the branch] → review_scope [exec: the diff's class → the reviewer's model] → review (one reviewer agent; FIXES → work) → look_route [exec: a line with `human_gate:` not yet passed → owner_look, a human wait that frees the window slot until the owner answers go / fix / close] → project_land [exec: merge --no-ff + the queue's land_test under the repo's land lock] → mark_done [exec: `[x]` + the record_file line] → lessons_file [exec: the agents' lesson records → queue lines / triage rows, never fails the land] → cleanup [exec] → done. A project overrides project_prepare / project_land through `extends: batch-task`."
 initial: claim
 max_transitions: 60
 
@@ -146,7 +146,7 @@ states:
 
       3. `link_agent({session_id: W, agent_id: <its id>})` (the engine records it as this visit's agent);
          context_set `worker_agent` = its id.
-      A later visit (a fix round, the cause from the review or the land) arrives as "Revisit #N", and the
+      A later visit (a fix round, the cause from the review, the land or the owner's `fix` answer) arrives as "Revisit #N", and the
       values this prompt rendered are the first visit's: read each one it uses from P's context now
       (`status` with `key`) — `model_fix` / `effort_fix` (a fix round's worker; empty — no difficulty, or a
       table without a `fix` stage — = `model` / `effort`) against `worker_model` (stored as `model/effort`), and `worker_agent`, `worker_session`:
@@ -253,9 +253,55 @@ states:
       agent's tokens>, review_lessons: <the JSON after `lessons=` on its line, verbatim; leave the key out when none>}`: MERGE → `land`; FIXES → `fix` (the
       worker's cause = the verdict line + "read /tmp/wf-batch-logs/{{context.task}}/review.md whole"; with design=yes the driver first asks its decider, see its instructions, and adds "read {{context.wt}}.log/decisions.md whole"); REJECT → `reject`. The keys ride on the transition (`set`): they are written first, in the same call.
     transitions:
-      land: project_land
+      land: look_route
       fix: work
       reject: blocked
+
+  look_route:
+    station: false
+    type: exec
+    # A line with `human_gate:` not yet passed waits for its owner before the land (exit 10); any other line lands.
+    command: '"$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --gate "$TASK"'
+    env:
+      TASK: "{{context.task}}"
+      QUEUE: "{{context.queue_file}}"
+    timeout: 60000
+    cases:
+      "0": project_land
+      "10": owner_look
+    default: look_failed
+
+  look_failed:
+    prompt: |-
+      The gate check of {{context.task}} failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      The queue could not be read (a held lock, a malformed file): `retry` once it reads; `stop` otherwise.
+    transitions:
+      retry: look_route
+      stop: stop_state
+
+  owner_look:
+    # The owner looks before the land. Entering frees the task's window slot (its line goes `awaiting`); the answer,
+    # recorded by `answer` or the dashboard, resumes the task on a fresh driver ahead of every pending line. The owner's
+    # rounds have their own cap here; an answer starts a new round of `work` / `review` visits.
+    max_visits: 5
+    on_exhausted: blocked
+    human:
+      question: "Look at {{context.task}} before it lands: `git -C {{context.cwd}} diff HEAD...batch/{{context.task}}` (worktree {{context.wt}}). go = land it, fix = send your words to the worker, close = do not land."
+      show:
+        - "{{context.wt}}.log/report.md"
+        - "/tmp/wf-batch-logs/{{context.task}}/review.md"
+      answer_key: owner_words
+      passes: [go]
+    prompt: |-
+      {{context.task}} is reviewed (MERGE) and waits for its owner (`human_gate:` on its line). On the answer:
+      `go` → the land; `fix` → a fix round of the same worker, its cause = "the owner's words: read `owner_words` of
+      {{session_id}} (status with key) whole" (then the gate and a review, back here); `close` → the task will not land.
+    transitions:
+      go: project_land
+      fix: work
+      close: blocked
 
   project_land:
     type: exec

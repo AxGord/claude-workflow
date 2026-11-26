@@ -205,6 +205,7 @@ All tools are registered under the `wf` server. Full tool prefix: `mcp__plugin_w
 | `pool_status` | The machine-wide pool: one line per lease and waiter (as `wf-run --status`) | — |
 | `resume` | Continue a suspended session in this process (and own its sub-tree); finishes an exec state it stopped in; lists the sub-agents to wake | `session_id` |
 | `suspended` | Suspended sessions of this project (or `all`) | `all` |
+| `answer` | Record the owner's answer to a session at a human wait (`human:`): the queue line resumes before any pending one ([Queue](queue.md#human-waits)) | `session_id`, `route`, `text` |
 | `link_agent` | Record the Agent-tool id (`a` and hex; anything else is refused) of the sub-agent driving a child session (named by the parent's `resume`) and the parent's state + visit (the parent's `status` marks it current or stale) | `session_id`, `agent_id`, `role?` (`driver` or another: see below) |
 | `queue_next` | Admit the next tasks of a YAML task queue and set them running (§ Task queue) | `queue`, `file`, `dry_run`, `explain` |
 | `queue_mark` | Move one task's status (`running` / `done` / `failed` / `released` / `promoted` / `shelved`; `retry` restarts a failed task) | `queue`, `file`, `id`, `to`, `note`, `retry`, `force` |

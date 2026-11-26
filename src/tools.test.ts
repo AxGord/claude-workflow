@@ -300,6 +300,7 @@ describe("registerTools annotations", () => {
       "create",
       "delete",
       "abort",
+      "answer",
       "set_priority",
       "queue_next",
       "queue_mark",

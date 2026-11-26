@@ -172,7 +172,11 @@ export function hygieneFindings(
     k === "id" ? l.id : k === "status" ? l.status : k === "text" ? l.text : l.meta[k];
   for (const l of queue.lines) {
     if (isCuratorLineId(l.id)) continue;
-    const open = l.status === "pending" || l.status === "backlog" || l.status === "running";
+    const open =
+      l.status === "pending" ||
+      l.status === "backlog" ||
+      l.status === "running" ||
+      l.status === "awaiting";
     if (l.status === "pending")
       for (const k of require)
         if (field(l, k) === undefined) out.push({ id: l.id, check: "require", detail: `no ${k}:` });
@@ -190,6 +194,8 @@ export function hygieneFindings(
     }
     if (l.status === "running" && !liveTasks.has(l.id))
       out.push({ id: l.id, check: "stuck", detail: "running, and no live session runs it" });
+    if (l.status === "awaiting" && !liveTasks.has(l.id))
+      out.push({ id: l.id, check: "stuck", detail: "awaiting, and no live session waits for it" });
     if (open && l.text !== "") {
       const key = norm(l.text);
       const first = texts.get(key);

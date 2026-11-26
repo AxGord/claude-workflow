@@ -31,7 +31,7 @@ export type SessionRow = {
 /** One queue task, as the engine's dashboard answers it (/api/queue). */
 export type QueueLine = {
   id: string
-  status: 'pending' | 'running' | 'done' | 'failed' | 'backlog'
+  status: 'pending' | 'running' | 'awaiting' | 'done' | 'failed' | 'backlog'
   difficulty: string
   isParked: boolean
   isExclusive: boolean
@@ -43,6 +43,9 @@ export type QueueLine = {
   /** a `unblocked` row only: what keeps the line from starting, as the picker words it (`waits: <id> (overlap)`, `after: <id> (running)`); absent: nothing, the line is next to admit */
   wait?: string
 }
+
+/** An `awaiting` queue line: its task waits for the owner's answer at a human wait state, its window slot free. `since` is ms since the epoch; `answered` (the route) once the owner answered: it resumes before any Next line. */
+export type AwaitingLine = { id: string; difficulty: string; priority: string; session: string; question: string; show: string[]; since: number; answered?: string }
 
 /** A `failed` queue line: `recent` = it ended within the last two days (queue_mark's `ended`; a line with none is older), its reason is the first line of its last note (`''` none), its date that note's (`''` unknown), `usd` the ledger's real spend over every run of the line (absent: not measured); `usdFloor` stands in when a run recorded only a partial sum (an agent unmeasured): a lower bound drawn `≥$x`, never added to a total. */
 export type FailedLine = { id: string; difficulty: string; date: string; reason: string; recent: boolean; usd?: number; usdFloor?: number }
@@ -58,6 +61,8 @@ export type QueueView = {
   failed: number
   pending: number
   running: QueueLine[]
+  /** the lines waiting for the owner's answer (`awaiting`), the oldest wait first */
+  awaiting: AwaitingLine[]
   /** pending tasks the picker would admit with the window ignored (file order) */
   ready: QueueLine[]
   /** while `ready` is empty: the pending lines kept out only by the running ones, in the order the picker admits them once those end (the picker's own pass with the running lines done); `[]` otherwise */

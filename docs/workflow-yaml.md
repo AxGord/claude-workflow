@@ -40,6 +40,41 @@ states:
   - a line already marked, a missing queue and a missing line leave the end of the session as it is;
   - bundled `batch-task` declares it on `closed`, `stopped` (`failed`) and `released`, so no task session that ends leaves its line `running`.
 - `delivers: <key>` (or `{ key, tokens?, agent? }`) on a prompt state: the context key the agent the state waits on writes its deliverable to; its `context_set` is a delivery the driver acts on without waiting for the agent's end of turn (on a terminal, `sub_workflow`, `exec` or `fetch` state it is a load error): see [Delivery](/action-states#delivery-—-delivers).
+- `human: { question, show?, answer_key?, passes?, moved?, stop? }` on a prompt state: a human wait (§ below).
+
+### Human wait — `human:`
+
+A state with `human:` waits for the task's owner, not for an agent.
+
+```yaml
+owner_look:
+  max_visits: 5               # the owner's rounds
+  on_exhausted: blocked
+  human:
+    question: "Compare the preview of {{context.task}} with main"
+    show: ["{{context.preview_links}}"]   # links and files; several lines = one entry each
+    answer_key: owner_words   # the answer's text goes here (default human_answer)
+    passes: [go]              # the answers that pass the line's human_gate: (default: all)
+    moved: rebase             # optional: a passing answer enters this state first when HEAD moved
+    stop: 'kill "$(cat .preview.pid)"'    # optional: run once when the session ends
+  transitions:
+    go: land
+    fix: owner_fix
+    close: blocked
+```
+
+- Entering it, by an agent's transition or an exec's route, records the rendered question and links on the session.
+- For a queue task (context `queue_file` and `task`) its line goes `awaiting`: the window slot is free, the line keeps its `touches:` claim, and nothing else takes it ([Queue](queue.md#human-waits)).
+- Each transition is an answer. The owner answers with the `answer` tool or from the dashboard. A move out without that answer, or by another route, is refused.
+- The move writes the answer's text into `answer_key`. `set` may not ride it.
+
+Rounds and holds:
+
+- The state's own `max_visits` counts every owner round. Every other state's `max_visits` counts from the last answer, so a `fix` round leaves the worker's and the reviewer's caps whole. `{{visits.x}}` still counts all visits.
+- `stop` is what the wait holds while its slot is free (a preview server, a port). The session owns it, and the pool does not count it. The command runs once, in the session's cwd, when the session ends: done, closed, aborted, expired.
+- A waiting session is not STALE while no answer is recorded, nor while its answered line waits for a slot. Once the pick resumes it, the prompt state's clock runs again from the answer.
+- A `stop:` command needs the same consent as an exec state: an untrusted project file with one is not loaded, and `create` / `modify` refuse it.
+- Load errors: a `human:` on an exec, fetch, terminal, sub-workflow or skill gate; no transitions; a `passes` entry that is no transition; a `moved` that is no state; `human` with `delivers`.
 
 ## Three-Tier Loading
 
