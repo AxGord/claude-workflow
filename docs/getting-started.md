@@ -336,7 +336,7 @@ Consent protects against a workflow that **arrives** with a project you have not
 Two of them are guarded. The plugin's PreToolUse hook (`hooks/trust-write-gate.sh`) answers `ask` when an agent's `Write`, `Edit`, `MultiEdit` or `NotebookEdit`, or a Bash command, writes
 
 - the trust record `$STATE_DIR/trusted-workflows.json` (the reason names the file and `wf-trust`), or
-- a file in the global workflows directory (`~/.claude/workflows/`, or `$WORKFLOW_DIR`): a workflow there runs its `exec` states without a consent step.
+- a file the engine reads in the global workflows directory (`~/.claude/workflows/`, or `$WORKFLOW_DIR`): a `.yaml` or `.yml` workflow runs its `exec` states there without a consent step, and `settings.json` is the project settings file. Any other file there, such as a Claude Code native `.js` workflow, is no question; the directory itself still is.
 
 Reading either stays free (`Read`, `cat`, `ls`, `cp` out of the directory), with one exception below, and `wf-trust` run by you in a terminal is not a tool call, so it is not asked. The paths come from the same `STATE_DIR` and `WORKFLOW_DIR` the engine reads.
 

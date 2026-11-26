@@ -1,7 +1,8 @@
 #!/bin/sh
 # PreToolUse(Bash|Write|Edit|MultiEdit|NotebookEdit): an agent's write to the trust record
 # ($STATE_DIR/trusted-workflows.json) or into the global workflows directory ($WORKFLOW_DIR,
-# default ~/.claude/workflows) is answered `ask`, so the user confirms it. It only decides, never
+# default ~/.claude/workflows) is answered `ask`, so the user confirms it; in that directory only the
+# files the engine reads (.yaml, .yml, settings.json) and the directory itself. It only decides, never
 # rewrites the call. Fast path, no node: with WORKFLOW_DIR unset, a payload that names neither
 # `trusted-workflows` nor `workflows` cannot reach either place. Never breaks the call: no node /
 # no build / a failing gate → the call passes as it is with one line on stderr.

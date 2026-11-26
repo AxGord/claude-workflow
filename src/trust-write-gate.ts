@@ -2,7 +2,9 @@
 // workflows directory is answered `ask`, so the user confirms it. Exec consent protects against a
 // workflow that ARRIVES with a project the user has not trusted; both places are read by the engine
 // as the user's own say, so a write there by an agent is a question to the user (Claude Code's
-// permissions rule the rest of what an agent may do). The guard only decides: it never rewrites a
+// permissions rule the rest of what an agent may do). In the directory only the files the engine
+// reads ask (`.yaml` / `.yml`, `settings.json`) and the directory itself: any other file there, a
+// Claude Code native `.js` workflow for one, passes. The guard only decides: it never rewrites a
 // call (`updatedInput` of one PreToolUse hook breaks the others).
 //
 // A speed bump for a confused agent, not a sandbox. Caught: Write / Edit / MultiEdit / NotebookEdit
@@ -19,6 +21,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { basename, splitSegments, type Segment } from "./pool-gate.js";
+import { PROJECT_SETTINGS_FILE } from "./project-settings.js";
 import { TRUST_FILE, wfTrustCommand } from "./trust.js";
 import { stateDir, workflowDirs } from "./workflow-dirs.js";
 
@@ -108,12 +111,39 @@ function expand(word: string, env: NodeJS.ProcessEnv): string {
   });
 }
 
+/**
+ * Whether the engine reads a file of that name from a workflows directory: a workflow (`.yaml` /
+ * `.yml`, `pool-gate.yaml` among them) or the project settings file. Any other file there (a Claude
+ * Code native `.js` workflow, a note) is no say of the user's to the engine, so a write to it is no
+ * question of exec consent.
+ */
+function engineReads(name: string): boolean {
+  // Lower-cased: on a case-insensitive filesystem `wf.YAML` is the file `wf.yaml`.
+  const n = name.toLowerCase();
+  return n.endsWith(".yaml") || n.endsWith(".yml") || n === PROJECT_SETTINGS_FILE.toLowerCase();
+}
+
 function placeOf(raw: string, cwd: string, env: NodeJS.ProcessEnv, g: Guarded): Place | undefined {
   if (raw === "" || raw.startsWith("-")) return undefined;
   const c = canon(path.resolve(cwd, expand(raw, env)));
   if (c === g.trust) return "trust";
-  if (c === g.global || c.startsWith(g.global + path.sep)) return "global";
+  // The directory itself (a move or removal takes every workflow in it) always asks.
+  if (c === g.global) return "global";
+  if (c.startsWith(g.global + path.sep) && engineReads(path.basename(c))) return "global";
   return undefined;
+}
+
+/** `text` without the spelled-out paths of files in the global directory that the engine never reads. */
+function withoutUnreadFiles(text: string, g: Guarded, cwd: string): string {
+  let out = text;
+  for (const dir of new Set([g.global, path.resolve(cwd, g.global)])) {
+    const esc = dir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(
+      new RegExp(`${esc}/([^\\s'"\`;|&<>()=/]+)(?![^\\s'"\`;|&<>()=])`, "g"),
+      (m, name: string) => (engineReads(name) ? m : ""),
+    );
+  }
+  return out;
 }
 
 /** Whether a piece of code or text names a guarded path, spelled out (an interpreter's `-e` body, an unparsed command). */
@@ -123,7 +153,7 @@ function mentions(
   env: NodeJS.ProcessEnv,
   g: Guarded,
 ): Place | undefined {
-  const expanded = expand(text, env);
+  const expanded = withoutUnreadFiles(expand(text, env), g, cwd);
   if (expanded.includes(TRUST_FILE)) return "trust";
   for (const dir of [g.global, path.resolve(cwd, g.global)])
     if (expanded.includes(dir)) return "global";

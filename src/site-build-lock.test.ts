@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withBuildLock } from "./site-browser-helpers.js";
+import { ROOT, withBuildLock } from "./site-browser-helpers.js";
+import { writeWhenNoBuild } from "./site-workflows-setup.js";
+import { SITE_WORKFLOWS_FILE } from "./site-workflows.js";
 
 // The build lock the docs builds of the site tests take turns by (VitePress shares one .temp directory).
 
@@ -69,6 +71,28 @@ describe("withBuildLock", () => {
       expect(ran).toBe(true);
     } finally {
       gone(lock);
+    }
+  });
+});
+
+describe("the test run's export write", () => {
+  it("waits for a running docs build (it holds the lock) before it writes into docs/public", async () => {
+    const lock = fresh();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "wf-site-root-"));
+    try {
+      fs.symlinkSync(path.join(ROOT, "templates"), path.join(root, "templates"));
+      fs.mkdirSync(lock);
+      fs.writeFileSync(path.join(lock, "pid"), String(process.pid));
+      const file = path.join(root, SITE_WORKFLOWS_FILE);
+      const done = writeWhenNoBuild(root, lock);
+      await sleep(500);
+      expect(fs.existsSync(file), "no write while the build holds the lock").toBe(false);
+      fs.rmSync(lock, { recursive: true, force: true });
+      await done;
+      expect(fs.existsSync(file)).toBe(true);
+    } finally {
+      gone(lock);
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

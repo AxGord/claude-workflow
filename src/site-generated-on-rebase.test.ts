@@ -44,7 +44,7 @@ describe("ENG-SITE-GENERATED-ON-REBASE: docs/public/workflows.json is a build pr
 
   it("the test run writes it through the one writer the export script uses", () => {
     expect(read("vitest.config.ts")).toContain('globalSetup: ["src/site-workflows-setup.ts"]');
-    expect(read("src/site-workflows-setup.ts")).toContain("writeSiteWorkflows(");
+    expect(read("src/site-workflows-setup.ts")).toContain("writeSiteWorkflows(root)");
     expect(read("scripts/export-workflows.mjs")).toContain("writeSiteWorkflows(root)");
   });
 
