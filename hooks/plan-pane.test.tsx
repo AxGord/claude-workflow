@@ -1241,6 +1241,9 @@ test('the Pool tab: budget, load, locks, the STARVED note, leases and waiters in
   // the step shows, the label's second line does not
   expect(await texts(/proj · af2cce95 · slice-worker\/sync_gate_run · tree=\$\(pwd -P\)$/)).toHaveLength(1)
   expect(await texts(/second line/)).toEqual([])
+  // only the lease whose label key has history shows its time left, after its age
+  // (cut to the width with an ellipsis before its flags)
+  expect((await texts(/~44m/)).map(t => t.includes('prio 0 normal · 1m08s · ~44m'))).toEqual([true])
   // a waiter: its place, STARVED, a label cut to the pane width with an ellipsis
   expect((await texts(/1\. 4 threads/))[0]).toContain('prio 1 high · 16m40s')
   expect(await texts(/^\s*STARVED$/)).toHaveLength(1)
@@ -1331,6 +1334,7 @@ test('poolView keeps what the pane draws: the project\'s last name, an 8-charact
   ])
   expect(v.leases.map(l => l.underuse)).toEqual([null, 0])
   expect(v.leases[1]?.label).toBe('tree=$(pwd -P)')
+  expect(v.leases.map(l => l.eta)).toEqual(['', '~44m left (typ. 45m, 5 runs)'])
   expect(v.waiting[0]).toMatchObject({ isStarved: true, priority: '1 high', step: '' })
   expect(poolView({}).leases).toEqual([])
 })

@@ -41,8 +41,17 @@ describe("wf-run records the run time of a lease in the pool's history", () => {
     expect(await wfRun("--threads", "1", "--label", "build ENG-TWO", "--", "false")).toBe(1);
     const state = JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8")) as {
       history?: Record<string, number[]>;
+      work?: Record<string, number[]>;
     };
     expect(Object.keys(state.history ?? {})).toEqual(["build *"]);
     expect(state.history?.["build *"]).toHaveLength(1);
+    // the real run of the child, in thread-ms (one thread): not the instant of the grant
+    // the failed run's thread-time is kept: a label whose runs end non-zero still has a time left
+    expect(state.work?.["build *"]).toHaveLength(2);
+    expect(state.work?.["build *"]?.[0]).toBeGreaterThanOrEqual(50);
+    // one thread: its thread-time is its run time, read a few ms apart
+    expect(
+      Math.abs((state.work?.["build *"]?.[0] ?? 0) - (state.history?.["build *"]?.[0] ?? 0)),
+    ).toBeLessThan(100);
   });
 });

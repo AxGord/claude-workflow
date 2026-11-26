@@ -1184,7 +1184,14 @@ describe("the Pool tab", () => {
         starvedNote: "STARVED: nothing granted for 20m",
         leases: [
           row({ started: 1 }, { overrun: true, runs: 12.3 }),
-          row({ started: 2 }, { underuse: true, runs: 0.4 }),
+          row(
+            { started: 2 },
+            {
+              underuse: true,
+              runs: 0.4,
+              eta: { typicalMs: 1, runs: 5, leftMs: 1, text: "~45m left (typ. 3h35m, 5 runs)" },
+            },
+          ),
         ],
         waiting: [row({ pid: 42 }, { starved: true, request: "7 threads" })],
       })})`,
@@ -1194,6 +1201,9 @@ describe("the Pool tab", () => {
     expect(html).toContain("STARVED: nothing granted for 20m");
     expect(html).toContain("OVERRUN ~12");
     expect(html).toContain("UNDERUSE ~0");
+    // a lease row shows its time left under its age; a row with no ETA shows none
+    expect(html).toContain("~45m left (typ. 3h35m, 5 runs)");
+    expect(html.match(/left \(typ\./g)).toHaveLength(1);
     expect(html).toContain('href="/session/abcdef123456"');
     expect(html).toContain("7 threads");
     expect(html).toContain("task/gate");

@@ -229,7 +229,7 @@ Size a range's `max` from a measurement of held against used (`LC_ALL=C ps`), no
   - No history for some size: the `wait_full` rule above — but the granted lease still carries an `est_ms` read off the measured sizes (the granted size's own time, else the nearest measured size's as is), so backfill behind it sees its end.
 - **Status**: `wf-run --status` and the `pool_status` MCP tool print the budget, the load (and a `STARVED:` line, above) and one line per lease and per waiter (in admission order):
   - `pid`,
-  - what it holds or wants (`holds 6 threads (asked 2-8) + lock sim` / `wants 2-8 threads`, `, runs ~N` for a measured lease with threads, flagged `(OVERRUN)` or `(UNDERUSE)`),
+  - what it holds or wants (`holds 6 threads (asked 2-8) + lock sim` / `wants 2-8 threads`, `, runs ~N` for a measured lease with threads, flagged `(OVERRUN)` or `(UNDERUSE)`, then `, ~45m left (typ. 3h35m, 5 runs)` when the label has run before),
   - `prio` with the level,
   - `since HH:MM:SS (Ns[, STARVED])`,
   - the project (the git root of its cwd, a linked worktree mapped to its main repo, `~`-shortened),

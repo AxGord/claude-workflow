@@ -127,6 +127,7 @@ The pane's parts:
 - **Pool** (`4`; its label reads `Pool <held>/<budget>`, like `Plan <running>/<window>`) — the machine-wide thread pool, as the dashboard's Pool tab shows it, fitted to the narrow pane. It reads the dashboard's `GET /api/pool` and nothing else reads the pool.
   - The header: budget, threads held, load, external load and threshold, held locks, the pool-wide `STARVED` note.
   - Each lease: what it holds, priority, time held, an `OVERRUN ~N` flag when its processes run well above its threads, an `UNDERUSE ~N` flag (yellow) when they have run well below them for 30 s, `N` the busy cpus it runs. Under it come project, session, step and label, cut to the pane width with `…`.
+  - A lease whose label has run before also shows its time left after the age: `~45m left (typ. 3h35m, 5 runs)`, or `over typical by 12m (...)`.
   - Each waiter in admission order: what it wants, priority, wait time, a `STARVED` flag.
   - The label's `held`/`budget` come from `GET /api/pool?counts=1` (one plain pool pass, no measuring window, `{budget, held}`). Every refresh reads it while the pane is open on a tab other than Pool; the Pool tab's full read gives them itself. A dashboard that does not answer it leaves the bare `Pool`.
   - The full read costs nothing while the tab is closed: `/api/pool` is called only by a refresh (every 15 s) whose open tab is Pool, and once when the tab is pressed or the pane is opened on it, never on the other tabs and never while the pane is closed.
@@ -233,6 +234,7 @@ The views:
 - **Pool tab** — the machine-wide thread pool, live (refreshed every 2 s).
   - The header: budget, threads held, load and external load, held locks, the pool-wide `STARVED` line.
   - Each lease: pid, threads/locks, priority and level, time held, project, session linked to `/session/<id>`, step, label, an `OVERRUN ~N` plaque when its processes run well above its threads, an `UNDERUSE ~N` plaque when they have run well below them for 30 s.
+  - A lease whose label has run before shows its time left in grey under the age (`PoolRow.eta`, see [the pool](pool.md)).
   - Each waiter in admission order with its wait time and a `STARVED` plaque.
   - `GET /api/pool` answers the same data `wf-run --status` / `pool_status` print, read through the pool module (`poolSnapshot` in `src/pool.ts`; one measured admission pass per request, as `pool_status` runs).
 - **Cost tab** — what the finished task pipelines cost, for a day range (today by default; `from` / `to` date inputs, drawn in the page's theme, with their calendar popup, by its `color-scheme`).

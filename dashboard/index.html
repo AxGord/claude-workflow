@@ -775,7 +775,7 @@ function renderPool(p) {
     const session = e.session_id ? `<a href="${Routes.routePath({ view: 'session', id: e.session_id })}">${escapeHtml(e.session_id.slice(0, 8))}</a>` : '';
     const project = e.project || e.cwd || '';
     return `<tr><td class="mono">${pos === undefined ? '' : pos}</td><td class="mono">${e.pid}</td><td>${escapeHtml(r.request)}</td><td>${e.priority}${e.level ? ' ' + escapeHtml(e.level) : ''}</td>`
-      + `<td>${tlSpan(r.ageMs)}</td><td title="${escapeHtml(project)}">${escapeHtml(project.split('/').pop())}</td><td class="mono">${session}</td><td class="mono">${escapeHtml(e.step || '')}</td><td>${escapeHtml(e.label || '')}</td><td>${flags(r)}</td></tr>`;
+      + `<td>${tlSpan(r.ageMs)}${r.eta ? `<br><span class="muted">${escapeHtml(r.eta.text)}</span>` : ''}</td><td title="${escapeHtml(project)}">${escapeHtml(project.split('/').pop())}</td><td class="mono">${session}</td><td class="mono">${escapeHtml(e.step || '')}</td><td>${escapeHtml(e.label || '')}</td><td>${flags(r)}</td></tr>`;
   };
   const table = (title, label, rows, numbered) => rows.length === 0 ? ui.label(`${title} (0)`, true) + ui.empty('none', true)
     : ui.label(`${title} (${rows.length})`, true) + `<div class="pool-scroll"><table class="pool-table"><thead><tr><th>${numbered ? '#' : ''}</th><th>pid</th><th>${label}</th><th>prio</th><th>${numbered ? 'waiting' : 'since'}</th><th>project</th><th>session</th><th>step</th><th>label</th><th></th></tr></thead><tbody>${rows.map((r, i) => row(r, numbered ? i + 1 : undefined)).join('')}</tbody></table></div>`;

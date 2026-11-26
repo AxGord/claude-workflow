@@ -102,6 +102,8 @@ export type PoolLine = {
   /** a lease whose processes have run well below its threads for 30 s (the pool's UNDERUSE): the busy cpus it runs, else null */
   underuse: number | null
   isStarved: boolean
+  /** a lease's approximate time left or its overrun of the typical time, as `pool_status` prints it (`~45m left (typ. 3h35m, 5 runs)`); '' none */
+  eta: string
 }
 
 /** The machine-wide pool as the Pool tab draws it. */

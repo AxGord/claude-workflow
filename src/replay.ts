@@ -1386,6 +1386,7 @@ export function poolStateAt(file: ReplayFile, at: number): PoolState {
     overrun: null,
     underuse: null,
     isStarved: false,
+    eta: "",
   });
   const named = seen.filter(m => m[0] !== "starved");
   const leases = named.map(m => ({

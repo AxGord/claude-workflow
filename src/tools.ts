@@ -1310,6 +1310,7 @@ export function registerTools(
         "The machine-wide thread pool, as `wf-run --status` shows it: budget and load, then one line per lease " +
         "and per waiter (in admission order) — pid, threads/locks held or wanted, priority and level, since when, project, session, step, label. " +
         "Shows what each measured lease runs against what it holds (`runs ~N`) and flags one whose processes run well above its threads (`OVERRUN`) or well below them for 30 s (`UNDERUSE`), a waiter queued past `starve_after` (`STARVED`) and a pool that granted nothing that long. " +
+        "A lease whose label has run before shows its approximate time left (`~45m left (typ. 3h35m, 5 runs)`, or `over typical by N`). " +
         "Runs one admission pass (reaps dead entries, may grant a waiting lease).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z.object({}).strict(),

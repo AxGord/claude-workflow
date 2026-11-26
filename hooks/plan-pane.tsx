@@ -607,6 +607,7 @@ export function poolView(api: any): PoolView {
       overrun: r?.overrun ? Math.round(num(r.runs)) : null,
       underuse: r?.underuse ? Math.round(num(r.runs)) : null,
       isStarved: Boolean(r?.starved),
+      eta: typeof r?.eta?.text === 'string' ? r.eta.text : '',
     }
   }
   return {

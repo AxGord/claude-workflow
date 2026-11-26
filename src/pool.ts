@@ -265,6 +265,12 @@ export interface PoolState {
    * key (`labelKey`): an entry with no estimate of its own takes the p90 of its key's.
    */
   readonly history?: Readonly<Record<string, readonly number[]>>;
+  /**
+   * The thread-time (thread-ms: threads held x ms held, from the grant) of finished leases by
+   * label key, oldest first, the last `HISTORY_SAMPLES`, whatever the run's exit status (a label
+   * whose runs end non-zero still has a time left): what a running lease's time left is read from.
+   */
+  readonly work?: Readonly<Record<string, readonly number[]>>;
 }
 
 // What differs between runs of one command and is no part of its identity: a slice or task id
@@ -286,6 +292,20 @@ export function historyEstimate(
   return key === "" ? undefined : p90(state.history?.[key] ?? []);
 }
 
+/** `samples` with one more value under `key`: the key moves to the newest, past `HISTORY_KEYS` the oldest key goes. */
+function pushSample(
+  samples: Readonly<Record<string, readonly number[]>> | undefined,
+  key: string,
+  value: number,
+): Record<string, readonly number[]> {
+  const { [key]: old = [], ...rest } = samples ?? {};
+  const kept = Object.entries({
+    ...rest,
+    [key]: [...old, Math.round(value)].slice(-HISTORY_SAMPLES),
+  });
+  return Object.fromEntries(kept.slice(-HISTORY_KEYS));
+}
+
 /** `history` with one more run of `label`: the key moves to the newest, past `HISTORY_KEYS` the oldest key goes. */
 export function recordRun(
   state: Pick<PoolState, "history">,
@@ -294,12 +314,76 @@ export function recordRun(
 ): NonNullable<PoolState["history"]> {
   const key = labelKey(label);
   if (key === "" || !(ms > 0) || !Number.isFinite(ms)) return state.history ?? {};
-  const { [key]: old = [], ...rest } = state.history ?? {};
-  const kept = Object.entries({
-    ...rest,
-    [key]: [...old, Math.round(ms)].slice(-HISTORY_SAMPLES),
-  });
-  return Object.fromEntries(kept.slice(-HISTORY_KEYS));
+  return pushSample(state.history, key, ms);
+}
+
+/** `work` with the thread-time (thread-ms) of one more run of `label`, kept as `recordRun` keeps a run time. */
+export function recordWork(
+  state: Pick<PoolState, "work">,
+  label: string,
+  threadMs: number,
+): NonNullable<PoolState["work"]> {
+  const key = labelKey(label);
+  if (key === "" || !(threadMs > 0) || !Number.isFinite(threadMs)) return state.work ?? {};
+  return pushSample(state.work, key, threadMs);
+}
+
+/** A running lease's approximate time left, read from the thread-time of earlier runs of its label key. */
+export interface LeaseEta {
+  /** The typical (p90) run time on the threads held now: the key's typical thread-time over them. */
+  readonly typicalMs: number;
+  /** Earlier runs the typical time is read from. */
+  readonly runs: number;
+  /** Time left; absent once the lease is past its typical time. */
+  readonly leftMs?: number;
+  /** How far past its typical time the lease runs; absent while it is within it. */
+  readonly overMs?: number;
+  /** As `--status`, the dashboard and the pane print it. */
+  readonly text: string;
+}
+
+/** `ms` as a coarse span: `40s`, `45m`, `3h35m`. */
+function etaSpan(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * The time left of the running lease `e` at `now`: (typical thread-time of its label key - the
+ * thread-time it has used) / the threads it holds, so a lease granted fewer threads has more left.
+ * Undefined for a waiter, a lock-only lease, a label with no key or one under `MIN_SAMPLES` runs.
+ * Past its typical time the lease is `over` it, never left a negative time.
+ */
+export function leaseEta(
+  state: Pick<PoolState, "work">,
+  e: Pick<PoolEntry, "label" | "threads" | "started">,
+  budget: number,
+  now: number,
+): LeaseEta | undefined {
+  if (e.started === undefined || e.threads <= 0) return undefined;
+  const key = labelKey(e.label);
+  const samples = key === "" ? [] : (state.work?.[key] ?? []);
+  const typical = p90(samples);
+  if (typical === undefined) return undefined;
+  const threads = effectiveThreads(e, budget);
+  const typicalMs = typical / threads;
+  const detail = `typ. ${etaSpan(typicalMs)}, ${samples.length} runs`;
+  const age = now - e.started;
+  return age < typicalMs
+    ? {
+        typicalMs,
+        runs: samples.length,
+        leftMs: typicalMs - age,
+        text: `~${etaSpan(typicalMs - age)} left (${detail})`,
+      }
+    : {
+        typicalMs,
+        runs: samples.length,
+        overMs: age - typicalMs,
+        text: `over typical by ${etaSpan(age - typicalMs)} (${detail})`,
+      };
 }
 
 /** The pool after one admission pass. */
@@ -532,6 +616,7 @@ export function schedule(
     ...(lastGrant !== undefined ? { last_grant: lastGrant } : {}),
     ...(backfillOff !== undefined ? { backfill_off: backfillOff } : {}),
     ...(state.history ? { history: state.history } : {}),
+    ...(state.work ? { work: state.work } : {}),
     runs,
   };
 }
@@ -834,7 +919,8 @@ export interface Lease {
   /**
    * Idempotent; also grants the waiters the freed threads now fit. The lease's run time goes
    * into the pool's `history` of its label unless the run `failed` (a failed run's time says
-   * nothing about a good one's).
+   * nothing about a good one's); its thread-time goes into `work` either way, so the time left
+   * of a label whose runs end non-zero is still known.
    */
   release(opts?: { readonly failed?: boolean }): Promise<void>;
 }
@@ -881,6 +967,7 @@ function readState(raw: string, fp: string): PoolState {
       ...(typeof parsed.backfill_off === "string" ? { backfill_off: parsed.backfill_off } : {}),
       ...(typeof parsed.last_sample === "number" ? { last_sample: parsed.last_sample } : {}),
       ...(parsed.history && typeof parsed.history === "object" ? { history: parsed.history } : {}),
+      ...(parsed.work && typeof parsed.work === "object" ? { work: parsed.work } : {}),
     };
   } catch {
     console.error(`wf-pool: ${fp} is not valid JSON — starting from an empty pool`);
@@ -1114,7 +1201,7 @@ export class Pool {
         if (released) return;
         released = true;
         clearInterval(pulse);
-        await this._remove(self.id, opts.failed !== true);
+        await this._remove(self.id, opts.failed === true);
       },
     };
     return { status: "granted", waitMs: Date.now() - arrived, lease };
@@ -1168,10 +1255,10 @@ export class Pool {
     return this._pass();
   }
 
-  private _remove(id: string, record: boolean): Promise<PoolView> {
+  private _remove(id: string, failed: boolean): Promise<PoolView> {
     return this._update(state => {
       const lease = state.leases.find(e => e.id === id);
-      const ran = record && lease?.started !== undefined && lease.threads > 0;
+      const ran = lease?.started !== undefined && lease.threads > 0;
       if (lease?.started !== undefined) {
         const used = usageRecord(
           labelKey(lease.label) || lease.label,
@@ -1181,14 +1268,27 @@ export class Pool {
           lease.meter,
         );
         if (used) appendUsage(this.dir, used);
+        // a failed run stays out of `history`: the log says why a label has none
+        if (failed && ran)
+          this._log(
+            Date.now(),
+            `released failed: pid ${lease.pid} held ${lease.threads} threads for ${Math.round((Date.now() - lease.started) / 1000)}s, not in history — ${lease.label || "-"}`,
+          );
       }
       return {
         ...state,
         leases: state.leases.filter(e => e.id !== id),
         waiting: state.waiting.filter(e => e.id !== id),
+        ...(ran && !failed
+          ? { history: recordRun(state, lease.label, Date.now() - lease.started) }
+          : {}),
         ...(ran
           ? {
-              history: recordRun(state, lease.label, Date.now() - lease.started),
+              work: recordWork(
+                state,
+                lease.label,
+                effectiveThreads(lease, this.config().budget) * (Date.now() - lease.started),
+              ),
             }
           : {}),
       };
@@ -1409,6 +1509,7 @@ export class Pool {
           ...(view.backfill_off !== undefined ? { backfill_off: view.backfill_off } : {}),
           ...(lastSample !== undefined ? { last_sample: lastSample } : {}),
           ...(view.history ? { history: view.history } : {}),
+          ...(view.work ? { work: view.work } : {}),
         },
         null,
         2,
@@ -1474,6 +1575,8 @@ export interface EntryMarks {
   /** A measured lease running well above (`OVERRUN`) or below (`UNDERUSE`) its threads. */
   readonly use?: "OVERRUN" | "UNDERUSE";
   readonly starved?: boolean;
+  /** A running lease's time left (`leaseEta`), when its label key has runs enough. */
+  readonly eta?: string;
 }
 
 /** What a lease holds: `4 threads (asked 2-8) + lock a`. */
@@ -1506,6 +1609,7 @@ export function formatEntry(
     what = `holds ${describeHeld(e)}`;
     if (marks.runs !== undefined)
       what += `, runs ~${Math.round(marks.runs)}${marks.use ? ` (${marks.use})` : ""}`;
+    if (marks.eta !== undefined) what += `, ${marks.eta}`;
   }
   const project = e.project ?? e.cwd;
   const shown =
@@ -1530,6 +1634,8 @@ export interface PoolRow {
   /** A lease whose tree has run well below its threads for UNDERUSE_GRACE_MS. */
   readonly underuse: boolean;
   readonly starved: boolean;
+  /** A lease whose label key has runs enough: its time left, or how far past its typical time it runs. */
+  readonly eta?: LeaseEta;
 }
 
 /** The pool as JSON: the data `formatStatus` prints, one reader for both. */
@@ -1550,6 +1656,7 @@ export function poolSnapshot(view: PoolView, now: number = Date.now()): PoolSnap
   const starvedNote = poolStarvation(view, now);
   const row = (e: PoolEntry): PoolRow => {
     const runs = view.runs[e.id];
+    const eta = leaseEta(view, e, view.budget, now);
     return {
       entry: e,
       request: e.started !== undefined ? describeHeld(e) : describeRequest(e, view.budget),
@@ -1558,6 +1665,7 @@ export function poolSnapshot(view: PoolView, now: number = Date.now()): PoolSnap
       overrun: e.started !== undefined && overruns(e, view),
       underuse: e.started !== undefined && underusing(e, view, now),
       starved: isStarved(e, view, now),
+      ...(eta ? { eta } : {}),
     };
   };
   return {
@@ -1577,10 +1685,11 @@ export function poolSnapshot(view: PoolView, now: number = Date.now()): PoolSnap
 
 /** What `--status` shows of a lease's use: the busy cpus of its tree against its threads, flagged when far off. */
 function leaseMarks(e: PoolEntry, view: PoolView, now: number): EntryMarks {
+  const eta = leaseEta(view, e, view.budget, now)?.text;
   const runs = view.runs[e.id];
-  if (runs === undefined || e.threads <= 0) return {};
+  if (runs === undefined || e.threads <= 0) return eta ? { eta } : {};
   const use = overruns(e, view) ? "OVERRUN" : underusing(e, view, now) ? "UNDERUSE" : undefined;
-  return { runs, ...(use ? { use } : {}) };
+  return { runs, ...(use ? { use } : {}), ...(eta ? { eta } : {}) };
 }
 
 /** `wf-run --status` and the `pool_status` tool. */

@@ -33,12 +33,13 @@ function executorWith(budget: number): { executor: Executor; dir: string } {
   return { executor: new Executor(new Pool(dir, probes)), dir };
 }
 
-// The queue and the leases; the run `history` the pool keeps beside them is pinned in pool-history.test.ts.
+// The queue and the leases; the run `history` and `work` the pool keeps beside them are pinned in pool-history.test.ts and pool-eta.test.ts.
 const readPool = (dir: string): PoolState => {
   const state = JSON.parse(fs.readFileSync(path.join(dir, "pool.json"), "utf8")) as {
     -readonly [K in keyof PoolState]: PoolState[K];
   };
   delete state.history;
+  delete state.work;
   return state;
 };
 

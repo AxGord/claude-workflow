@@ -52,6 +52,8 @@ export const API_POOL = {
       overrun: false,
       underuse: true,
       starved: false,
+      // present only on a lease whose label key has runs enough
+      eta: { typicalMs: 2700000, runs: 5, leftMs: 2631560, text: '~44m left (typ. 45m, 5 runs)' },
     },
   ],
   waiting: [

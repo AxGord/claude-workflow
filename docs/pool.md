@@ -67,6 +67,9 @@ The log keeps no priority and no age for a lease, so the rows here show none; th
 The 30 seconds are real time: a lease nobody sampled for longer than a meter credits (nobody polls the pool and its holder never passes) is judged by ONE status call over the stretch since its last sample (its meter, else its grant), by the process table's own cpu average, not from that call.
 
 - `wf-run --status` and `pool_status` also show what every measured lease runs against what it holds (`holds 4 threads, runs ~3`); the dashboard shows `runs` only in the OVERRUN and UNDERUSE plaques.
+- A lease whose label key has run `MIN_SAMPLES` times before shows `~45m left (typ. 3h35m, 5 runs)` in `wf-run --status`, `pool_status`, the dashboard's Pool tab and the plan pane. A key with too few runs shows nothing.
+- Each finished run records its thread-time (threads held x time held, from the grant, whatever the exit status) under its label key.
+- Left is (typical thread-time, the p90, minus the thread-time used) over the threads held now, so a lease granted fewer threads shows more left. Past the typical time the row reads `over typical by 12m`.
 - The pool only reports it: the size of a lease is its caller's declaration, and the caller fixes it.
 - `wf-run --usage` adds up the leases that ended, per label, so a project can right-size its own callers.
 
