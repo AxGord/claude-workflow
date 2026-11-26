@@ -211,6 +211,9 @@ states:
          task session (all of them, not only the new ones); `driver=` is the agent linked with `role: "driver"`, never a worker's
          id (the engine refuses such an entry and names the right id) — after a context compression
          `status({session_id: "{{session_id}}", key: "tasks"})` and `sessions` are the truth, not your memory.
+      A `CURATOR-<date>-<n>` line (workflow column `curator`) is the engine's own: the project's curator jobs are due
+      (`.claude/curator.yaml`), and the pick admitted the run into a free slot. Start it like any line; its driver ends
+      with `NEEDS-PARENT … reason=curator report ready … see=<present.md>`, its line already done.
       Then transition `dispatched` and END your turn: agent notifications wake you in `collect`.
     transitions:
       dispatched: collect

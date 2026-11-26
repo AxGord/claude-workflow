@@ -63,6 +63,7 @@ Agent                       Engine                          Storage
 | `lint-review` | Trivial-diff review — engine-run lint, act on findings, one intent re-read |
 | `batch` | Long-running task queue: the engine admits lines into the window (`after:` / `touches:` / `owner:` / pause), one `batch-task` child per task, one fresh-eyes review of the combined diff; experimental opt-in `WF_DISPATCHER`: a dispatcher agent launches the tasks |
 | `batch-task` | One queued task, run by a haiku driver (`driver:`): difficulty → model/effort (`model_table`) → worktree → worker → reviewer chosen by the diff → merge + `land_test` under the repo's land lock → mark done → lessons filed → cleanup |
+| `curator` | The project's tidying run, started when the engine finds a job due (`.claude/curator.yaml`): counts by script, one judge, a verifier for text edits, apply under the project's consent, yield → next interval ([Curator](/queue#curator)) |
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 

@@ -17,7 +17,8 @@
     "wf-trust": "build/trust-cli.js",
     "wf-validate": "build/validate-cli.js",
     "wf-skills": "build/skills-cli.js",
-    "wf-calibration": "build/calibration-cli.js"
+    "wf-calibration": "build/calibration-cli.js",
+    "wf-curator": "build/curator-cli.js"
   },
   "scripts": {
     "build": "node node_modules/typescript7/bin/tsc",

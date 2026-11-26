@@ -677,3 +677,62 @@ A PreToolUse(Bash) hook (`hooks/read-only-gate.sh`) refuses a Bash call made by 
 - `$/task` is that over the tasks with a measured agent there.
 - `-` when none is on record (a line from before the record), `>=` when an agent there could not be read or priced.
 - The ledger line carries `project`, `task` (the queue line id), `visits`, `verdict`, `plan_handoff`, `agent_ids` (`agent_id_<stage>`) and `counts` (length of each context list; `--findings-key` sums one).
+
+## Curator
+
+The curator tidies what a project's runs leave behind: memory, the model table, the queue, unfiled lessons, skills. It is a bundled workflow, `curator`, and the ENGINE decides when it runs. A project turns it on with `.claude/curator.yaml`, or with the queue header's `curator: <path>` (relative = beside the queue; `curator: off` turns it off). No config, no curator.
+
+```yaml
+# .claude/curator.yaml
+edits: propose          # default: the run applies nothing; `direct` applies what the rules below allow
+high_yield: 5           # findings of one run that halve a job's interval
+difficulty: 5           # the admitted line's difficulty (the workflow's model_table maps it)
+jobs:                   # a job runs only when it is listed; `enabled: false` turns one off
+  hygiene: { every: 10, require: [workflow, touches], rules: [{ match: { id: "^ENG-" }, require: { workflow: "^engine-task$" } }], forbid_words: [] }
+  memory: { every: 20, dirs: [~/.claude/projects/<project>/memory], index: MEMORY.md, index_budget_bytes: 4096, new_files: 5 }
+  calibration: { every: 5, workflows: [.claude/workflows] }
+  lessons: { every: 10 }
+  skills: { every: 20, dirs: [~/.claude/skills], transcripts: ~/.claude/projects/<project>, min_transcripts: 3 }
+  docs-sweep: { every: 15, command: "ls docs", prompt: "name the pages the code no longer matches" }
+```
+
+A job's options other than these are its own: a `notes:` text is guidance the judge reads.
+
+### When a job is due
+
+| Job | Due when |
+|-----|----------|
+| `hygiene`, `lessons`, `skills`, a project job | its lands since its last run reach its interval |
+| `memory` | the same, or its index is over `index_budget_bytes` (once it grew since the last run), or `new_files` memory files are new |
+| `calibration` | one model row (`workflow stage model/effort`) has interval-many new lands |
+
+- A land is a task session of the queue's lines that ended complete, one per task id; curator runs are not counted. With no queue, the project's own lines count.
+- Each run records `found` and `changed` per job. Nothing found doubles the job's interval, up to 40. `high_yield` or more halves it, down to 5. A run recorded again (a retry) tunes nothing twice.
+- The record is `<STATE_DIR>/curator/<project>/state.json`.
+- `wf-curator due [--queue F | --project D] [--json]` is the dry run: each job's interval, count, last run and why it is due; exit 0 when one is.
+
+### How a run starts
+
+- Under a dispatcher, a pick with a free slot and a due job adds `CURATOR-<date>-<n>` (workflow `curator`, priority urgent, `touches: []`). It is admitted like any line; the pick summary says `curator: added …`.
+- While a curator line is pending or running, no second one is added. One that failed today holds the next until tomorrow (`curator: held, …`). A config the engine cannot read keeps the run out and never fails the pick.
+- Only the id shape `CURATOR-YYYY-MM-DD-N` is the engine's: a user's own `CURATOR-…` line is an ordinary line.
+- With no dispatcher above it, the `transition` that ends a task session shows `CURATOR-DUE: <jobs> — start it: start({workflow: "curator", …})`, its context carrying the session's `queue_file`.
+
+### What a run does
+
+`claim` → `plan` and `counts` (execs, no model) → `judge` (one agent) → `judge_check` → `verify` (one independent agent, only for text edits) → `apply` → `record` → `present`.
+
+- **Counts** are scripts: memory orphans, dangling links and the index budget; the hygiene findings; calibration rows and each `model_table` change's lands before and after; triage rows and owed steps; tool-error shapes seen in `min_transcripts` transcripts, and skill usage.
+- **Judge** writes one plan: each job's `found`, edit ops (`move-index`, `move-file`, `replace`, `revert`), proposals, the user's decisions.
+- **Verify** checks every `replace` before it may be applied. Moves skip it.
+- **Present** hands back `NEEDS-PARENT … reason=curator report ready … see=<present.md>`: done, proposed, decisions.
+
+### Consent and history
+
+- `edits: propose` applies nothing: every op is a proposal.
+- `edits: direct` applies moves, and a verified `replace` of a tool skill. A memory edit that changes a rule's meaning and a `preferences-*` skill stay proposals.
+- Each applied op is one commit of a shadow git directory, `<STATE_DIR>/curator-history/<target>.git`, used with `--work-tree=<target>`. The target never gets a `.git`.
+- `wf-curator history log|diff|revert --target <dir> [--rev <sha>]` reads it or undoes one edit; a revert whose lines changed since is refused.
+- A skills edit names the error shape it should reduce; the next run measures that shape and proposes a revert when it did not go down.
+
+The judge's and verifier's models come from the workflow's `model_table` (stages `judge`, `verify`; sonnet/high). A project tunes them in its own heir, `.claude/workflows/curator.yaml` with `extends: curator`.

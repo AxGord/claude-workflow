@@ -33,6 +33,9 @@ Follow the prompt's steps for each admitted line, with these rules:
   driver from `status({session_id: P, key: "driver_call"})` exactly, then `link_agent` (`role: "driver"`). A refusal that says
   the workflow declares no `driver:` names no `driver_call` (the session has none): main drives that task;
   keep it in `tasks` as `ID=P driver=main` and spawn nothing.
+- A `CURATOR-…` line (workflow column `curator`) is admitted by the engine when the project's curator jobs are due:
+  start it and spawn its driver like any line. Its last line is a NEEDS-PARENT (`reason=curator report ready`), handed
+  to main as any other.
 - A `start` answer WITHOUT a DRIVER block (a task workflow with no `driver:`) → you never drive a task
   session: keep it in `tasks` as `ID=P driver=main` and, after the transition below, hand back
   `NEEDS-PARENT task=<ID> session=<P> reason=task workflow has no driver: main drives it see=state dispatch`.

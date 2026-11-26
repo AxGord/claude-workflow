@@ -1,0 +1,308 @@
+name: curator
+description: >-
+  The project's curator run (a child session of the dispatcher, driven by a driver agent, or started by the main
+  conversation when a CURATOR-DUE line says so): claim → plan [exec: the due jobs of the project's `.claude/curator.yaml`] →
+  counts [exec: each job's facts by script, no model] → judge (one agent: verdicts, edit ops, proposals, decisions)
+  → check [exec: the plan's shape] → verify (one independent agent, only when the plan edits text) → apply [exec:
+  what the consent allows, one shadow-history commit per edit; the default `edits: propose` applies nothing] →
+  record [exec: each job's yield tunes its interval; the queue line is marked done] → present (hand-back: the
+  parent relays done / proposed / the user's decisions). No worktree, no commit in any repo, no land.
+initial: claim
+max_transitions: 60
+# The judge and the verifier read rules and decide what a memory entry or a skill sentence means: the stages that
+# carry the run's quality. Moderate defaults; a project replaces this table in its own heir
+# (`.claude/workflows/curator.yaml` with `extends: curator`): tuning lives in the project, never here.
+model_table:
+  stages:
+    # `execute` is required by the loader; here it only sets the fallback `model` / `effort`.
+    execute:
+      - { upto: 10, model: sonnet, effort: high }
+    judge:
+      - { upto: 10, model: sonnet, effort: high }
+    verify:
+      - { upto: 10, model: sonnet, effort: high }
+
+driver:
+  model: haiku
+  effort: medium
+  prompt_ref: task-driver
+
+states:
+  claim:
+    prompt: |-
+      Curator run {{session_id}} (parent {{parent_session_id}}; queue line {{context.task}}, queue {{context.queue_file}}; empty = started by
+      hand). Every `transition` reply IS the next prompt. `transition({session_id: "{{session_id}}", transition: "plan"})`; when the
+      difficulty ({{context.difficulty}}) is empty, pass `set: {difficulty: "5"}` with it: the engine then sets the judge's and the
+      verifier's models from this workflow's model_table. `plan` is an exec: the engine decides which jobs run.
+    transitions:
+      plan: plan
+
+  plan:
+    type: exec
+    # The ENGINE decides what runs: the jobs due now (none due, a run started by hand: every enabled job).
+    command: '"$WF_PLUGIN_ROOT/scripts/wf-curator" plan --queue "$QUEUE" --project "$WF_PROJECT_ROOT" --run "$TASK"'
+    env:
+      QUEUE: "{{context.queue_file}}"
+      TASK: "{{context.task}}"
+    timeout: 60000
+    context_set:
+      run_dir: "{{stdout}}"
+    cases:
+      "0": counts
+      "10": nothing_enabled
+    default: plan_failed
+
+  plan_failed:
+    ask: parent
+    prompt: |-
+      The curator run could not be planned (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      Hand back NEEDS-PARENT task={{context.task}} session={{session_id}} reason=curator plan failed see=state plan_failed, and take NO
+      transition: the parent fixes the config ({{project_root}}/.claude/curator.yaml) and messages you `retry`, or `close`.
+    transitions:
+      retry: plan
+      close: closed
+
+  nothing_enabled:
+    type: exec
+    command: |-
+      [ -n "$TASK" ] && [ -n "$QUEUE" ] || exit 0
+      "$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --done "$TASK" --note "curator: no job enabled"
+    env:
+      QUEUE: "{{context.queue_file}}"
+      TASK: "{{context.task}}"
+    timeout: 60000
+    on_success: closed
+    on_error: closed
+
+  counts:
+    type: exec
+    station: false
+    command: '"$WF_PLUGIN_ROOT/scripts/wf-curator" counts --run-dir "$RUN_DIR"'
+    env:
+      RUN_DIR: "{{context.run_dir}}"
+    timeout: 300000
+    on_success: judge
+    on_error: counts_failed
+
+  counts_failed:
+    ask: parent
+    prompt: |-
+      The curator's counts failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      Hand back NEEDS-PARENT task={{context.task}} session={{session_id}} reason=curator counts failed see=state counts_failed, and take NO
+      transition: the parent messages you `retry` or `close`.
+    transitions:
+      retry: counts
+      close: closed
+
+  judge:
+    full_on_revisit: true
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      Curator run {{context.run_dir}}: the counts are written ({{stdout}}). One judge reads them and decides.
+      1. Spawn ONE judge: Agent (plain, no `subagent_type`), model {{context.model_judge}}, effort {{context.effort_judge}} (both empty → sonnet, high), prompt exactly:
+
+           You are the JUDGE of a curator run of the project {{project_root}}. You decide; a script applies, and only what the project's consent allows.
+           Change NO file yourself (no Edit, no Write, no commit, no queue tool, no sub-agent); call no workflow tool but the ONE context_set that delivers your plan.
+           Read: {{context.run_dir}}/meta.json (the run's jobs and why each is due), every {{context.run_dir}}/counts/<job>.json (facts counted by script: trust them, re-count nothing), and the config file meta.json names (each job's options; a job's `notes:` is the project's own guidance for it). Open the files the counts name (memory files, skills, queue lines) only where a verdict needs their text.
+           Per job:
+           - memory: one verdict per topic file that needs one: keep / move index (`move-index`: its link line from one index file to another) / archive (`move-index` to the archive index) / merge / fix (a `replace` op, `meaning: true` when it changes what the rule says) / move to another project's memory (`move-file` to a memory dir the config lists). Orphans, dangling links, a file in two indexes and an index over its byte budget are found facts. Index text costs tokens on every load: a rule only one kind of agent needs belongs in the index that kind reads.
+           - calibration: the rows since the last run and each tuning change's lands before and after. At most ONE model-table change per workflow, as a proposal (the workflow files are in a repo: the curator never edits them); a change whose after looks like its before is a no-effect change: propose its revert.
+           - hygiene: each finding is a line of the queue: a proposal per real problem (the exact queue_edit or queue_add), none for a false alarm.
+           - lessons: each unfiled triage row and owed step: a proposal (a queue line, a memory note) or nothing.
+           - skills: route each lesson by precedence: a tool fix (a proposed queue line) first, then a deterministic engine step, then a skill sentence (a `replace` op on that skill's file, with `shape` and `shape_transcripts` copied from the error shape it should reduce, and `expected`), then memory. A section no transcript used: propose its move to references/. A verified learned-* lesson: fold it into its skill (a `replace` op); an obsolete one: propose dropping it. A procedure re-derived in 3+ transcripts: propose a new skill. An earlier edit whose shape did not go down (`earlier_edits`: since >= before): a `revert` op of its commit.
+           - any other job: its counts file carries the project's prompt and its command's output: do what the prompt says.
+           Each job's `found` is the number of real findings (0 = nothing to do); it tunes how often the job runs.
+           Your plan is ONE JSON object: {"jobs": {"<job>": {"found": <n>, "note": "<one line>"}, ...every job of meta.json}, "ops": [{"id": "<unique>", "job": "<job>", "op": "move-index"|"move-file"|"replace"|"revert", "file": "<absolute>", "from"/"to": "<index file>", "to_dir": "<absolute>", "old"/"new": "<exact text, once in the file>", "target": "<absolute dir>", "commit": "<sha>", "meaning": true|false, "reason": "<one line>", "expected": "<the effect and how the next run measures it>"}], "proposals": ["<one line each>"], "decisions": ["<what only the user can decide, one line each>"]}.
+           Deliver it: ToolSearch query `select:mcp__plugin_workflow_wf__context_set` (max_results 1), then ONE call `context_set({session_id: "{{session_id}}", key: "curator_plan", value: "<the JSON, as a string>", force: true})`. A later fix sets it again, whole.
+           Before your last message nothing you started may still run. Your LAST message is exactly `PLAN context curator_plan`.
+
+      2. context_set `judge_agent` = the id Agent returned. END your turn on this line with the WAITING line. On its notification, transition `planned`.
+      A later visit of this state means the previous judge is gone: spawn it again the same way.
+    transitions:
+      planned: judge_check
+
+  judge_check:
+    type: exec
+    # The judge delivers its plan through the context; this writes it into the run directory and checks its shape.
+    command: |-
+      case "$PLAN" in ''|'{{'*) ;; *) printf '%s\n' "$PLAN" > "$RUN_DIR/plan.json";; esac
+      "$WF_PLUGIN_ROOT/scripts/wf-curator" check-plan --run-dir "$RUN_DIR"
+    env:
+      RUN_DIR: "{{context.run_dir}}"
+      PLAN: "{{context.curator_plan}}"
+    timeout: 30000
+    cases:
+      "0": verify
+      "20": apply
+      "30": judge_missing
+    default: judge_fix
+
+  judge_missing:
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      {{stdout}}
+      Still running (no notification yet)? END your turn; on its notification, transition `recheck`. Gone → `again` (a new judge).
+    transitions:
+      recheck: judge_check
+      again: judge
+
+  judge_fix:
+    max_visits: 2
+    on_exhausted: blocked
+    prompt: |-
+      The plan does not have the required shape:
+      {{stdout}}
+      SendMessage `{{context.judge_agent}}` (an agent that no longer answers: transition `again`): "Your plan does not have the required shape: <the lines above>. Fix the shape; do not redo the judging. Set curator_plan again, whole, with the same context_set. Reply PLAN context curator_plan." END your turn. On its line, transition `recheck`.
+    transitions:
+      recheck: judge_check
+      again: judge
+
+  verify:
+    full_on_revisit: true
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      Curator run {{context.run_dir}}: the plan edits text ({{stdout}}). One independent verifier checks every text edit before any is applied.
+      1. Spawn ONE verifier: Agent (plain, no `subagent_type`), model {{context.model_verify}}, effort {{context.effort_verify}} (both empty → sonnet, high), prompt exactly:
+
+           You are the VERIFIER of a curator run of the project {{project_root}}, independent of the judge who wrote the plan. Change NO file; call no workflow tool but the ONE context_set that delivers your verdicts.
+           Read {{context.run_dir}}/plan.json whole and, for each op whose "op" is "replace", the file it edits and whatever that text describes (the code, the tool, the config it names).
+           For each such op decide: is the new text true; when "meaning" is false, does it keep what the rule says; is the edit needed at all (a sentence the reader already has costs tokens on every load). Mechanical moves are not yours.
+           Deliver ONE JSON object {"<op id>": "ok" | "reject: <why, one line>"} for EVERY replace op: ToolSearch query `select:mcp__plugin_workflow_wf__context_set` (max_results 1), then `context_set({session_id: "{{session_id}}", key: "curator_verify", value: "<the JSON, as a string>", force: true})`.
+           Before your last message nothing you started may still run. Your LAST message is exactly `VERDICTS context curator_verify`.
+
+      2. context_set `verifier_agent` = the id Agent returned. END your turn on this line with the WAITING line. On its notification, transition `verified`.
+    transitions:
+      verified: verify_check
+
+  verify_check:
+    type: exec
+    command: |-
+      case "$VERDICTS" in ''|'{{'*) ;; *) printf '%s\n' "$VERDICTS" > "$RUN_DIR/verify.json";; esac
+      "$WF_PLUGIN_ROOT/scripts/wf-curator" check-verify --run-dir "$RUN_DIR"
+    env:
+      RUN_DIR: "{{context.run_dir}}"
+      VERDICTS: "{{context.curator_verify}}"
+    timeout: 30000
+    cases:
+      "0": apply
+      "30": verify_missing
+    default: verify_fix
+
+  verify_missing:
+    max_visits: 3
+    on_exhausted: blocked
+    prompt: |-
+      {{stdout}}
+      Still running (no notification yet)? END your turn; on its notification, transition `recheck`. Gone → `again` (a new verifier).
+    transitions:
+      recheck: verify_check
+      again: verify
+
+  verify_fix:
+    max_visits: 2
+    on_exhausted: blocked
+    prompt: |-
+      The verdicts do not have the required shape:
+      {{stdout}}
+      SendMessage `{{context.verifier_agent}}` (an agent that no longer answers: transition `again`): "Your verdicts do not have the required shape: <the lines above>. Set curator_verify again, whole, with the same context_set. Reply VERDICTS context curator_verify." END your turn. On its line, transition `recheck`.
+    transitions:
+      recheck: verify_check
+      again: verify
+
+  apply:
+    type: exec
+    # The consent is the project's (`edits:`); each applied op is one commit of its target's shadow history.
+    command: '"$WF_PLUGIN_ROOT/scripts/wf-curator" apply --run-dir "$RUN_DIR"'
+    env:
+      RUN_DIR: "{{context.run_dir}}"
+    timeout: 120000
+    on_success: record
+    on_error: apply_failed
+
+  apply_failed:
+    ask: parent
+    prompt: |-
+      The curator's apply step failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      Hand back NEEDS-PARENT task={{context.task}} session={{session_id}} reason=curator apply failed see=state apply_failed, and take NO
+      transition: the parent messages you `retry`, `record` (keep what was applied, report the rest) or `close`.
+    transitions:
+      retry: apply
+      record: record
+      close: closed
+
+  record:
+    type: exec
+    # The yield tunes each job's interval (the engine's record, read by the next pick; a run already recorded is not
+    # tuned again); then the queue line is done.
+    command: |-
+      p=$("$WF_PLUGIN_ROOT/scripts/wf-curator" record --run-dir "$RUN_DIR") || exit 1
+      if [ -n "$TASK" ] && [ -n "$QUEUE" ]; then
+        # a re-run (a retry, a restart) finds the line already done: that is not a failure
+        out=$("$WF_PLUGIN_ROOT/scripts/wf-queue" "$QUEUE" --done "$TASK" --note "curator report: $p" 2>&1) ||
+          case "$out" in *"$TASK is done, expected"*) ;; *) printf '%s\n' "$out" >&2; exit 3;; esac
+      fi
+      printf %s "$p"
+    env:
+      RUN_DIR: "{{context.run_dir}}"
+      QUEUE: "{{context.queue_file}}"
+      TASK: "{{context.task}}"
+    timeout: 60000
+    context_set:
+      present: "{{stdout}}"
+    on_success: present
+    on_error: record_failed
+
+  record_failed:
+    ask: parent
+    prompt: |-
+      The curator's record step failed (exit {{exit_code}}):
+      {{stdout}}
+      {{stderr}}
+      Hand back NEEDS-PARENT task={{context.task}} session={{session_id}} reason=curator record failed see=state record_failed, and take NO
+      transition: the parent messages you `retry` or `close`.
+    transitions:
+      retry: record
+      close: closed
+
+  present:
+    prompt: |-
+      The curator run is recorded; its report is {{context.present}}.
+      Do this in order, each its own call: `context_set({session_id: "{{session_id}}", key: "ask_parent", value: "curator report ready for the user"})`, then transition `done`, then SubagentHandback with EXACTLY this one line (the parent reads the named file and relays it):
+      NEEDS-PARENT task={{context.task}} session={{session_id}} reason=curator report ready, the line is closed and its slot is free see={{context.present}}
+    transitions:
+      done: presented
+
+  blocked:
+    ask: parent
+    prompt: |-
+      A driver: context_set `fail_note` on THIS session (one line, the reason), then hand back NEEDS-PARENT and take NO transition: the parent picks it.
+      The curator run {{context.run_dir}} could not produce a checked plan (a stage ran out of tries). The parent messages you `close` or `stop`.
+    transitions:
+      close: closed
+      stop: stopped
+
+  presented:
+    terminal: true
+    outcome: complete
+    prompt: "Curator run presented: hand back the NEEDS-PARENT line from the previous step and stop; its slot is the parent's to free."
+
+  closed:
+    terminal: true
+    outcome: complete
+    queue_mark: failed
+    prompt: "Curator run closed without a report: its slot is free — in the dispatcher session {{parent_session_id}} transition `slot_free`."
+
+  stopped:
+    terminal: true
+    outcome: fail
+    queue_mark: failed
+    prompt: "Curator run STOPPED: report the reason to the user. In the dispatcher session {{parent_session_id}} transition `stop`."

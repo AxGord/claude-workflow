@@ -30,9 +30,9 @@ enforces the guards and hands the agent one prompt at a time; a web dashboard sh
 - **State machines in YAML** — states, transitions, prompts, nested sub-workflows ([Workflow YAML][yaml])
 - **Action states** — `exec` runs a command, `fetch` an HTTP request, routed by exit code ([Action states][action])
 - **Thread pool** — heavy builds and tests, agents' own included, share one machine-wide budget ([Thread pool][pool])
-- **Task queue** — a picker, a cheap driver per task, model by difficulty, lessons filed by script ([Queue][queue])
+- **Task queue** — a picker, a driver per task, model by difficulty, a self-tuning curator ([Queue][queue])
 - **Subagents** — driver, experimental dispatcher (off unless `WF_DISPATCHER`), recon, reviewer ([Agent types][agents])
-- **21 bundled workflows**, **29 bundled skills** (14 by default, 15 on request) ([Concepts][concepts])
+- **22 bundled workflows**, **29 bundled skills** (14 by default, 15 on request) ([Concepts][concepts])
 - **Survives a restart** — sessions are suspended, not lost; `claude --resume` continues them ([Restart][restart])
 - **Live dashboard** — map, plan pane (in your terminal's theme), status line, light or dark ([Dashboard][dashboard])
 
@@ -114,7 +114,7 @@ The full documentation is the site **https://axgord.github.io/claude-workflow/**
 | [Workflow YAML](https://axgord.github.io/claude-workflow/workflow-yaml) | The file format, three-tier loading, `extends:` |
 | [Action states](https://axgord.github.io/claude-workflow/action-states) | `exec`, `fetch`, routing, fan-out, guards, restart |
 | [Thread pool](https://axgord.github.io/claude-workflow/pool) | Why parallel agents queue: leases, budget, priority, `wf-run` |
-| [Task queue and dispatch](https://axgord.github.io/claude-workflow/queue) | `queue_next`, `wf-queue`, the model table, drivers, agent types |
+| [Task queue and dispatch](https://axgord.github.io/claude-workflow/queue) | `queue_next`, `wf-queue`, the model table, drivers, agent types, the curator (`wf-curator`) |
 | [Dashboard and plan pane](https://axgord.github.io/claude-workflow/dashboard) | The plan pane, the live map, the status line |
 | [FAQ](https://axgord.github.io/claude-workflow/faq) | Troubleshooting |
 | [Development](https://axgord.github.io/claude-workflow/development) | Commands, source layout, the site, the replay, the banner |

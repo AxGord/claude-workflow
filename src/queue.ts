@@ -28,6 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import lockfile from "proper-lockfile";
 import YAML, { type Document, isMap, isScalar, isSeq, Scalar, type YAMLMap, YAMLSeq } from "yaml";
+import { CURATOR_WORKFLOW, curatorAdmission } from "./curator.js";
 import { projectRoot } from "./pool.js";
 import { kindMark } from "./map-layout.js";
 import { difficultyError, parseDifficulty } from "./model-table.js";
@@ -200,6 +201,8 @@ export interface PickResult {
     readonly id: string;
     readonly keys: readonly string[];
   }[];
+  /** What the curator admission did this pick (`curator: added <ID> (...)`, or why a config kept it out). */
+  readonly curator?: string;
 }
 
 /** `unknown key priority on X: ignored by this server` — one line per task with unknown keys. */
@@ -1349,12 +1352,30 @@ export async function pickQueue(
   return withQueueLock(file, () => {
     const days = archiveAfterDays(readQueue(file));
     const archived = days === undefined ? [] : archiveLocked(file, { olderThanDays: days }).moved;
+    // A due curator run joins the queue as an ordinary line, so the window, the pick and the land count it.
+    const curator = curatorAdmission(readQueue(file));
     return replanning(file, () => {
       const e = editable(file);
-      const plan = planPick(e.queue);
-      if (plan.admitted.length > 0) {
+      let queue = e.queue;
+      const add = curator.line;
+      if (add !== undefined && !queue.lines.some(l => l.id === add.id)) {
+        const node = e.doc.createNode({
+          id: add.id,
+          status: "pending",
+          difficulty: add.difficulty,
+          priority: "urgent",
+          workflow: CURATOR_WORKFLOW,
+          touches: [],
+          text: add.text,
+        }) as YAMLMap;
+        setOrdered(e, node, "added", new Date().toISOString());
+        e.tasks.items.push(node);
+        queue = parseQueue(e.doc.toString(YAML_OUT), queue.file, queue.archived);
+      }
+      const plan = planPick(queue);
+      if (plan.admitted.length > 0 || queue !== e.queue) {
         const ids = new Set(plan.admitted.map(a => a.id));
-        for (const l of e.queue.lines)
+        for (const l of queue.lines)
           if (ids.has(l.id) && l.status === "pending") taskNode(e, l).set("status", "running");
         if (!writeText(e.queue, e.doc.toString(YAML_OUT))) return false;
       }
@@ -1362,6 +1383,7 @@ export async function pickQueue(
         ...plan,
         dryRun: false,
         ...(archived.length > 0 ? { archived } : {}),
+        ...(curator.note !== undefined ? { curator: curator.note } : {}),
       };
     });
   });
@@ -2407,6 +2429,7 @@ export function formatPickSummary(r: PickResult, explain: boolean | "all"): stri
   if (r.archived !== undefined && r.archived.length > 0)
     out.push(`archived ${r.archived.length} old line(s) (archive_after_days)`);
   for (const o of r.overtakes ?? []) out.push(o);
+  if (r.curator !== undefined) out.push(r.curator);
   out.push(...explainLines(r.reasons, explain));
   for (const u of r.unknownKeys) out.push(unknownKeyNotice(u.id, u.keys));
   return out.join("\n");

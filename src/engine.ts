@@ -46,6 +46,13 @@ import {
 } from "./refresh.js";
 import { projectNameOf, projectRoot } from "./pool.js";
 import { projectDefaultPriority } from "./project-settings.js";
+import {
+  isCuratorLineId,
+  curatorContext,
+  curatorDueNotice,
+  dueFor,
+  readLedgerFile,
+} from "./curator.js";
 import { LEDGER_FILE, type Storage } from "./storage.js";
 import { Estimates } from "./estimate.js";
 import type { Loader } from "./loader.js";
@@ -255,6 +262,7 @@ export class Engine {
     "docs",
     "batch",
     "batch-task",
+    "curator",
   ]);
 
   private readonly _storage: Storage;
@@ -976,6 +984,42 @@ export class Engine {
     try {
       return owedDueLines(readQueue(file));
     } catch {
+      return [];
+    }
+  }
+
+  /**
+   * The `CURATOR-DUE:` line of a task session that has ended with no dispatching session above it (under a
+   * dispatcher the pick admits the run itself): the project's due jobs and the exact `start`. None when no job is
+   * due, the project has no config, or the session is a curator run.
+   */
+  public curatorDueLines(sessionId: string): string[] {
+    const s = this._storage.read(sessionId);
+    if (!s || s.stack.length > 0) return [];
+    const task = s.context.slice ?? s.context.task;
+    if (typeof task !== "string" || isCuratorLineId(task)) return [];
+    for (let p = s.parent_session_id, n = 0; p && n < 10; n++) {
+      const parent = this._storage.read(p);
+      if (!parent) break;
+      if (typeof parent.context.task_workflow === "string") return [];
+      p = parent.parent_session_id;
+    }
+    try {
+      const file = s.context.queue_file;
+      const queue = typeof file === "string" && fs.existsSync(file) ? readQueue(file) : undefined;
+      const project = queue
+        ? projectRoot(path.dirname(queue.file))
+        : projectRoot(typeof s.context.cwd === "string" ? s.context.cwd : process.cwd());
+      const ctx = curatorContext({
+        project,
+        ...(queue ? { queue } : {}),
+        ...(this._options.stateDir ? { stateDir: this._options.stateDir } : {}),
+      });
+      if (ctx === null) return [];
+      const due = dueFor(ctx, readLedgerFile(this._options.stateDir));
+      return due.length > 0 ? [curatorDueNotice(ctx.config, due, ctx.queueFile)] : [];
+    } catch {
+      // a notice never fails the call it rides on
       return [];
     }
   }
