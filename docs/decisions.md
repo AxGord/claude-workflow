@@ -11,3 +11,4 @@ Agent panel detach needs no resume: a worker still running about 30 s after its 
 Panel-detach theory (a resume detaches a worker) built no engine, template or workflow rule: the fresh-worker-outside-the-tree proposal was never implemented; WAKES-DRIVER-ONLY, LINK-AGENT-ROLE and the resume choice rest on routing, cost and labels; keep → ENG-DETACH-WORKAROUND-AUDIT
 
 A worker report or wake reaches main when its run was woken by its OWN background shell and its driver had already stopped with nothing live (147 of 156); the same wake with the driver parked or running 3 of 105, SendMessage and spawn-run wakes 5 of 10682 → ENG-WORKER-REPORT-REPEATS-TO-PARENT
+SendMessage to the driver, or the DELIVERY key, does not keep main quiet: the harness sends a run's hand-back and completion notice to main whenever its owner is not running, and the engine cannot wake a driver; read from claude 2.1.332 bytes, not run → ENG-REPORT-ROUTING-DESIGN
