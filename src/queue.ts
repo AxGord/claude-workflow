@@ -395,6 +395,26 @@ function gateWarnings(line: QueueLine): string[] {
   return phrase === null ? [] : [gateHintNote(line, phrase)];
 }
 
+/**
+ * `after:` gates only admission, so on a running line it holds nothing: an edit that makes the
+ * line wait for a dependency that is not done (one it did not wait for before) says so.
+ */
+function afterRunningWarnings(
+  queue: Queue,
+  line: QueueLine,
+  before: ReturnType<typeof blockedBy>,
+): string[] {
+  if (line.status !== "running") return [];
+  const now = blockedBy(line, new Map(queue.lines.map(l => [l.id, l])), queue.archived);
+  if (now === null) return [];
+  const widened =
+    now.ids.some(i => !(before?.ids ?? []).includes(i)) || (now.stuck && now.why !== before?.why);
+  if (!widened) return [];
+  return [
+    `${line.id}: is running, and after: gates only admission — it waits for nothing now (not done: ${now.why}); the line keeps running and its driver is not told. The edit is recorded for a rerun`,
+  ];
+}
+
 const gateHintNote = (line: QueueLine, phrase: string): string =>
   `${line.id}: its text asks for an owner's look ("${phrase}") but the line has no human_gate: key — it would land unseen; queue_edit set human_gate: look`;
 
@@ -2740,11 +2760,13 @@ export async function editQueueLine(
   if (Object.keys(set).length === 0 && note === undefined)
     throw new QueueError("nothing to edit: give fields to set or a note");
   let wasMissing = false;
+  let waitedBefore: ReturnType<typeof blockedBy> = null;
   const done = await writing(
     file,
     e => {
       const line = lineOf(e.queue, id);
       wasMissing = difficultyRequired(line) !== null;
+      waitedBefore = blockedBy(line, new Map(e.queue.lines.map(l => [l.id, l])), e.queue.archived);
       const node = taskNode(e, line);
       for (const [k, raw] of Object.entries(set)) {
         const v = fieldValue(e, k, raw);
@@ -2769,13 +2791,15 @@ export async function editQueueLine(
     },
   );
   const reads = ["touches", "repo", "kind", "workflow", "text", "human_gate"].some(k => k in set);
-  if (!reads) return done;
+  const afterEdited = "after" in set;
+  if (!reads && !afterEdited) return done;
   const q = readQueue(file);
   const line = lineOf(q, id);
   const warnings = [
-    ...touchesWarnings(q, line),
-    ...kindWorkflowWarnings(q, line),
-    ...gateWarnings(line),
+    ...(reads
+      ? [...touchesWarnings(q, line), ...kindWorkflowWarnings(q, line), ...gateWarnings(line)]
+      : []),
+    ...(afterEdited ? afterRunningWarnings(q, line, waitedBefore) : []),
   ];
   const runs =
     "kind" in set || "workflow" in set || "repo" in set ? runsNote(q, line)[0] : undefined;

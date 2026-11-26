@@ -158,6 +158,7 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
 - `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task, and/or a note appended to `notes:`.
   - `""`/null removes a field; a set field keeps its place, a new one goes in key order; `after`/`touches` take a list or a comma-separated string; `text` is written as a block scalar.
   - The fields are checked as `queue_add` checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused, while a line written before the rule stays editable. The status stays `queue_mark`'s.
+  - Setting or widening `after:` on a running line answers with a warning: `after:` gates only admission, so the line keeps running and its driver is not told. The warning names the dependencies not done; the edit is still recorded for a rerun. All dependencies done, or a pending line: no warning.
   - An edit of `text`, `touches`, `owner` or `sweep` that changes the brief, or of `repo` to another value, rewrites `base` (at the HEAD of the line's repo then) and `text_hash`; any other edit leaves them.
 - `queue_header({ queue?, file?, batch_size?, reason?, until?, archive_after_days?, exclusive_hold? })` — header keys, under the lock:
   - the window: `batch_size: N` with `reason:` (`0` pauses; the two go together);
