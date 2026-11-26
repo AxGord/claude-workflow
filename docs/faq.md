@@ -25,6 +25,28 @@ No. Sessions are suspended when Claude Code exits and `claude --resume` continue
 
 Give a state a `stale_after` so a stall is reported, and look at the session in the dashboard. See [Stall detection](/action-states#stall-detection-—-stale-after).
 
+## A worker shows as a separate top-level row in Claude Code's agent panel
+
+Two behaviours look alike and are not the same. Read them apart.
+
+### The panel's drawing (cosmetic)
+
+In Claude Code's agent panel, a background worker still running about 30 s after its spawner (usually the driver) has finished its run and its own background work is drawn as a separate top-level row. Its `parentAgentId` still names the spawner. No resume causes it, and who resumes does not matter. A spawner that is still running, or still holds its own background shell, keeps the worker nested. Seen on Claude Code 2.1.331; filed upstream as [anthropics/claude-code#112440](https://github.com/anthropics/claude-code/issues/112440).
+
+A top-level worker with no coordinator after its driver ended is normal. It is not a runaway and not lost.
+
+- Who owns it: `status` of the task session (LINKED AGENTS, with the role), `sessions` (`[agent ...]` on each row), the dashboard, or the agent's `meta.json` in the conversation's subagents directory (`parentAgentId`).
+- Its health is the session's state and the STALE line, never its panel row.
+
+### Where its report goes (routing)
+
+While its last spawner or resumer is live, Claude Code sends a nested background agent's report there. After that, delivery was seen both ways and the split is not counted:
+
+- to the main conversation, on 2.1.331 live runs and on real runs on 2.1.318 to 2.1.325;
+- to the driver, on a 2.1.327 scratch run.
+
+The engine works whichever way it goes. Only the `tasks` driver is woken. A worker or reviewer line that reached the dispatcher is relayed to its driver. The delivery key moves a session without the notification. The parent's answer goes through `parent_answer`. A driver that ended WAITING, or "without delivering a report", is not gone: see [the dispatcher](/queue).
+
 ## A heavy command ran outside the pool
 
 The pool gate only wraps the commands a project marks heavy in `.claude/workflows/pool-gate.yaml`. See [Pool gate](/action-states#pool-gate-—-agents-heavy-bash-commands-through-the-pool).

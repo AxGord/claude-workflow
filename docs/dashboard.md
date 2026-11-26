@@ -453,6 +453,15 @@ Notes on the event log:
 - In `/api/events?since=<run>:<seq>`, a bare seq = this run; another run's = from 0.
 - The kinds: session_start, transition, exec_start, exec_end, agent_link, agent_respawn, agent_stop, rescore, queue, ask, answer, session_end.
 
+### Workers in Claude Code's agent panel
+
+The dashboard and `status` name a worker's owner; the agent panel does not.
+
+- A background worker still running about 30 s after its driver finished its run and its own background work is drawn there as a separate top-level row. Its `parentAgentId` still names the driver.
+- That is cosmetic: no resume causes it, and a top-level worker is not lost.
+- Read its health from the session state and the STALE line.
+- Where its report goes is a separate matter: see the [FAQ](/faq#where-its-report-goes-routing).
+
 ## Status Line
 
 With the plan pane closed, the Claude Code mod draws a band above the prompt (`hooks/plan-pane.tsx`; it hides while the pane is open and comes back when it closes):
