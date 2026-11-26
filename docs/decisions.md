@@ -9,3 +9,5 @@ native Workflow is a script that only starts agents, with no MCP and a run lost 
 Agent panel detach needs no resume: a worker still running about 30 s after its spawner's run and its own background work ended is drawn top-level (seen live, claude 2.1.331); a spawner parked on a live child with no own background work stays untested → ENG-DETACH-LIVE-REPRO
 
 Panel-detach theory (a resume detaches a worker) built no engine, template or workflow rule: the fresh-worker-outside-the-tree proposal was never implemented; WAKES-DRIVER-ONLY, LINK-AGENT-ROLE and the resume choice rest on routing, cost and labels; keep → ENG-DETACH-WORKAROUND-AUDIT
+
+A worker report or wake reaches main when its run was woken by its OWN background shell and its driver had already stopped with nothing live (147 of 156); the same wake with the driver parked or running 3 of 105, SendMessage and spawn-run wakes 5 of 10682 → ENG-WORKER-REPORT-REPEATS-TO-PARENT
