@@ -33,6 +33,8 @@ import {
   MARK_TARGETS,
   QueueError,
   addQueueLine,
+  addQueueLines,
+  formatAddBatch,
   editQueueLine,
   formatHeaderKey,
   formatMark,
@@ -1504,7 +1506,7 @@ export function registerTools(
     "queue_next",
     {
       description:
-        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, exclusive, breaking, parked, ended, restored, base, text_hash, text, notes}`): " +
+        "Admit the next tasks of a YAML task queue (header `batch_size:`, `tasks:` of `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, split_from, split_into, owner, sweep, on_end_tell_parent, exclusive, breaking, parked, ended, restored, base, text_hash, text, notes}`): " +
         "fills the window (batch_size minus the running tasks) in `priority:` order (urgent, high, normal, low; file order within one) with pending tasks whose `after:` ids are all done, " +
         "that are not `parked`, and whose `touches:` / `owner:` overlap no running or just-admitted task (`touches:` within " +
         "one repo only, where no `touches:` = overlaps every task; `exclusive: true` = overlaps every task of its own repo (another repo is unaffected), and while it waits only for running lines of its repo, no later line of that repo is admitted (`held for exclusive <ID>`; header `exclusive_hold: no` turns that off); `breaking: true` = admitted only into an empty window, nothing else admitted while it runs; " +
@@ -1610,7 +1612,7 @@ export function registerTools(
     {
       description:
         "Add a task to a YAML task queue under its lock (the lock queue_next / queue_mark take, so no status " +
-        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, kind: bug|feature|research (absent = feature; any other value is refused), priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], owner, sweep, on_end_tell_parent (one line: the step the parent owes when the line ends; the dispatcher hands it back once as `OWED task=<ID> status=<done|failed> sha=<sha>: <text>`), exclusive, breaking, parked, text, notes: [{from, date, text}]}`; `ended` (the day a line reached done or failed) is queue_mark's: a new task cannot set it. " +
+        "is lost to a concurrent write): `task` is `{id, status?: pending|backlog, difficulty, kind: bug|feature|research (absent = feature; any other value is refused), priority: urgent|high|normal|low (the pick admits higher first, then file order; any other value is refused), model, effort, repo, workflow, after: [ids], touches: [paths], split_from (the id of the line this one is a slice of; a task of the queue or its archive), owner, sweep, on_end_tell_parent (one line: the step the parent owes when the line ends; the dispatcher hands it back once as `OWED task=<ID> status=<done|failed> sha=<sha>: <text>`), exclusive, breaking, parked, text, notes: [{from, date, text}]}`; `ended` (the day a line reached done or failed) is queue_mark's: a new task cannot set it. " +
         "The line records where it was written: `base` (HEAD of the line's repo — `repo:` or the queue's project; left out when that is not a git repo) and `text_hash` (short sha256 of text + touches + owner (+ sweep when set)), both set by queue_add / queue_edit only; `ended` (queue_mark's) and `restored` (the archive restore's) are never set on a new line. " +
         "Refused unless it reads as a pick reads it: a new id, known keys only, every id in `after:` a task of the queue " +
         "(no cycle), a one-word `workflow:`, a `repo:` that resolves, a `difficulty:` of 1..10 (REQUIRED on a pending line: `difficulty: <1-10> is required on a pending line`; backlog, `parked` and `model: —` lines need none), a `kind:` of bug|feature|research (a research line without `workflow:` runs `research-task` when its repo or the queue's project has one; the answer says `runs workflow <name>` and warns on a research line with a non-research workflow). Goes after `after_id`, before `before_id`, " +
@@ -1653,13 +1655,63 @@ export function registerTools(
     },
   );
 
+  // 18b. queue_add_batch
+  server.registerTool(
+    "queue_add_batch",
+    {
+      description:
+        "Add SEVERAL tasks to a YAML task queue in ONE write under its lock, or none: `lines` is a list of the `task` mappings `queue_add` takes. " +
+        "The whole list is judged as `queue_add` judges one line, and as one list: every id new and unique, `after:` naming a task of the queue or of the list (no cycle across both), `difficulty:` on every pending line, the keys, `repo:`, `workflow:` and `kind:` as `queue_add` checks them. " +
+        "Any failing line refuses the call and the answer names EVERY failing line with its reason; the file is not touched. The lines go in order after `after_id`, before `before_id`, else last; the queue must exist. " +
+        "`split: <ID>` is the split mark: that line must be `running`; in the same write it ends `failed` (with `ended`, a note `split into …` and `split_into: [the new ids]`) and every new line gets `split_from: <ID>`. " +
+        "A split line is not retried (`queue_mark` `retry` refuses it), and a line with `after: [<ID>]` waits for the split line's slices, not for the line itself. `split_from` may also be set by a plain `queue_add`; `split_into` is the engine's.",
+      inputSchema: z
+        .object({
+          ...QUEUE_SEL,
+          lines: z
+            .array(z.record(z.unknown()))
+            .min(1)
+            .describe("The new tasks, each as `queue_add`'s `task` (`id` and its fields by key)"),
+          after_id: z.string().min(1).optional().describe("Insert the list right after this line"),
+          before_id: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Insert the list right before this line"),
+          split: z
+            .string()
+            .min(1)
+            .optional()
+            .describe(
+              "The running line these tasks are the slices of: marked split in the same write",
+            ),
+        })
+        .strict(),
+    },
+    async args => {
+      try {
+        const file = resolveQueueFile(args);
+        const r = await addQueueLines(file, args.lines, {
+          after: args.after_id,
+          before: args.before_id,
+          split: args.split,
+        });
+        return {
+          content: [{ type: "text", text: `${formatAddBatch(r)}${refillHint(file)}` }],
+        };
+      } catch (err) {
+        return queueError(err);
+      }
+    },
+  );
+
   // 19. queue_edit
   server.registerTool(
     "queue_edit",
     {
       description:
         "Change one task's fields in a YAML task queue under the queue's lock: `set: { field: value }` " +
-        '(difficulty, kind: bug|feature|research — anything else is refused, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, owner, sweep (one non-empty line: a command for the workflow of the project, no pick rule), on_end_tell_parent (one non-empty line: the step the parent owes when the line ends; the dispatcher hands it back once as `OWED …`), exclusive, breaking, parked, text (`ended` is set by queue_mark only, read-only here; so is `restored` (written by the archive restore); so are `base` / `text_hash`: an edit that changes text, touches, owner, sweep or repo rewrites both — base = HEAD of its repo now — and any other edit leaves them); `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
+        '(difficulty, kind: bug|feature|research — anything else is refused, priority: urgent|high|normal|low — anything else is refused, model, effort, repo, workflow, after, touches, split_from, owner, sweep (one non-empty line: a command for the workflow of the project, no pick rule), on_end_tell_parent (one non-empty line: the step the parent owes when the line ends; the dispatcher hands it back once as `OWED …`), exclusive, breaking, parked, text (`ended` is set by queue_mark only, read-only here; so is `restored` (written by the archive restore); so are `base` / `text_hash`: an edit that changes text, touches, owner, sweep or repo rewrites both — base = HEAD of its repo now — and any other edit leaves them); `""` or null removes the field; `after`/`touches` a list or a comma-separated string) and/or `append_note` ' +
         "(appended to `notes:` as `{from, date, text}`, `from` default `parent`). The status is queue_mark's. " +
         "A set field keeps its place; values are checked as queue_add checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused (a line already without one stays editable). Returns the task as written (YAML).",
       inputSchema: z

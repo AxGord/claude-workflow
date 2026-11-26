@@ -11,6 +11,7 @@
 //   wf-queue <q> --header <key>                   the header's value of <key> (empty when absent)
 //   wf-queue <q> --gate <ID>                      exit 10 (prints the kind) while the line's human_gate: is not passed; 0 otherwise
 //   wf-queue <q> --add <YAML-MAPPING> [--after <ID>|--before <ID>]       queue_add (`{id: X, difficulty: 3, touches: [a], text: …}`)
+//   wf-queue <q> --add-batch <file|-> [--after <ID>|--before <ID>] [--split <ID>]   queue_add_batch: a YAML list of tasks (or `{tasks: [...]}`), all in one write or none; --split marks that running line split
 //   wf-queue <q> --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO]   queue_edit (`key=` removes)
 //   wf-queue <q> --lessons <ID> --records <file>… [--triage <file>] [--repo <dir>: the filed repo only when the origin line is gone] [--workflow <name>]   (triage: the flag, else the header's `lessons_triage:`, else ../backups/slice-logs/lessons-triage.txt)  the lesson records of a landed task as queue lines / triage rows (src/lessons-file.ts); prints `lessons=filed N, triage M[, already K]`, exit 0 for any record, 2 for usage / an unreadable queue
 //   wf-queue <q> --lessons-take [--triage <file>]   prints the triage file, then empties it (only once the rows are out), under the lock a land's append takes
@@ -38,6 +39,8 @@ import {
   QUEUE_EXIT,
   QueueError,
   addQueueLine,
+  addQueueLines,
+  formatAddBatch,
   gateDue,
   archiveQueue,
   editQueueLine,
@@ -65,7 +68,7 @@ import {
 
 const USAGE =
   "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--if-running] [--note TEXT] [--from WHO] | --header <key> | --gate <ID> | --path" +
-  ' | --add <YAML-MAPPING> [--after ID|--before ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME] | --lessons-take [--triage FILE] | --batch-size <N> --reason TEXT [--until "<ID> done"] | --header-set archive_after_days=N|exclusive_hold=yes|no [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>' +
+  ' | --add <YAML-MAPPING> [--after ID|--before ID] | --add-batch <FILE|-> [--after ID|--before ID] [--split ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME] | --lessons-take [--triage FILE] | --batch-size <N> --reason TEXT [--until "<ID> done"] | --header-set archive_after_days=N|exclusive_hold=yes|no [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>' +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
 /** `--flag value` pairs after an op; a flag outside `allowed`, a missing value, or a repeat of a non-list flag is a usage error. */
@@ -253,6 +256,30 @@ async function main(args: string[]): Promise<number> {
       `${r.id}: added at line ${r.lineNo}${r.created ? `; the queue did not exist — created ${file}` : ""}${r.runs !== undefined ? `; ${r.runs}` : ""}\n`,
     );
     for (const w of r.warnings ?? []) process.stderr.write(`warning: ${w}\n`);
+    return 0;
+  }
+  if (op === "--add-batch") {
+    if (!args[1])
+      throw new QueueError("--add-batch needs a file of tasks (a YAML list), or - for stdin");
+    const o = options(args.slice(2), ["--after", "--before", "--split"]);
+    let doc: unknown;
+    try {
+      doc = YAML.parse(fs.readFileSync(args[1] === "-" ? 0 : args[1], "utf8"));
+    } catch (err) {
+      throw new QueueError(`--add-batch: ${(err as Error).message}`);
+    }
+    const list =
+      typeof doc === "object" && doc !== null && !Array.isArray(doc)
+        ? (doc as { tasks?: unknown }).tasks
+        : doc;
+    if (!Array.isArray(list))
+      throw new QueueError("--add-batch takes a YAML list of tasks (or a mapping with `tasks:`)");
+    const r = await addQueueLines(file, list as Record<string, unknown>[], {
+      after: o.get("--after")?.[0],
+      before: o.get("--before")?.[0],
+      split: o.get("--split")?.[0],
+    });
+    process.stdout.write(`${formatAddBatch(r)}\n`);
     return 0;
   }
   if (op === "--edit") {

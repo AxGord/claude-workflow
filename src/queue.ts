@@ -3,7 +3,7 @@
 // `archive_after_days: N` (a pick first archives the done / failed lines that ended over N days ago)
 // and any other `key: value` a workflow reads (`--header`) — and `tasks:`, a list of
 // `{id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, exclusive,
-// breaking, parked, ended, restored, added, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
+// breaking, parked, split_from, split_into, ended, restored, added, base, text_hash, text, notes}`. The file is the only truth: every write (pick, mark, add, edit, header) re-reads it
 // under a lock beside it, edits the parsed document in place (key order and comments kept) and
 // writes it only while the file still reads as it did.
 //
@@ -71,6 +71,8 @@ export const TASK_KEYS = [
   "workflow",
   "after",
   "touches",
+  "split_from",
+  "split_into",
   "owner",
   "sweep",
   "on_end_tell_parent",
@@ -89,8 +91,9 @@ export const TASK_KEYS = [
   "text",
   "notes",
 ] as const;
-/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `owed_handed` by the engine once the owed step is handed to the parent, `added` by add, `base` / `text_hash` by add and edit, `human_wait` / `human_passed` by a human wait state): never set by a caller. */
+/** Known state the engine writes (`ended` by the mark, `restored` by a restore, `owed_handed` by the engine once the owed step is handed to the parent, `added` by add, `base` / `text_hash` by add and edit, `human_wait` / `human_passed` by a human wait state, `split_into` by the batch add's split mark): never set by a caller. */
 const STATE_KEYS: ReadonlySet<string> = new Set([
+  "split_into",
   "owed_handed",
   "human_passed",
   "human_wait",
@@ -104,7 +107,7 @@ const STATE_KEYS: ReadonlySet<string> = new Set([
 export const EDIT_KEYS: ReadonlySet<string> = new Set(
   TASK_KEYS.filter(k => k !== "id" && k !== "status" && k !== "notes" && !STATE_KEYS.has(k)),
 );
-const LIST_KEYS: ReadonlySet<string> = new Set(["after", "touches"]);
+const LIST_KEYS: ReadonlySet<string> = new Set(["after", "touches", "split_into"]);
 const BOOL_KEYS: ReadonlySet<string> = new Set(["exclusive", "breaking", "parked"]);
 const NOTE_KEYS: ReadonlySet<string> = new Set(["from", "date", "text"]);
 /** The header's `overlap:` values; `paths` (the default) = every `touches:` entry is a path prefix. */
@@ -303,6 +306,8 @@ function parseTask(raw: unknown, index: number, file: string): QueueLine {
     "human_passed",
     "after",
     "touches",
+    "split_from",
+    "split_into",
     "ended",
     "restored",
     "added",
@@ -781,6 +786,54 @@ export interface PickBlock {
   };
 }
 
+/** The `split_into:` ids of a line, in order (empty when it was not split). */
+function splitIntoOf(line: QueueLine): string[] {
+  return (line.meta.split_into ?? "")
+    .split(",")
+    .map(t => t.trim())
+    .filter(t => t !== "");
+}
+
+/**
+ * What a split line (`failed` with `split_into:`) leaves a dependent to wait for: its slices, as the slices'
+ * own ends read (a slice that was split in turn through its own slices). null = the line was not split. A split
+ * line whose slices are all done lets its dependents go, so an `after:` on the parent is the slices' end.
+ */
+function splitWaits(
+  line: QueueLine,
+  byId: ReadonlyMap<string, QueueLine>,
+  archived: ReadonlyMap<string, Status>,
+  seen: ReadonlySet<string> = new Set(),
+): { readonly waits: string[]; readonly ids: string[]; readonly stuck: boolean } | null {
+  const into = splitIntoOf(line);
+  if (into.length === 0) return null;
+  const out = { waits: [] as string[], ids: [] as string[], stuck: false };
+  for (const s of into) {
+    const sl = byId.get(s);
+    if (sl === undefined) {
+      const gone = archived.get(s);
+      if (gone === "done") continue;
+      out.waits.push(gone === undefined ? `${s}?` : `${s} (${gone}, archived)`);
+      out.stuck = true;
+    } else if (sl.status === "done") continue;
+    else {
+      const deeper =
+        sl.status === "failed" && !seen.has(s)
+          ? splitWaits(sl, byId, archived, new Set([...seen, line.id]))
+          : null;
+      if (deeper !== null) {
+        out.waits.push(...deeper.waits);
+        out.ids.push(...deeper.ids);
+        out.stuck ||= deeper.stuck;
+      } else {
+        out.waits.push(`${s} (${sl.status})`);
+        out.ids.push(s);
+      }
+    }
+  }
+  return out;
+}
+
 /** null = every dependency is done; otherwise why the line must wait, and the queue lines whose end ends the wait. */
 function blockedBy(
   line: QueueLine,
@@ -798,7 +851,12 @@ function blockedBy(
     const dep = byId.get(tok);
     const gone = dep ? undefined : archived.get(tok);
     if (dep) {
-      if (dep.status !== "done") {
+      const slices = dep.status === "failed" ? splitWaits(dep, byId, archived) : null;
+      if (slices !== null) {
+        for (const w of slices.waits) waits.push(`${tok} (split) → ${w}`);
+        for (const i of slices.ids) if (!ids.includes(i)) ids.push(i);
+        if (slices.stuck) stuck = true;
+      } else if (dep.status !== "done") {
         waits.push(`${tok} (${dep.status})`);
         if (!ids.includes(tok)) ids.push(tok);
       }
@@ -1591,6 +1649,17 @@ function archivePlan(
   for (const l of queue.lines)
     if (l.status !== "done" && l.status !== "failed")
       for (const t of afterIdsOf(l.meta.after, byId)) named.add(t);
+  // a split line a line waits on is waited on through its slices, at every level of the split
+  const down = [...named];
+  for (let t = down.pop(); t !== undefined; t = down.pop()) {
+    const l = byId.get(t);
+    if (l === undefined) continue;
+    for (const s of splitIntoOf(l))
+      if (!named.has(s)) {
+        named.add(s);
+        down.push(s);
+      }
+  }
   const moved: string[] = [];
   const keptNamed: string[] = [];
   let unended = 0;
@@ -1950,6 +2019,10 @@ export async function markQueue(
     const line = lineOf(e.queue, id);
     if (opts.ifRunning === true && line.status !== "running")
       return { id, from: line.status, to: line.status, skipped: true };
+    if (opts.retry === true && line.meta.split_into !== undefined)
+      throw new QueueError(
+        `${id} was split into ${splitIntoOf(line).join(", ")}: a retry would run it again beside its slices`,
+      );
     if (line.status !== from) {
       const hint =
         line.status === "failed" && to === "running" ? " (retry: true restarts a failed task)" : "";
@@ -2103,6 +2176,13 @@ function checkFields(queue: Queue, line: QueueLine, keys?: ReadonlySet<string>):
       throw new QueueError(`${line.id}: after: ${unknown.join(", ")} — no such task in the queue`);
     const cycle = afterCycle(queue, line.id);
     if (cycle) throw new QueueError(`${line.id}: after: closes a cycle ${cycle.join(" → ")}`);
+  }
+  if (has("split_from")) {
+    const from = line.meta.split_from ?? "";
+    if (!ID_RE.test(from) || from === line.id)
+      throw new QueueError(`${line.id}: split_from: is the id of the line this one was split from`);
+    if (!queue.lines.some(l => l.id === from) && !queue.archived.has(from))
+      throw new QueueError(`${line.id}: split_from: ${from} — no such task in the queue`);
   }
   if (has("workflow") && workflowOf(line) === null)
     throw new QueueError(`${line.id}: workflow: "${line.meta.workflow}" is not a workflow name`);
@@ -2326,18 +2406,8 @@ function lineNoOf(text: string, id: string): number {
   return text.slice(0, at).split("\n").length;
 }
 
-/**
- * A new pending (or backlog) task under the lock: after the task `after`, before the task `before`,
- * or last. The task must read as a pick reads it: a unique id, known keys, `after:` naming only
- * tasks of the queue (and no cycle), a one-word `workflow:`, a `repo:` that resolves, a
- * `difficulty:` of 1..10 (required on a pending line, see `difficultyRequired`).
- */
-export async function addQueueLine(
-  file: string,
-  task: NewTask,
-  pos: { readonly after?: string; readonly before?: string } = {},
-  opts: { readonly create?: boolean } = {},
-): Promise<AddResult> {
+/** The id and status of a new task, or the refusal of a key a caller may not set (the checks `addQueueLine` and `addQueueLines` share). */
+function refuseNewTask(task: NewTask): { readonly id: string; readonly status: string } {
   const id = typeof task.id === "string" ? task.id.trim() : "";
   if (!ID_RE.test(id)) throw new QueueError(`refused task id "${String(task.id)}"`);
   const unknown = Object.keys(task).find(k => !(TASK_KEYS as readonly string[]).includes(k));
@@ -2357,37 +2427,66 @@ export async function addQueueLine(
   for (const k of ["human_wait", "human_passed"])
     if (task[k] !== undefined)
       throw new QueueError(`${id}: ${k} is written by the engine's human wait, not set`);
+  if (task.split_into !== undefined)
+    throw new QueueError(
+      `${id}: split_into is written by the split mark of queue_add_batch, not set`,
+    );
   const status = task.status ?? "pending";
   if (status !== "pending" && status !== "backlog")
     throw new QueueError(`${id}: a new task is pending or backlog, not ${str(status)}`);
+  return { id, status };
+}
+
+/** The refusal of an id the queue or its archive already holds. */
+function refuseTakenId(queue: Queue, id: string): void {
+  if (queue.lines.some(l => l.id === id)) throw new QueueError(`${id} is already in ${queue.file}`);
+  if (queue.archived.has(id)) throw archivedIdError(queue, id);
+}
+
+/** The node of a new task: its keys in TASK_KEYS order, `added` and `base` / `text_hash` stamped. */
+function newTaskNode(e: Editable, task: NewTask, id: string, status: string): YAMLMap {
+  const node = e.doc.createNode({ id }) as YAMLMap;
+  for (const k of TASK_KEYS) {
+    if (k === "id" || task[k] === undefined) continue;
+    if (k === "status") node.set("status", status);
+    else if (k === "notes") {
+      for (const n of parseNotes(task.notes, id))
+        addNote(e, node, n.text, n.from ?? "parent", n.date);
+    } else {
+      const v = fieldValue(e, k, task[k]);
+      if (v !== null) node.set(k, v);
+    }
+  }
+  if (task.status === undefined) node.items.splice(1, 0, e.doc.createPair("status", status));
+  setOrdered(e, node, "added", new Date().toISOString());
+  stampBase(e, node);
+  return node;
+}
+
+/**
+ * A new pending (or backlog) task under the lock: after the task `after`, before the task `before`,
+ * or last. The task must read as a pick reads it: a unique id, known keys, `after:` naming only
+ * tasks of the queue (and no cycle), a one-word `workflow:`, a `repo:` that resolves, a
+ * `difficulty:` of 1..10 (required on a pending line, see `difficultyRequired`).
+ */
+export async function addQueueLine(
+  file: string,
+  task: NewTask,
+  pos: { readonly after?: string; readonly before?: string } = {},
+  opts: { readonly create?: boolean } = {},
+): Promise<AddResult> {
+  const { id, status } = refuseNewTask(task);
   if (pos.after !== undefined && pos.before !== undefined)
     throw new QueueError("after_id and before_id exclude each other");
   const place = (e: Editable): number => {
-    if (e.queue.lines.some(l => l.id === id))
-      throw new QueueError(`${id} is already in ${e.queue.file}`);
-    if (e.queue.archived.has(id)) throw archivedIdError(e.queue, id);
+    refuseTakenId(e.queue, id);
     const at =
       pos.after !== undefined
         ? lineOf(e.queue, pos.after).index + 1
         : pos.before !== undefined
           ? lineOf(e.queue, pos.before).index
           : e.tasks.items.length;
-    const node = e.doc.createNode({ id }) as YAMLMap;
-    for (const k of TASK_KEYS) {
-      if (k === "id" || task[k] === undefined) continue;
-      if (k === "status") node.set("status", status);
-      else if (k === "notes") {
-        for (const n of parseNotes(task.notes, id))
-          addNote(e, node, n.text, n.from ?? "parent", n.date);
-      } else {
-        const v = fieldValue(e, k, task[k]);
-        if (v !== null) node.set(k, v);
-      }
-    }
-    if (task.status === undefined) node.items.splice(1, 0, e.doc.createPair("status", status));
-    setOrdered(e, node, "added", new Date().toISOString());
-    stampBase(e, node);
-    e.tasks.items.splice(at, 0, node);
+    e.tasks.items.splice(at, 0, newTaskNode(e, task, id, status));
     return at;
   };
   const check = (next: Queue): void => {
@@ -2436,6 +2535,171 @@ export async function addQueueLine(
     ...(runs !== undefined ? { runs } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
   };
+}
+
+export interface AddBatchResult {
+  /** The new ids, in the order written. */
+  readonly ids: readonly string[];
+  /** 1-based line number of the first new task in the file. */
+  readonly lineNo: number;
+  /** The line the split mark closed (`failed`, with `split_into:` the new ids). */
+  readonly split?: string;
+  /** The workflow each new line runs, as AddResult.runs. */
+  readonly runs: readonly { readonly id: string; readonly runs: string }[];
+  /** Notes on the written lines, as AddResult.warnings. */
+  readonly warnings: readonly { readonly id: string; readonly warning: string }[];
+}
+
+/**
+ * Many new tasks in ONE write under the lock, or none. Every line is judged as `addQueueLine` judges one, and
+ * as one list: ids new and unique, `after:` naming a task of the queue or of the list, no cycle across both,
+ * `difficulty:` on every pending line. A refusal names every failing line with its reason and writes nothing.
+ * The list goes after `pos.after`, before `pos.before`, else last, in order. `split: <ID>` is the split mark: that
+ * running line ends `failed` with `split_into:` the new ids and a note, and every new line gets `split_from: <ID>`,
+ * all in the same write.
+ */
+export async function addQueueLines(
+  file: string,
+  tasks: readonly NewTask[],
+  opts: { readonly after?: string; readonly before?: string; readonly split?: string } = {},
+): Promise<AddBatchResult> {
+  if (tasks.length === 0) throw new QueueError("queue_add_batch: the list of tasks is empty");
+  if (opts.after !== undefined && opts.before !== undefined)
+    throw new QueueError("after_id and before_id exclude each other");
+  const split = opts.split?.trim();
+  if (split !== undefined && !ID_RE.test(split)) throw new QueueError(`refused task id "${split}"`);
+  const fail = (errs: { n: number; text: string }[], n: number, id: string, err: unknown): void => {
+    const msg = (err instanceof Error ? err.message : String(err)).replace(/ \(keys: [^)]*\)$/, "");
+    const own = `${id}: `;
+    errs.push({
+      n,
+      text: `line ${n + 1}${id === "" ? "" : ` (${id})`}: ${id !== "" && msg.startsWith(own) ? msg.slice(own.length) : msg}`,
+    });
+  };
+  const refuseAll = (errs: readonly { n: number; text: string }[]): never => {
+    const lines = [...errs].sort((a, b) => a.n - b.n).map(x => `  ${x.text}`);
+    throw new QueueError(
+      `queue_add_batch refused, nothing written (${lines.length} problem${lines.length === 1 ? "" : "s"} in ${tasks.length} line${tasks.length === 1 ? "" : "s"}):\n${lines.join("\n")}`,
+    );
+  };
+  const early: { n: number; text: string }[] = [];
+  const heads: ({ id: string; status: string; task: NewTask } | null)[] = [];
+  const seen = new Map<string, number>();
+  tasks.forEach((t, n) => {
+    const id =
+      typeof t === "object" && t !== null && typeof t.id === "string" && ID_RE.test(t.id.trim())
+        ? t.id.trim()
+        : "";
+    try {
+      if (typeof t !== "object" || t === null || Array.isArray(t))
+        throw new QueueError("is not a mapping");
+      const head = refuseNewTask(t);
+      if (split !== undefined && t.split_from !== undefined && str(t.split_from).trim() !== split)
+        throw new QueueError(`${id}: split_from: is ${split} under split: ${split}`);
+      const first = seen.get(id);
+      if (first !== undefined) throw new QueueError(`${id}: the id repeats line ${first + 1}`);
+      seen.set(id, n);
+      heads.push({ ...head, task: split === undefined ? t : { ...t, split_from: split } });
+    } catch (err) {
+      fail(early, n, id, err);
+      heads.push(null);
+    }
+  });
+  let errs: { n: number; text: string }[] = [];
+  const placed: { id: string; n: number }[] = [];
+  const change = (e: Editable): number => {
+    errs = [...early];
+    placed.length = 0;
+    const at =
+      opts.after !== undefined
+        ? lineOf(e.queue, opts.after).index + 1
+        : opts.before !== undefined
+          ? lineOf(e.queue, opts.before).index
+          : e.tasks.items.length;
+    const nodes: YAMLMap[] = [];
+    heads.forEach((h, n) => {
+      if (h === null) return;
+      try {
+        refuseTakenId(e.queue, h.id);
+        nodes.push(newTaskNode(e, h.task, h.id, h.status));
+        placed.push({ id: h.id, n });
+      } catch (err) {
+        fail(errs, n, h.id, err);
+      }
+    });
+    let parent: QueueLine | undefined;
+    if (split !== undefined) {
+      try {
+        parent = lineOf(e.queue, split);
+        if (parent.status !== "running")
+          throw new QueueError(`${split} is ${parent.status}: only a running line is marked split`);
+      } catch (err) {
+        errs.push({ n: -1, text: `split: ${err instanceof Error ? err.message : String(err)}` });
+        parent = undefined;
+      }
+    }
+    e.tasks.items.splice(at, 0, ...nodes);
+    if (parent !== undefined && errs.length === 0) {
+      const node = e.tasks.items.find(
+        (n): n is YAMLMap => isMap(n) && String(n.get("id")) === split,
+      ) as YAMLMap;
+      node.set("status", "failed");
+      setOrdered(e, node, "ended", today());
+      const into = e.doc.createNode(placed.map(p => p.id)) as YAMLSeq;
+      into.flow = true;
+      setOrdered(e, node, "split_into", into);
+      addNote(e, node, `split into ${placed.map(p => p.id).join(", ")}`, "split");
+      endWindow(e, parent.id);
+    }
+    return at;
+  };
+  const check = (next: Queue): void => {
+    for (const p of placed)
+      try {
+        const line = lineOf(next, p.id);
+        checkFields(next, line);
+        const why = difficultyRequired(line);
+        if (why !== null) throw new QueueError(why);
+      } catch (err) {
+        fail(errs, p.n, p.id, err);
+      }
+    if (errs.length > 0) refuseAll(errs);
+  };
+  await writing(file, change, check);
+  const abs = path.resolve(file);
+  const written = readQueue(abs);
+  const ids = placed.map(p => p.id);
+  const runs: { id: string; runs: string }[] = [];
+  const warnings: { id: string; warning: string }[] = [];
+  for (const id of ids) {
+    const line = lineOf(written, id);
+    const r = runsNote(written, line)[0];
+    if (r !== undefined) runs.push({ id, runs: r });
+    for (const w of [
+      ...touchesWarnings(written, line),
+      ...kindWorkflowWarnings(written, line),
+      ...gateWarnings(line),
+    ])
+      warnings.push({ id, warning: w });
+  }
+  return {
+    ids,
+    lineNo: lineNoOf(fs.readFileSync(abs, "utf8"), ids[0]),
+    ...(split !== undefined ? { split } : {}),
+    runs,
+    warnings,
+  };
+}
+
+/** The answer of a batch add: one line on what was written, then a `warning:` per note. */
+export function formatAddBatch(r: AddBatchResult): string {
+  const head = `${r.ids.length} task${r.ids.length === 1 ? "" : "s"} added from line ${r.lineNo}: ${r.ids.join(", ")}`;
+  const split =
+    r.split !== undefined
+      ? `; ${r.split} marked split (failed, split_into: ${r.ids.join(", ")})`
+      : "";
+  const runs = r.runs.map(x => `; ${x.id}: ${x.runs}`).join("");
+  return `${head}${split}${runs}${r.warnings.map(w => `\nwarning: ${w.id}: ${w.warning}`).join("")}`;
 }
 
 export interface EditResult {

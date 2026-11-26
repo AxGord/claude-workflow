@@ -299,7 +299,7 @@ states:
         agent frees that slot as a CLOSED line instead and tells the parent: this bullet is for a dispatching session driven by hand.
       - an owner's answer was recorded (`answer`; its reply names this session) → `refill`: the answered line resumes first.
       - the main conversation says lines were added, unparked, re-prioritised or freed of their `after:` while a slot is
-        free (`queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…` then; so does `queue_header` when it raises the window and names this session) → `refill` (the pick runs
+        free (`queue_add` / `queue_add_batch` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…` then; so does `queue_header` when it raises the window and names this session) → `refill` (the pick runs
         again without a land; admits nothing when no slot is free or no line is admissible, and `collect` stays). Never poll for it.
       - task sessions still running, none ended → END your turn here, no transition.
       - none of YOURS runs and the last pick admitted nothing (exit 10: the running tasks left belong to

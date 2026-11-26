@@ -305,6 +305,7 @@ describe("registerTools annotations", () => {
       "queue_next",
       "queue_mark",
       "queue_add",
+      "queue_add_batch",
       "queue_edit",
       "queue_header",
     ];

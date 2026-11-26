@@ -52,7 +52,7 @@ tasks:
 **Task keys**
 
 `id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, owed_handed,
-human_gate, human_passed, human_wait, exclusive, breaking, parked, ended, restored, added, base, text_hash, text, notes`.
+human_gate, human_passed, human_wait, exclusive, breaking, parked, ended, restored, added, base, text_hash, text, notes`, and `split_from`, `split_into` after `touches`.
 
 - `human_gate: <kind>` (one lower-case word, e.g. `look`): the line lands only after its task passed a human wait (§ Human waits). `human_passed` and `human_wait` are the engine's.
 
@@ -65,6 +65,11 @@ human_gate, human_passed, human_wait, exclusive, breaking, parked, ended, restor
   - It is data for the project's workflow: the engine gives it no meaning, so it implies no `exclusive` and the pick ignores it. `queue_next` prints it as `| sweep: <command>` on the admitted line; `GET /api/queue` carries it as `sweep`.
   - A value that is empty or spans lines is refused with the key named; `""` / null removes it.
   - It is part of the brief a recon reads, so an edit that changes it rewrites `base` and `text_hash` like one of `touches`.
+- `split_from: <ID>` names the line this one is a slice of (one id, a task of the queue or of its archive, never itself). A batch add with `split:` writes it on every new line; a plain `queue_add` / `queue_edit` may set it. The pick ignores it.
+- `split_into: [ids]` is written on the line a batch add marked split (see `queue_add_batch`), never by a caller. The line stays `failed`, so the pick, the archive and the pane read it as they read any failed line; the key is what says it was split.
+  - A line with `after: [<split line>]` waits for the slices, not for the split line: it is admitted once every slice is `done`, and a slice that was split in turn counts through its own slices.
+  - The archive keeps a failed line an open line waits on, and with it the slices named by its `split_into:`, at every level.
+  - A retry of a split line is refused: it would run again beside its slices.
 - `ended` (`YYYY-MM-DD`) is the day `queue_mark` moved the line to `done` or `failed`. It is written there, removed by a retry or any move out of those, and read-only for `queue_add` / `queue_edit`.
 - `restored` (`YYYY-MM-DD`) is the day `wf-queue --restore` brought a done / failed line back from the archive. It is written there, removed with `ended` by any move out of done / failed, and read-only like `ended`. The archive counts the line's age from the later of the two.
 - `added` (an ISO time) is when `queue_add` / `wf-queue --add` wrote the line. It is never rewritten by an edit or a mark, refused as input, and absent on an older line. The replay export hides the line before it.
@@ -144,6 +149,12 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - a `difficulty:` of 1..10, **required on a pending line** (`B: difficulty: <1-10> is required on a pending line`; `backlog`, `parked`, finished and `model: —` lines need none);
   - a `kind:` of bug|feature|research;
   - a `priority:` of urgent|high|normal|low.
+- `queue_add_batch({ queue?, file?, lines, after_id? | before_id?, split? })` — many tasks (`lines`, each as `queue_add`'s `task`) in ONE write under the lock, or none.
+  - The whole list is judged as `queue_add` judges one line, and as one list: new, unique ids; `after:` naming a task of the queue or of the list; no cycle across both; `difficulty:` on every pending line.
+  - A refusal names every failing line (`line 2 (S2): …`) and the file is not touched. The queue must exist.
+  - The lines go in order after `after_id`, before `before_id`, else last.
+  - `split: <ID>` is the split mark. That line must be `running`. In the same write it ends `failed` with `ended`, a note `split into …` and `split_into:` the new ids, and every new line gets `split_from: <ID>`.
+  - Why `failed` and not a new status: every reader of a line's end (the pick's `after:` wait, the archive's kept-when-named rule, the owed step, the pane) already treats `failed` as ended and not landed. A `split` status would be a new case in each of them; `split_into:` says what happened without one.
 - `queue_edit({ queue?, file?, id, set?: { field: value }, append_note?, from? })` — fields of one task, and/or a note appended to `notes:`.
   - `""`/null removes a field; a set field keeps its place, a new one goes in key order; `after`/`touches` take a list or a comma-separated string; `text` is written as a block scalar.
   - The fields are checked as `queue_add` checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused, while a line written before the rule stays editable. The status stays `queue_mark`'s.
@@ -190,6 +201,7 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - `--done|--failed|--release|--running|--promote|--shelve <ID> [--note T] [--from W]`; `--failed|--release <ID> --if-running`: a line that is not `running` is left as it is (no refusal), which is how a pipeline's last step marks a line it may already have marked; `--running <ID> --retry`: failed→running, `difficulty:` +1; `--running <ID> --force REASON`: mark a line the picker would not admit;
   - `--header <key>`;
   - `--add '<YAML mapping>' [--after ID|--before ID]`;
+  - `--add-batch <FILE|-> [--after ID|--before ID] [--split ID]` (`queue_add_batch`: a YAML list of tasks, or a mapping with `tasks:`; `-` reads stdin; exit 2 and the file untouched when any line fails);
   - `--edit <ID> [--set key=value]… [--append-note T] [--from W]` (`key=` removes);
   - `--batch-size <N> --reason T [--until "<ID> done"]` (the temporary window above);
   - `--header-set archive_after_days=N|exclusive_hold=yes|no [--reason T]` (`archive_after_days=` / `exclusive_hold=` removes the key; another key is refused; the reason is echoed, not written);
