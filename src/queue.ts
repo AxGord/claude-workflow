@@ -29,6 +29,7 @@ import path from "node:path";
 import lockfile from "proper-lockfile";
 import YAML, { type Document, isMap, isScalar, isSeq, Scalar, type YAMLMap, YAMLSeq } from "yaml";
 import { CURATOR_WORKFLOW, curatorAdmission } from "./curator.js";
+import { PRIORITIES, type Priority } from "./priority.js";
 import { projectRoot } from "./pool.js";
 import { kindMark } from "./map-layout.js";
 import { difficultyError, parseDifficulty } from "./model-table.js";
@@ -500,8 +501,7 @@ export function difficultyRequired(line: QueueLine): string | null {
   return `${line.id}: difficulty: <1-10> is required on a pending line (backlog, parked and model: — lines need none)`;
 }
 
-export const PRIORITIES = ["urgent", "high", "normal", "low"] as const;
-export type Priority = (typeof PRIORITIES)[number];
+export { PRIORITIES, type Priority };
 
 /** The line's `priority:`: `normal` when absent or `-`/`—`; null when it is not a priority. */
 function priorityOf(line: QueueLine): Priority | null {
@@ -1591,7 +1591,7 @@ export async function pickQueue(
           id: add.id,
           status: "pending",
           difficulty: add.difficulty,
-          priority: "urgent",
+          priority: add.priority,
           workflow: CURATOR_WORKFLOW,
           touches: [],
           text: add.text,

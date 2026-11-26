@@ -740,6 +740,7 @@ The curator tidies what a project's runs leave behind: memory, the model table, 
 edits: propose          # default: the run applies nothing; `direct` applies what the rules below allow
 high_yield: 5           # findings of one run that halve a job's interval
 difficulty: 5           # the admitted line's difficulty (the workflow's model_table maps it)
+priority: high          # the admitted line's priority: urgent|high|normal|low (default high)
 jobs:                   # a job runs only when it is listed; `enabled: false` turns one off
   hygiene: { every: 10, require: [workflow, touches], rules: [{ match: { id: "^ENG-" }, require: { workflow: "^engine-task$" } }], forbid_words: [] }
   memory: { every: 20, dirs: [~/.claude/projects/<project>/memory], index: MEMORY.md, index_budget_bytes: 4096, new_files: 5 }
@@ -766,7 +767,8 @@ A job's options other than these are its own: a `notes:` text is guidance the ju
 
 ### How a run starts
 
-- Under a dispatcher, a pick with a free slot and a due job adds `CURATOR-<date>-<n>` (workflow `curator`, priority urgent, `touches: []`). It is admitted like any line; the pick summary says `curator: added …`.
+- Under a dispatcher, a pick with a free slot and a due job adds `CURATOR-<date>-<n>` (workflow `curator`, priority `high` unless the config's `priority:` says otherwise, `touches: []`). It is admitted like any line, behind a user's `urgent` line; the pick summary says `curator: added …`.
+- `priority:` is one of the queue's `urgent|high|normal|low`; any other value is a config error, so the pick reports `curator: not admitted, …` and adds nothing.
 - While a curator line is pending or running, no second one is added. One that failed today holds the next until tomorrow (`curator: held, …`). A config the engine cannot read keeps the run out and never fails the pick.
 - Only the id shape `CURATOR-YYYY-MM-DD-N` is the engine's: a user's own `CURATOR-…` line is an ordinary line.
 - With no dispatcher above it, the `transition` that ends a task session shows `CURATOR-DUE: <jobs> — start it: start({workflow: "curator", …})`, its context carrying the session's `queue_file`.

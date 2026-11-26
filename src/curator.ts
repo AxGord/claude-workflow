@@ -8,6 +8,7 @@ import path from "node:path";
 import YAML from "yaml";
 import type { LedgerEntry } from "./ledger.js";
 import { projectRoot } from "./pool.js";
+import { PRIORITIES, type Priority } from "./priority.js";
 
 export const CURATOR_WORKFLOW = "curator";
 /** The id prefix of the queue lines the pick adds for a curator run. */
@@ -58,7 +59,12 @@ export interface CuratorConfig {
   readonly highYield: number;
   /** The difficulty the admitted line carries (the curator workflow's `model_table` maps it). */
   readonly difficulty: number;
+  /** The priority the admitted line carries: housekeeping, so `high` unless the project says otherwise. */
+  readonly priority: Priority;
 }
+
+/** The priority of an admitted curator line when the config names none: below `urgent`, so it never outranks a user's urgent line. */
+export const CURATOR_PRIORITY_DEFAULT: Priority = "high";
 
 const expandHome = (p: string): string =>
   p === "~" ? os.homedir() : p.startsWith("~/") ? path.join(os.homedir(), p.slice(2)) : p;
@@ -100,6 +106,14 @@ export function curatorConfigFile(opts: {
   return fs.existsSync(f) ? f : null;
 }
 
+const priorityOf = (v: unknown, file: string): Priority => {
+  if (v === undefined) return CURATOR_PRIORITY_DEFAULT;
+  if (typeof v === "string" && (PRIORITIES as readonly string[]).includes(v)) return v as Priority;
+  throw new CuratorError(
+    `${file}: priority: one of ${PRIORITIES.join(", ")}, not ${JSON.stringify(v)}`,
+  );
+};
+
 /** Parse a config's text. Jobs are off unless listed; `enabled: false` turns a listed one off. */
 export function parseCuratorConfig(text: string, file: string, project: string): CuratorConfig {
   let raw: unknown;
@@ -110,11 +124,15 @@ export function parseCuratorConfig(text: string, file: string, project: string):
   }
   if (raw === null || raw === undefined) raw = {};
   if (typeof raw !== "object" || Array.isArray(raw))
-    throw new CuratorError(`${file}: a mapping (jobs:, edits:, high_yield:, difficulty:)`);
+    throw new CuratorError(
+      `${file}: a mapping (jobs:, edits:, high_yield:, difficulty:, priority:)`,
+    );
   const o = raw as Record<string, unknown>;
   for (const k of Object.keys(o))
-    if (!["jobs", "edits", "high_yield", "difficulty"].includes(k))
-      throw new CuratorError(`${file}: unknown key ${k} (jobs, edits, high_yield, difficulty)`);
+    if (!["jobs", "edits", "high_yield", "difficulty", "priority"].includes(k))
+      throw new CuratorError(
+        `${file}: unknown key ${k} (jobs, edits, high_yield, difficulty, priority)`,
+      );
   const jobsRaw = o.jobs ?? {};
   if (typeof jobsRaw !== "object" || jobsRaw === null || Array.isArray(jobsRaw))
     throw new CuratorError(`${file}: jobs: a mapping of job name → its options`);
@@ -155,6 +173,7 @@ export function parseCuratorConfig(text: string, file: string, project: string):
         ? HIGH_YIELD_DEFAULT
         : whole(o.high_yield, `${file}: high_yield`, 1),
     difficulty: o.difficulty === undefined ? 5 : whole(o.difficulty, `${file}: difficulty`, 1),
+    priority: priorityOf(o.priority, file),
   };
 }
 
@@ -567,6 +586,7 @@ export interface CuratorLine {
   readonly id: string;
   readonly text: string;
   readonly difficulty: number;
+  readonly priority: Priority;
   readonly due: readonly DueJob[];
 }
 
@@ -602,7 +622,13 @@ export function curatorAdmission(
   if (due.length === 0) return {};
   const id = curatorLineId(new Set([...q.lines.map(l => l.id), ...q.archived.keys()]), now);
   return {
-    line: { id, text: curatorLineText(ctx.config, due), difficulty: ctx.config.difficulty, due },
+    line: {
+      id,
+      text: curatorLineText(ctx.config, due),
+      difficulty: ctx.config.difficulty,
+      priority: ctx.config.priority,
+      due,
+    },
     note: `curator: added ${id} (${due.map(d => d.job).join(", ")} due)`,
   };
 }

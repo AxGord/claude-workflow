@@ -1513,7 +1513,7 @@ export function registerTools(
         "header `overlap: files` = only file entries conflict, a directory or glob is a hint); sets each admitted task running under the queue's lock, so two calls never admit one task. `backlog` tasks are never admitted. Returns id, " +
         "model, effort, repo (absolute), workflow (when set: the line's own, else `research-task` for a research line whose repo or queue project has it), difficulty (1..10, when set: " +
         "the task workflow's model_table maps it to model/effort), kind (bug|feature|research; feature when the task has none), sweep (when set: the line's command, data for the project's workflow, no pick rule reads it) and text per admitted task. `batch_size: 0` = paused: nothing is admitted. " +
-        "When the project's curator config (`.claude/curator.yaml`, or the header's `curator:`) has a job due and a slot is free, the pick first adds a `CURATOR-<date>-<n>` line (workflow `curator`, priority urgent, `touches: []`) and admits it like any line. " +
+        "When the project's curator config (`.claude/curator.yaml`, or the header's `curator:`) has a job due and a slot is free, the pick first adds a `CURATOR-<date>-<n>` line (workflow `curator`, priority high unless the config's `priority:` says otherwise, `touches: []`) and admits it like any line. " +
         "The exec form is `$WF_PLUGIN_ROOT/scripts/wf-queue`.",
       inputSchema: z
         .object({

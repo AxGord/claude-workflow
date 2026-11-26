@@ -83,7 +83,7 @@ describe("curator admission under a dispatcher", () => {
     const { queue } = fixture(10);
     const r = await pickQueue(queue);
     const cur = r.admitted.find(a => a.id.startsWith("CURATOR-"));
-    expect(cur).toMatchObject({ workflow: "curator", difficulty: 5, priority: "urgent" });
+    expect(cur).toMatchObject({ workflow: "curator", difficulty: 5, priority: "high" });
     expect(cur?.text).toMatch(/hygiene \(10 lands since the start \(interval 10\)\)/);
     expect(r.admitted.map(a => a.id)).toContain("NEXT");
     expect(formatPickSummary(r, true)).toContain(`curator: added ${cur?.id} (hygiene due)`);
@@ -94,6 +94,39 @@ describe("curator admission under a dispatcher", () => {
     const again = await pickQueue(queue);
     expect(again.admitted).toEqual([]);
     expect(readQueue(queue).lines.filter(l => l.id.startsWith("CURATOR-"))).toHaveLength(1);
+  });
+
+  it("the config's priority: sets the admitted line's priority; an unknown word is a config error the pick reports", async () => {
+    const urgent = fixture(10, "priority: urgent\njobs:\n  hygiene: {}\n");
+    const r = await pickQueue(urgent.queue);
+    expect(r.admitted.find(a => a.id.startsWith("CURATOR-"))?.priority).toBe("urgent");
+    const low = fixture(10, "priority: low\njobs:\n  hygiene: {}\n");
+    const l = await pickQueue(low.queue);
+    expect(readQueue(low.queue).lines.find(x => x.id.startsWith("CURATOR-"))?.meta.priority).toBe(
+      "low",
+    );
+    expect(l.admitted.map(a => a.id)).toContain("NEXT");
+    const bad = fixture(10, "priority: soon\njobs:\n  hygiene: {}\n");
+    const b = await pickQueue(bad.queue);
+    expect(b.admitted.map(a => a.id)).toEqual(["NEXT"]);
+    expect(b.curator).toMatch(
+      /^curator: not admitted, .*priority: one of urgent, high, normal, low, not "soon"/,
+    );
+  });
+
+  it("a user's high line ahead of it in the file is admitted before the default (high) curator line when one slot is free", async () => {
+    const { queue } = fixture(10);
+    fs.writeFileSync(
+      queue,
+      fs
+        .readFileSync(queue, "utf8")
+        .replace("batch_size: 2", "batch_size: 1")
+        .concat(
+          "  - {id: HOT, status: pending, difficulty: 3, priority: high, touches: [h], text: hot}\n",
+        ),
+    );
+    const r = await pickQueue(queue);
+    expect(r.admitted.map(a => a.id)).toEqual(["HOT"]);
   });
 
   it("nothing due, no config, a full window or a paused queue add no line", async () => {
