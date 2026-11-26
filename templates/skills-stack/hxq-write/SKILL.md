@@ -24,6 +24,10 @@ text (inline / `--from-file` / stdin `-`) — it has NO `--select`, and appendin
 `add-import` / `remove-import` take the import path. `new` / `fmt` are whole-file. Everything else in the
 table below does accept the address forms above.
 
+**Heredoc after a pipeline binds to the LAST command.** In `hxq patch … | cmd <<'EOF'` the heredoc feeds `cmd`, so an
+hxq op earlier in the pipe (`patch`, `replace-node`, `add-member`, `new --raw -`) gets no stdin and hangs. Never pipe
+such an op's stdout; filter its output in a separate step.
+
 **Why select/match over positions: they are EDIT-STABLE.** A chain of ops needs NO re-locate between edits (positions rot as soon as an earlier edit shifts lines — the old add-import/replace-node line-shift gotcha is dead when you use named addresses). `>>` makes the natural path work: `--select 'ClassDecl:X >> FnMember:f >> VarStmt:tmp'` reaches a local without knowing block nesting.
 
 **Recipes:**

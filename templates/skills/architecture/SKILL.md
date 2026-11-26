@@ -73,3 +73,4 @@ section whose title matches) when the situation in its line is the one in front 
 - **A Strict Gate Verified Only Against Your Own Mock Has Not Been Verified**
 - **A Fix for Stale State Closes the Half You Can See — Enumerate Every Reader of That State**
 - **A Field Nothing Ever Writes May Be an Unfinished Mechanism, Not Dead Code**
+- **Raising a Path's Frequency Changes Its Contract**

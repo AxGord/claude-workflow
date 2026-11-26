@@ -30,6 +30,11 @@ config here → load `preferences-lint`; unavailable too → say so in the repor
   destination as a callback; pass `Point`, not `x, y`.
 - Helpers: closure over method context → local `inline function`; pure →
   `private static inline` at the class bottom, shared → global utility.
+- A tool, formatter or codegen bug reported through a concrete file or selection:
+  apply the fix's result to THAT file too, after checking that only the intended
+  hunk changes — or say plainly that it was left stale.
+- Git advice, rebase vs merge: one question decides it — which commits does it
+  rewrite, and are any already published? Unpublished → rebase; published → merge.
 
 ### Working with the user
 

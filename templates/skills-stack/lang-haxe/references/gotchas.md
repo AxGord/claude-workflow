@@ -421,6 +421,9 @@ or a plain `if`. Treat a lowercase binder whose name is already in scope and whi
 as a BUG (the author meant a comparison), not as a style nit — and note the reverse hazard when
 cleaning up: silently rewriting it to `case _:` preserves behaviour while erasing the only evidence.
 
+An UPPER-initial bare identifier never captures: `case Foo:` is a compile error ("pattern variables must be
+lower-case or with `var ` prefix"), while `_Foo` and `__x` DO capture silently. (Reproduced, haxe 4.3.7.)
+
 ## `return <expr>` Still Needs Its `;` — a Block-Terminated Statement Hides That
 
 `return switch x { … }` and `if (c) { … }` compile with no trailing `;` because the closing brace
@@ -775,3 +778,14 @@ A single `Dynamic` DOES unify with a `Row` parameter, so only locals need the an
 
 What remains genuinely forced is the one signature that receives the library's array. Typing
 that parameter `Array<Dynamic>` is correct; letting `Dynamic` spread past it is not.
+
+## Small Compile and Control-Flow Facts (reproduced on haxe 4.3.7)
+
+- A write to a `final` field is rejected ONLY inside a closure ("cannot be accessed for writing"). Under `if`, a loop, `&&` or a ternary in the constructor it compiles — there is no definite-assignment analysis.
+- An `abstract` cannot declare an instance variable ("Cannot declare member variable in abstract").
+- `!x is T` parses as `(!x) is T`, not `!(x is T)`; a rewrite that negates an `is` test must emit `!(x is T)`.
+- A static member cannot share a name with an instance field, inherited fields included ("Same field name can't be used for both static and instance").
+- A `@:generic` class cannot have static fields.
+- A private static of a superclass is not visible unqualified in a subclass.
+- The for-loop binder is writable only for array iteration; a `0...n` binder is rejected.
+- `break` inside a `switch` inside a loop leaves the loop (no switch-local break).

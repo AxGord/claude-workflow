@@ -64,6 +64,10 @@ lie, the field default is what runs.
 Strict null safety refuses the shape outright, which is most of why it stays out of sight in code
 that has null safety off.
 
+Making the field `final` does not help: a `final` field assigned only under a condition in the constructor
+compiles, and on the other path reads `null` on interp and `undefined` on js (reproduced). Its jvm behaviour and
+the claim that `@:nullSafety(Strict)` catches it are a sibling project's reading, not re-run here.
+
 ## `EReg.escape` Is Broken on `--interp` Target
 
 `EReg.escape` on Haxe `--interp` does NOT escape closing parens/brackets (likely more chars). Feeding the result into `new EReg(...)` produces a PCRE error `at N: unmatched closing parenthesis` at regex construction — before any match runs. Works correctly on `neko` and `js`.

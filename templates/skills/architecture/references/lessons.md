@@ -987,3 +987,7 @@ When a member (a field, a config key, a parameter) is never assigned anywhere, e
 **Rule:** finish the intended path instead of deleting the member - make the owner read it where it builds or starts the thing, so it becomes the single carrier, then delete the shadow. Deletion only freezes the accidental design. Present both options to the user with a recommendation; deleting an unfinished mechanism and completing it are different decisions, and only the user knows whether the intended design is still wanted.
 
 **Follow-on trap once the member becomes the carrier:** enumerate every place the value gets COPIED (clone at construction, copy-on-start, per-instance duplicates of the same config). A stale copy written after the consumer already acted re-creates the original problem in the opposite direction, so the writer must reach every copy, and any actual-value mirror of the member must be filled from what really happened, not from the request.
+
+## Raising a Path's Frequency Changes Its Contract
+
+Moving a code path from once per run to repeated (a cache, a daemon, a parallel worker, a retry) changes what it must guarantee. Code written for one call is often not re-entrant: it leaves state behind, assumes a fresh start, or races with itself. Review and tests must then exercise the SECOND call (and the overlapping one), not only the first.

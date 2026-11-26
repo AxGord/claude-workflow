@@ -570,6 +570,10 @@ sum; a height helper that walks `getLineMetrics(i)` per line has to add the same
 
 **Null\<Float\> is 50x slower** — C++ boxes as heap GC object, allocates on every assignment. Use sentinel values.
 
+**`?p:T = default` on a value type boxes on hxcpp** — the parameter stays `Dynamic` for the whole body; dropping the `?` gives a `hx::Null<T>` boundary and native values (but breaks a literal `null` argument on static targets and any override or interface implementation). (A sibling project's measurement, not re-run here.)
+
+**`Lambda.foreach` / `exists` go through reflection on hxcpp** — `Iterable<A>` erases to `Dynamic`: reflective field lookups per iteration plus a closure; an inlined flag-and-break body removes all of it. (A sibling project's measurement, not re-run here.)
+
 **Dynamic allocates on null check** — comparing callback to null creates a Dynamic wrapper. Avoid in hot loops.
 
 **Modulo goes through fmod()** — `x % n` on ints converts to double → `fmod()`. Use `x & (n - 1)` for power-of-2.
