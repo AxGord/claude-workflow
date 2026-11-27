@@ -777,7 +777,12 @@ A job's options other than these are its own: a `notes:` text is guidance the ju
 
 `claim` → `plan` and `counts` (execs, no model) → `judge` (one agent) → `judge_check` → `verify` (one independent agent, only for text edits) → `apply` → `record` → `present`.
 
-- **Counts** are scripts: memory orphans, dangling links and the index budget; the hygiene findings; calibration rows and each `model_table` change's lands before and after; triage rows and owed steps; tool-error shapes seen in `min_transcripts` transcripts, and skill usage.
+- **Counts** are scripts: memory orphans, dangling links and the index budget; the hygiene findings; calibration rows and each `model_table` row change's like-for-like evidence (below); triage rows and owed steps; tool-error shapes seen in `min_transcripts` transcripts, and skill usage.
+- **Calibration evidence.** A tuning change is a commit whose diff changes a `model_table` row (the file parsed at the commit and at its parent; a comment or other edit is none; `escalate` and `review` rows are not read).
+  - Per changed stage and difficulty band, the counts hold that band's lands on each side, split into process-shape cells: the stages that spent, and no, one or several review rounds.
+  - A cell gives n, the median and mean of THAT stage's `spend.by_agent` USD, review rounds, escalations and verdicts (findings with the job's `findings_key`). The whole task's spend is never compared.
+  - A land that recorded the row its stage ran on goes to the side whose row for its difficulty it ran on (else `off_row_lands`); a land at a difficulty whose row did not change is in neither side.
+  - A cell under 5 lands on either side is `thin`; a change of thin cells only is "not enough lands yet".
 - **Judge** writes one plan: each job's `found`, edit ops (`move-index`, `move-file`, `replace`, `revert`), proposals, the user's decisions.
 - **Verify** checks every `replace` before it may be applied. Moves skip it.
 - **Present** hands back `NEEDS-PARENT … reason=curator report ready … see=<present.md>`: done, proposed, decisions.

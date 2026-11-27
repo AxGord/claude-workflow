@@ -1,13 +1,13 @@
 // The curator's COUNTS: what each job's judge reads, computed by script, no model. Memory: the files, their
 // indexes, orphans, dangling links, the index budget. Hygiene: the queue lines that break a check. Calibration: the
-// ledger's rows since the last run and each model-table change's lands before and after. Lessons: unfiled triage
+// ledger's rows since the last run and each model-table row change's like-for-like evidence. Lessons: unfiled triage
 // rows and owed steps. Skills: tool-error shapes repeated across transcripts, skill usage, earlier edits' effect.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { calibrate, reviewRounds } from "./calibration.js";
+import { calibrate } from "./calibration.js";
 import {
   type CuratorContext,
   INDEX_BUDGET_DEFAULT,
@@ -20,6 +20,13 @@ import {
   projectDirName,
   stateDir,
 } from "./curator.js";
+import {
+  changedRows,
+  type StageEvidence,
+  type StagePicks,
+  stageEvidence,
+  stagePicks,
+} from "./curator-tuning.js";
 import { historyGitDir, historyLog } from "./curator-history.js";
 import type { LedgerEntry } from "./ledger.js";
 import { owedDueLines, type Queue } from "./queue.js";
@@ -238,34 +245,16 @@ export function hygieneFindings(
 
 // ---- calibration ----
 
-interface Aggregate {
-  readonly tasks: number;
-  readonly review_rounds_mean: number;
-  readonly usd_mean: number | null;
-  readonly escalations: number;
-}
-
-function aggregate(lands: readonly LedgerEntry[]): Aggregate {
-  const usd = lands.filter(e => e.spend?.usd !== undefined).map(e => e.spend?.usd ?? 0);
-  const mean = (xs: readonly number[]): number =>
-    xs.length === 0 ? 0 : Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100;
-  return {
-    tasks: lands.length,
-    review_rounds_mean: mean(lands.map(e => reviewRounds(e.visits))),
-    usd_mean: usd.length === 0 ? null : mean(usd),
-    escalations: lands.reduce((a, e) => a + (e.escalations ?? 0), 0),
-  };
-}
-
+/** A commit that changed a `model_table` row, with the like-for-like evidence of each changed stage and band. */
 export interface TuningChange {
   readonly file: string;
   readonly workflow: string;
   readonly commit: string;
   readonly at: string;
   readonly subject: string;
-  /** The workflow's lands in the same span of time before and after the change. */
-  readonly before: Aggregate;
-  readonly after: Aggregate;
+  readonly stages: readonly StageEvidence[];
+  /** False when every cell of every changed stage is thin: "not enough lands yet". */
+  readonly enough: boolean;
 }
 
 /** The project workflow files that carry a `model_table:`: `workflows:` dirs of the job, else `.claude/workflows`. */
@@ -301,42 +290,109 @@ function tunedWorkflows(job: JobConfig, project: string): { file: string; name: 
   return out;
 }
 
-/** The last changes of each tuned workflow file (git log), with its lands before and after each. */
+/** The tuning changes shown per workflow file: the newest. */
+const TUNING_SHOWN = 3;
+const TUNING_SCANNED = 60;
+
+/** A file's text at `rev`, or undefined when it did not exist there. */
+function showAt(dir: string, rev: string, name: string): string | undefined {
+  try {
+    return execFileSync("git", ["show", `${rev}:./${name}`], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 1 << 24,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+const picksOf = (text: string | undefined): ReturnType<typeof stagePicks> | undefined => {
+  if (text === undefined) return undefined;
+  try {
+    return stagePicks(YAML.parse(text));
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The newest tuning changes of each tuned workflow file: a commit whose diff changes a `model_table` row (the file
+ * parsed at the commit and at its parent; a comment or any other edit is none). Each changed (stage, band) carries
+ * the lands of that band on each side, in process-shape cells judged on that stage's own spend (curator-tuning.ts).
+ * A side stops at the neighbouring change of the same stage and band.
+ */
 export function tuningChanges(
   job: JobConfig,
   project: string,
   entries: readonly LedgerEntry[],
 ): TuningChange[] {
   const out: TuningChange[] = [];
+  const findingsKey =
+    typeof job.options.findings_key === "string" ? job.options.findings_key : undefined;
   for (const w of tunedWorkflows(job, project)) {
+    const dir = path.dirname(w.file);
+    const name = path.basename(w.file);
     let log = "";
     try {
-      log = execFileSync("git", ["log", "-3", "--format=%H%x09%cI%x09%s", "--", w.file], {
-        cwd: path.dirname(w.file),
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
+      log = execFileSync(
+        "git",
+        ["log", `-${TUNING_SCANNED}`, "--format=%H%x09%cI%x09%s", "--", name],
+        { cwd: dir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      ).trim();
     } catch {
       continue; // not under git: no history to judge
     }
+    const changes = log
+      .split("\n")
+      .filter(Boolean)
+      .flatMap(line => {
+        const [commit, at, subject] = line.split("\t");
+        const now = picksOf(showAt(dir, commit, name));
+        const was = picksOf(showAt(dir, `${commit}^`, name));
+        if (now === undefined || was === undefined) return []; // no earlier table to compare with
+        const changed = changedRows(was, now);
+        return changed.length === 0
+          ? []
+          : [{ commit, at, subject: subject ?? "", t: Date.parse(at), changed, was, now }];
+      });
     const lands = entries.filter(e => e.workflow === w.name);
-    for (const line of log.split("\n").filter(Boolean)) {
-      const [commit, at, subject] = line.split("\t");
-      const t = Date.parse(at);
-      const after = lands.filter(e => Date.parse(e.ended_at) > t);
-      const span = after.length === 0 ? 0 : Math.max(...after.map(e => Date.parse(e.ended_at))) - t;
-      const before = lands.filter(e => {
-        const x = Date.parse(e.ended_at);
-        return x <= t && x > t - Math.max(span, 7 * 86_400_000);
+    const day = 86_400_000;
+    for (const c of changes.slice(0, TUNING_SHOWN)) {
+      const stages = c.changed.map(ch => {
+        const same = changes
+          .filter(o => o.changed.some(x => x.stage === ch.stage && x.band === ch.band))
+          .map(o => o.t);
+        const next = Math.min(Number.POSITIVE_INFINITY, ...same.filter(t => t > c.t));
+        const prev = Math.max(Number.NEGATIVE_INFINITY, ...same.filter(t => t < c.t));
+        const after = lands.filter(e => {
+          const x = Date.parse(e.ended_at);
+          return x > c.t && x <= next;
+        });
+        const span =
+          after.length === 0 ? 0 : Math.max(...after.map(e => Date.parse(e.ended_at))) - c.t;
+        const before = lands.filter(e => {
+          const x = Date.parse(e.ended_at);
+          return x <= c.t && x > prev && x > c.t - Math.max(span, 7 * day);
+        });
+        const none: StagePicks = new Map();
+        return stageEvidence(
+          ch,
+          before,
+          after,
+          { before: c.was.get(ch.stage) ?? none, after: c.now.get(ch.stage) ?? none },
+          findingsKey,
+        );
       });
       out.push({
         file: w.file,
         workflow: w.name,
-        commit,
-        at,
-        subject: subject ?? "",
-        before: aggregate(before),
-        after: aggregate(after),
+        commit: c.commit,
+        at: c.at,
+        subject: c.subject,
+        stages,
+        enough: stages.some(s => s.enough),
       });
     }
   }

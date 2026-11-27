@@ -103,6 +103,23 @@ function agentsAt(
   return out;
 }
 
+/** What a task's agents linked at `stage` spent (`spend.by_agent`): the stage's own cost, never the whole task's. */
+export function stageSpend(
+  e: LedgerEntry,
+  stage: string,
+): { usd: number; unmeasured: number; measured: boolean } {
+  const out = { usd: 0, unmeasured: 0, measured: false };
+  for (const a of e.spend?.by_agent ?? []) {
+    if (a.stage !== stage) continue;
+    if (a.usd === undefined) out.unmeasured += 1;
+    else {
+      out.usd += a.usd;
+      out.measured = true;
+    }
+  }
+  return out;
+}
+
 const bump = (m: Record<string, number>, k: string): void => {
   m[k] = (m[k] ?? 0) + 1;
 };
