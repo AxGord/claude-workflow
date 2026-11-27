@@ -508,22 +508,24 @@ driver:
 
 A landed task's lessons are filed by a script, not read by the dispatcher on every land.
 
-- The worker and the reviewer of `batch-task` (and of the engine's own `engine-task`) may end their answer with records. In `batch-task` the one-line answer gains ` lessons=<one-line JSON>`. In `engine-task` the final message gains a line `LESSONS: <JSON>` (the reviewer's goes just before the verdict line). The shape is `{"lessons":[{"id","kind","touches","repro","text"}]}`.
+- The worker and the reviewer of `batch-task` (and of the engine's own `engine-task`) may end their answer with records. In `batch-task` the one-line answer gains ` lessons=<one-line JSON>`. In `engine-task` the final message gains a line `LESSONS: <JSON>` (the reviewer's goes just before the verdict line). The shape is `{"lessons":[{"id","kind","dest","touches","repro","text"}]}`; `dest` is optional.
 - The driver copies each JSON verbatim into the `set` of the transition that follows the answer: `lessons` on the worker's `check`, `review_lessons` on the review's verdict transition. A round that sends records replaces the key; one that sends none leaves it.
 - After the land, the `lessons_file` exec (between `mark_done` and `cleanup`, `station: false`) writes the two keys to `<queue dir>/../backups/slice-logs/<ID>/lessons.json` and `review-lessons.json`, then runs `wf-queue <queue> --lessons <ID> --records <both>`. The context keys are the truth: the files are rewritten from them each run.
 - What each `kind` becomes:
   - `unverified`: a `backlog` line, priority `low`;
   - `arm-rot-on-base`: a `pending` line, priority `high`, difficulty 4;
   - `reproduced-on-real-tree`, `loss`, `process`: a row of the triage file.
+- `dest` (optional) is where the writer judged the lesson belongs: `tool|workflow|skill|instructions|docs|decision|memory`, the rows of the `knowledge-placement` table (`decision` is the user's calls). `kind` still drives filing; `dest` is only recorded, as `dest=<word>` in the triage row. A record filed as a line carries none. The writers' spec glosses each word, so a worker never loads the table.
 - A filed line carries the `repo:` and `workflow:` of the task it came from. The `touches` are checked against that same repo: the origin line's `repo:`, and `--repo` only when the origin line is gone from the queue (with an origin line `--repo` changes neither the check nor the filed `repo:`). Its text is the record's text and a `Repro:` line.
 - A record the script cannot file is never an error: it becomes a triage row that names the reason. The reasons:
-  - a `kind` that is none of the five; an `id` outside `[A-Za-z0-9._-]+`; an empty `text` or `repro`;
+  - a `kind` that is none of the five, or a `dest` that is none of the seven words (the row names the reason and carries no `dest=`); an `id` outside `[A-Za-z0-9._-]+`; an empty `text` or `repro`;
   - `touches` empty, over 8 entries, a glob, a `..` or absolute path, a directory, or a file the task's repo lacks and that is not marked `path (new)` (the check runs against that repo);
   - an id a queue line or the archive already holds;
   - a duplicate of an open line: the same brief of 30+ characters, or the same files and a shared backticked name;
   - a refusal of the queue itself, such as a workflow name it rejects.
-- The triage file is the flag `--triage`, else the header key `lessons_triage:` (relative = beside the queue), else `<queue dir>/../backups/slice-logs/lessons-triage.txt`. It holds a block `== <ID>` per task, one row per record: `id [kind] reason :: text :: repro :: touches`.
+- The triage file is the flag `--triage`, else the header key `lessons_triage:` (relative = beside the queue), else `<queue dir>/../backups/slice-logs/lessons-triage.txt`. It holds a block `== <ID>` per task, one row per record: `id [kind] reason :: text :: repro :: touches`, with ` dest=<word>` after the `[kind]` when the record had a valid `dest`.
   - The dispatcher reads it in a batch, every `lessons_every` lands and before a curator run, with `wf-queue <queue> --lessons-take [--triage FILE]`: it prints the file and empties it under the lock a land's append takes, so a row appended meanwhile is neither lost nor read twice. The file is emptied only after the rows are written out, so a closed pipe or a killed call loses none. Never empty it by hand.
+  - The fold groups the rows by `dest=` and places each group as that row of the table; the table is walked only for a row with no `dest=`.
 - The command prints `lessons=filed N, triage M` (plus `, already K` on a rerun, plus ` triage_file=<path>` when M > 0, so the `LANDED` line that reaches the main conversation names the file) and exits 0 whatever the records hold; 2 is a usage error or an unreadable queue. A missing or empty record file is no records. An unparseable one is one triage row with its text.
 - A rerun files nothing twice: a record whose id is already a line with the same text counts as `already`, and a triage row the task's block already holds is not added again.
 - The step never fails a land. Any failure (the command, an unwritable directory, a timeout) prints `lessons=not run` and `cleanup` runs. A task that does not land (`CLOSED`) files nothing: its follow-ups stay prose in the driver's line.

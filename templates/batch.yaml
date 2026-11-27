@@ -232,8 +232,10 @@ states:
         arm-rot-on-base → a pending one): read nothing for them. The rows it sent to the triage file (the header's `lessons_triage:`, else
         `../backups/slice-logs/lessons-triage.txt` beside the queue; a `triage_file=<path>` on the line names it) are read in a batch,
         every `lessons_every` lands and before a curator run, never per land: `wf-queue <queue> --lessons-take [--triage <path>]`
-        prints the file and empties it under the lock a land's append takes (never empty it by hand); each row → a `queue_add` line,
-        a placement by the `knowledge-placement` skill (load it; its table says where the row goes), or nothing. Any other
+        prints the file and empties it under the lock a land's append takes (never empty it by hand); group the rows by their `dest=<word>` (the
+        writer's own placement: tool, workflow, skill, instructions, docs, decision, memory) and treat each group as that row of the
+        `knowledge-placement` skill; only a row with no `dest=` is walked through its table (load it). Each row → a `queue_add` line, a
+        placement, or nothing. Any other
         `lessons=<phrase (file)>; …|none` tail is the agents' own follow-ups, copied: turn each into a `queue_add` line, a placement by the same skill, or nothing.
         A trailing `decided=<file>` means a decider answered design choices without you: audit that file
         (`## <choice>` / `decision:` / `why:` blocks) and overrule a wrong one with a `queue_add` line.

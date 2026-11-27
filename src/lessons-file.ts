@@ -1,9 +1,11 @@
 // Lesson records of a landed task -> queue lines or triage rows, by script (`wf-queue <q> --lessons <ID>`).
 // The worker and the reviewer of the batch flow hand their records over as the context keys `lessons` and
-// `review_lessons` (one JSON document each, `{"lessons": [{id, kind, touches, repro, text}]}`); an exec after
+// `review_lessons` (one JSON document each, `{"lessons": [{id, kind, dest?, touches, repro, text}]}`); an exec after
 // the land writes them to files and calls `fileLessons`. The dispatcher reads none of it per land:
 //   unverified -> a `backlog` line, priority low; arm-rot-on-base -> a `pending` line, priority high (difficulty 4);
 //   every other kind and every REFUSED record -> a row of the triage file under `== <ID>`, read in a batch.
+// `dest` (optional, a closed word list) names the home the writer judged the lesson belongs to; it is a hint for
+// the fold of the triage rows, never a routing rule of this script (`kind` alone drives filing).
 // A filed line carries the `repo:` and `workflow:` of the task it came from, and its `touches` are checked
 // against that repo. Never throws for a record: a bad one is a triage row, so nothing a task learned is lost.
 // A rerun is a no-op: an id already filed with the same text counts as `already`, a triage row already in the
@@ -30,6 +32,20 @@ export const LESSON_KINDS = [
   "process",
 ] as const;
 export type LessonKind = (typeof LESSON_KINDS)[number];
+
+/** Where a lesson belongs, by the rows of the `knowledge-placement` table; optional on a record. */
+export const LESSON_DESTS = [
+  "tool",
+  "workflow",
+  "skill",
+  "instructions",
+  "docs",
+  "decision",
+  "memory",
+] as const;
+export type LessonDest = (typeof LESSON_DESTS)[number];
+
+const isDest = (w: string): boolean => (LESSON_DESTS as readonly string[]).includes(w);
 
 /** The kinds the script files itself, with the line each becomes; every other kind is the dispatcher's. */
 const FILED: Readonly<
@@ -78,6 +94,8 @@ export function formatLessons(r: LessonsResult): string {
 interface Row {
   readonly id: string;
   readonly kind: string;
+  /** A valid `dest` word, or absent. */
+  readonly dest?: string;
   readonly reason: string;
   readonly text: string;
   readonly repro: string;
@@ -89,9 +107,10 @@ const flat = (v: unknown, max = ROW_TEXT_MAX): string => {
   return s.length > max ? `${s.slice(0, max)} ...` : s;
 };
 
-/** `id [kind] reason :: text :: repro :: touches`, one line. */
+/** `id [kind] dest=<word> reason :: text :: repro :: touches`, one line; `dest=` only when the record had a valid one. */
 export function triageRow(r: Row): string {
-  return `${flat(r.id) || "?"} [${flat(r.kind) || "?"}] ${flat(r.reason)} :: ${flat(r.text)} :: ${flat(r.repro)} :: ${flat(r.touches)}`;
+  const dest = r.dest !== undefined && r.dest !== "" ? ` dest=${flat(r.dest)}` : "";
+  return `${flat(r.id) || "?"} [${flat(r.kind) || "?"}]${dest} ${flat(r.reason)} :: ${flat(r.text)} :: ${flat(r.repro)} :: ${flat(r.touches)}`;
 }
 
 const norm = (s: string): string => s.replace(/\s+/g, " ").trim().toLowerCase();
@@ -103,6 +122,8 @@ const fileSet = (list: readonly string[]): string =>
 interface Lesson {
   readonly id: string;
   readonly kind: string;
+  /** As written: absent when the record has none, else the word (the JSON text of a non-string value). */
+  readonly dest?: string;
   readonly touches: readonly string[];
   readonly repro: string;
   readonly text: string;
@@ -127,9 +148,17 @@ function asRecord(raw: unknown): { rec: Lesson } | { row: Row } {
   const touches = Array.isArray(o.touches)
     ? o.touches.filter((t): t is string => typeof t === "string").map(t => t.trim())
     : [];
+  const rawDest = o.dest;
+  const dest =
+    rawDest === undefined || rawDest === null
+      ? ""
+      : typeof rawDest === "string"
+        ? rawDest.trim()
+        : JSON.stringify(rawDest);
   const rec: Lesson = {
     id: str("id"),
     kind: str("kind"),
+    ...(dest !== "" ? { dest } : {}),
     touches,
     repro: str("repro"),
     text: str("text"),
@@ -143,6 +172,7 @@ function toRow(r: Lesson, reason: string, raw?: unknown): Row {
   return {
     id: r.id,
     kind: r.kind,
+    ...(r.dest !== undefined && isDest(r.dest) ? { dest: r.dest } : {}),
     reason,
     text: flat(r.text || (raw === undefined ? "" : raw)),
     repro: flat(r.repro),
@@ -305,6 +335,12 @@ export async function fileLessons(opts: LessonsOptions): Promise<LessonsResult> 
           triageRow(
             toRow(rec, `kind ${rec.kind || "(none)"} is not one of ${LESSON_KINDS.join(", ")}`),
           ),
+        );
+        continue;
+      }
+      if (rec.dest !== undefined && !isDest(rec.dest)) {
+        rows.push(
+          triageRow(toRow(rec, `dest ${rec.dest} is not one of ${LESSON_DESTS.join(", ")}`)),
         );
         continue;
       }

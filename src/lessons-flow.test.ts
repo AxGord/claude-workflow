@@ -36,6 +36,20 @@ const flat = (s: string | undefined): string => (s ?? "").replace(/\s+/g, " ");
 describe.each(["batch-task", "engine-task"])("%s hands the lesson records over", name => {
   const states = () => flows()[name].states;
 
+  it("the worker's and the reviewer's record spec lists the dest words, each glossed, and the collect fold groups by them", () => {
+    const prompts = Object.values(states()).map(st => flat(st.prompt));
+    const worker = prompts.filter(p => p.includes('"kind":"<kind>"'));
+    const reviewer = prompts.filter(p => p.includes("the worker's form, kinds and `dest` words"));
+    expect([worker.length, reviewer.length]).toEqual([1, 1]);
+    for (const w of ["tool", "workflow", "skill", "instructions", "docs", "decision", "memory"])
+      expect(worker[0]).toMatch(new RegExp(`\\b${w} \\(`));
+    expect(worker[0]).toContain('"dest":"<dest>"');
+    const batch = new Loader(TEMPLATES, tmp(), null).get("batch")!;
+    expect(flat(batch.states.collect.prompt)).toContain(
+      "only a row with no `dest=` is walked through its table",
+    );
+  });
+
   it("mark_done goes to lessons_file, which goes to cleanup on success, error and timeout: a land is never failed by it", () => {
     const s = states();
     expect(s.mark_done.on_success).toBe("lessons_file");

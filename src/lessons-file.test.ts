@@ -141,6 +141,44 @@ describe("lessons filed by script", () => {
     expect(rows).toHaveLength(4);
   });
 
+  it("dest is optional: a triage row carries `dest=<word>` when the record had one, and is unchanged without it", async () => {
+    const e = setup();
+    write(
+      e,
+      rec({ id: "L-D", kind: "loss", dest: "docs" }),
+      rec({ id: "L-N", kind: "loss" }),
+      rec({ id: "L-U", kind: "unverified", dest: "skill", touches: ["src/a.ts"] }),
+    );
+    const r = await run(e);
+    expect([r.filed, r.triage]).toEqual([1, 2]);
+    const rows = triageRows(e);
+    expect(rows[1]).toMatch(
+      /^L-D \[loss\] dest=docs .* :: .* :: run it and read the output :: src\/a.ts$/,
+    );
+    expect(rows[2]).toMatch(/^L-N \[loss\] [^d]/);
+    expect(rows[2]).not.toContain("dest=");
+    expect(readQueue(e.queue).lines.map(l => l.id)).toEqual(["ORIGIN", "L-U"]);
+  });
+
+  it.each([
+    ["an unknown word", "stuff"],
+    ["a wrong case", "Docs"],
+    ["a non-string value", ["docs"]],
+  ])(
+    "a dest that is %s is refused as a kind is: a triage row naming the reason, never filed",
+    async (_n, dest) => {
+      const e = setup();
+      write(e, rec({ id: "L-B", kind: "unverified", dest }));
+      const r = await run(e);
+      expect([r.filed, r.triage]).toEqual([0, 1]);
+      const row = triageRows(e)[1];
+      expect(row).toContain(
+        "is not one of tool, workflow, skill, instructions, docs, decision, memory",
+      );
+      expect(row).not.toContain(" dest=");
+    },
+  );
+
   it("touches are checked against the origin's repo, not the queue's project", async () => {
     const e = setup();
     write(e, rec({ touches: ["only-in-proj.ts"] }));
