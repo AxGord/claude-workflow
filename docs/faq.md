@@ -65,6 +65,10 @@ Other files there, a native `.js` workflow for one, pass without this question. 
 
 The project set `memory_write_gate` in `.claude/workflows/settings.json`, and the agent created a new file under `~/.claude/projects/*/memory/` with no `why-memory:` line in its frontmatter. The agent writes the file again with `why-memory: 7 <why no row 1-6 fits>`, or places the knowledge in a row that fits. Delete the key to turn the gate off. Details and limits: [Memory write gate](/getting-started#memory-write-gate-opt-in).
 
+## Claude Code refused an Agent spawn naming `agents.max_live`
+
+The project set `agents.max_live` in `.claude/workflows/settings.json`, and that many agents of the session are already live. Wait for a running agent to finish, then spawn the rest in the next wave. Raise or delete the key to lift the cap. Details: [Agent cap](/getting-started#agent-cap-opt-in).
+
 ## A project install from a git URL does not run
 
 `build/` is gitignored, so a git-sourced plugin has no compiled MCP server. Install from this repository's marketplace (`/plugin marketplace add AxGord/claude-workflow`), npm or a local checkout; see [Getting started](/getting-started#install-channels).

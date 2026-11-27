@@ -289,9 +289,15 @@ states:
       - The per-file fix plan
       - Interface contracts with other files
 
-      Launch ALL file agents in ONE message, each with `run_in_background:
-      false` — their reports gate integration; a "batch" of ONE file is
-      still a gating single, not a background task.
+      Launch the file agents in ONE message per wave, at most N of them
+      (N = the room left under the project's `agents.max_live`
+      (`.claude/workflows/settings.json`): the cap counts EVERY live agent of
+      the session tree, the agent running this state included; unset = 4.
+      A hook refuses a spawn past it, and a refused file goes into the next
+      wave, never skipped: integrate only after every file has run), each with
+      `run_in_background: false` — their reports gate integration; a "batch"
+      of ONE file is still a gating single, not a background task. More files
+      → next wave after the current one completes.
       Wait for all to complete. Collect reports.
 
       After ALL reports are collected:
@@ -425,10 +431,15 @@ states:
       With a difficulty set: `model` {{context.model_review}}, `effort` {{context.effort_review}}
       (empty = no difficulty: the rule above); on a later visit read them with `status` + `key`.
 
-      Launch up to 8 batch agents in ONE message, each with
+      Launch up to N batch agents in ONE message (N = the room left under the
+      project's `agents.max_live` (`.claude/workflows/settings.json`): the cap
+      counts EVERY live agent of the session tree, the agent running this
+      state included; unset = 8. A hook refuses a spawn past it, and a
+      refused batch goes into the next wave, never skipped: merge only after
+      every batch has run), each with
       `run_in_background: false` — reports gate the merge; a single batch
       is still a gating single, not a background task. More batches →
-      next wave. Collect reports.
+      next wave after the current one completes. Collect reports.
 
       After ALL reports are collected:
       1. Abort orphaned child workflow sessions.

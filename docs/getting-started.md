@@ -372,6 +372,26 @@ With it on, the PreToolUse hook `hooks/knowledge-write-gate.sh` stops a call tha
 
 A new hook needs a Claude Code restart.
 
+### Agent cap (opt-in)
+
+Nothing but this setting bounds how many agents one session starts: a fan-out prompt can start one per file, and an agent that spawns its own helpers multiplies that (the queue window caps only admitted lines). A project can cap it. In `.claude/workflows/settings.json` at the project root:
+
+```json
+{ "agents": { "max_live": 4 } }
+```
+
+Absent, the key does nothing: no spawn is refused. A positive whole number is the most agents of one session that may be live at once, nested spawns included. The setting is read from the project of the session's working directory (a worktree resolves to its main checkout).
+
+With it on, the PreToolUse hook `hooks/agent-cap-gate.sh` refuses an `Agent` call past the cap. The refusal names the cap and the setting and tells the agent to wait for a running agent to finish and put the rest into the next wave.
+
+- **In a queue:** the cap counts the dispatcher, every driver and every parent waiting on its child. A queue needs `max_live` above the dispatcher plus the window times the nesting depth (driver, worker, reviewer); below that every driver's spawn is refused, the live agents are the other waiting drivers, and the queue stalls until a silent agent expires.
+- **Live:** an agent counts from the moment its spawn passed the hook until its SubagentStop. Background agents count. The count is per session: an agent's own spawns share its session, so they count toward the same cap.
+- **No leaks:** an agent that died with no stop event stops counting after an hour of silence (its own transcript not written); a spawn that another hook or a permission prompt refused, after two minutes.
+- **Counted from the setting on:** agents started before the key was set are not counted.
+- **Bundled workflows:** `coding`, `bug-fix` and `code-review` launch at most the room left under the cap per wave (the agent running the state holds a slot; 4 file agents or 8 review batches when it is unset). A refused spawn goes into the next wave, never skipped.
+
+The hook decides only and never rewrites the call. Without node or a build, or on an unreadable settings file, the call passes with one stderr line. A new hook needs a Claude Code restart.
+
 ## Heavy commands share one thread pool
 
 Builds and test suites from every session on the machine go through one thread pool, so several agents working at once queue for threads instead of choking the machine:

@@ -22,7 +22,39 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/agent-cap-gate.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/agent-cap-gate.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/hooks/agent-cap-gate.sh",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "Bash",
         "hooks": [

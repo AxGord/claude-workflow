@@ -1,6 +1,6 @@
 // A project's own engine settings: `.claude/workflows/settings.json` at its root (a worktree
 // counts as its main checkout, like the queue and the pool's project). Keys: `priority`,
-// `memory_write_gate`.
+// `memory_write_gate`, `agents` (`max_live`).
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -13,11 +13,18 @@ export const PROJECT_SETTINGS_FILE = "settings.json";
 export const MemoryWriteGateSchema = z.enum(["deny", "ask"]);
 export type MemoryWriteGateMode = z.infer<typeof MemoryWriteGateSchema>;
 
+/** The agent cap: the most agents of one session tree that may be live at once. */
+const AgentsSettingsSchema = z.strictObject({
+  max_live: z.number().int().positive(),
+});
+
 const ProjectSettingsSchema = z.strictObject({
   /** The level of a session or a bare `wf-run` in the project that names no priority and has no parent. */
   priority: PriorityLevelSchema.optional(),
   /** Opt-in: absent = the gate is off and the project's memory writes are nobody's business. */
   memory_write_gate: MemoryWriteGateSchema.optional(),
+  /** Opt-in: absent = no cap, a spawn is nobody's business. */
+  agents: AgentsSettingsSchema.optional(),
 });
 type ProjectSettings = z.infer<typeof ProjectSettingsSchema>;
 
@@ -59,4 +66,9 @@ export function projectDefaultPriority(cwd: string): PriorityLevel | undefined {
 /** The project's `memory_write_gate` mode, or undefined (the gate is off) when the file names none. */
 export function projectMemoryWriteGate(cwd: string): MemoryWriteGateMode | undefined {
   return readProjectSettings(cwd).memory_write_gate;
+}
+
+/** The project's `agents.max_live`, or undefined (no cap) when the file names none. */
+export function projectAgentCap(cwd: string): number | undefined {
+  return readProjectSettings(cwd).agents?.max_live;
 }

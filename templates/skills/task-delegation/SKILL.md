@@ -59,7 +59,9 @@ top-tier rates, so file bodies must not flow through it:
 - **CODE above ~30 changed lines → implementer agent(s)**: a COUPLED
   change goes to ONE implementer carrying the whole plan + contracts
   (never fan out a coupled set per-file); independent files fan out in
-  parallel as usual.
+  parallel as usual, in waves of at most the project's `agents.max_live`
+  (`.claude/workflows/settings.json`) when it sets one: a spawn past it is
+  refused, so wait for a running agent to end and launch the rest next.
 - **Implementer tier = f(plan detail × mechanical net)**: a detailed plan
   (exact edits, contracts, order) + a net (linter/tests/compiler) →
   `sonnet` — implementation became mechanics; the plan deliberately

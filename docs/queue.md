@@ -49,6 +49,8 @@ tasks:
       - {from: user, date: 2026-11-07, text: later thought}
 ```
 
+The window is not the agent cap. A project's `agents.max_live` ([Agent cap](/getting-started#agent-cap-opt-in)) counts the dispatcher, every driver and every parent waiting on its child. A queue needs it above the dispatcher plus the window times the nesting depth (driver, worker, reviewer); below that the drivers' own spawns are refused while the live agents are the other waiting drivers.
+
 **Task keys**
 
 `id, status, difficulty, kind, priority, model, effort, repo, workflow, after, touches, owner, sweep, on_end_tell_parent, owed_handed,
