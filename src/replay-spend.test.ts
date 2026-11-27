@@ -299,7 +299,7 @@ describe("snapshotAt gives a Landed row its spend, and the day its sum", () => {
     const tree = draw(file, 500);
     expect(texts(tree, /\$1\.50.*A/)).toHaveLength(1);
     expect(texts(tree, /—.*E/)).toHaveLength(1);
-    expect(texts(tree, /✓ Landed · 14d \(2\) · \$1\.50/)).toHaveLength(1);
+    expect(texts(tree, /✓ Done · 14d \(2\) · \$1\.50/)).toHaveLength(1);
   });
 
   it("agrees with the pane's own daySpends and landedUsd over the same ledger", async () => {

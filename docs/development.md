@@ -352,7 +352,7 @@ It holds the sessions of `--project anyparse` and `--also mcp-workflow-engine` o
 **The cost of each task**
 
 - The export reads `spend.usd` from `ledger.jsonl` for the tasks of the replay only (an allowlist like the events', a row of any other task is never read into the file; `--ledger FILE|none`).
-- The plan pane's Landed rows show `$x.xx` and the day row its sum as the live pane does, and a task with no measured spend stays `—`.
+- The plan pane's Done rows show `$x.xx` and the day row its sum as the live pane does, and a task with no measured spend stays `—`.
 
 **The plan pane's Next and Waiting**
 
@@ -439,7 +439,7 @@ Two scripts do it:
 - `scripts/render-banner.mjs` holds the banner's SVG templates (a schematic of a task's life: queue, think, code, review, land, the gates between them, the dashed fix arrow, the thread pool with the agents waiting for it).
   - It reads the site's name and tagline from the hero of `docs/index.md`, and counts the bundled workflows from `templates/` for its line of chips.
   - It puts the drawing over a blurred, dimmed crop of a real frame of the scene, captured as `docs:record` captures it, never a stored picture.
-  - `-- --at <replay s>` picks the moment, by default the first second at which the plan pane shows three Landed rows with a price, read from the replay itself (`defaultAt`), so a re-export moves it.
+  - `-- --at <replay s>` picks the moment, by default the first second at which the plan pane shows three Done rows with a price, read from the replay itself (`defaultAt`), so a re-export moves it.
   - The README's size has the weaker background so the schematic reads first.
 
 So no number or picture in them is typed or drawn by hand (same prerequisites as `docs:record`, without ffmpeg).

@@ -11,7 +11,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-11' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-12' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -22,7 +22,7 @@ const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, 
 const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shape: 'pool-1' })
 /** The pool's `held`/`budget` as of the last refresh with the pane open on any tab: the `Pool <held>/<budget>` tab label (null: not read, or the dashboard did not answer). */
 const poolCountsAtom = atom({ plugin: 'workflow', key: 'poolCounts' } as const, null, { shape: 'pool-counts-1' })
-/** The Plan tab sections whose fold the person flipped (running, next, lands, failed) and the `+N more` rows whose list the person opened (`next-more`, `waiting-more`, `sessions-more`): none by default, so all sections show but FOLDED_BY_DEFAULT ones, and every capped list stops at its cap. A Landed day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
+/** The Plan tab sections whose fold the person flipped (running, next, lands, failed) and the `+N more` rows whose list the person opened (`next-more`, `waiting-more`, `sessions-more`): none by default, so all sections show but FOLDED_BY_DEFAULT ones, and every capped list stops at its cap. A Done day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-2' })
 /** The session whose card is open in the Sessions tab ('' none). */
 const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { shape: 'expanded-1' })
@@ -228,13 +228,13 @@ export function awaitingOf(lines: ApiLine[]): AwaitingLine[] {
     .sort((a, b) => a.since - b.since)
 }
 
-async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string; landBranch?: string; taskIds?: string[]; shas?: Map<string, string> }> {
+async function loadQueue($: any, file: string, now: number): Promise<{ queue: QueueView | null; error: string; landBranch?: string; taskIds?: string[]; openIds?: string[]; shas?: Map<string, string> }> {
   const res = await $.http.fetch(`${DASHBOARD}/api/queue?file=${encodeURIComponent(file)}`).catch((e: unknown) => String(e))
   if (typeof res === 'string') return { queue: null, error: 'queue: ' + res }
   try {
     const body = JSON.parse(res.text)
     if (!res.ok) return { queue: null, error: 'queue: ' + String(body?.error ?? res.status) }
-    return { queue: queueView(file, body, now), error: '', ...(typeof body?.landBranch === 'string' ? { landBranch: body.landBranch } : {}), taskIds: [...(Array.isArray(body?.lines) ? body.lines.map((l: any) => String(l?.id)) : []), ...(Array.isArray(body?.archivedIds) ? body.archivedIds.map(String) : [])], shas: landShasOf(body) }
+    return { queue: queueView(file, body, now), error: '', ...(typeof body?.landBranch === 'string' ? { landBranch: body.landBranch } : {}), taskIds: [...(Array.isArray(body?.lines) ? body.lines.map((l: any) => String(l?.id)) : []), ...(Array.isArray(body?.archivedIds) ? body.archivedIds.map(String) : [])], openIds: Array.isArray(body?.lines) ? body.lines.filter((l: any) => l?.status !== 'done').map((l: any) => String(l?.id)) : [], shas: landShasOf(body) }
   } catch (e) {
     return { queue: null, error: 'queue: ' + String(e) }
   }
@@ -350,6 +350,39 @@ export function ledgerLandedOf(text: string): Map<string, LedgerLand> {
   return out
 }
 
+/** The task runs of the ledger whose line ENDED closed: its latest run, of any workflow, completed with no `land` state (a research line, a design line, a line a human answered). A run that is a child session of a run of the same task (a recon of the pipeline) is no run of the line. The latest run's start, end, difficulty and own spend; a line whose latest run failed, or that landed in that run, is absent. */
+export function ledgerClosedOf(text: string): Map<string, LedgerLand> {
+  type Row = { task: string; session: string; parentSession: string; ended: number; j: Record<string, unknown> }
+  const rows: Row[] = []
+  for (const line of text.split('\n')) {
+    if (!line.includes('"task"')) continue
+    try {
+      const j = JSON.parse(line) as Record<string, unknown>
+      const ended = Date.parse(String(j.ended_at ?? ''))
+      if (typeof j.task !== 'string' || j.task === '' || !Number.isFinite(ended)) continue
+      rows.push({ task: j.task, session: typeof j.session_id === 'string' ? j.session_id : '', parentSession: typeof j.parent_session_id === 'string' ? j.parent_session_id : '', ended, j })
+    } catch {
+      // a torn or foreign line is not a run
+    }
+  }
+  const sessions = new Set(rows.filter(r => r.session !== '').map(r => `${r.task}\n${r.session}`))
+  const latest = new Map<string, Row>()
+  for (const r of rows) {
+    if (r.parentSession !== '' && sessions.has(`${r.task}\n${r.parentSession}`)) continue
+    if ((latest.get(r.task)?.ended ?? -Infinity) <= r.ended) latest.set(r.task, r)
+  }
+  const out = new Map<string, LedgerLand>()
+  for (const [task, r] of latest) {
+    if (outcomeOf(r.j) !== 'closed') continue
+    const spend = r.j.spend as { usd?: unknown; usd_partial?: unknown } | undefined
+    const usd = spend?.usd
+    const figure = typeof usd === 'number' && Number.isFinite(usd) ? (spend?.usd_partial === true ? { usdFloor: usd } : { usd }) : {}
+    const start = Date.parse(String(r.j.started_at ?? ''))
+    out.set(task, { start: Number.isFinite(start) ? start : NaN, endedAt: r.ended, difficulty: typeof r.j.difficulty === 'number' ? String(r.j.difficulty) : '', ...figure })
+  }
+  return out
+}
+
 /** What the ledger rows of a queue line add up to: the agents' `spend.usd` and the parent's `parent_spend.usd` (a row records either as absent: it adds 0). `isUnmeasured` is set when a row that counts toward `usd` recorded no spend or only a partial sum (`spend.usd_partial`): the line is measured whole or not at all, so its sum is not a cost; `isPartial` is set besides when every such row recorded a figure and some is partial: `usd` is then a lower bound (`≥$x`), never added to a total. */
 export type TaskTotals = { usd: number; parentUsd: number; isUnmeasured?: true; isPartial?: true }
 
@@ -416,8 +449,8 @@ export function failedSpend(lines: FailedLine[], totals: Map<string, TaskTotals>
   return { usd, parentUsd, missing, ...(unmeasured > 0 ? { unmeasured } : {}) }
 }
 
-type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[]; landed: Map<string, LedgerLand>; totals: Map<string, TaskTotals> }
-const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [], landed: new Map(), totals: new Map() }
+type Ledger = { runs: Map<string, Run>; spends: Map<string, TaskSpend>; parent: ParentSpend[]; landed: Map<string, LedgerLand>; closed: Map<string, LedgerLand>; totals: Map<string, TaskTotals> }
+const NO_LEDGER: Ledger = { runs: new Map(), spends: new Map(), parent: [], landed: new Map(), closed: new Map(), totals: new Map() }
 let ledgerRead: Ledger = NO_LEDGER
 
 /** The ledger's runs and spend, re-read only when the file's size or mtime moved (the pane refreshes often). */
@@ -429,7 +462,7 @@ async function ledgerAt($: any, dir: string): Promise<Ledger> {
   const stamp = `${f.name}:${f.size}:${f.mtimeMs}`
   if (stamp !== ledgerSeen) {
     const text = String(await $.fs.read(`${dir}/${f.name}`).catch(() => ''))
-    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text), landed: ledgerLandedOf(text), totals: ledgerTotalsOf(text) }
+    ledgerRead = { runs: ledgerRunsOf(text), spends: ledgerSpendOf(text), parent: ledgerParentOf(text), landed: ledgerLandedOf(text), closed: ledgerClosedOf(text), totals: ledgerTotalsOf(text) }
     ledgerSeen = stamp
   }
   return ledgerRead
@@ -485,12 +518,12 @@ export function recentLand(lands: Land[], label: string, at: number, now: number
     const ms = landMs(l.at, now)
     if (ms > at + 2 * day) continue
     if (ms < at - 2 * day) break
-    if (l.slice === label) return l
+    if (l.slice === label && l.isReport !== true) return l
   }
   return undefined
 }
 
-/** Each day of the Landed tree: the sum of its landed lines' cost plus the failed and closed lines whose latest run ended that day (a line counts once), how many lines that is and how many were measured. */
+/** Each day of the Done tree: the sum of its rows' cost (lands and reports) plus the failed lines, and the closed lines that have no report row, whose latest run ended that day (a line counts once), how many lines that is and how many were measured. */
 export function daySpends(lands: Land[], spends: Map<string, TaskSpend>, now: number = Date.now()): Record<string, DaySpend> {
   const days: Record<string, DaySpend> = {}
   // a day's full date: a label is DD.MM with no year, so a line that ended a year ago on the same DD.MM must not match it
@@ -521,7 +554,7 @@ export function daySpends(lands: Land[], spends: Map<string, TaskSpend>, now: nu
   return days
 }
 
-/** The $ sum of the landed lines of the Landed tree: each line once (a line that landed twice has one cost), a line with no spend row adds nothing; undefined when no line is measured. */
+/** The $ sum of the rows of the Done tree (lands and reports): each line once (a line that landed twice has one cost), a line with no spend row adds nothing; undefined when no line is measured. */
 export function landedUsd(lands: Land[]): number | undefined {
   const seen = new Set<string>()
   let sum = 0
@@ -536,7 +569,7 @@ export function landedUsd(lands: Land[]): number | undefined {
   return measured ? sum : undefined
 }
 
-/** The parent's spend over the Landed window: the stretches of the queue repo's own conversations (`project` is its directory under `projects/`, so another project's session adds nothing) that ended in the last `LAND_DAYS` days; undefined when none is recorded. */
+/** The parent's spend over the Done window: the stretches of the queue repo's own conversations (`project` is its directory under `projects/`, so another project's session adds nothing) that ended in the last `LAND_DAYS` days; undefined when none is recorded. */
 export function parentUsd(parent: ParentSpend[], now: number, project: string): number | undefined {
   const since = now - LAND_DAYS * 24 * 3600 * 1000
   const mine = parent.filter(p => p.to >= since && p.project === project)
@@ -560,7 +593,7 @@ async function landBranchOf($: any, repo: string, header: string | undefined): P
   return BRANCH_RE.test(name) ? name : 'main'
 }
 
-/** The start, difficulty and cost a Landed row draws for a slice: the pipeline runs and spend of the ledger when it has them, else the slice's landed run of ANY workflow (a queue's own task workflow is not one of `TASK_WORKFLOWS`). Read from the ledger on disk, so they survive a restart of the host process. */
+/** The start, difficulty and cost a Done row draws for a slice: the pipeline runs and spend of the ledger when it has them, else the slice's landed run of ANY workflow (a queue's own task workflow is not one of `TASK_WORKFLOWS`). Read from the ledger on disk, so they survive a restart of the host process. */
 function landFigures(ledger: Ledger, slice: string): { start: number; difficulty: string; usd?: number; usdFloor?: number } {
   const lp = ledger.landed.get(slice)
   const start = ledger.runs.get(slice)?.start ?? lp?.start ?? NaN
@@ -585,8 +618,24 @@ function ledgerLands(ledger: Ledger, seen: Set<string>, own: Set<string>, shas: 
   return out
 }
 
-/** The Landed tree's rows, newest first, and the branch they were read from: the commits of the land branch carrying a `Slice:` trailer, then the ledger's landed task runs of the window that git does not show (each slice once). A slice whose queue line is still `running` has no row: its merge commit exists before the ledger and the mark, so the row would draw `?` figures and the task would leave the running group early. */
-async function lands($: any, queueFile: string, ledger: Ledger, header: string | undefined, own: Set<string>, running: Set<string>, shas: Map<string, string>, now: number): Promise<{ lands: Land[]; branch: string }> {
+/** The closed lines of the window that `seen` (the lands drawn) lacks, of the lines of THIS queue (`own`) whose queue line is done (`open` holds every line that is not: a running, pending, failed or awaiting line has no report): a research, design or human-answered line closes with no commit, so its row is a report, `isReport`, with no sha. Its figures are the line's whole ledger spend, as a land's. */
+function reportRows(ledger: Ledger, seen: Set<string>, own: Set<string>, open: Set<string>, now: number): Land[] {
+  const since = now - LAND_DAYS * 24 * 3600 * 1000
+  const out: Land[] = []
+  for (const [slice, c] of ledger.closed) {
+    if (!own.has(slice) || open.has(slice) || seen.has(slice) || c.endedAt < since || c.endedAt > now + 24 * 3600 * 1000) continue
+    const d = new Date(c.endedAt)
+    const at = `${dayOf(c.endedAt)} ${two(d.getHours())}:${two(d.getMinutes())}`
+    const t = ledger.totals.get(slice)
+    const start = ledger.runs.get(slice)?.start ?? c.start
+    const figure = t ? (!t.isUnmeasured ? { usd: t.usd } : t.isPartial ? { usdFloor: t.usd } : {}) : { ...(c.usd !== undefined ? { usd: c.usd } : {}), ...(c.usdFloor !== undefined ? { usdFloor: c.usdFloor } : {}) }
+    out.push({ sha: '', isReport: true, at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty: ledger.runs.get(slice)?.difficulty ?? c.difficulty, ...figure })
+  }
+  return out
+}
+
+/** The Done tree's rows, newest first, and the branch they were read from: the commits of the land branch carrying a `Slice:` trailer, then the ledger's landed task runs of the window that git does not show (each slice once), then the report rows of the lines that closed without a land. A slice whose queue line is still `running` has no row: its merge commit exists before the ledger and the mark, so the row would draw `?` figures and the task would leave the running group early. */
+async function lands($: any, queueFile: string, ledger: Ledger, header: string | undefined, own: Set<string>, running: Set<string>, open: Set<string>, shas: Map<string, string>, now: number): Promise<{ lands: Land[]; branch: string }> {
   const repo = repoOf(queueFile)
   if (repo === queueFile) return { lands: [], branch: 'main' }
   const branch = await landBranchOf($, repo, header)
@@ -607,7 +656,8 @@ async function lands($: any, queueFile: string, ledger: Ledger, header: string |
       return { sha: p[0] ?? '', at, slice, start: Number.isFinite(start) ? startText(start, at) : '?'.padEnd(5), difficulty, ...(usd !== undefined ? { usd } : {}), ...(usdFloor !== undefined ? { usdFloor } : {}) }
     })
   const extra = ledgerLands(ledger, new Set(fromGit.map(l => l.slice)), own, shas, now).filter(l => !running.has(l.slice))
-  return { lands: extra.length === 0 ? fromGit : [...fromGit, ...extra].sort((a, b) => landMs(b.at, now) - landMs(a.at, now)), branch }
+  const reports = reportRows(ledger, new Set([...fromGit, ...extra].map(l => l.slice)), own, open, now)
+  return { lands: extra.length + reports.length === 0 ? fromGit : [...fromGit, ...extra, ...reports].sort((a, b) => landMs(b.at, now) - landMs(a.at, now)), branch }
 }
 
 /** The Pool tab's data, cut to what the pane draws, from the engine's /api/pool answer (`poolSnapshot`). */
@@ -768,7 +818,7 @@ async function build($: any): Promise<Snapshot> {
     }),
     ...(ledger !== NO_LEDGER ? { failedSpend: failedSpend(failedRecent, failedTotals) } : {}),
   }
-  const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), new Set(queue.running.map(l => l.id)), loaded.shas ?? new Map(), now) : { lands: [], branch: 'main' }
+  const read = queue ? await lands($, queueFile, ledger, loaded.landBranch, new Set(loaded.taskIds ?? []), new Set(queue.running.map(l => l.id)), new Set(loaded.openIds ?? []), loaded.shas ?? new Map(), now) : { lands: [], branch: 'main' }
   const landed = read.lands
   const recent = landed.filter(l => landMs(l.at, now) > now - 24 * 3600 * 1000).length
   const landedSum = landedUsd(landed)
@@ -1068,7 +1118,7 @@ export const register: Register = on => {
       )
     }
     if (seen) {
-      const land = s?.lands.find(l => l.slice === seen.label)
+      const land = s?.lands.find(l => l.slice === seen.label && l.isReport !== true)
       return (
         <Text>
           <Text color={TONE.info}>⚙ [{seen.label}] </Text>

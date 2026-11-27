@@ -77,10 +77,10 @@ export type QueueView = {
   marks: Record<string, string>
 }
 
-/** A landed line: `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown), `usd` the ledger's real spend over every run of the line (absent: not measured, never $0); `usdFloor` stands in when a run recorded only a partial sum (an agent unmeasured): a lower bound drawn `≥$x`, never added to a total. */
-export type Land = { sha: string; slice: string; at: string; start: string; difficulty: string; usd?: number; usdFloor?: number }
+/** A row of the Done tree: a landed line (`sha` the commit) or, when `isReport` is set, a line that closed with no land (a research, design or human-answered line; `sha` is empty). `start` is the pipeline's start (`HH:MM`, `?` when the ledger has none), `difficulty` its final score ('' unknown), `usd` the ledger's real spend over every run of the line (absent: not measured, never $0); `usdFloor` stands in when a run recorded only a partial sum (an agent unmeasured): a lower bound drawn `≥$x`, never added to a total. */
+export type Land = { sha: string; slice: string; at: string; start: string; difficulty: string; usd?: number; usdFloor?: number; isReport?: true }
 
-/** One day of the Landed tree (`DD.MM`): the sum of the measured lines' `usd` over its landed lines and the failed and closed lines that ended that day, how many lines the sum covers, and how many of them were measured. */
+/** One day of the Done tree (`DD.MM`): the sum of the measured lines' `usd` over its rows (lands and reports) and the failed lines and the closed lines with no report row that ended that day, how many lines the sum covers, and how many of them were measured. */
 export type DaySpend = { usd: number; lines: number; measured: number; failed: number; closed: number }
 
 /** An agent seen linked to a workflow session: its slice (or workflow), role and last step. */
@@ -146,7 +146,7 @@ export type Snapshot = {
   recent: number
   /** per `DD.MM` of `lands`: the day's spend */
   days: Record<string, DaySpend>
-  /** the $ sum of the landed lines of `lands` (each line once; a line with no spend adds nothing); absent when none is measured */
+  /** the $ sum of the rows of `lands` (each line once; a line with no spend adds nothing); absent when none is measured */
   landedUsd?: number
   /** the parent's own spend recorded in the last 14 days in the queue repo's project (ledger `parent_spend`); absent when none is recorded */
   parentUsd?: number

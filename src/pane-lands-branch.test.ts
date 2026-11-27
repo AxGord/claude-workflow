@@ -24,7 +24,7 @@ test('Landed reads the queue repo\'s checked-out branch, not a hard-coded main',
   engine(on, true, { git: git as never, ledger: '' })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(2\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(2\)/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -32,7 +32,7 @@ test('a land with no Slice trailer is found through the ledger\'s completed task
   engine(on, true, { git: 'ccc333\t07.11 08:00\t', ledger: ranOf('DONE-1', '2026-11-07T11:50:00Z', 1.5) })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(1\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(1\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /DONE-1/ })).toBeDefined()
   await ui.unmount()
 })

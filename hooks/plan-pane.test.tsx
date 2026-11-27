@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerLandedOf, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, spawnOf, startText } from './plan-pane'
-import { SINGLE_FOLD_LEVELS, SINGLE_FOLD_ORDER, TAB_LINKS, cells, dayOf, dayText, execDeadlineMs, failedHeading, fitCells, foldFlipped, nodeText, paneTree, prioGlyph, landedHeading, spanText, usdText } from './pane-view'
+import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerClosedOf, ledgerLandedOf, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, recentLand, spawnOf, startText } from './plan-pane'
+import { SINGLE_FOLD_LEVELS, SINGLE_FOLD_ORDER, TAB_LINKS, cells, dayOf, dayText, execDeadlineMs, failedHeading, fitCells, foldFlipped, nodeText, paneTree, prioGlyph, doneHeading, spanText, usdText } from './pane-view'
 import type { PaneEl, PaneNode } from './pane-view'
 import type { PoolState, SessionRow, Snapshot, View } from '../types'
 import { API_POOL } from './fixtures/api-pool'
@@ -516,33 +516,33 @@ test('parentUsd: only the stretches that ended inside the 14 days and belong to 
   expect(parentUsd([], now, '-proj')).toBeUndefined()
 })
 
-test('landedHeading: count, landed $, parent $ and the parent\'s share of the landed sum', () => {
-  expect(landedHeading(434, 1234.4, 310.2)).toBe('✓ Landed · 14d (434) · $1234 · parent $310 (25%)')
-  expect(landedHeading(434, 1234.4, undefined)).toBe('✓ Landed · 14d (434) · $1234')
+test('doneHeading: count, landed $, parent $ and the parent\'s share of the landed sum', () => {
+  expect(doneHeading(434, 1234.4, 310.2)).toBe('✓ Done · 14d (434) · $1234 · parent $310 (25%)')
+  expect(doneHeading(434, 1234.4, undefined)).toBe('✓ Done · 14d (434) · $1234')
   // a line with no spend adds nothing: no landed figure at all when none is measured, and no unpriced marker
-  expect(landedHeading(3, undefined, undefined)).toBe('✓ Landed · 14d (3)')
+  expect(doneHeading(3, undefined, undefined)).toBe('✓ Done · 14d (3)')
   // the parent without a landed sum has no share to give
-  expect(landedHeading(3, undefined, 12.5)).toBe('✓ Landed · 14d (3) · parent $12.50')
-  expect(landedHeading(2, 8, 2)).toBe('✓ Landed · 14d (2) · $8.00 · parent $2.00 (25%)')
-  expect(landedHeading(2, 3, 2)).toBe('✓ Landed · 14d (2) · $3.00 · parent $2.00 (67%)')
+  expect(doneHeading(3, undefined, 12.5)).toBe('✓ Done · 14d (3) · parent $12.50')
+  expect(doneHeading(2, 8, 2)).toBe('✓ Done · 14d (2) · $8.00 · parent $2.00 (25%)')
+  expect(doneHeading(2, 3, 2)).toBe('✓ Done · 14d (2) · $3.00 · parent $2.00 (67%)')
 })
 
-test('the Landed heading carries the landed lines\' $ and the parent\'s $ with its share, over the same 14 days', async ($, on) => {
+test('the Done heading carries the landed lines\' $ and the parent\'s $ with its share, over the same 14 days', async ($, on) => {
   // L-ONE costs $1.234 (the one measured landed line); the parent spent $0.617 in the window, $50 on a stretch 20 days ago and $900 in another project's conversation
   const ledger = [LEDGER, parentRow('2026-11-07T11:50:00Z', 0.617), parentRow('2026-10-18T11:50:00Z', 50), parentRow('2026-11-07T11:55:00Z', 900, '-elsewhere')].join('\n')
   engine(on, true, { git: GIT, ledger })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(3\) · \$1\.23 · parent \$0\.62 \(50%\)$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(3\) · \$1\.23 · parent \$0\.62 \(50%\)$/ })).toBeDefined()
   await ui.unmount()
 })
 
-test('a pane narrower than the Landed heading cuts it with an ellipsis: it never wraps', async ($, on) => {
+test('a pane narrower than the Done heading cuts it with an ellipsis: it never wraps', async ($, on) => {
   const ledger = [LEDGER, parentRow('2026-11-07T11:50:00Z', 0.617)].join('\n')
   engine(on, true, { git: GIT, ledger })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 30 }, surface: 'terminal' })
-  const full = `▾ ${landedHeading(3, 1.234, 0.617)}`
+  const full = `▾ ${doneHeading(3, 1.234, 0.617)}`
   expect(cells(full)).toBeGreaterThan(30)
   expect(cells(fitCells(full, 30))).toBeLessThanOrEqual(30)
   expect(await ui.find({ type: 'Text', text: fitCells(full, 30) })).toBeDefined()
@@ -550,11 +550,11 @@ test('a pane narrower than the Landed heading cuts it with an ellipsis: it never
   await ui.unmount()
 })
 
-test('the Landed heading shows the landed $ and no parent figure while the ledger recorded none', async ($, on) => {
+test('the Done heading shows the landed $ and no parent figure while the ledger recorded none', async ($, on) => {
   engine(on, true, { git: GIT, ledger: LEDGER })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(3\) · \$1\.23$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(3\) · \$1\.23$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /parent/ })).toBeUndefined()
   await ui.unmount()
 })
@@ -564,7 +564,7 @@ test('Landed is a tree of the last 14 days: today open, older days folded; per r
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   expect(ran.some(r => r.includes('--since=14 days ago'))).toBe(true)
-  expect(await ui.find({ type: 'Text', text: /Landed · 14d \(3\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Done · 14d \(3\)/ })).toBeDefined()
   // today: two lands, one measured; the older day's sum is there, its rows are not
   expect(await ui.find({ type: 'Text', text: /▾ ▦ 07\.11 \(2\) \$1\.23$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▸ ▦ 06\.11 \(1\) —$/ })).toBeDefined()
@@ -868,7 +868,7 @@ test('a day header sums its landed lines and the failed and closed lines that en
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 200 }, surface: 'terminal' })
   // 1.5 + 2.25 landed, 3 + 7.5 failed, 0.5 closed; L-THREE has no spend: 5 of 6 lines measured
-  expect((await ui.find({ type: 'Text', text: /▦ 07\.11/ }))?.text).toBe('  ▾ ▦ 07.11 (3 landed) $14.75 incl. 2 failed, 1 closed')
+  expect((await ui.find({ type: 'Text', text: /▦ 07\.11/ }))?.text).toBe('  ▾ ▦ 07.11 (3 done) $14.75 incl. 2 failed, 1 closed')
   // each landed row its own line cost; the unmeasured one `—`
   expect(await ui.find({ type: 'Text', text: /\$1\.50 \d\d:\d\d-13:49 aaa111 L-ONE|\$1\.50 \?    -13:49 aaa111 L-ONE/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: / {4}— .*ccc333 L-THREE/ })).toBeDefined()
@@ -909,7 +909,7 @@ test('a run with a partial spend draws its measured sum as a lower bound, never 
   expect(all.some(t => /\$1\.50 .*aaa111 L-ONE/.test(t))).toBe(true)
   expect(all.some(t => / {4}— .*ccc333 L-THREE/.test(t))).toBe(true)
   // the partial line is no part of the day sum: it is a bound, not a cost
-  expect(all.some(t => /▦ 07\.11 \(3 landed\) \$1\.50/.test(t))).toBe(true)
+  expect(all.some(t => /▦ 07\.11 \(3 done\) \$1\.50/.test(t))).toBe(true)
 })
 
 test('ledgerSpendOf, ledgerLandedOf and ledgerTotalsOf: a partial run gives the floor, a run with no spend at all none', () => {
@@ -947,7 +947,7 @@ test('the band counts the lands of the last 24 hours, the tree holds 14 days', a
   expect(await band.find({ type: 'Text', text: /· ✓ 1$/ })).toBeDefined()
   await band.unmount()
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /Landed · 14d \(2\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Done · 14d \(2\)/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -1363,7 +1363,7 @@ test('Landed reads the queue repo\'s checked-out branch, not a hard-coded main, 
   engine(on, true, { git: gitOn('golf-int', 'golf-int', 'aaa111\t07.11 13:49\tL-ONE\nbbb222\t07.11 09:10\tL-TWO'), ledger: '' })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(2\) · golf-int/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(2\) · golf-int/ })).toBeDefined()
   expect(ran.some(r => r.includes('"log"') && r.includes('"golf-int"') && !r.includes('"main"'))).toBe(true)
   await ui.unmount()
 })
@@ -1374,7 +1374,7 @@ test('the queue header\'s land_branch wins over the checked-out branch', async (
   try {
     await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(1\) · release/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(1\) · release/ })).toBeDefined()
     expect(ran.some(r => r.includes('"golf-int"'))).toBe(false)
     await ui.unmount()
   } finally {
@@ -1386,7 +1386,7 @@ test('a git that names no usable branch reads main', async ($, on) => {
   engine(on, true, { git: gitOn('main', 'HEAD detached at abc', 'aaa111\t07.11 13:49\tL-ONE'), ledger: '' })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(1\)$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(1\)$/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -1395,7 +1395,7 @@ test('a land with no Slice trailer is found through the ledger\'s landed rows of
   engine(on, true, { git: 'ccc333\t07.11 08:00\t\nddd444\t07.11 09:00\tL-BOTH', ledger })
   await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(2\)/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(2\)/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /DONE-1/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /ddd444 L-BOTH/ })).toBeDefined()
   // a landed task of another queue (the ledger holds every project's runs) is not this pane's land
@@ -1409,12 +1409,91 @@ test('the ledger fallback also finds a land of a line the queue has archived', a
   try {
     await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
     const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-    expect(await ui.find({ type: 'Text', text: /✓ Landed · 14d \(1\)/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /✓ Done · 14d \(1\)/ })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /ARCH-1/ })).toBeDefined()
     await ui.unmount()
   } finally {
     delete (API_QUEUE as Record<string, unknown>).archivedIds
   }
+})
+
+/** A finished run of a research workflow as the ledger holds it: completed through `visits`, no land state. */
+const researched = (task: string, ended: string, usd: number, extra: Record<string, unknown> = {}) =>
+  JSON.stringify({ workflow: 'research-task', task, started_at: new Date(Date.parse(ended) - 30 * 60_000).toISOString(), ended_at: ended, outcome: 'completed', visits: { research: 1, report: 1 }, difficulty: 3,
+    spend: { agents: 1, usd, input: 1, output: 1, cache_read: 1, cache_write: 1 }, ...extra })
+
+test('ledgerClosedOf: the line\'s LATEST run of any workflow, when it completed with no land; a failed or landed latest run, a recon child of the same task and a torn row give nothing', () => {
+  const text = [
+    researched('R-1', '2026-11-07T09:00:00Z', 2),
+    ran1('R-FAIL', '2026-11-07T09:00:00Z', 1, 'failed'),
+    researched('R-RETRY', '2026-11-07T08:50:00Z', 1),
+    ran1('R-RETRY', '2026-11-07T09:10:00Z', 1, 'failed'),
+    ran1('R-LANDED', '2026-11-07T09:00:00Z', 1),
+    researched('R-LANDED', '2026-11-07T08:00:00Z', 1),
+    JSON.stringify({ workflow: 'engine-task', task: 'R-CHILD', session_id: 'p', started_at: '2026-11-07T08:00:00Z', ended_at: '2026-11-07T09:00:00Z', outcome: 'abandoned', visits: { work: 1 } }),
+    JSON.stringify({ workflow: 'recon', task: 'R-CHILD', session_id: 'c', parent_session_id: 'p', started_at: '2026-11-07T08:00:00Z', ended_at: '2026-11-07T09:30:00Z', outcome: 'completed', visits: { read: 1 } }),
+    'torn{"task"',
+  ].join('\n')
+  const m = ledgerClosedOf(text)
+  expect([...m.keys()]).toEqual(['R-1'])
+  expect(m.get('R-1')).toEqual({ start: Date.parse('2026-11-07T08:30:00Z'), endedAt: Date.parse('2026-11-07T09:00:00Z'), difficulty: '3', usd: 2 })
+  expect(ledgerClosedOf(partial(researched('R-P', '2026-11-07T09:00:00Z', 4))).get('R-P')).toMatchObject({ usdFloor: 4 })
+})
+
+test('Done: a line that closed with a report (a research line) has a row beside the lands, in time order, marked `✎ report` where a land has its sha; the heading and the day count and sum cover both', async ($, on) => {
+  // ARCH-R: a research line of the archive, closed; ARCH-E: closed in the engine-task workflow (the pipeline's own spend row); DONE-1: landed.
+  // A running, a pending and a failed line, and a failed run of an archived line, have no report row.
+  const at = (h: number, m: number) => new Date(2026, 10, 7, h, m).toISOString()
+  const ledger = [
+    ranOf('DONE-1', at(9, 50), 1.5),
+    researched('ARCH-R', at(9, 20), 2),
+    ran1('ARCH-E', at(9, 30), 0.25, 'closed'),
+    ran1('ARCH-F', at(9, 35), 9, 'failed'),
+    researched('RUN-1', at(9, 40), 8),
+    researched('NEXT-2', at(9, 41), 8),
+    researched('FAIL-LONG', at(9, 42), 8),
+  ].join('\n')
+  engine(on, true, { git: '', ledger })
+  ;(API_QUEUE as Record<string, unknown>).archivedIds = ['ARCH-R', 'ARCH-E', 'ARCH-F']
+  try {
+    const all = await paneTexts($, 200)
+    expect(all.some(t => t.includes('✓ Done · 14d (3) · $3.75'))).toBe(true)
+    // the day: its three rows are counted once, the closed lines have rows (so no `incl. closed`); the failed archived run is added
+    expect(all.find(t => /▦ 07\.11/.test(t))).toBe('  ▾ ▦ 07.11 (3 done) $12.75 incl. 1 failed')
+    const rows = all.filter(t => /DONE-1|ARCH-R|ARCH-E|ARCH-F|RUN-1|NEXT-2|FAIL-LONG/.test(t) && /\d\d:\d\d-\d\d:\d\d/.test(t))
+    expect(rows.map(t => /(DONE-1|ARCH-R|ARCH-E)/.exec(t)?.[1])).toEqual(['DONE-1', 'ARCH-E', 'ARCH-R'])
+    expect(rows.find(t => t.includes('ARCH-R'))).toMatch(/▰▰▱▱▱ .* \$2\.00 .*-\d\d:\d\d ✎ report ARCH-R$/)
+    expect(rows.find(t => t.includes('ARCH-E'))).toMatch(/\$0\.25 .*✎ report ARCH-E$/)
+    expect(rows.find(t => t.includes('DONE-1'))).not.toContain('report')
+    expect(rows.some(t => /ARCH-F|RUN-1|NEXT-2|FAIL-LONG/.test(t))).toBe(false)
+  } finally {
+    delete (API_QUEUE as Record<string, unknown>).archivedIds
+  }
+})
+
+test('the band\'s ✓ counts the report rows of the last 24 hours with the lands (the Done tree\'s rows), a report older than that no more than a land', async ($, on) => {
+  const at = (day: number, h: number) => new Date(2026, 10, day, h).toISOString()
+  engine(on, true, { git: 'aaa111\t07.11 09:00\tL-ONE', ledger: [researched('ARCH-R', at(7, 9), 2), researched('ARCH-OLD', at(4, 9), 2)].join('\n') })
+  ;(API_QUEUE as Record<string, unknown>).archivedIds = ['ARCH-R', 'ARCH-OLD']
+  try {
+    on('ui.render', ($: any, e: any) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
+    await $.session.start({ cwd: '/proj', surface: 'terminal', isInteractive: true })
+    const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+    expect(await band.find({ type: 'Text', text: /· ✓ 2$/ })).toBeDefined()
+    await band.unmount()
+  } finally {
+    delete (API_QUEUE as Record<string, unknown>).archivedIds
+  }
+})
+
+test('recentLand: a report row is no landing, whatever its slice says', () => {
+  const now = Date.parse('2026-11-07T10:05:00Z')
+  const row = { sha: '', at: '07.11 09:20', slice: 'ARCH-R', start: '08:30', difficulty: '3', isReport: true as const }
+  expect(recentLand([row], 'ARCH-R', now, now)).toBeUndefined()
+  expect(recentLand([{ ...row, sha: 'abc1234', isReport: undefined } as never], 'ARCH-R', now, now)?.sha).toBe('abc1234')
 })
 
 // --- the single-task view: a session with no work queue, one screen with no tabs ---

@@ -40,13 +40,13 @@ function texts(n: PaneNode, re: RegExp): string[] {
 }
 
 describe("render-banner defaultAt lands on a moment that shows prices", () => {
-  it("at the default moment the plan pane shows a Landed row with `$`", () => {
+  it("at the default moment the plan pane shows a Done row with `$`", () => {
     const at = DEFAULT_AT * 1000;
     expect(at).toBeLessThanOrEqual(file.durationMs);
     const snap = snapshotAt(file, at);
     const landedWithUsd = snap.lands.filter(l => l.usd !== undefined);
     expect(landedWithUsd.length).toBeGreaterThanOrEqual(B.DEFAULT_LANDED_ROWS);
-    expect(texts(draw(at), /✓ Landed.*\$\d/).length).toBeGreaterThan(0);
+    expect(texts(draw(at), /✓ Done.*\$\d/).length).toBeGreaterThan(0);
   });
 
   it("the moment is the FIRST second with that many priced lands, read from the replay", () => {

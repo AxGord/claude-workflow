@@ -39,7 +39,7 @@ before Claude Code's built-in Workflow tool became available (v2.1.146, 20 May 2
 - **Subagents** — driver, experimental dispatcher (off unless `WF_DISPATCHER`), recon, reviewer ([Agent types][agents])
 - **22 bundled workflows**, **30 bundled skills** (15 by default, 15 on request) ([Concepts][concepts])
 - **Survives a restart** — sessions are suspended, not lost; `claude --resume` continues them ([Restart][restart])
-- **Live dashboard** — map, plan pane (in your terminal's theme), status line, light or dark ([Dashboard][dashboard])
+- **Live dashboard** — map, plan pane (runs, lands, reports), status line, light or dark ([Dashboard][dashboard])
 
 ## Install
 

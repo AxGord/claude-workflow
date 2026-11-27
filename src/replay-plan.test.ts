@@ -91,7 +91,7 @@ describe("the site draws the replay with the mod's own pane code (hooks/pane-vie
     expect(texts(draw(25), /^▾ ▶ Running 1\/1$/)).toHaveLength(1);
     expect(texts(draw(25), /▰▰▰▰▱ ※ A {2}work/)).toHaveLength(1);
     expect(texts(draw(25), /^▾ ⏭ Next \(3\)$/)).toHaveLength(1);
-    expect(texts(draw(160), /^▾ ✓ Landed · 14d \(1\)$/)).toHaveLength(1);
+    expect(texts(draw(160), /^▾ ✓ Done · 14d \(1\)$/)).toHaveLength(1);
     expect(texts(draw(160), /✗ Failed \(1\)/)).toHaveLength(1);
   });
 });

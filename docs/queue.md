@@ -26,7 +26,7 @@ base: [/abs/repo=<sha>]
 land_test: npm test           # run after each merge (batch-task's default land)
 record_file: records.md
 overlap: files                # optional: only FILE entries of `touches:` conflict (default `paths`)
-land_branch: integration      # optional: the branch the plan pane's Landed tree reads (default: the repo's checked-out branch, else main)
+land_branch: integration      # optional: the branch the plan pane's Done tree reads (default: the repo's checked-out branch, else main)
 tasks:
   - id: T1
     status: pending           # pending | running | awaiting | done | failed | backlog

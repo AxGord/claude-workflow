@@ -25,37 +25,42 @@ The pane's parts:
     - It has the same cap and `+N more` fold; nothing to list = `nothing ready`.
     - The priority is a coloured one-cell glyph after the id, one space after the id, never padded to a column: `⇈` urgent red, `↑` high orange, `↓` low grey, normal none and a blank cell.
     - The dashboard's plan rows use the same glyphs, and its `next:` strip lists the same unblocked rows.
-  - `✓ Landed · 14d (n) · $landed · parent $P (S%) · branch`: the queue repo's `git log --first-parent` lines carrying a `Slice:` trailer, the Cost tab's 14 days. The heading's parts:
+  - `✓ Done · 14d (n) · $done · parent $P (S%) · branch`: the queue repo's `git log --first-parent` lines carrying a `Slice:` trailer, and the lines that closed with no commit (a report row, below), the Cost tab's 14 days. The heading's parts:
     - The log is of the branch the queue's lands target: the header's `land_branch:` when set, else the repo's checked-out branch (`git branch --show-current`), else `main`. The heading names the branch when it is not `main`.
     - A land made before the repo wrote the trailer, which git does not show, is read from the ledger's task runs that went through a `land` state in the window, of whatever workflow.
     - Such a land is read only for a line of this queue or its archive (the ledger holds every project's runs). Each slice counts once.
     - Its sha column is the commit the line's own `landed <sha>` note names (any case, the latest such note; `/api/queue` carries it as `landedSha`).
     - A line with `repo:` set lands in that repo, whose commits carry no `Slice:` trailer, so only its note names the commit.
     - A land whose notes name no sha draws `—`.
-    - `$landed` is the sum of the ledger's real `spend.usd` over those lines, each line once. A line with no spend row, or only a partial one (`usd_partial`), adds nothing, and `$landed` is absent when no line is measured.
+    - `n` counts every row, lands and reports, and `$done` sums the ledger's real `spend.usd` over those rows, each line once. A line with no spend row, or only a partial one (`usd_partial`), adds nothing, and `$done` is absent when no row is measured.
     - `parent $P` is the top-level Claude Code session's own spend recorded in the same 14 days, of the queue repo's own conversations only (ledger `parent_spend`, below). Its `project` is matched to the repo by Claude Code's project directory name.
-    - `S%` is the parent's share of `$landed`, absent without a landed sum.
+    - `S%` is the parent's share of `$done`, absent without a sum.
     - A title longer than the pane is cut with `…`.
-  - A slice whose queue line is still `running` has no Landed row, whatever git or the ledger show: the land's merge commit exists before the ledger entry and the queue mark, and a row drawn then would read `? —` while the task left the running group early. The row appears when the line is marked done.
-  - The Landed section is a tree:
+  - A slice whose queue line is still `running` has no Done row, whatever git or the ledger show: the land's merge commit exists before the ledger entry and the queue mark, and a row drawn then would read `? —` while the task left the running group early. The row appears when the line is marked done.
+  - A line that closed `done` with no land (a research line, a design line, a line a person answered) has a **report row** in the same tree, in time order with the lands:
+    - Its latest ledger run, of any workflow, completed with no `land` state, and its queue line is done or archived. A running, pending, failed or awaiting line has none, and neither has a line whose latest run failed.
+    - It draws `✎ report` where a land draws its sha; its start and difficulty come from the line's latest run and its cost is the line's whole ledger spend, whatever workflow ran it. A recon child of the same task is no run of the line.
+    - It is counted in the heading and the day row, and its cost is in both sums. A driver's end notification of such a line does not say `landed`.
+    - The section was `Landed` before reports joined it; the fold keys (`lands`, `lands-DD.MM`) are unchanged, so a day a person folded stays folded.
+  - The Done section is a tree:
     - One foldable `▦ DD.MM (n) <day spend>` row per day. Today is open, the older days are folded until a click; a day the person folded or opened stays so past midnight.
-    - Under it, one `▰▰▱▱▱ ◆ $cost start-end sha id` row per land.
+    - Under it, one `▰▰▱▱▱ ◆ $cost start-end sha id` row per land, `▰▰▱▱▱ ⚑ $cost start-end ✎ report id` per report.
     - The difficulty bar is first on every row that has one (`?????` when unknown), then the line's kind glyph (a blank cell for a land that is not in the queue).
     - The start is the ledger's `started_at` of the line's task session, matched by its `task`, which the ledger records from the session context. It reads `?` for a land with no ledger row, and carries a `DD.MM` prefix when the run began the day before.
     - Lands of other repos do not appear: the list is the queue repo's log.
     - Each section and day folds on a click.
     - A day's spend counts a failed or closed line only when its latest run ended on that very date (not the same `DD.MM` of another year).
-    - The status band's `✓ n` still counts the last 24 hours.
-  - **Cost.** Each Landed and Failed row carries `$cost` right after the kind glyph (the difficulty bar stays first).
-    - It is the ledger's real `spend.usd` summed over every task run of the line (`slice-pipeline` / `engine-task` rows with a `task`). When a run's sum left an agent out (`usd_partial`) and every run has a figure, the row draws the sum as a lower bound, `≥$17.40`; it is not added to a day, the Landed heading or the Failed header.
+    - The status band's `✓ n` still counts the rows of the last 24 hours, reports too.
+  - **Cost.** Each Done and Failed row carries `$cost` right after the kind glyph (the difficulty bar stays first).
+    - It is the ledger's real `spend.usd` summed over every task run of the line (`slice-pipeline` / `engine-task` rows with a `task`). When a run's sum left an agent out (`usd_partial`) and every run has a figure, the row draws the sum as a lower bound, `≥$17.40`; it is not added to a day, the Done heading or the Failed header.
     - A line any of whose runs recorded no spend, or that has no ledger row, shows `—`, never `$0.00`.
     - A failed row reads the same source as the Failed header: the whole ledger through `/api/ledger-rows`, not the 30-day `ledger-recent.jsonl`. So a line whose runs are older than 30 days shows its cost, and the counted rows add up to the header's total.
     - A line with a run of no recorded spend, in any window, shows `—`.
-    - A land found in git whose task ran in a workflow other than those two (a sibling project's own task workflow) draws its difficulty, start and cost from the ledger row of its landed run. So a Landed row is never blank beside a ledger that knows it.
+    - A land found in git whose task ran in a workflow other than those two (a sibling project's own task workflow) draws its difficulty, start and cost from the ledger row of its landed run. So a Done row is never blank beside a ledger that knows it.
     - A figure is `$1.23` under $100, whole dollars above, right-aligned to the section's widest, and never cut: in the two-line form it is on the first line and the id is cut before it.
-  - **Day sums.** A day row carries the day's sum: its landed lines plus the failed and closed lines whose latest run ended that day.
+  - **Day sums.** A day row carries the day's sum: its rows (lands and reports) plus the failed lines, and the closed lines that have no report row, whose latest run ended that day.
     - A line is counted once; `closed` = completed without a `land` state, as the Cost tab reads it.
-    - The row says what it includes: `▦ 07.11 (3 landed) $14.75 incl. 2 failed, 1 closed`. The count is of the rows under the day, and `landed` is added when the sum covers lines that are not rows.
+    - The row says what it includes: `▦ 07.11 (3 done) $14.75 incl. 2 failed, 1 closed`. The count is of the rows under the day, and `done` is added when the sum covers lines that are not rows.
     - A day with no measured line reads `—`.
     - A line's whole cost (all its runs) sits on one day of the sums: the day it landed, or for a failed or closed line the day its latest run ended. A run on an earlier day adds nothing to that day.
   - `✗ Failed (n)` follows, folded until a click.
@@ -80,9 +85,9 @@ The pane's parts:
     - The two-line form of each section is first line / second line:
       - Running: bar, kind, id / the state, the next step, the age.
       - Next: bar, kind, id, priority glyph / the id and its glyph.
-      - Landed: bar, kind, cost, times, sha / the id.
+      - Done: bar, kind, cost, times, sha (`✎ report`) / the id.
       - Failed: bar, kind, cost, id, date / the reason.
-    - Landed is measured over the rows of the open days only: a row of a folded day neither flips the section to the two-line form nor widens its cost column.
+    - Done is measured over the rows of the open days only: a row of a folded day neither flips the section to the two-line form nor widens its cost column.
     - Failed: the full reason is measured, so a long one makes the section two-line.
 - **Sessions** (a session with a work queue) — the workflow sessions of THIS Claude Code session as a tree (`◆` a root with children, bright `⚙` a working leaf). A click opens a session's card:
   - where it came from (its last moves);
@@ -471,7 +476,7 @@ With the plan pane closed, the Claude Code mod draws a band above the prompt (`h
 The picture is the band drawn from a recorded session by the code the mod uses, `statusBandTree` of `hooks/pane-view.ts`; drag the slider to another moment.
 
 - The root session of this Claude Code instance, as `workflow:state`: `◆` in bold once it has children, else `⚙` (bright while an agent or an engine step works in it, plain while it waits), and the other sessions' count in parentheses: `◆ slice-dispatch:collect (5)`.
-- The queue, when there is one: `▶` running / window, `⏭` ready, `✓` landed in the last 24 hours.
+- The queue, when there is one: `▶` running / window, `⏭` ready, `✓` rows of the Done tree, lands and reports, of the last 24 hours.
 - `[plan]` (key `p`) opens the pane.
 - With an agent's transcript in view, the band shows that agent's workflow session and the deepest state under it instead.
 
@@ -483,7 +488,7 @@ The landing page shows the replay on one 16:9 stage:
 - The Claude Code window is drawn over it, translucent: a dark terminal in the site's dark theme and a white one in its light theme. The window's chrome and the pane's colours switch together with `html.dark`; the pane's `--tc-<theme key>` palette is in `PaneView.vue`.
 - The window shows the parent conversation's lines (each pipeline started, its driver spawned, a question and its answer, a land) and the plan pane.
 - The pane is not an imitation: `hooks/pane-view.ts` is what the pane draws, a pure function of a Snapshot. The mod draws it with Claude Code's elements and the site draws it in the browser.
-- `snapshotAt` (`src/replay.ts`) builds that Snapshot from the replay's events and its spend, so a Landed row shows `$x.xx` and the day row its sum.
+- `snapshotAt` (`src/replay.ts`) builds that Snapshot from the replay's events and its spend, so a Done row shows `$x.xx` and the day row its sum.
 - A thin strip at the stage's foot draws the machine's thread pool over the replay's hours (threads held against the budget, the waiters along the top) with a cursor at the clock.
 - The window's Pool tab shows the pool at that moment through the mod's own `poolBody` (the log carries no priority or age, so its rows show none).
 - A lane whose exec waits for a pool lease carries the map's "waiting for the pool" mark.

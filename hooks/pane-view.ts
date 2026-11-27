@@ -36,11 +36,14 @@ export const TONE = {
   pool: 'autoAccept',
   high: 'claude',
 } as const
-/** How far back the Landed tree goes: the Cost tab's own range. */
+/** What a report row of the Done tree draws where a land draws its sha: the line closed with a report, not a commit. */
+export const REPORT_MARK = '✎ report'
+
+/** How far back the Done tree goes: the Cost tab's own range. */
 export const LAND_DAYS = 14
 /** The Failed section lists the lines that ended within this many days; the rest fold under `+N older`. */
 export const FAILED_DAYS = 2
-/** Sections that start folded: a click on one unfolds it. Each `+N more` fold row of the pane is one (`next-more`, `waiting-more`, `sessions-more`): closed, the list stops at its cap; open, it lists every row. A day of the Landed tree other than today starts folded too (`lands-DD.MM`). */
+/** Sections that start folded: a click on one unfolds it. Each `+N more` fold row of the pane is one (`next-more`, `waiting-more`, `sessions-more`): closed, the list stops at its cap; open, it lists every row. A day of the Done tree other than today starts folded too (`lands-DD.MM`). */
 export const FOLDED_BY_DEFAULT = new Set(['failed', 'failed-older', 'next-more', 'waiting-more', 'sessions-more'])
 
 /** What a press on a button of the pane asks for: the drawer owns the state and applies it. */
@@ -94,7 +97,7 @@ export function age(ms: number): string {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`
 }
 
-/** `DD.MM` of a moment, in local time: the key of a day of the Landed tree. */
+/** `DD.MM` of a moment, in local time: the key of a day of the Done tree. */
 export function dayOf(ms: number): string {
   const d = new Date(ms)
   return `${two(d.getDate())}.${two(d.getMonth() + 1)}`
@@ -169,14 +172,14 @@ export function foldFlipped(foldedKeys: string[], key: string): string[] {
   return foldedKeys.includes(key) ? foldedKeys.filter(k => k !== key) : [...foldedKeys, key]
 }
 
-/** A Landed day (`lands-DD.MM`) is open when the person opened it, folded when they folded it, else open only on today. The fold list holds an explicit `+key` / `-key` for a day, never a flip of the default: a default that changes at midnight must not flip a day the person chose. */
+/** A Done day (`lands-DD.MM`) is open when the person opened it, folded when they folded it, else open only on today. The fold list holds an explicit `+key` / `-key` for a day, never a flip of the default: a default that changes at midnight must not flip a day the person chose. */
 export function landDayOpen(foldedKeys: string[], key: string, today: string): boolean {
   if (foldedKeys.includes('-' + key)) return false
   if (foldedKeys.includes('+' + key)) return true
   return key === today
 }
 
-/** The fold list after a click on a Landed day: the opposite of what it showed, written explicitly. */
+/** The fold list after a click on a Done day: the opposite of what it showed, written explicitly. */
 export function landDayToggled(foldedKeys: string[], key: string, today: string): string[] {
   const wasOpen = landDayOpen(foldedKeys, key, today)
   return [...foldedKeys.filter(k => k !== '+' + key && k !== '-' + key), (wasOpen ? '-' : '+') + key]
@@ -188,16 +191,16 @@ export function usdText(usd: number | undefined, floor?: number): string {
   return '$' + (usd < 100 ? usd.toFixed(2) : usd.toFixed(0))
 }
 
-/** A day row's spend: the sum (`—` when no line is measured) and what it includes besides landed lines. */
+/** A day row's spend: the sum (`—` when no line is measured) and what it includes besides its rows. */
 export function dayText(d: DaySpend): string {
   const extra = [d.failed > 0 ? `${d.failed} failed` : '', d.closed > 0 ? `${d.closed} closed` : ''].filter(x => x !== '').join(', ')
   return `${d.measured === 0 ? '—' : usdText(d.usd)}${extra !== '' ? ` incl. ${extra}` : ''}`
 }
 
-/** `✓ Landed · 14d (434) · $1234 · parent $310 (25%) · golf-int`: the count, the landed lines' spend (absent when none is measured), the parent's spend and its share of the landed sum (the share absent when there is no landed sum), the land branch when it is not `main`. */
-export function landedHeading(count: number, landed: number | undefined, parent: number | undefined, branch = 'main'): string {
-  const share = landed !== undefined && landed > 0 && parent !== undefined ? ` (${String(Math.round((parent / landed) * 100))}%)` : ''
-  return `✓ Landed · ${LAND_DAYS}d (${count})${landed !== undefined ? ' · ' + usdText(landed) : ''}${parent !== undefined ? ' · parent ' + usdText(parent) + share : ''}${branch !== 'main' ? ' · ' + branch : ''}`
+/** `✓ Done · 14d (434) · $1234 · parent $310 (25%) · golf-int`: the count of rows (lands and reports), their spend (absent when none is measured), the parent's spend and its share of that sum (the share absent when there is no sum), the land branch when it is not `main`. */
+export function doneHeading(count: number, done: number | undefined, parent: number | undefined, branch = 'main'): string {
+  const share = done !== undefined && done > 0 && parent !== undefined ? ` (${String(Math.round((parent / done) * 100))}%)` : ''
+  return `✓ Done · ${LAND_DAYS}d (${count})${done !== undefined ? ' · ' + usdText(done) : ''}${parent !== undefined ? ' · parent ' + usdText(parent) + share : ''}${branch !== 'main' ? ' · ' + branch : ''}`
 }
 
 /** `✗ Failed (28) · $41.20 (parent $6.10) · 3 not in the ledger · 2 unmeasured`: the count, the lines' spend, the parent's spend when it has one, how many lines the ledger has no row of (they add 0; `no ledger rows` when none has) and how many have a run with no recorded spend (left out of the sums; their rows show `—`). */
@@ -540,7 +543,7 @@ export function paneTree(input: PaneInput): PaneNode {
     key.startsWith('lands-') ? landDayOpen(foldedNow, key, today) : foldedNow.includes(key) === FOLDED_BY_DEFAULT.has(key)
   // a section header of the Plan tab: a click folds or unfolds it (all unfolded by default but FOLDED_BY_DEFAULT ones and the days before today)
   const columns = input.columns
-  // a long title (the Landed heading with its sums) is cut with an ellipsis, never wrapped
+  // a long title (the Done heading with its sums) is cut with an ellipsis, never wrapped
   const header = (key: string, color: string, title: string) =>
     button('fold-' + key, { kind: 'fold', key }, [text({ color, weight: 'bold' }, fitCells(`${isOpen(key) ? '▾' : '▸'} ${title}`, columns))])
   // the `+N more` row that follows a capped list's first lines: a click lists the rest below it (▾) or caps the list again (▸), the fold kept across refreshes
@@ -667,7 +670,7 @@ export function paneTree(input: PaneInput): PaneNode {
       ),
     )
   } else {
-    // Next shows up to 10, fitted to the pane; Landed lists the whole day (the pane scrolls) and folds on a click
+    // Next shows up to 10, fitted to the pane; Done lists the whole day (the pane scrolls) and folds on a click
     const pipelineOf = new Map(s.sessions.filter(r => r.tag !== '').map(r => [r.tag, r]))
     const whereOf = (id: string) => {
       const p = pipelineOf.get(id)
@@ -705,7 +708,9 @@ export function paneTree(input: PaneInput): PaneNode {
     const landCost = costCol(shownLands)
     const failCost = costCol(shownFailed)
     const costOf = (l: { usd?: number; usdFloor?: number }, c: { text: (l: { usd?: number; usdFloor?: number }) => string }) => text({ dimColor: l.usd === undefined && l.usdFloor === undefined }, c.text(l))
-    const landTwo = !fitsOneLine(shownLands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l)} ${l.start}-${l.at.slice(6)} ${l.sha} ${l.slice}`), columns)
+    // a report row (a line that closed with no commit) names itself where a land names its sha
+    const shaOf = (l: { sha: string; isReport?: true }) => (l.isReport ? REPORT_MARK : l.sha)
+    const landTwo = !fitsOneLine(shownLands.map(l => `    ${BAR_W} ${markOf(l.slice)} ${landCost.text(l)} ${l.start}-${l.at.slice(6)} ${shaOf(l)} ${l.slice}`), columns)
     const stampOf = (date: string) => {
       // `YYYY-MM-DD` of the last note as `DD.MM`; a line with no dated note says so
       const when = /^\d{4}-(\d\d)-(\d\d)$/.exec(date)
@@ -759,7 +764,7 @@ export function paneTree(input: PaneInput): PaneNode {
               : text({}, '  ', level(l.difficulty), ' ', kindOf(l.id), ' ', l.id, ' ', prioCell(l.priority), waitTail(l.wait, columns - cells(`  ${BAR_W} ${markOf(l.id)} ${l.id} `) - 1)),
           )
         : null,
-      header('lands', TONE.ok, landedHeading(s.lands.length, s.landedUsd, s.parentUsd, s.landBranch)),
+      header('lands', TONE.ok, doneHeading(s.lands.length, s.landedUsd, s.parentUsd, s.landBranch)),
       isOpen('lands')
         ? [...new Set(s.lands.map(l => l.at.slice(0, 5)))].flatMap(day => {
             // `at` is `DD.MM HH:MM` (numeric: locale-free): one foldable row per day with its spend, its lands one level deeper
@@ -767,16 +772,16 @@ export function paneTree(input: PaneInput): PaneNode {
             const spend = s.days[day]
             const key = 'lands-' + day
             return [
-              button('fold-' + key, { kind: 'landDay', key, today }, [text({ dimColor: true }, fitCells(`  ${isOpen(key) ? '▾' : '▸'} ▦ ${day} (${mine.length}${spend && spend.failed + spend.closed > 0 ? ' landed' : ''})${spend ? ' ' + dayText(spend) : ''}`, columns))]),
+              button('fold-' + key, { kind: 'landDay', key, today }, [text({ dimColor: true }, fitCells(`  ${isOpen(key) ? '▾' : '▸'} ▦ ${day} (${mine.length}${spend && spend.failed + spend.closed > 0 ? ' done' : ''})${spend ? ' ' + dayText(spend) : ''}`, columns))]),
               ...(isOpen(key)
                 ? mine.map(l =>
                     landTwo
                       // two lines: bar, kind, cost, times, sha; the id indented under them
                       ? col(
-                          text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l, landCost), ' ', text({ dimColor: true }, fitCells(`${l.start}-${l.at.slice(6)} ${l.sha}`, Math.max(1, columns - 13 - landCost.w)))),
+                          text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l, landCost), ' ', text({ dimColor: true }, fitCells(`${l.start}-${l.at.slice(6)} ${shaOf(l)}`, Math.max(1, columns - 13 - landCost.w)))),
                           text({}, '    ', TAB, fitCells(l.slice, Math.max(1, columns - 4 - TAB.length))),
                         )
-                      : text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l, landCost), ' ', text({ dimColor: true }, `${l.start}-${l.at.slice(6)} ${l.sha}`), ' ', l.slice),
+                      : text({}, '    ', level(l.difficulty), ' ', kindOf(l.slice), ' ', costOf(l, landCost), ' ', text({ dimColor: true }, `${l.start}-${l.at.slice(6)} ${shaOf(l)}`), ' ', l.slice),
                   )
                 : []),
             ]

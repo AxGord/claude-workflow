@@ -5,7 +5,7 @@
 // (1280x640, the size GitHub asks of a repository's social preview; the same bytes are also written to
 // docs/public/og.png, the image the site's Open Graph and Twitter cards name). One command:
 //
-//   npm run docs:banner [-- --at <replay s>]   (default: the first moment with three priced Landed rows)
+//   npm run docs:banner [-- --at <replay s>]   (default: the first moment with three priced Done rows)
 //
 // The banner: the logo, the site's name and tagline (docs/index.md's hero) and one line of what the product is made of
 // (the bundled workflows counted from templates/, so the number is never typed) on the left; a schematic of a task's
@@ -25,7 +25,7 @@ import { DARK, LIGHT, logoMark, logoSvg, faviconSvg } from "./brand.mjs";
 
 export { DARK, LIGHT, logoMark, logoSvg, faviconSvg };
 
-/** How many Landed rows (each with its spend) the default moment shows: enough to read as a plan pane that has been working. */
+/** How many Done rows (each with its spend) the default moment shows: enough to read as a plan pane that has been working. */
 export const DEFAULT_LANDED_ROWS = 3;
 
 /** The replay the site plays, as `npm run docs:replay` exports it. */
@@ -33,7 +33,7 @@ export const REPLAY_FILE = "docs/public/replay/anyparse.json";
 
 /**
  * The replay moment (seconds in) the scene is captured at: the first second at which the plan pane shows at least
- * `rows` Landed rows that carry a price (a root session with a task that moved through `land`, ended completed, and
+ * `rows` Done rows that carry a price (a root session with a task that moved through `land`, ended completed, and
  * has an entry in the file's `spend`, as `snapshotAt` in src/replay.ts counts them). Read from the replay itself, so a
  * re-export that moves the lands moves the banner with it; throws when the replay never gets that far.
  */

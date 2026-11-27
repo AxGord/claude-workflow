@@ -671,10 +671,10 @@ const windows = new WeakMap<ReplayFile, number>();
 /**
  * The plan pane's Snapshot at `at` ms into the replay, as the mod builds it from the engine's state files and
  * queue (hooks/plan-pane.tsx): the live sessions, the queue (a root session with a task is a queue line: pending
- * before it starts, Running until it ends, then done — Landed when it moved through `land` — or failed when it
+ * before it starts, Running until it ends, then done — a Done row when it moved through `land` — or failed when it
  * did not complete; the pending ones are the file's `queue` read at the moment, `queueAt`: Next when the pick would admit
  * them, Waiting with its reason while a line it waits for is still going, else the lines that start later) and the lands, newest first. A task the ledger measured (`ReplayFile.spend`) carries its `usd` on
- * its Landed and Failed row and in the day sums (`days`, `landedUsd`) as the live pane's do; one with none stays
+ * its Done and Failed row and in the day sums (`days`, `landedUsd`) as the live pane's do; one with none stays
  * unmeasured (the pane draws `—`). The replay carries no commit, so no `sha`. Pure; the site's scene draws it with the mod's own pane code (hooks/pane-view.ts).
  */
 export function snapshotAt(file: ReplayFile, at: number): Snapshot {
@@ -896,7 +896,7 @@ function landedSum(lands: readonly Land[]): { landedUsd?: number } {
 }
 
 /**
- * Each day of the Landed tree as the pane's `daySpends` sums it: the landed lines plus the failed and closed lines
+ * Each day of the Done tree as the pane's `daySpends` sums it: the landed lines plus the failed and closed lines
  * whose run ended that day and that the ledger measured (a line once), only on a day that has a landed line. The
  * replay spans hours, so a `DD.MM` is one date and needs no year check.
  */

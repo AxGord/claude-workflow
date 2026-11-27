@@ -233,10 +233,10 @@ describe("the recorder's ?record hook on the production site", () => {
   });
 });
 
-describe("the plan pane's Landed day row", () => {
-  it("says `landed` beside its count when its sum includes failed or closed lines that are not rows", () => {
+describe("the plan pane's Done day row", () => {
+  it("says `done` beside its count when its sum includes failed or closed lines that are not rows", () => {
     const pane = read("hooks/pane-view.ts");
-    expect(pane).toContain("spend.failed + spend.closed > 0 ? ' landed' : ''");
+    expect(pane).toContain("spend.failed + spend.closed > 0 ? ' done' : ''");
   });
 
   it("the window's traffic lights work: close and minimise hide it into the Terminal button, green and a title double-click zoom it", () => {
