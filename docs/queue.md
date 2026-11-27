@@ -738,6 +738,41 @@ A PreToolUse(Bash) hook (`hooks/read-only-gate.sh`) refuses a Bash call made by 
 - `-` when none is on record (a line from before the record), `>=` when an agent there could not be read or priced.
 - The ledger line carries `project`, `task` (the queue line id), `visits`, `verdict`, `plan_handoff`, `agent_ids` (`agent_id_<stage>`) and `counts` (length of each context list; `--findings-key` sums one).
 
+## Routing census
+
+`wf-routing-census [--project PATH|DIR] [--from TS] [--to TS] [--cut TS]... [--json]` answers whether the report and the wakes of a worker, reviewer, recon or investigator reached the driver that owns it or the main conversation. It reads a project's Claude Code transcripts and writes nothing.
+
+- `--project` is a project path (default: the working directory) or a transcript directory. One pass over a large project takes under a minute.
+- `--from` and `--to` keep the messages in `[from, to)`; the history before `from` still decides each agent's state.
+- Each `--cut TS` splits the range into windows, so a change and its effect are two rows. A cut outside `(from, to)` is refused.
+- `--json` prints the same figures as data.
+
+The window table has one row per window:
+
+- `tasks` is the number of distinct driver descriptions started in the window.
+- `reports`, `waiting`, `other` and `twin` are messages (the count that reached main).
+- A `twin` is a `finished` notice that repeats a hand-back sent to the same recipient within 5 seconds, and is not counted twice.
+- `distinct main` is the messages that reached main, twins left out, and `per 20 tasks` is that over the tasks.
+- `bg wakes` is the runs woken by the worker's own background shell, and how many of those messages went to main.
+
+The wake-source table says what started the worker's run, and where its message went (owner, main, a third agent):
+
+| Source | Meaning |
+|--------|---------|
+| own bg shell, driver finished | The shell's notice woke the worker after its driver stopped with nothing live and its parent got the `finished` notice. |
+| own bg shell, driver parked | The same wake while the driver was waiting with a live child. |
+| own bg shell, driver running | The same wake while the driver was mid-turn. |
+| SendMessage | A message from another agent resumed the worker. |
+| spawn prompt | The run is the worker's first. |
+| own sub-agent notice | A notice from the worker's own child started it. |
+| other | The worker had no earlier input, or a human message started the run. |
+
+A message to a worker the main conversation resumed itself is left out, because reaching main is right there. A driver's own messages are not counted.
+
+A meta line counts as the harness's own only when its `isMeta` flag lies among the first 2,500 characters of the line. This is how the first census was taken, and its verified figures depend on it: a longer meta line (a skill body, a relayed coordinator message) counts as a start of a run.
+
+On the project that census read, up to 2026-11-26T15:13Z, the cuts `2026-11-18T17:53:41Z` and `2026-11-25T23:21:13Z` reproduce its table: 147 of 156 own-shell wakes to main with the driver finished, 71 of 71 to the driver while it was parked, 5 of 10,682 for every other source, and 2.49, 0.67 and 8.64 distinct messages per 20 tasks.
+
 ## Curator
 
 The curator tidies what a project's runs leave behind: memory, the model table, the queue, unfiled lessons, skills. It is a bundled workflow, `curator`, and the ENGINE decides when it runs. A project turns it on with `.claude/curator.yaml`, or with the queue header's `curator: <path>` (relative = beside the queue; `curator: off` turns it off). No config, no curator.

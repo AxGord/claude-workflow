@@ -85,10 +85,10 @@ Run `wf-skills remove` (`scripts/wf-skills` of the plugin; see "The `wf-*` comma
 
 ### The `wf-*` commands
 
-`wf-skills`, `wf-queue`, `wf-curator`, `wf-run`, `wf-trust`, `wf-validate` and `wf-orphans` are not on your `PATH` after a plugin install. Run one as `<plugin dir>/scripts/wf-skills` (for a local checkout that is the checkout; `claude plugin list` shows it as `Read from:`), or link them once; the scripts follow the link to find `build/`:
+`wf-skills`, `wf-queue`, `wf-curator`, `wf-routing-census`, `wf-run`, `wf-trust`, `wf-validate` and `wf-orphans` are not on your `PATH` after a plugin install. Run one as `<plugin dir>/scripts/wf-skills` (for a local checkout that is the checkout; `claude plugin list` shows it as `Read from:`), or link them once; the scripts follow the link to find `build/`:
 
 ```bash
-for c in wf-skills wf-queue wf-curator wf-run wf-trust wf-validate wf-orphans; do ln -s "<plugin dir>/scripts/$c" ~/.local/bin/$c; done
+for c in wf-skills wf-queue wf-curator wf-routing-census wf-run wf-trust wf-validate wf-orphans; do ln -s "<plugin dir>/scripts/$c" ~/.local/bin/$c; done
 ```
 
 `npm install -g claude-mcp-workflow` puts them on the `PATH` instead.
