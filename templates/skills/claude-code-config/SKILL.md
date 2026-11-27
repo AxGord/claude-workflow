@@ -410,8 +410,8 @@ claude_pro`). The statusline command is a child of the CLI, so it inherits
 
 ## Session Scratchpad Is Wiped on Restart
 
-A Claude Code restart empties the session scratchpad. Backups, proposals and notes that must survive go to a git-ignored directory in the project (for example `.claude/backups/`); the scratchpad is for throwaway probes only.
+A Claude Code restart empties the session scratchpad (observed). Backups, proposals and notes that must survive go to a git-ignored directory in the project (for example `.claude/backups/`); the scratchpad is for throwaway probes only.
 
 ## Plugin MCP Tools: Per-Tool Allow Is Ignored, and Plan Mode Prompts Every Call
 
-Per-tool `permissions.allow` entries for a **plugin** MCP server (`mcp__plugin_<plugin>_<server>__<tool>`) are ignored (issue #28580, seen CLI 2.1.224); the server-level rule without a tool suffix (`mcp__plugin_<plugin>_<server>`) works. `ask`/`deny` per-tool matching may hit the same bug. Separately, in plan mode every MCP tool call prompts, subagents included, unless the tool declares `annotations.readOnlyHint: true`; the CLI treats a missing hint as non-read-only.
+Per-tool `permissions.allow` entries for a **plugin** MCP server (`mcp__plugin_<plugin>_<server>__<tool>`) are ignored (seen on CLI 2.1.224, not re-checked on later versions); the server-level rule without a tool suffix (`mcp__plugin_<plugin>_<server>`) works. `ask`/`deny` per-tool matching may hit the same bug. Separately, in plan mode every MCP tool call prompts, subagents included, unless the tool declares `annotations.readOnlyHint: true`; the CLI treats a missing hint as non-read-only.
