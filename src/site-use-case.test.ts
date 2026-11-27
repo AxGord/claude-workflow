@@ -9,7 +9,7 @@ import {
   serveBuiltSite,
   type BuiltSite,
 } from "./site-browser-helpers.js";
-import type { UseCaseSnapshot } from "./use-case.js";
+import type { UseCaseSnapshot, UseCaseStatsSnapshot } from "./use-case.js";
 import { PATH_SCENARIOS, slicePath, stageRow } from "./use-case-path.js";
 import {
   ANCHORS,
@@ -27,6 +27,9 @@ import {
 // the landing and the docs nav, and each of its scenes (theme/UseCase*.vue) draws the committed snapshot's facts and
 // numbers and answers the reader's choice: the queue line, the pick, the path by difficulty, the review rounds, the
 // lessons, the curator, the numbers. Real browser, the built site.
+// Pins of ENG-DOCS-USE-CASE-ENGINE: the second page (docs/use-case-engine.md) is in the sidebar and the Docs menu, draws
+// the engine's own snapshot (docs/use-case-engine.json) through the numbers scene, and leaves out the panels that
+// snapshot has no figures for.
 
 const HAVE_BROWSER = browserInstalled();
 const snapshot = JSON.parse(
@@ -35,6 +38,39 @@ const snapshot = JSON.parse(
 const facts = snapshot.workflow;
 const stats = snapshot.stats;
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), "utf8");
+const engine = JSON.parse(read("docs/use-case-engine.json")) as UseCaseStatsSnapshot;
+
+describe("the engine's use-case page is a page of the site, drawn from its own snapshot", () => {
+  const page = read("docs/use-case-engine.md");
+
+  it("is in the sidebar and the Docs menu, and the landing and the README link it", () => {
+    expect(read("docs/.vitepress/config.mts").match(/link: "\/use-case-engine"/g)?.length).toBe(2);
+    expect(read("docs/index.md")).toContain("](/use-case-engine)");
+    expect(read("README.md")).toContain("/use-case-engine)");
+  });
+
+  it("places the numbers scene on the engine's snapshot, links the first page, and types no ledger number", () => {
+    expect(page).toContain('\n<UseCaseNumbers of="engine" />\n');
+    expect(page).toContain("](/use-case-anyparse)");
+    for (const n of [engine.stats.runs.total, engine.stats.runs.landed, engine.stats.cost.median])
+      expect(page, `the page's text does not type ${n}`).not.toContain(String(n));
+  });
+
+  it("names no machine path and no id, and is shorter than the first page", () => {
+    expect(page).not.toMatch(/\/Users\/|\/home\/|~\//);
+    expect(page).not.toMatch(/\b[0-9a-f]{16,}\b/);
+    expect(page.length).toBeLessThan(read("docs/use-case-anyparse.md").length);
+  });
+
+  it("is written by the same script, behind --engine, beside the anyparse snapshot", () => {
+    const script = read("scripts/export-use-case.mjs");
+    expect(script).toContain('"engine" in args');
+    expect(script).toContain('landVisit: "mark_done"');
+    expect(engine.project).toBe("mcp-workflow-engine");
+    expect(engine.task_workflow).toBe("engine-task");
+    expect("workflow" in engine).toBe(false);
+  });
+});
 
 describe("the use-case page is a page of the site", () => {
   it("is in the sidebar and the Docs menu, and the landing links it", () => {
@@ -91,7 +127,12 @@ const steps = (page: Page): Promise<string[]> =>
 const bars = (effort: string): string =>
   ({ low: "▮▯▯▯", medium: "▮▮▯▯", high: "▮▮▮▯", xhigh: "▮▮▮▮", max: "▮▮▮▮" })[effort] ?? "";
 
-async function open(width: number, theme: "dark" | "light" = "dark"): Promise<Page> {
+async function open(
+  width: number,
+  theme: "dark" | "light" = "dark",
+  route = "use-case-anyparse",
+  ready = `${SCENE} [data-node="execute"]`,
+): Promise<Page> {
   const ctx = await browser.newContext({
     viewport: { width, height: 900 },
     colorScheme: theme,
@@ -99,8 +140,8 @@ async function open(width: number, theme: "dark" | "light" = "dark"): Promise<Pa
   });
   await ctx.addInitScript(t => localStorage.setItem("vitepress-theme-appearance", t), theme);
   const page = await ctx.newPage();
-  await page.goto(`${site?.url ?? ""}use-case-anyparse`);
-  await page.waitForSelector(`${SCENE} [data-node="execute"]`);
+  await page.goto(`${site?.url ?? ""}${route}`);
+  await page.waitForSelector(ready);
   // hydrated: a click is answered
   await page.waitForFunction(
     () =>
@@ -731,3 +772,74 @@ describe.skipIf(!HAVE_BROWSER)("the other scenes of the use-case page", () => {
     }
   });
 });
+
+describe.skipIf(!HAVE_BROWSER)(
+  "the engine's page: the numbers scene on the engine's snapshot",
+  () => {
+    const st = engine.stats;
+    const openEngine = (width: number, theme: "dark" | "light" = "dark"): Promise<Page> =>
+      open(width, theme, "use-case-engine", '.ucn[data-of="engine"] [data-figure="lands"]');
+
+    it("draws the engine's figures, says what they are, and leaves out the panels it has no figures for", async () => {
+      const page = await openEngine(1280);
+      try {
+        expect(await flat(page, '.ucn [data-figure="lands"]')).toContain(String(st.runs.landed));
+        expect(await flat(page, '.ucn [data-figure="lands"]')).toContain(
+          `of ${st.runs.total} runs`,
+        );
+        expect(await flat(page, '.ucn [data-figure="cost"]')).toContain(usd(st.cost.median));
+        expect(await flat(page, '.ucn [data-figure="unlanded"]')).toContain(
+          String(st.runs.total - st.runs.landed),
+        );
+        expect(await attrs(page, ".ucn [data-day]", "data-day")).toEqual(st.days.map(d => d.day));
+        for (const r of st.rounds)
+          expect(await flat(page, `.ucn [data-rounds="${r.rounds}"]`)).toContain(String(r.lands));
+        expect(await attrs(page, ".ucn [data-open]", "data-open")).toEqual(
+          st.slots.map(x => String(x.open)),
+        );
+        // no recon ran and no agent is recorded by stage: those panels and their tile are not drawn
+        for (const gone of ["recon", "recon-parts", "stages"])
+          expect(await page.locator(`.ucn [data-figure="${gone}"]`).count(), gone).toBe(0);
+        await page.click('.ucn [data-figure="unlanded"]');
+        expect(await flat(page, ".ucn [data-how]")).toContain("did not land");
+        expect(await page.locator(".ucn figcaption a").getAttribute("href")).toBe(
+          "https://github.com/AxGord/claude-workflow/blob/master/docs/use-case-engine.json",
+        );
+        expect(await flat(page, ".ucn figcaption")).toContain("engine-task runs only");
+      } finally {
+        await page.context().close();
+      }
+    });
+
+    it("the anyparse page keeps its recon and stage panels", async () => {
+      const page = await open(1280);
+      try {
+        for (const kept of ["recon", "recon-parts", "stages"])
+          expect(await page.locator(`.ucn [data-figure="${kept}"]`).count(), kept).toBe(1);
+      } finally {
+        await page.context().close();
+      }
+    });
+
+    it("fits a phone in both themes without a sideways scroll or an error", async () => {
+      for (const theme of ["dark", "light"] as const) {
+        const page = await openEngine(390, theme);
+        const errors: string[] = [];
+        page.on("pageerror", e => errors.push(String(e)));
+        try {
+          const inner = await page.locator(".ucn").evaluate(el => el.scrollWidth - el.clientWidth);
+          expect(inner, `${theme} the scene holds what it draws`).toBeLessThanOrEqual(0);
+          expect(
+            await page.evaluate(
+              () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            ),
+            theme,
+          ).toBe(0);
+          expect(errors).toEqual([]);
+        } finally {
+          await page.context().close();
+        }
+      }
+    });
+  },
+);

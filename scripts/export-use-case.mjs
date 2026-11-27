@@ -15,7 +15,11 @@
 //   npm run build && node scripts/export-use-case.mjs --project-dir <the anyparse checkout>
 //        [--project anyparse] [--workflow slice-pipeline] [--worker slice-worker] [--model-table FILE] [--ledger FILE]
 //        [--queue FILE] [--to ISO] [--every 20] [--out FILE]
+//   npm run build && node scripts/export-use-case.mjs --engine [--ledger FILE] [--to ISO] [--every 20] [--out FILE]
 //
+// --engine       the engine's own runs (project mcp-workflow-engine, workflow engine-task, a land is a visit of
+//                `mark_done`) into docs/use-case-engine.json: the ledger's figures only, no workflow facts and no
+//                project checkout, because that page's diagrams are prose and its figures are all the page reads
 // --project-dir  the project's checkout: its .claude/workflows hold the pipeline's and the worker's files
 // --model-table  a copy of the pipeline's file whose model_table is the one in force during the ledger's window
 //                (the table the costs were made on); without it the table is today's file's. The thresholds and
@@ -38,6 +42,10 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith("--")) throw new Error(`unexpected argument ${a}`);
+    if (a === "--engine") {
+      out.engine = true;
+      continue;
+    }
     const v = argv[++i];
     if (v === undefined) throw new Error(`${a} needs a value`);
     out[a.slice(2)] = v;
@@ -64,29 +72,16 @@ function readLedger(file) {
   return rows;
 }
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const project = args.project ?? "anyparse";
-  const workflow = args.workflow ?? "slice-pipeline";
-  const projectDir = args["project-dir"];
-  if (!projectDir) throw new Error("--project-dir <the project's checkout> is required");
-  const stateDir = process.env.STATE_DIR ?? path.join(os.homedir(), ".claude", "workflow-state");
-  const ledger = args.ledger ?? path.join(stateDir, "ledger.jsonl");
-  const out = args.out ?? path.join(root, "docs", `use-case-${project}.json`);
-  const to = args.to === undefined ? Infinity : Date.parse(args.to);
-  if (Number.isNaN(to)) throw new Error(`--to ${args.to} is not a time`);
-
-  const { foldUseCase, workflowFacts, assertUseCaseClean } = await load("use-case.js");
+/** The anyparse page's snapshot: the ledger's figures beside the facts read from the project's own workflow files. */
+async function projectSnapshot({ project, workflow, projectDir, args, stats, workflowFacts }) {
   const { exclusiveHoldOn, readQueue } = await load("queue.js");
   const queue = args.queue ?? path.join(projectDir, ".claude", "batch", "queue.yaml");
   const yaml = name =>
     YAML.parse(fs.readFileSync(path.join(projectDir, ".claude", "workflows", `${name}.yaml`), "utf8"), {
       merge: true,
     });
-  const every = args.every === undefined ? 20 : Number(args.every);
-  if (!Number.isInteger(every) || every < 1) throw new Error(`--every ${args.every} is not a count`);
   const dated = args["model-table"];
-  const snapshot = {
+  return {
     project,
     task_workflow: workflow,
     table_of: dated === undefined ? "today" : "window",
@@ -96,15 +91,37 @@ async function main() {
       yaml(args.worker ?? "slice-worker"),
       dated === undefined ? undefined : YAML.parse(fs.readFileSync(dated, "utf8"), { merge: true }),
     ),
-    stats: foldUseCase(
-      readLedger(ledger).filter(e => Date.parse(e.ended_at) <= to),
-      { project, workflow, every },
-    ),
+    stats,
   };
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const engine = "engine" in args;
+  const project = args.project ?? (engine ? "mcp-workflow-engine" : "anyparse");
+  const workflow = args.workflow ?? (engine ? "engine-task" : "slice-pipeline");
+  const projectDir = args["project-dir"];
+  if (!engine && !projectDir) throw new Error("--project-dir <the project's checkout> is required");
+  const stateDir = process.env.STATE_DIR ?? path.join(os.homedir(), ".claude", "workflow-state");
+  const ledger = args.ledger ?? path.join(stateDir, "ledger.jsonl");
+  const out = args.out ?? path.join(root, "docs", `use-case-${engine ? "engine" : project}.json`);
+  const to = args.to === undefined ? Infinity : Date.parse(args.to);
+  if (Number.isNaN(to)) throw new Error(`--to ${args.to} is not a time`);
+
+  const { foldUseCase, workflowFacts, assertUseCaseClean } = await load("use-case.js");
+  const every = args.every === undefined ? 20 : Number(args.every);
+  if (!Number.isInteger(every) || every < 1) throw new Error(`--every ${args.every} is not a count`);
+  const stats = foldUseCase(
+    readLedger(ledger).filter(e => Date.parse(e.ended_at) <= to),
+    { project, workflow, every, ...(engine ? { landVisit: "mark_done" } : {}) },
+  );
+  const snapshot = engine
+    ? { project, task_workflow: workflow, stats }
+    : await projectSnapshot({ project, workflow, projectDir, args, stats, workflowFacts });
   const text = `${JSON.stringify(snapshot, null, 2)}\n`;
   assertUseCaseClean(text);
   fs.writeFileSync(out, text);
-  const s = snapshot.stats;
+  const s = stats;
   console.log(
     `${path.relative(process.cwd(), out)}: ${(Buffer.byteLength(text) / 1000).toFixed(1)} KB, ${s.from.slice(0, 10)}..${s.to.slice(0, 10)}, ` +
       `${s.runs.total} runs, ${s.runs.landed} landed, $${s.cost.mean} per land over ${s.cost.measured} measured`,

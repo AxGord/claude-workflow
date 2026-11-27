@@ -116,6 +116,7 @@ describe("docs site: the VitePress setup", () => {
       "getting-started",
       "concepts",
       "use-case-anyparse",
+      "use-case-engine",
       "workflow-yaml",
       "action-states",
       "queue",

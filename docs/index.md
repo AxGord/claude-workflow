@@ -44,7 +44,7 @@ features:
 
 ## In real use
 
-[anyparse](https://github.com/AxGord/anyparse), an open-source platform for parsers and formatters, is developed on this engine: a queue of small tasks, a scout that may rescore a task before any worker starts, review rounds, and a land under one lock. [See how one task goes from the queue to main](/use-case-anyparse), with the project's own numbers.
+[anyparse](https://github.com/AxGord/anyparse), an open-source platform for parsers and formatters, is developed on this engine: a queue of small tasks, a scout that may rescore a task before any worker starts, review rounds, and a land under one lock. [See how one task goes from the queue to main](/use-case-anyparse), with the project's own numbers. The engine is built the same way, on itself: [how a change to it reaches the sessions that run it](/use-case-engine).
 
 ## What you see
 

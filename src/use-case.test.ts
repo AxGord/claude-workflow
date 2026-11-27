@@ -13,6 +13,7 @@ import {
   foldUseCase,
   workflowFacts,
   type UseCaseSnapshot,
+  type UseCaseStatsSnapshot,
 } from "./use-case.js";
 import {
   PATH_SCENARIOS,
@@ -553,6 +554,85 @@ describe("the ledger folded for the use-case page (foldUseCase)", () => {
 
   it("is the same text whatever order the ledger's lines come in", () => {
     expect(JSON.stringify(fold([...RUNS].reverse()))).toBe(JSON.stringify(s));
+  });
+});
+
+describe("a workflow whose lands pass another state (landVisit)", () => {
+  const ENGINE = { project: "mcp-workflow-engine", workflow: "engine-task" };
+  const rows = [
+    run({
+      from: 0,
+      to: 2,
+      visits: { work: 1, review: 1, project_land: 1, mark_done: 1 },
+      usd: 3,
+      ...ENGINE,
+    }),
+    run({
+      from: 2,
+      to: 4,
+      visits: { work: 1, review: 2, project_land: 1, mark_done: 1 },
+      usd: 5,
+      ...ENGINE,
+    }),
+    // a land that failed and went no further, a line closed at its blocker, one abandoned
+    run({
+      from: 4,
+      to: 5,
+      visits: { work: 1, project_land: 1, land_failed: 1, closed: 1 },
+      ...ENGINE,
+    }),
+    run({ from: 5, to: 6, visits: { work: 1, blocked: 1, closed: 1 }, ...ENGINE }),
+    run({ from: 6, to: 7, visits: { work: 1 }, outcome: "abandoned", ...ENGINE }),
+  ];
+  const engine = (landVisit?: string) =>
+    foldUseCase(rows, { project: "mcp-workflow-engine", workflow: "engine-task", landVisit });
+
+  it("counts a land by that state's visit, and by none of the slice pipeline's", () => {
+    expect(engine().runs).toEqual({ total: 5, landed: 0, split: 0, closed: 2, other: 3 });
+    expect(engine("mark_done").runs).toEqual({
+      total: 5,
+      landed: 2,
+      split: 0,
+      closed: 2,
+      other: 1,
+    });
+    expect(engine("mark_done").cost).toEqual({ lands: 2, measured: 2, median: 4, mean: 4, usd: 8 });
+    expect(engine("mark_done").rounds.map(r => [r.rounds, r.lands])).toEqual([
+      [1, 1],
+      [2, 1],
+    ]);
+  });
+
+  it("has no recon to report and no stage the agents were linked at", () => {
+    const s = engine("mark_done");
+    expect(s.recon.ran).toBe(0);
+    expect(s.stages.rows.filter(r => r.usd > 0)).toEqual([]);
+  });
+});
+
+describe("the committed engine snapshot (docs/use-case-engine.json)", () => {
+  const file = path.join(ROOT, "docs/use-case-engine.json");
+  const text = fs.readFileSync(file, "utf8");
+  const engine = JSON.parse(text) as UseCaseStatsSnapshot;
+  const s = engine.stats;
+
+  it("is the engine-task runs of the engine, with no path, session or task, and no workflow facts", () => {
+    expect(() => assertUseCaseClean(text)).not.toThrow();
+    expect(text).not.toMatch(/Users|workflow-state|session/);
+    expect(engine.project).toBe("mcp-workflow-engine");
+    expect(engine.task_workflow).toBe("engine-task");
+    expect(Object.keys(engine).sort()).toEqual(["project", "stats", "task_workflow"]);
+  });
+
+  it("counts add up, and every land is a run that reached mark_done", () => {
+    expect(s.runs.landed + s.runs.split + s.runs.closed + s.runs.other).toBe(s.runs.total);
+    expect(s.runs.landed).toBeGreaterThan(100);
+    expect(s.runs.split).toBe(0);
+    expect(s.rounds.reduce((n, r) => n + r.lands, 0)).toBe(s.runs.landed);
+    expect(s.days.reduce((n, d) => n + d.lands, 0)).toBe(s.runs.landed);
+    expect(s.cost.lands).toBe(s.runs.landed);
+    expect(s.recon.ran).toBe(0);
+    expect(Date.parse(s.from)).toBeLessThan(Date.parse(s.to));
   });
 });
 

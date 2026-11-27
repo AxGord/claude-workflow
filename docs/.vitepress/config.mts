@@ -104,6 +104,7 @@ export default defineConfig({
             { text: "Getting started", link: "/getting-started" },
             { text: "Concepts", link: "/concepts" },
             { text: "Use case: anyparse", link: "/use-case-anyparse" },
+            { text: "Use case: the engine", link: "/use-case-engine" },
             { text: "Workflow YAML", link: "/workflow-yaml" },
             { text: "Action states", link: "/action-states" },
             { text: "Thread pool", link: "/pool" },
@@ -126,7 +127,10 @@ export default defineConfig({
       },
       {
         text: "Use cases",
-        items: [{ text: "anyparse", link: "/use-case-anyparse" }],
+        items: [
+          { text: "anyparse", link: "/use-case-anyparse" },
+          { text: "The engine itself", link: "/use-case-engine" },
+        ],
       },
       {
         text: "Reference",

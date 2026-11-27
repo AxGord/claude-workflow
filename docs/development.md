@@ -186,7 +186,7 @@ The rules lease every vitest form (`npx`, `npm exec`, `node_modules/.bin`, bare)
 | `src/event-fold.ts` | The event log's `fold` and `seedEvents` (a session file's events), pure; served as `/event-fold.js` |
 | `src/map-layout.ts` | The live map's `layout` (bands, lanes, branches, loops, stops, questions) and keyed `scene`, pure; served as `/map-layout.js` |
 | `src/replay.ts` | The landing page's replay, pure: `buildReplay`, `expandReplay`, the player's clock, the map's fit, the plan pane's Snapshot at a moment, the parent conversation's lines and the pool of the window; `scripts/export-replay.mjs` writes `docs/public/replay/anyparse.json` with it |
-| `src/use-case.ts` | The use-case page's data, pure: `foldUseCase`, `workflowFacts`, `assertUseCaseClean`; `scripts/export-use-case.mjs` writes `docs/use-case-anyparse.json` from them |
+| `src/use-case.ts` | The use-case page's data, pure: `foldUseCase`, `workflowFacts`, `assertUseCaseClean`; `scripts/export-use-case.mjs` writes `docs/use-case-anyparse.json` from them, and with `--engine` `docs/use-case-engine.json` |
 | `src/use-case-path.ts` | The path one queue line takes through anyparse's slice pipeline over those facts (`slicePath`, `stageRow`, the page's scenarios): free of imports, run by the page in the browser |
 | `src/use-case-scenes.ts` | What the page's other scenes draw, free of imports: a queue line's fields and the difficulty anchors, the small queue and its pick, the lane of review rounds, where a lesson goes |
 | `src/replay-queue.ts` | The replay's queue, the export's half that reads the queue module: `captureReplayQueue` runs the engine's own pick over the queue file rolled back to the window's start; `snapshotAt` (`src/replay.ts`) plays it back |
@@ -209,6 +209,7 @@ The rules lease every vitest form (`npx`, `npm exec`, `node_modules/.bin`, bare)
   - The pool of the window: `buildPool` cuts `pool.log` to an allowlist of labels, `assertReplayClean` is the export's self-check, `poolStateAt` / `poolCountsAt` the Pool tab's read, `poolWaiting` the lanes that wait for a lease, `poolStrip` the strip's paths.
 - `src/use-case.ts`:
   - `foldUseCase` folds one project's finished pipeline runs from the ledger, as counts and sums that name no task or session: lands, cost by review rounds, difficulty, band and stage, the recon's outcomes, the windows between curator runs, hours by open pipelines.
+  - Its `landVisit` option names the state whose visit marks a land when a workflow's lands do not pass `mark_landed` or `bookkeeping` (`engine-task`: `mark_done`).
   - `workflowFacts` reads the model table, the driver and the thresholds from the project's workflow files, refusing a file that no longer says one.
 - `src/use-case-scenes.ts`: the small queue's pick is `toyPick`, held equal to `planPick` by a test; the lane of review rounds is `roundsLane`.
 - `src/replay-queue.ts`:
@@ -418,7 +419,17 @@ npm run build && npm run docs:use-case -- --project-dir <the anyparse checkout> 
 - `--model-table` takes the table from a dated copy, the one in force while the ledger's runs were made.
 - `--to` ends the window where that table stopped being in force.
 
-The file names no task, session, agent or path (`assertUseCaseClean` refuses the write otherwise), and the same inputs give the same bytes. The scenes are rendered into the page's HTML at build time; their colours are the dashboard's tokens, which `config.mts` writes into every page's head on `.dash-tokens` (`theme/dash-tokens.ts`).
+The file names no task, session, agent or path (`assertUseCaseClean` refuses the write otherwise), and the same inputs give the same bytes.
+
+`docs/use-case-engine.md` is the second page, about the engine's own lines. Its only scene is `<UseCaseNumbers of="engine" />`, which draws `docs/use-case-engine.json`: the figures of the engine's `engine-task` runs, with no workflow facts. A panel the snapshot has no figures for (the recon, the cost by stage) is not drawn. To rewrite it:
+
+```sh
+npm run build && npm run docs:use-case -- --engine [--to <ISO time>]
+```
+
+`--engine` reads the engine's runs from the ledger (project `mcp-workflow-engine`, workflow `engine-task`, a land is a visit of `mark_done`) and needs no project checkout.
+
+The anyparse snapshot's rules still hold for it: no path, session or task, and no number typed into the page's text. The scenes are rendered into the page's HTML at build time; their colours are the dashboard's tokens, which `config.mts` writes into every page's head on `.dash-tokens` (`theme/dash-tokens.ts`).
 
 ### Recording the scene
 

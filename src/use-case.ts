@@ -18,6 +18,8 @@ export interface UseCaseOptions {
   readonly workflow: string;
   /** Lands between two curator runs (default 20): the size of the windows the lands are cut into. */
   readonly every?: number;
+  /** The state whose visit marks a land, when the workflow's lands do not pass `mark_landed` or `bookkeeping` (engine-task: `mark_done`). */
+  readonly landVisit?: string;
 }
 
 /** A count of landed lines with what they cost. `median` and `mean` are over the `measured` ones. */
@@ -130,9 +132,14 @@ function costGroup(entries: readonly LedgerEntry[]): CostGroup {
 
 const visited = (e: LedgerEntry, state: string): number => e.visits?.[state] ?? 0;
 
-/** A run that went through the land and its bookkeeping. */
-const landed = (e: LedgerEntry): boolean =>
-  e.outcome === "completed" && (visited(e, "mark_landed") > 0 || visited(e, "bookkeeping") > 0);
+/** A run that went through the land and its bookkeeping: the workflow's own land state when it names one. */
+const landedBy =
+  (landVisit: string | undefined) =>
+  (e: LedgerEntry): boolean =>
+    e.outcome === "completed" &&
+    (landVisit === undefined
+      ? visited(e, "mark_landed") > 0 || visited(e, "bookkeeping") > 0
+      : visited(e, landVisit) > 0);
 
 /** The stages a landed line's $ is shown by; an agent no stage names is the driver (linked by the dispatcher) or `other`. */
 const STAGE_ORDER = ["recon", "plan", "execute", "fix", "review", "driver", "other"] as const;
@@ -203,6 +210,7 @@ export function foldUseCase(entries: readonly LedgerEntry[], o: UseCaseOptions):
   );
   if (runs.length === 0)
     throw new Error(`the ledger holds no finished ${o.workflow} run of ${o.project}`);
+  const landed = landedBy(o.landVisit);
   const lands = runs.filter(landed);
   const split = runs.filter(e => !landed(e) && visited(e, "mark_split") > 0);
   const closed = runs.filter(
@@ -446,16 +454,20 @@ export function workflowFacts(
   };
 }
 
-/** The file the page reads: the workflow facts and the ledger's numbers of one project. */
-export interface UseCaseSnapshot {
+/** The ledger's numbers of one project's task workflow: all a page that only draws the figures reads (docs/use-case-engine.json). */
+export interface UseCaseStatsSnapshot {
   readonly project: string;
   readonly task_workflow: string;
+  readonly stats: UseCaseStats;
+}
+
+/** The file the page reads: the workflow facts and the ledger's numbers of one project. */
+export interface UseCaseSnapshot extends UseCaseStatsSnapshot {
   /** Whose model table `workflow.table` is: the one in force during the stats' window (a dated copy), or today's file. */
   readonly table_of: "window" | "today";
   /** Whether a waiting exclusive line of the project's queue holds the lines behind it (its header's `exclusive_hold`). */
   readonly exclusive_hold: boolean;
   readonly workflow: WorkflowFacts;
-  readonly stats: UseCaseStats;
 }
 
 /**

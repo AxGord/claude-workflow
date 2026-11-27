@@ -1,13 +1,21 @@
 <script setup lang="ts">
 // The use-case page's closing scene "the numbers": the snapshot as one panel. Every figure is a button that says how
 // it is counted and how many runs it stands on. Nothing here is typed: the figures are `stats` of the snapshot
-// (docs/use-case-anyparse.json, scripts/export-use-case.mjs). This file draws.
+// (docs/use-case-anyparse.json, or docs/use-case-engine.json with `of="engine"`; scripts/export-use-case.mjs).
+// A block the snapshot has no figures for (the engine's runs have no recon and no per-stage record) is not drawn.
+// This file draws.
 import { computed, ref } from "vue";
-import snapshot from "../../use-case-anyparse.json";
+import anyparse from "../../use-case-anyparse.json";
+import engine from "../../use-case-engine.json";
 import { DASH_TOKENS } from "./dash-tokens";
 
-const s = snapshot.stats;
-const SNAPSHOT_URL = "https://github.com/AxGord/claude-workflow/blob/master/docs/use-case-anyparse.json";
+const props = withDefaults(defineProps<{ of?: "anyparse" | "engine" }>(), { of: "anyparse" });
+const s = { anyparse, engine }[props.of].stats;
+const SNAPSHOT_URL = `https://github.com/AxGord/claude-workflow/blob/master/docs/use-case-${props.of}.json`;
+const WHOSE = props.of === "engine" ? "The engine's own ledger" : "anyparse's ledger";
+const WHICH = props.of === "engine" ? "its engine-task runs only" : "one project's task pipeline";
+const hasRecon = s.recon.ran > 0;
+const NAMED = ["recon", "plan", "execute", "fix", "review"];
 
 const usd = (n: number | null): string => (n === null ? "—" : `$${n.toFixed(2)}`);
 const day = (iso: string): string => iso.slice(0, 10);
@@ -15,6 +23,8 @@ const day = (iso: string): string => iso.slice(0, 10);
 const perDay = Math.max(...s.days.map(d => d.lands), 1);
 const mostRounds = Math.max(...s.rounds.map(r => r.lands), 1);
 const stages = s.stages.rows.filter(r => r.usd > 0);
+const hasStages = stages.some(r => NAMED.includes(r.stage));
+const unlanded = s.runs.total - s.runs.landed;
 const recon = [
   { name: "kept", n: s.recon.kept, says: "its score was the line's" },
   { name: "raised", n: s.recon.up, says: "it scored the work higher" },
@@ -27,7 +37,8 @@ const reconSum = recon.reduce((sum, r) => sum + r.n, 0);
 const hours = s.slots.reduce((sum, x) => sum + x.hours, 0);
 
 const HOW: Record<string, string> = {
-  lands: `A run landed when it went through the land and its bookkeeping. ${s.runs.total} runs of the pipeline ended in the window: ${s.runs.landed} landed, ${s.runs.split} were split into smaller lines, ${s.runs.closed} closed without landing (a refuted premise, a blocked worker, a rejected review), ${s.runs.other} were abandoned or released.`,
+  lands: `A run landed when it went through the land and its bookkeeping. ${s.runs.total} runs of the pipeline ended in the window: ${s.runs.landed} landed, ${s.runs.split > 0 ? `${s.runs.split} were split into smaller lines, ` : ""}${s.runs.closed} closed without landing (a refuted premise, a blocked worker, a rejected review), ${s.runs.other} were abandoned or released.`,
+  unlanded: `${unlanded} of the ${s.runs.total} runs did not land: ${s.runs.closed} were closed (a refuted premise, a blocked worker, a rejected review) and ${s.runs.other} were abandoned or released. Their agents' spend is not in the cost of a landed line.`,
   cost: `The spend of a landed line's agents, read from their transcripts and priced turn by turn at API rates: ${s.cost.measured} of the ${s.cost.lands} landed lines carry it (the record began after the first days). Median ${usd(s.cost.median)}, mean ${usd(s.cost.mean)}. The top-level conversation's own turns are not in it.`,
   days: `Landed lines by the UTC day they ended, over the ${s.days.length} days of the window.`,
   rounds: `Entries into the review of a landed line: the first review, and one more for every fix round. All ${s.runs.landed} landed lines.`,
@@ -40,7 +51,7 @@ const how = computed(() => HOW[chosen.value]);
 </script>
 
 <template>
-  <figure class="ucn uc-box" :class="DASH_TOKENS" aria-label="The snapshot's numbers: lands, cost, review rounds, the recon, slot occupancy">
+  <figure class="ucn uc-box" :class="DASH_TOKENS" :aria-label="`The snapshot's numbers: lands, cost, review rounds, ${hasRecon ? 'the recon, ' : ''}slot occupancy`" :data-of="props.of">
     <div class="ucn-tiles">
       <button type="button" class="ucn-tile" :class="{ on: chosen === 'lands' }" :aria-pressed="chosen === 'lands'" data-figure="lands" @click="chosen = 'lands'">
         <span class="ucn-big">{{ s.runs.landed }}</span>
@@ -52,10 +63,15 @@ const how = computed(() => HOW[chosen.value]);
         <span class="ucn-name">per landed line, median</span>
         <span class="ucn-sub">mean {{ usd(s.cost.mean) }}</span>
       </button>
-      <button type="button" class="ucn-tile" :class="{ on: chosen === 'recon' }" :aria-pressed="chosen === 'recon'" data-figure="recon" @click="chosen = 'recon'">
+      <button v-if="hasRecon" type="button" class="ucn-tile" :class="{ on: chosen === 'recon' }" :aria-pressed="chosen === 'recon'" data-figure="recon" @click="chosen = 'recon'">
         <span class="ucn-big">{{ usd(s.recon.stopped.median) }}</span>
         <span class="ucn-name">a run the recon stopped</span>
         <span class="ucn-sub">{{ s.recon.split + s.recon.closed }} lines never reached a worker</span>
+      </button>
+      <button v-else type="button" class="ucn-tile" :class="{ on: chosen === 'unlanded' }" :aria-pressed="chosen === 'unlanded'" data-figure="unlanded" @click="chosen = 'unlanded'">
+        <span class="ucn-big">{{ unlanded }}</span>
+        <span class="ucn-name">runs that did not land</span>
+        <span class="ucn-sub">closed or abandoned</span>
       </button>
     </div>
 
@@ -81,7 +97,7 @@ const how = computed(() => HOW[chosen.value]);
         </span>
       </button>
 
-      <button type="button" class="ucn-block" :class="{ on: chosen === 'stages' }" :aria-pressed="chosen === 'stages'" data-figure="stages" @click="chosen = 'stages'">
+      <button v-if="hasStages" type="button" class="ucn-block" :class="{ on: chosen === 'stages' }" :aria-pressed="chosen === 'stages'" data-figure="stages" @click="chosen = 'stages'">
         <span class="uc-lead">A landed line's cost by stage</span>
         <span class="ucn-stack">
           <span v-for="p in stages" :key="p.stage" class="ucn-part" :class="`t-${p.stage}`" :style="{ width: `${(p.usd / s.stages.usd) * 100}%` }"></span>
@@ -91,7 +107,7 @@ const how = computed(() => HOW[chosen.value]);
         </span>
       </button>
 
-      <button type="button" class="ucn-block" :class="{ on: chosen === 'recon' }" :aria-pressed="chosen === 'recon'" data-figure="recon-parts" @click="chosen = 'recon'">
+      <button v-if="hasRecon" type="button" class="ucn-block" :class="{ on: chosen === 'recon' }" :aria-pressed="chosen === 'recon'" data-figure="recon-parts" @click="chosen = 'recon'">
         <span class="uc-lead">What the recon did with {{ s.recon.ran }} lines</span>
         <span class="ucn-stack">
           <span v-for="(r, i) in recon" :key="r.name" class="ucn-part" :class="`r-${i}`" :style="{ width: `${(r.n / reconSum) * 100}%` }"></span>
@@ -117,7 +133,7 @@ const how = computed(() => HOW[chosen.value]);
       The $ is what the same tokens cost at API prices. On a subscription no such bill arrives: read it as a yardstick of how much of the limit a task used. Exact limit accounting is not published.
     </p>
     <figcaption class="uc-cap">
-      anyparse's ledger from {{ day(s.from) }} to {{ day(s.to) }}, one project's task pipeline, no task or session named. The file itself: <a :href="SNAPSHOT_URL">use-case-anyparse.json</a>.
+      {{ WHOSE }} from {{ day(s.from) }} to {{ day(s.to) }}, {{ WHICH }}, no task or session named. The file itself: <a :href="SNAPSHOT_URL">use-case-{{ props.of }}.json</a>.
     </figcaption>
   </figure>
 </template>
