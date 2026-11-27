@@ -130,6 +130,28 @@ PLAYWRIGHT_BROWSERS_PATH=<worktree>-browsers npx playwright install <browser>
 - The bundled `batch-task` already placed its worktree beside the repo; only its reviewer's `review.md` (`/tmp/wf-batch-logs/<ID>/`, the one write a read-only reviewer is allowed) is in `/tmp`, and it is a transient file.
 - `src/worktree-survives-reboot.test.ts` pins it.
 
+### The pre-commit hook
+
+The hook is local, not tracked: `.git/hooks/pre-commit`, shared by the main checkout and every task worktree. Install it once per clone:
+
+```sh
+printf '#!/bin/sh\nroot="$(git rev-parse --show-toplevel)"\n[ -f "$root/scripts/pre-commit.sh" ] && exec sh "$root/scripts/pre-commit.sh"\nexec sh "$root/scripts/check-skill-sync.sh"\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+It runs `scripts/pre-commit.sh`, which has two checks.
+
+**Commit scope** (`scripts/check-commit-scope.sh`)
+
+- A commit made straight on the main checkout may carry one `docs/decisions.md` line and nothing else. Anything more is refused, naming the files and the queue tools (`queue_add`, `queue_edit`): engine code and shipped text change through an engine-task worktree and its review.
+- Passes: a commit in a linked worktree (a task worktree), the commit of a merge in progress, an empty or decisions-only index, and a commit made with `WF_ENGINE_USER_COMMIT` set (the user's own release or hand fix; an agent never sets it).
+- The land is never refused: it is `git merge --ff-only`, which makes no commit and runs no hook.
+- It is a local backstop, as `git commit --no-verify` skips it. Pinned by `src/commit-scope.test.ts`, which commits through the real hook.
+
+**Skill sync** (`scripts/check-skill-sync.sh`)
+
+- It blocks only a commit that touches `templates/skills/`, `templates/skills-stack/` or `.skillsyncignore`.
+- For any other commit a drift is a warning that asks for an engine-task line, so a live-skill edit no longer stops every land until someone syncs it.
+
 ### The pool gate of the engine repo
 
 The engine repo has its own pool gate, `.claude/workflows/pool-gate.yaml` (tracked beside `engine-task.yaml`; `.gitignore` un-ignores it, so every engine-task worktree has it).

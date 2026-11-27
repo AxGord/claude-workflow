@@ -15,7 +15,7 @@
 # live and live equals master's bundled copy (the branch edited the skill; the
 # engine-task land syncs live after a green build). Any other direction fails.
 #
-# Exit 0 = in sync; exit 1 = drift reported (used by the pre-commit hook).
+# Exit 0 = in sync; exit 1 = drift reported (used by scripts/pre-commit.sh, which blocks a commit on it only when the commit touches a skill).
 # Skills existing on only one side are not drift (user-local skills are
 # not all bundled; a machine without live copies checks nothing).
 

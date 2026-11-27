@@ -27,6 +27,7 @@ For a worker, reviewer or investigator of an engine slice. The engine repo is Ty
 - The same commit carries a `CHANGELOG.md` entry under `## Unreleased`, and README, the bundled skills and any key list, comment or tool description that enumerates the feature.
 - Edit `CLAUDE.md` only when your line names the row. Otherwise put the row and its exact new text in your report.
 - No `git stash`, no `pkill -f`. A clean worktree at the end.
+- The pre-commit hook refuses a commit on the main checkout that carries anything but a `docs/decisions.md` line (`scripts/check-commit-scope.sh`); your worktree commit is never refused by it. Never set `WF_ENGINE_USER_COMMIT`: it is the user's. A drift of a live skill blocks only a commit that touches `templates/skills*/`; see `docs/development.md` § The pre-commit hook.
 
 ## What is public
 
@@ -43,7 +44,7 @@ A new state type touches, in order: `types.ts`, `engine.ts`, `tools.ts`, the das
 
 ## Skills and agent types
 
-- `templates/skills/` is the bundled copy of the live `~/.claude/skills/`. The live copy is the truth and you cannot write it. Edit the bundled file and name the live sync in your report; `scripts/check-skill-sync.sh` refuses drift at commit.
+- `templates/skills/` is the bundled copy of the live `~/.claude/skills/`. The live copy is the truth and you cannot write it. Edit the bundled file and name the live sync in your report; `scripts/check-skill-sync.sh` refuses drift in a commit that touches a skill.
 - Every edit of `templates/skills/` or `templates/skills-stack/` needs `npm run skills:history`.
 - Renaming an agent type keeps the old `agents/<name>.md` until drivers spawned under it have ended.
 - A mod `tool.call` hook never changes the call's input: auto mode refuses the call. The engine's own PreToolUse hooks are a separate mechanism.
