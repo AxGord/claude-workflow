@@ -120,7 +120,7 @@ The full documentation is the site **https://axgord.github.io/claude-workflow/**
 | [Workflow YAML](https://axgord.github.io/claude-workflow/workflow-yaml) | The file format, three-tier loading, `extends:` |
 | [Action states](https://axgord.github.io/claude-workflow/action-states) | `exec`, `fetch`, routing, fan-out, guards, restart |
 | [Thread pool](https://axgord.github.io/claude-workflow/pool) | Why parallel agents queue: leases, budget, priority, `wf-run` |
-| [Task queue and dispatch](https://axgord.github.io/claude-workflow/queue) | `queue_next`, `queue_add_batch`, `wf-queue`, the model table, drivers, agent types, the curator (`wf-curator`), the routing census (`wf-routing-census`) |
+| [Task queue and dispatch](https://axgord.github.io/claude-workflow/queue) | `queue_next`, `queue_add_batch`, `wf-queue`, hand edits of a queue file refused, the model table, drivers, agent types, the curator (`wf-curator`), the routing census (`wf-routing-census`) |
 | [Dashboard and plan pane](https://axgord.github.io/claude-workflow/dashboard) | The plan pane, the live map, the status line |
 | [How this differs from Claude Code's built-in Workflow](https://axgord.github.io/claude-workflow/vs-claude-code-workflow) | A side-by-side of the built-in Workflow tool and this plugin, and how their files coexist |
 | [FAQ](https://axgord.github.io/claude-workflow/faq) | Troubleshooting |

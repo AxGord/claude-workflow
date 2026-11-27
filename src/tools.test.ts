@@ -387,6 +387,22 @@ describe("ENG-1a: status context, failed outcome, start cwd", () => {
       expect((await call("queue_header", { queue: "n", exclusive_hold: "maybe" })).isError).toBe(
         true,
       );
+      expect(
+        (
+          await call("queue_header", {
+            queue: "n",
+            land_test: "npm test",
+            base: [`${proj}=abc123`],
+            overlap: "files",
+          })
+        ).text,
+      ).toBe(`overlap (none) → files\nbase (none) → ${proj}=abc123\nland_test (none) → npm test`);
+      expect(readQueue(file).header).toMatchObject({ land_test: "npm test", overlap: "files" });
+      expect(readQueue(file).baseRepos).toEqual([proj]);
+      expect((await call("queue_header", { queue: "n", land_test: null })).text).toBe(
+        "land_test npm test → (none)",
+      );
+      expect((await call("queue_header", { queue: "n", base: ["relative=1"] })).isError).toBe(true);
       expect((await call("queue_header", { queue: "n", batch_size: 1 })).isError).toBe(true);
       expect((await call("queue_header", { queue: "n" })).isError).toBe(true);
       const next = await call("queue_next", { queue: "n" });

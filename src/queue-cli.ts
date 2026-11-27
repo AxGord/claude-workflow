@@ -17,7 +17,7 @@
 //   wf-queue <q> --lessons-take [--triage <file>]   prints the triage file, then empties it (only once the rows are out), under the lock a land's append takes
 //   wf-queue <q> --done|--failed|--release <ID> ... --if-running (with --failed / --release: a line not running is left as it is, exit 0)
 //   wf-queue <q> --batch-size <N> --reason TEXT [--until "<ID> done"]   queue_header (the window; --until: temporary, the mark of <ID> that leaves running puts the old window back)
-//   wf-queue <q> --header-set archive_after_days=N | exclusive_hold=yes|no [--reason TEXT]   queue_header (a header key: N ≥ 1 / yes|no, `key=` removes; any other key refused; --reason is echoed, not written)
+//   wf-queue <q> --header-set archive_after_days=N | exclusive_hold=yes|no | overlap=paths|files | base=/repo=sha[,/repo2=sha2] | land_test=CMD | record_file=FILE | land_branch=BRANCH [--reason TEXT]   queue_header (a header key: N ≥ 1 / yes|no / a mode / a list / one line, `key=` removes; any other key refused; --reason is echoed, not written)
 //   wf-queue <q> --archive --older-than <days> [--include-unended] [--dry-run]   the manual archive (done/failed lines → <q>.archive.yaml); a pick does it by the header's archive_after_days
 //   wf-queue <q> --restore <ID>   one archived line back into the queue (CLI only, no MCP tool)
 //   wf-queue --convert <old.md|config.json> [--into <file.yaml>] [--status S] [--dry-run]
@@ -68,7 +68,7 @@ import {
 
 const USAGE =
   "usage: wf-queue [<queue.yaml>|--queue NAME] [--dry-run] [--explain|--explain-all] | --done|--failed|--release|--running|--promote|--shelve <ID> [--retry] [--force REASON] [--if-running] [--note TEXT] [--from WHO] | --header <key> | --gate <ID> | --path" +
-  ' | --add <YAML-MAPPING> [--after ID|--before ID] | --add-batch <FILE|-> [--after ID|--before ID] [--split ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME] | --lessons-take [--triage FILE] | --batch-size <N> --reason TEXT [--until "<ID> done"] | --header-set archive_after_days=N|exclusive_hold=yes|no [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>' +
+  ' | --add <YAML-MAPPING> [--after ID|--before ID] | --add-batch <FILE|-> [--after ID|--before ID] [--split ID] | --edit <ID> [--set key=value]… [--append-note TEXT] [--from WHO] | --lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME] | --lessons-take [--triage FILE] | --batch-size <N> --reason TEXT [--until "<ID> done"] | --header-set archive_after_days=N|exclusive_hold=yes|no|overlap=paths|files|base=/repo=sha[,…]|land_test=CMD|record_file=FILE|land_branch=B [--reason TEXT] | --archive --older-than <days> [--include-unended] [--dry-run] | --restore <ID>' +
   " | --convert <old.md|config.json> [--into FILE.yaml] [--status S] [--dry-run]";
 
 /** `--flag value` pairs after an op; a flag outside `allowed`, a missing value, or a repeat of a non-list flag is a usage error. */
@@ -370,10 +370,12 @@ async function main(args: string[]): Promise<number> {
     if (eq < 1) throw new QueueError("--header-set needs key=value (`key=` removes the key)");
     const key = kv.slice(0, eq);
     const raw = kv.slice(eq + 1);
-    const numeric = key !== "exclusive_hold";
+    const numeric = key === "archive_after_days";
     if (raw !== "" && numeric && !/^\d+$/.test(raw))
       throw new QueueError(`--header-set ${key}: a whole number ≥ 1, or empty to remove`);
-    const r = await setQueueHeaderKey(file, key, raw === "" ? null : numeric ? Number(raw) : raw);
+    // `base` is a list: its entries are comma separated.
+    const value = key === "base" ? raw.split(",") : numeric ? Number(raw) : raw;
+    const r = await setQueueHeaderKey(file, key, raw === "" ? null : value);
     const why = o.get("--reason")?.[0];
     process.stdout.write(`${formatHeaderKey(r)}${why === undefined ? "" : `  # ${why}`}\n`);
     return 0;

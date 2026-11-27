@@ -46,6 +46,7 @@ import {
   readQueue,
   resolveQueueFile,
   setQueueHeaderKey,
+  type HeaderValue,
   setQueueWindow,
   type HeaderResult,
   type MarkTarget,
@@ -1764,6 +1765,8 @@ export function registerTools(
         "`null` removes the key = no automatic archiving; a pick archives the done / failed lines that ended over N days ago). " +
         "And/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line: while a pending `exclusive: true` line waits only for running " +
         "lines of its repo, no later line of that repo is admitted; `null` removes the key = on). " +
+        'And/or the run\'s own keys, each `null` removes: `base: ["<absolute repo path>=<sha>"]` (one entry per repo the tasks touch), `land_test: <command run after each merge>`, ' +
+        "`record_file: <file a landed task appends a record line to>`, `land_branch: <branch>`, `overlap: paths|files`. " +
         '`until: "<TASK-ID> done"` with the window makes it temporary: the engine restores the window and reason it replaced at the mark of that line that leaves running (done, failed or released), so a raised window is never left raised; a plain window set meanwhile drops the pending revert. ' +
         "One call sets the window, either key or all; the other header keys are untouched. " +
         "When the window grows and a live dispatcher session holds the queue, the answer adds one line naming that session, its state and the call that makes it use the new window (`lines added` to its agent at `collect`, `retry` at `paused`; `transition` `refill` / `retry` when main drives it); a hand edit of the file is not noticed.",
@@ -1792,6 +1795,37 @@ export function registerTools(
             .describe(
               "no = a waiting exclusive line does not hold its repo; yes = it does (the default); null removes the key",
             ),
+          base: z
+            .array(z.string().min(1))
+            .min(1)
+            .nullable()
+            .optional()
+            .describe(
+              "`<absolute repo path>=<sha>` per repo the tasks touch; null removes the key",
+            ),
+          land_test: z
+            .string()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe("The command run after each merge (one line); null removes the key"),
+          record_file: z
+            .string()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe("A file a landed task appends one record line to; null removes the key"),
+          land_branch: z
+            .string()
+            .min(1)
+            .nullable()
+            .optional()
+            .describe("The branch the lands target; null removes the key"),
+          overlap: z
+            .enum(["paths", "files"])
+            .nullable()
+            .optional()
+            .describe("`files`: only FILE entries of `touches:` conflict; null removes the key"),
           until: z
             .string()
             .min(1)
@@ -1805,9 +1839,10 @@ export function registerTools(
     async args => {
       try {
         const window = args.batch_size !== undefined || args.reason !== undefined;
-        if (!window && args.archive_after_days === undefined && args.exclusive_hold === undefined)
+        const keys = HEADER_KEY_ARGS.filter(k => args[k] !== undefined);
+        if (!window && keys.length === 0)
           throw new QueueError(
-            "queue_header needs batch_size + reason, archive_after_days, exclusive_hold, or several",
+            "queue_header needs batch_size + reason, a header key (archive_after_days, exclusive_hold, base, land_test, record_file, land_branch, overlap), or several",
           );
         if (window && (args.batch_size === undefined || args.reason === undefined))
           throw new QueueError("batch_size and reason go together");
@@ -1819,15 +1854,9 @@ export function registerTools(
           const r = await setQueueWindow(file, args.batch_size, args.reason, args.until);
           lines.push(formatWindow(r), ...windowNudgeLines(storage, file, r));
         }
-        if (args.archive_after_days !== undefined)
+        for (const k of keys)
           lines.push(
-            formatHeaderKey(
-              await setQueueHeaderKey(file, "archive_after_days", args.archive_after_days),
-            ),
-          );
-        if (args.exclusive_hold !== undefined)
-          lines.push(
-            formatHeaderKey(await setQueueHeaderKey(file, "exclusive_hold", args.exclusive_hold)),
+            formatHeaderKey(await setQueueHeaderKey(file, k, args[k] as HeaderValue | null)),
           );
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
@@ -1836,6 +1865,17 @@ export function registerTools(
     },
   );
 }
+
+/** The `queue_header` arguments that set one header key, in the order they are written. */
+const HEADER_KEY_ARGS = [
+  "archive_after_days",
+  "exclusive_hold",
+  "overlap",
+  "base",
+  "land_test",
+  "record_file",
+  "land_branch",
+] as const;
 
 /** The queue a call means: `file` (a full path), else `queue` (a name), else the project's default. */
 const QUEUE_SEL = {

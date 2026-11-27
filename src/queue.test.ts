@@ -26,6 +26,7 @@ import {
   readQueue,
   resolveQueueFile,
   setQueueHeaderKey,
+  formatHeaderKey,
   setQueueWindow,
   textHashOf,
   today,
@@ -1136,6 +1137,54 @@ describe("queue line writes (queue_add / queue_edit / queue_header)", () => {
     expect(fs.readFileSync(file, "utf8")).toBe(before);
   });
 
+  it("setQueueHeaderKey sets, changes and removes the run's keys base, land_test, record_file, land_branch and overlap, and refuses a bad value (ENG-TASKFILE-WRITE-HOOK)", async () => {
+    const file = queueFile(`- [ ] A | touches: a`, "batch_size: 2");
+    const repo = path.dirname(path.dirname(path.dirname(file)));
+    expect(await setQueueHeaderKey(file, "land_test", "npm test")).toEqual({
+      key: "land_test",
+      from: undefined,
+      to: "npm test",
+    });
+    expect((await setQueueHeaderKey(file, "land_test", "npm run check")).from).toBe("npm test");
+    expect(await setQueueHeaderKey(file, "record_file", "records.md")).toMatchObject({
+      to: "records.md",
+    });
+    await setQueueHeaderKey(file, "land_branch", "integration");
+    await setQueueHeaderKey(file, "overlap", "files");
+    await setQueueHeaderKey(file, "base", [`${repo}=abc123`, "/other=def456"]);
+    const q = readQueue(file);
+    expect(q.header).toMatchObject({
+      land_test: "npm run check",
+      record_file: "records.md",
+      land_branch: "integration",
+      overlap: "files",
+    });
+    expect(q.baseRepos).toEqual([repo, "/other"]);
+    expect(q.overlap).toBe("files");
+    expect(formatHeaderKey(await setQueueHeaderKey(file, "base", [`${repo}=1`]))).toBe(
+      `base ${repo}=abc123, /other=def456 → ${repo}=1`,
+    );
+    const text = fs.readFileSync(file, "utf8");
+    expect(text.indexOf("land_test:")).toBeLessThan(text.indexOf("tasks:"));
+    for (const key of ["land_test", "record_file", "land_branch", "overlap", "base"])
+      expect((await setQueueHeaderKey(file, key, null)).to).toBeUndefined();
+    expect(readQueue(file).header.land_test).toBeUndefined();
+    expect(readQueue(file).baseRepos).toEqual([]);
+    const before = fs.readFileSync(file, "utf8");
+    for (const [key, bad] of [
+      ["overlap", "sideways"],
+      ["base", ["relative=abc"]],
+      ["base", []],
+      ["base", ["/repo"]],
+      ["land_test", ""],
+      ["land_test", "a\nb"],
+      ["land_test", 3],
+      ["record_file", "  "],
+    ] as const)
+      await expect(setQueueHeaderKey(file, key, bad)).rejects.toThrow(key);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
   it("mark done and failed write the day the line ended (`ended`); a retry removes it; other marks leave it out", async () => {
     const file = queueFile(
       `- [>] A | touches: a\n- [>] B | touches: b\n- [ ] C | touches: c`,
@@ -1246,6 +1295,23 @@ describe("wf-queue CLI", () => {
     vi.restoreAllMocks();
     return { code: process.exitCode, out: out.join(""), err: err.join("") };
   }
+
+  it("wf-queue --header-set writes the run's keys; base takes comma separated entries (ENG-TASKFILE-WRITE-HOOK)", async () => {
+    const file = queueFile(`- [ ] A | touches: a`, "batch_size: 2");
+    expect((await cli(file, "--header-set", "land_test=npm test")).out).toBe(
+      "land_test (none) → npm test\n",
+    );
+    expect((await cli(file, "--header-set", "base=/a=1,/b=2")).out).toBe(
+      "base (none) → /a=1, /b=2\n",
+    );
+    expect(readQueue(file).baseRepos).toEqual(["/a", "/b"]);
+    expect((await cli(file, "--header-set", "overlap=files")).code).toBe(0);
+    expect((await cli(file, "--header-set", "overlap=x")).code).toBe(2);
+    expect((await cli(file, "--header-set", "base=rel=1")).code).toBe(2);
+    expect((await cli(file, "--header-set", "land_test=")).out).toBe(
+      "land_test npm test → (none)\n",
+    );
+  });
 
   it("--add and --edit refuse a pending line with no difficulty: exit 2, the id named, the file unchanged", async () => {
     const file = queueFile("- [ ] A | difficulty: 2 | touches: a");

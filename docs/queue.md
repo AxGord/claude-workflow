@@ -92,6 +92,17 @@ Keep the queue file untracked and ignored (e.g. `.claude/batch/` in `.gitignore`
 
 The land takes a merge back with `git reset --keep` only while HEAD is still that merge. Otherwise (HEAD moved during `land_test`, or local edits on the merged files) it exits 4 and touches nothing.
 
+**Hand edits are refused**
+
+The plugin's PreToolUse hook (`hooks/queue-write-gate.sh`) denies an agent's `Write`, `Edit`, `MultiEdit` or Bash write of a queue file. The reason names `queue_add`, `queue_edit`, `queue_mark`, `queue_header` and `wf-queue`.
+
+- A queue file is a `.yaml` / `.yml` file directly in a `.claude/batch/` directory (the queue, a named queue, `<queue>.archive.yaml`), or any other existing `.yaml` / `.yml` file with a top-level `batch_size:` and `tasks:` (a queue of another repo, named by a full path).
+- Bash: a redirect onto it, `cp` / `mv` / `rm` / `touch` / `tee` / `sed -i`, `sh -c` bodies and heredocs fed to a shell. A read (`cat`, `grep`, `wf-queue <file> --header …`) passes, so do the MCP tools and `wf-queue`: they are no Edit or Write call and carry the file only as an argument.
+- A speed bump, not a sandbox. An interpreter's inline code (`node -e`, `python -c`) is not examined, because a script that reads the queue is as common as one that writes it; a path built at run time is not seen.
+- The header keys a flow needs (`base`, `land_test`, `record_file`, `land_branch`, `overlap`) are set through `queue_header` / `wf-queue --header-set`; the bundled `batch` and `master` flows do so, and a pin refuses a bundled template that tells an agent to edit a queue by hand.
+- A queue file the tools cannot read is repaired by the user in a terminal.
+- The hook needs a Claude Code restart.
+
 **The pick**
 
 A pick fills the window (`batch_size` minus the running tasks) in `priority:` order (`urgent`, `high`, `normal` = default, `low`; file order within one priority) with the pending tasks (never `backlog` ones) that:
@@ -162,7 +173,7 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - The fields are checked as `queue_add` checks them, so an edit that leaves a pending line (not parked, not `model: —`) with no `difficulty:` is refused, while a line written before the rule stays editable. The status stays `queue_mark`'s.
   - Setting or widening `after:` on a running line answers with a warning: `after:` gates only admission, so the line keeps running and its driver is not told. The warning names the dependencies not done; the edit is still recorded for a rerun. All dependencies done, or a pending line: no warning.
   - An edit of `text`, `touches`, `owner` or `sweep` that changes the brief, or of `repo` to another value, rewrites `base` (at the HEAD of the line's repo then) and `text_hash`; any other edit leaves them.
-- `queue_header({ queue?, file?, batch_size?, reason?, until?, archive_after_days?, exclusive_hold? })` — header keys, under the lock:
+- `queue_header({ queue?, file?, batch_size?, reason?, until?, archive_after_days?, exclusive_hold?, overlap?, base?, land_test?, record_file?, land_branch? })` — header keys, under the lock:
   - the window: `batch_size: N` with `reason:` (`0` pauses; the two go together);
   - with `until: "<TASK-ID> done"` the window is temporary:
     - the header keeps the window and reason it replaced as `window_until:`;
@@ -170,15 +181,16 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
     - a line already `done` or `failed`, or an unknown one, is refused (the window would never end), and so is a second temporary window while one is pending;
     - a plain window set meanwhile drops the pending revert, and the answer names it;
   - and/or `archive_after_days: N` (a whole number ≥ 1; `null` removes the key);
-  - and/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line, see the pick rules; `null` removes the key = on).
+  - and/or `exclusive_hold: yes|no` (`no` turns off the hold of a waiting exclusive line, see the pick rules; `null` removes the key = on);
+  - and/or the run's own keys, each `null` removes: `base: ["<abs repo>=<sha>"]`, `land_test: <command>`, `record_file: <file>`, `land_branch: <branch>`, `overlap: paths|files`. A bad value (a relative `base` path, a multi-line command) is refused with nothing written. With the hand edit refused, this is how a flow sets them.
   - A window that GROWS (`wf-queue --batch-size` too) admits nothing by itself: a dispatcher at `collect` moves only on a land's `slot_free` or main's `refill`, one at `paused` only on `retry`.
     - When a live dispatcher session holds the queue (a root, not suspended session whose context names that `queue_file` and a `task_workflow`), the answer adds one line per such session: its id, its state and the exact call.
     - A dispatcher agent holds the session: `SendMessage({ to: "<agent id>", message: "lines added" })` at `collect` (only when a pick would admit lines now), `message: "retry"` at `paused` (always).
     - The main conversation driving the session itself: `transition` `refill` / `retry`.
     - At `dispatch` or `pick` the line says to send it once the session stands at `collect`; at another state, or for a shrunk window, nothing is added.
     - No hook does it: a PostToolUse hook cannot `SendMessage` an agent, and a `transition` it made would hand the next prompt to the hook instead of the agent that drives the session. The caller of `queue_header` sends.
-    - A hand edit of the queue file is noticed by nothing: send the dispatcher the same message yourself.
-  - One call sets the window, a key or several; a set of one leaves the other keys as they are. No other key is settable here (the rest of the header is written when the queue is made).
+    - A hand edit of the queue file is noticed by nothing (and an agent's is refused, § Hand edits are refused): send the dispatcher the same message yourself.
+  - One call sets the window, a key or several; a set of one leaves the other keys as they are. The window and the keys listed above are all that is settable here; any other header key is set by the user in a terminal.
 - Archive (no MCP tool): keeps the queue file small.
   - The header key `archive_after_days: N` (set with `queue_header` / `wf-queue --header-set`; absent = no archiving) makes every pick (`queue_next`, `wf-queue`), under its lock and before admitting, move the `done` and `failed` lines whose `ended:` is more than N days ago to `<queue>.archive.yaml` beside the queue (`queue.yaml` → `queue.archive.yaml`), appending, under the queue's lock. The line is moved whole, its text and notes unchanged.
   - A line with no `ended:` stays; a failed line an open (pending / running / backlog) line's `after:` names stays.
@@ -207,7 +219,7 @@ Each admitted task is set `running` under the queue's lock (`<file>.lock`, an at
   - `--add-batch <FILE|-> [--after ID|--before ID] [--split ID]` (`queue_add_batch`: a YAML list of tasks, or a mapping with `tasks:`; `-` reads stdin; exit 2 and the file untouched when any line fails);
   - `--edit <ID> [--set key=value]… [--append-note T] [--from W]` (`key=` removes);
   - `--batch-size <N> --reason T [--until "<ID> done"]` (the temporary window above);
-  - `--header-set archive_after_days=N|exclusive_hold=yes|no [--reason T]` (`archive_after_days=` / `exclusive_hold=` removes the key; another key is refused; the reason is echoed, not written);
+  - `--header-set archive_after_days=N|exclusive_hold=yes|no|overlap=paths|files|base=/repo=sha[,…]|land_test=CMD|record_file=FILE|land_branch=B [--reason T]` (`key=` removes the key; another key is refused; the reason is echoed, not written);
   - `--archive --older-than <days> [--include-unended] [--dry-run]`;
   - `--restore <ID>` (an archived line back into the queue);
   - `--lessons <ID> --records FILE… [--triage FILE] [--repo DIR] [--workflow NAME]` (a landed task's lesson records as queue lines and triage rows; see "Lesson records");

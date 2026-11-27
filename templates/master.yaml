@@ -205,7 +205,7 @@ states:
       5. Own queue only (`plan-<slug>`): `queue_header({queue, batch_size: N, reason: "plan:
          <slug>"})` — N = the tasks with no `after`, at most 3 — and `context_set(key: "queue_file",
          value: "<absolute path of the queue file>")` (the add's answer names it). `batch`'s
-         `plan_queue` finishes the header (`base:`, `land_test:`) and resumes this queue. A heir's
+         `plan_queue` finishes the header (`base:`, `land_test:`, through `queue_header`) and resumes this queue. A heir's
          queue: no header write.
     transitions:
       batch: run_batch

@@ -42,7 +42,7 @@ states:
 
       0. **Handed over** — context `queue_file` already set = master's `enqueue_plan` queued the
          tasks of an approved plan (`queue_add`, window set): RESUME that queue (step 1's rules for
-         `base:`; add `land_test:` / `record_file:` by hand once if the project has them), do not
+         `base:`; set `land_test:` / `record_file:` through `queue_header` once if the project has them), do not
          build a new one. Then go to step 3.
       1. **Resume check** — list `{{context.cwd}}/.claude/batch/*.yaml`. If a
          queue file has pending or running tasks and matches the
@@ -55,8 +55,11 @@ states:
          Then go to step 3.
       2. **New queue** — create `{{context.cwd}}/.claude/batch/<short-name>.yaml`
          through `queue_add({queue: "<short-name>", task: {…}})` (the first add creates
-         it), then `queue_header` for the window; header keys you write by hand once,
-         before the run is live:
+         it), then ONE `queue_header` call for the window and the run's keys, before the run is
+         live: `{queue, batch_size, reason, base: ["<repo-abs-path>=<sha>"], land_test: "<command>",
+         record_file: "<file>"}` (omit `land_test` / `record_file` for none; `land_branch`, `overlap`
+         set the same way). Never edit the queue file by hand: a hook refuses it. The file then
+         reads like this:
          ```yaml
          batch_size: 3
          reason: <why this window>

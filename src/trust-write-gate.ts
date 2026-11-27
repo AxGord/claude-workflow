@@ -20,7 +20,8 @@
 // server, `wf-trust`, `wf-skills`: no tool call).
 //
 // The command walk is generic over the places it guards (`Guard`, `commandPlace`): the knowledge
-// write gate (`knowledge-write-gate.ts`) walks the same commands for the memory directories.
+// write gate (`knowledge-write-gate.ts`) and the queue write gate (`queue-write-gate.ts`) walk the
+// same commands for the memory directories and the queue files.
 import fs from "node:fs";
 import path from "node:path";
 import { basename, splitSegments, type Segment } from "./pool-gate.js";
@@ -58,6 +59,8 @@ export interface Guard<P> {
   readonly mentionedIn: (expanded: string, cwd: string) => P | undefined;
   /** Writer commands that cannot create a file and so never ask (`rm` for a guard of creations). */
   readonly skip?: ReadonlySet<string>;
+  /** `false`: an interpreter's code and a heredoc it reads are never examined (a guard of writes whose place is also read by a script). */
+  readonly interpreters?: boolean;
 }
 
 export const TOOL_PATH: Readonly<Record<string, string>> = {
@@ -309,7 +312,7 @@ function segmentPlace<P>(
       ? stay(name, commandPlace(args[c + 1], cwd, env, g))
       : stay(name);
   }
-  if (INTERPRETERS.has(name)) {
+  if (INTERPRETERS.has(name) && g.interpreters !== false) {
     // The raw words: a `>` inside inline code is not a redirect of the command.
     for (const a of values) {
       const p = mentions(a, cwd, env, g);
@@ -371,6 +374,7 @@ export function commandPlace<P>(
   // A heredoc is text for the command that reads it: only a shell or an interpreter acts on its body.
   for (const name of fed)
     for (const body of bodies) {
+      if (!SHELLS.has(name) && g.interpreters === false) continue;
       const p = SHELLS.has(name) ? commandPlace(body, dir, env, g) : mentions(body, dir, env, g);
       if (p) return p;
     }

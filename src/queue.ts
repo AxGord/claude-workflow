@@ -2894,16 +2894,50 @@ export function formatWindow(r: HeaderResult): string {
 
 /**
  * The header keys a tool may set besides the window (`batch_size` / `reason`): `archive_after_days`
- * a whole number ≥ 1, `exclusive_hold` `yes` or `no`; each removed with `null`.
+ * a whole number ≥ 1, `exclusive_hold` `yes` or `no`, `overlap` a mode, `base` a list of
+ * `<abs repo>=<sha>`, `land_test` / `record_file` / `land_branch` one non-empty line; each removed
+ * with `null`.
  */
-export const SETTABLE_HEADER_KEYS: readonly string[] = ["archive_after_days", "exclusive_hold"];
+export const SETTABLE_HEADER_KEYS: readonly string[] = [
+  "archive_after_days",
+  "exclusive_hold",
+  "overlap",
+  "base",
+  "land_test",
+  "record_file",
+  "land_branch",
+];
+
+export type HeaderValue = number | string | readonly string[];
 
 export interface HeaderKeyResult {
   readonly key: string;
   /** The value before (`undefined` = the key was absent). */
   readonly from: string | undefined;
   /** The value after (`undefined` = the key is now absent). */
-  readonly to: number | string | undefined;
+  readonly to: HeaderValue | undefined;
+}
+
+function checkHeaderValue(key: string, value: HeaderValue): void {
+  if (key === "exclusive_hold") {
+    if (value !== "yes" && value !== "no")
+      throw new QueueError(`${key} is yes or no (null removes it), not ${String(value)}`);
+  } else if (key === "overlap") {
+    if (typeof value !== "string" || !(OVERLAP_MODES as readonly string[]).includes(value))
+      throw new QueueError(
+        `${key} is one of ${OVERLAP_MODES.join(", ")} (null removes it), not ${String(value)}`,
+      );
+  } else if (key === "base") {
+    const list = typeof value === "string" ? [value] : value;
+    if (typeof list === "number" || list.length === 0 || !list.every(b => /^\/\S*=\S+$/.test(b)))
+      throw new QueueError(
+        `${key} is a list of <absolute repo path>=<sha> entries (null removes it), not ${String(value)}`,
+      );
+  } else if (key === "archive_after_days") {
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1)
+      throw new QueueError(`${key} is a whole number ≥ 1 (null removes it), not ${String(value)}`);
+  } else if (typeof value !== "string" || value.trim() === "" || /[\r\n]/.test(value))
+    throw new QueueError(`${key} is one non-empty line (null removes it)`);
 }
 
 /**
@@ -2914,35 +2948,34 @@ export interface HeaderKeyResult {
 export async function setQueueHeaderKey(
   file: string,
   key: string,
-  value: number | string | null,
+  value: HeaderValue | null,
 ): Promise<HeaderKeyResult> {
   if (!SETTABLE_HEADER_KEYS.includes(key))
     throw new QueueError(
       `${key} is not a header key a tool sets (${SETTABLE_HEADER_KEYS.join(", ")}; the window is batch_size + reason)`,
     );
-  if (value !== null) {
-    if (key === "exclusive_hold") {
-      if (value !== "yes" && value !== "no")
-        throw new QueueError(`${key} is yes or no (null removes it), not ${value}`);
-    } else if (typeof value !== "number" || !Number.isInteger(value) || value < 1)
-      throw new QueueError(`${key} is a whole number ≥ 1 (null removes it), not ${value}`);
-  }
+  if (value !== null) checkHeaderValue(key, value);
+  const stored = value === null ? null : typeof value === "object" ? [...value] : value;
   return writing(file, e => {
     const from = e.queue.header[key]?.trim() || undefined;
-    if (value === null) e.doc.delete(key);
-    else if (e.doc.has(key)) e.doc.set(key, value);
+    if (stored === null) e.doc.delete(key);
+    else if (e.doc.has(key)) e.doc.set(key, e.doc.createNode(stored));
     else {
       const top = e.doc.contents as YAMLMap;
       const at = top.items.findIndex(p => String((p.key as Scalar).value) === "tasks");
-      top.items.splice(at < 0 ? top.items.length : at, 0, e.doc.createPair(key, value));
+      top.items.splice(
+        at < 0 ? top.items.length : at,
+        0,
+        e.doc.createPair(key, e.doc.createNode(stored)),
+      );
     }
-    return { key, from, to: value ?? undefined };
+    return { key, from, to: stored ?? undefined };
   });
 }
 
 /** `archive_after_days 30 → 7`, `exclusive_hold (none) → no`: what a header key set did. */
 export function formatHeaderKey(r: HeaderKeyResult): string {
-  return `${r.key} ${r.from ?? "(none)"} → ${r.to ?? "(none)"}`;
+  return `${r.key} ${r.from ?? "(none)"} → ${r.to === undefined ? "(none)" : typeof r.to === "object" ? r.to.join(", ") : r.to}`;
 }
 
 // Reasons that say nothing about a line itself: with `explain` they fold into one summary line each.
