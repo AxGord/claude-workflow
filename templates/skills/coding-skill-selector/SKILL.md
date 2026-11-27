@@ -54,7 +54,8 @@ Load coding skills for the languages/domains THIS TASK will touch.
    - Game dev (physics, precision, camera, sprites) → `Skill("domain-gamedev")`
    - UI components / display-tree apps (ownership, state, events) → `Skill("domain-ui")`
    - Diagnosing a bug / fixes that don't stick after 2+ rounds → `Skill("debugging")`
-   - OpenFL / hxcpp native target → `Skill("target-openfl-native")`
+   - Haxe code built for the cpp target (`-cpp`, hxcpp, externs to C++, `cpp.*` imports) → `Skill("target-hxcpp")`
+   - OpenFL/lime on a NATIVE target (`lime test|build mac|windows|linux|ios|android`, a `cpp`/`native` define in project.xml, `#if cpp` code paths) → `Skill("target-hxcpp")` + `Skill("target-openfl-native")`; OpenFL html5 only → neither
 
 6. By tooling/platform:
    - CMakeLists.txt / CMake build → `Skill("build-cmake")`
@@ -79,7 +80,7 @@ Call `Skill(name)` for EVERY matched skill.
 
 **Stack skills — offer, never install silently.** The skills for languages,
 domains and tools above (`lang-*`, `domain-*`, `hxq`, `hxq-write`,
-`target-openfl-native`, `build-cmake`, `aws-lambda`, `ide-zed`) ship with the
+`target-hxcpp`, `target-openfl-native`, `build-cmake`, `aws-lambda`, `ide-zed`) ship with the
 workflow plugin but are NOT copied to the machine until asked for. When a rule
 above maps this task to one of them and it is not installed (the `Skill` call
 finds nothing), look at the state in `~/.claude/workflow-state/skills/wf-skills

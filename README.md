@@ -37,7 +37,7 @@ before Claude Code's built-in Workflow tool became available (v2.1.146, 20 May 2
 - **Thread pool** — heavy builds and tests, agents' own included, share one machine-wide budget ([Thread pool][pool])
 - **Task queue** — picker, driver per task (on `delivers:`), difficulty model, human waits, curator ([Queue][queue])
 - **Subagents** — driver, experimental dispatcher (off unless `WF_DISPATCHER`), recon, reviewer ([Agent types][agents])
-- **22 bundled workflows**, **30 bundled skills** (15 by default, 15 on request) ([Concepts][concepts])
+- **22 bundled workflows**, **31 bundled skills** (15 by default, 16 on request) ([Concepts][concepts])
 - **Survives a restart** — sessions are suspended, not lost; `claude --resume` continues them ([Restart][restart])
 - **Live dashboard** — map, plan pane (runs, lands, reports), status line, light or dark ([Dashboard][dashboard])
 

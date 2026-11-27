@@ -84,10 +84,10 @@ The `coding` workflow, drawn by the dashboard's own renderer (click a state to r
 
 ## Bundled Skills
 
-Skills are reusable knowledge modules loaded by workflows via `Skill()`. The plugin ships 30 of them in two sets, and only the first is copied to your machine:
+Skills are reusable knowledge modules loaded by workflows via `Skill()`. The plugin ships 31 of them in two sets, and only the first is copied to your machine:
 
 - **The default set (15)**: universal, stack-free skills. The SessionStart hook copies them to `~/.claude/skills/` and keeps them current. Edit your local copy to change one: a copy you edited is never overwritten ([how updates and removal work](#updating-and-removing-the-skills)).
-- **The stack pack (15)**: skills for a language, a domain or a tool. They ship in the same plugin, in `templates/skills-stack/`, which the hook never copies from. Install one with `wf-skills add <name>…` (or all of them with `wf-skills add --all-stack`); from then on it is recorded in the manifest and updated and removed like a default skill. `coding-skill-selector` offers one when the task needs it and it is not installed ([Offers](#stack-skills-are-offered-never-installed-silently)).
+- **The stack pack (16)**: skills for a language, a domain or a tool. They ship in the same plugin, in `templates/skills-stack/`, which the hook never copies from. Install one with `wf-skills add <name>…` (or all of them with `wf-skills add --all-stack`); from then on it is recorded in the manifest and updated and removed like a default skill. `coding-skill-selector` offers one when the task needs it and it is not installed ([Offers](#stack-skills-are-offered-never-installed-silently)).
 
 ### The default set
 
@@ -124,7 +124,8 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. The plu
 | `domain-gamedev` | Game dev precision and physics gotchas |
 | `domain-pony` | Pony (Haxe cross-library) gotchas |
 | `domain-ui` | UI component architecture: ownership, state, events |
-| `target-openfl-native` | OpenFL/hxcpp native target gotchas |
+| `target-hxcpp` | hxcpp target gotchas (GC, threads, externs, boot order, generated C++, value boxing), for any Haxe code built for cpp |
+| `target-openfl-native` | OpenFL/lime native target specifics (display tree, lime/NDLL build, platform details); load with `target-hxcpp` |
 | `build-cmake` | CMake build system gotchas |
 | `aws-lambda` | AWS Lambda .NET deployment gotchas |
 | `ide-zed` | Zed IDE integration rules |

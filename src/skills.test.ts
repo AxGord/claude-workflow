@@ -461,7 +461,7 @@ describe("the real bundled sets", () => {
     "wf-yaml-authoring",
   ];
 
-  it("a fresh start on a scratch HOME copies exactly the 15 universal skills, and the stack pack is the other 15", () => {
+  it("a fresh start on a scratch HOME copies exactly the 15 universal skills, and the stack pack is 16 more", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-skills-real-"));
     try {
       const ctx: SkillsContext = {
@@ -473,15 +473,43 @@ describe("the real bundled sets", () => {
       syncSkills(ctx);
       expect(fs.readdirSync(ctx.skillsDir).sort()).toEqual(DEFAULT);
       const stack = [...stackSkillNames(REPO)].sort();
-      expect(stack).toHaveLength(15);
+      expect(stack).toHaveLength(16);
       expect(stack.filter(n => DEFAULT.includes(n))).toEqual([]);
       expect(
         planSkills(ctx, readManifest(ctx.stateDir)).filter(r => r.state === "available"),
-      ).toHaveLength(15);
-      expect(shippedSkills(REPO).size).toBe(30);
+      ).toHaveLength(16);
+      expect(shippedSkills(REPO).size).toBe(31);
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the cpp skills split", () => {
+  it("target-hxcpp ships in the stack pack and the generic selector routes cpp and native OpenFL to it, html5 to neither", () => {
+    expect([...stackSkillNames(REPO)]).toContain("target-hxcpp");
+    const selector = fs.readFileSync(
+      path.join(REPO, "templates", "skills", "coding-skill-selector", "SKILL.md"),
+      "utf8",
+    );
+    const lines = selector.split("\n");
+    const cpp = lines.find(l => l.includes("`-cpp`"));
+    expect(cpp).toContain('Skill("target-hxcpp")');
+    expect(cpp).not.toContain("target-openfl-native");
+    const openfl = lines.find(l => l.includes("OpenFL/lime on a NATIVE target"));
+    expect(openfl).toContain('Skill("target-hxcpp")');
+    expect(openfl).toContain('Skill("target-openfl-native")');
+    expect(openfl).toContain("html5 only → neither");
+    expect(selector).toMatch(/`hxq-write`,\s*`target-hxcpp`, `target-openfl-native`/);
+  });
+
+  it("target-openfl-native no longer carries the general hxcpp text and points at target-hxcpp", () => {
+    const openfl = fs.readFileSync(
+      path.join(REPO, "templates", "skills-stack", "target-openfl-native", "SKILL.md"),
+      "utf8",
+    );
+    expect(openfl).toContain("target-hxcpp");
+    expect(openfl.split("\n").length).toBeLessThan(600);
   });
 });
 
