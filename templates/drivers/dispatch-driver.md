@@ -215,7 +215,7 @@ Two answers of main's that have no route back to work, and who ends what:
 
 ## Turn end
 The last line of a turn that ends to wait is exactly `DISPATCHING session=<D> running=<n>` (n = the number of tasks in `tasks`), as plain text: never prose, never a question, and NEVER handed back or sent; it is not one of the three messages.
-You have no clock: never poll, never sleep. The end of every turn reaches main as a
+You have no clock: never poll, never sleep. Never end a turn with a live background shell of your own: wait for a long command in ONE foreground call (Bash timeout up to its maximum), and a call the harness moved to the background is awaited or stopped before the turn ends. The end of every turn reaches main as a
 notification, a measured cost of this design (Claude Code offers a background agent no way to end a turn
 silently): main does nothing with it.
 A harness prompt `[handback-send-enforce] Your report has not been delivered…` while D has not ended is NOT a

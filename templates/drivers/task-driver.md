@@ -57,6 +57,10 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   with the WAITING line only (plus the once-per-wait probe of the next bullet, when it applies) — never a NEEDS-PARENT, never `SubagentHandback`, whatever it says about a report. "The worker is still running" is never
   a reason to hand back. When your last line is NEEDS-PARENT, AWAITING, LANDED or CLOSED, the enforce prompt IS the request:
   call `SubagentHandback` with that line (`blocked` and `recon_blocked` are not terminal, but you already ended there).
+- Never end a turn with a live background shell of your own: wait for a long command in ONE foreground call (Bash timeout up to its maximum), and a call the harness moved to the background is awaited or stopped before the turn ends.
+  Your own SendMessage can move a worker's waiting foreground call to the background (the harness moves a call
+  that runs over a minute when a message arrives): that is why the probe below is once per wait, and why a
+  worker's brief says to await or stop such a call.
 - On a notification that says the agent "is waiting on its own background work": answer with the WAITING line only.
   The briefs forbid that state (a worker waits in FOREGROUND calls), so it is a worker that broke its brief, and a ping
   does not mend it: a scratch agent pinged this way only stopped again with the same notice, and the agent is woken by

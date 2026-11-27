@@ -124,6 +124,11 @@ states:
       start() returns `SESSION: <id>` — pass that session_id explicitly in every
       subsequent workflow tool call (transition, context_set); parallel siblings
       share the same ppid.
+      Bash: run commands FOREGROUND with an explicit timeout sized to the
+      command. Never end a turn with a live background shell of your own: wait
+      for a long command in ONE foreground call (Bash timeout up to its
+      maximum), and a call the harness moved to the background is awaited or
+      stopped before the turn ends.
       ---
       Also include:
       - The batch's file list (absolute paths) and WHY they are grouped
@@ -151,9 +156,9 @@ states:
       counts EVERY live agent of the session tree, the agent running this
       state included; unset = 8. A hook refuses a spawn past it, and a
       refused batch goes into the next wave, never skipped: merge only after
-      every batch has run), each with
-      `run_in_background: false` — reports gate the merge; a single batch
-      is still a gating single, not a background task. More batches →
+      every batch has run), each
+      as a foreground spawn — reports gate the merge; a single batch
+      is still a gating single, never a background spawn. More batches →
       next wave after the current one completes.
       Collect their reports.
 
@@ -200,6 +205,11 @@ states:
          start() returns `SESSION: <id>` — pass that session_id explicitly in every
          subsequent workflow tool call (transition, context_set); parallel siblings
          share the same ppid.
+         Bash: run commands FOREGROUND with an explicit timeout sized to the
+         command. Never end a turn with a live background shell of your own:
+         wait for a long command in ONE foreground call (Bash timeout up to
+         its maximum), and a call the harness moved to the background is
+         awaited or stopped before the turn ends.
          ---
          Also include:
          - The batch's file list (absolute paths) and why they are grouped
@@ -217,9 +227,9 @@ states:
          (`.claude/workflows/settings.json`): the cap counts EVERY live agent
          of the session tree, the agent running this state included; unset =
          8. A hook refuses a spawn past it, and a refused batch goes into the
-         next wave, never skipped: report only after every batch has run), each with
-         `run_in_background: false` — reports gate the package report; a
-         single batch is still a gating single, not a background task.
+         next wave, never skipped: report only after every batch has run), each
+         as a foreground spawn — reports gate the package report; a
+         single batch is still a gating single, never a background spawn.
          More batches → next wave after the current completes.
          If a child agent fails or returns no report — re-spawn it once;
          if it fails again, mark that batch's files as unreviewed in the package report.

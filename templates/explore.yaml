@@ -42,7 +42,7 @@ states:
         `opus` (effort high) for analytical judgement; fable only on user
         request, never silent session-model inheritance. Their
         findings gate your next transition → ALL calls in ONE message,
-        each with `run_in_background: false` (a single spawn especially —
+        each as a foreground spawn (a single spawn especially —
         never background one gating agent).
       - Use Glob to find files by pattern
       - For "where is X / what is X's shape / which decls carry Y" use the
@@ -77,6 +77,11 @@ states:
       self-classifies (analytical → skill-loaded sub-workflow; trivial → execute).
       start() returns `SESSION: <id>` — pass that session_id explicitly in every
       subsequent workflow tool call; parallel siblings share the same ppid.
+      Bash: run commands FOREGROUND with an explicit timeout sized to the
+      command. Never end a turn with a live background shell of your own: wait
+      for a long command in ONE foreground call (Bash timeout up to its
+      maximum), and a call the harness moved to the background is awaited or
+      stopped before the turn ends.
       ---
       After collecting reports: `sessions` → `abort` orphaned child `subagent`
       sessions.

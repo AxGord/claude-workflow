@@ -53,8 +53,8 @@ states:
       3. Register the new test file/suite if the runner requires it
 
       A run here (the red check) goes through a flat `general-purpose`
-      subagent with `model: "haiku"`, `effort: "low"`, foreground,
-      `run_in_background: false` — never inherit the session model.
+      subagent with `model: "haiku"`, `effort: "low"`, foreground
+      spawn — never inherit the session model.
 
       Budget: 5 visits to this state (engine-enforced); when nearly exhausted, choose `give_up` in fix_unit instead of retrying.
 
@@ -80,10 +80,8 @@ states:
       (b) "Strip noise, but quote every error, failing assertion, and
       number VERBATIM — don't paraphrase the signal or replace it with
       a verdict; the parent judges.", and (c) "Bash: run commands
-      FOREGROUND with an explicit timeout sized to the command;
-      background ONLY for never-exiting processes (servers, watchers)
-      or runs over the 10-min foreground ceiling."
-      Spawn with `run_in_background: false` — you need the result before transitioning.
+      FOREGROUND with an explicit timeout sized to the command. Never end a turn with a live background shell of your own: wait for a long command in ONE foreground call (Bash timeout up to its maximum), and a call the harness moved to the background is awaited or stopped before the turn ends."
+      Spawn it in the foreground — you need the result before transitioning.
 
       Choose transition:
       - `pass` → all unit tests pass
@@ -142,10 +140,8 @@ states:
       (b) "Strip noise, but quote every error, failing assertion, and
       number VERBATIM — don't paraphrase the signal or replace it with
       a verdict; the parent judges.", and (c) "Bash: run commands
-      FOREGROUND with an explicit timeout sized to the command;
-      background ONLY for never-exiting processes (servers, watchers)
-      or runs over the 10-min foreground ceiling."
-      Spawn with `run_in_background: false` — you need the result before transitioning.
+      FOREGROUND with an explicit timeout sized to the command. Never end a turn with a live background shell of your own: wait for a long command in ONE foreground call (Bash timeout up to its maximum), and a call the harness moved to the background is awaited or stopped before the turn ends."
+      Spawn it in the foreground — you need the result before transitioning.
 
       Choose transition:
       - `built` → build succeeded, verify it in integration
@@ -163,7 +159,11 @@ states:
          launches, nothing else; pass `model: "haiku"`, `effort: "low"`
          explicitly (runner, not judge); same spawn-prompt rules as the
          build runner (project constraints, verbatim quoting, foreground
-         with a timeout — a never-exiting app runs in background)
+         with a timeout). A never-exiting app is started DETACHED by the
+         launcher (`nohup <cmd> > <log> 2>&1 & echo $! > <pid file>`, log and
+         pid file by absolute path) and the launcher reports the pid, so no
+         shell of the launcher stays alive at its turn end; YOU stop the
+         app (`kill` that pid) after step 3
       2. Drive the debug bridge YOURSELF (the parent): simulate the
          actual user workflow end-to-end
       3. Verify state changes propagated correctly YOURSELF via the

@@ -66,7 +66,7 @@ that has null safety off.
 
 Making the field `final` does not help: a `final` field assigned only under a condition in the constructor
 compiles, and on the other path reads `null` on interp and `undefined` on js (reproduced). Its jvm behaviour and
-the claim that `@:nullSafety(Strict)` catches it are a sibling project's reading, not re-run here.
+the claim that `@:nullSafety(Strict)` catches it were read once, not re-verified.
 
 ## `EReg.escape` Is Broken on `--interp` Target
 

@@ -77,10 +77,8 @@ states:
       (b) "Strip noise, but quote every error, failing assertion, and
       number VERBATIM — don't paraphrase the signal or replace it with
       a verdict; the parent judges.", and (c) "Bash: run commands
-      FOREGROUND with an explicit timeout sized to the command;
-      background ONLY for never-exiting processes (servers, watchers)
-      or runs over the 10-min foreground ceiling."
-      Spawn with `run_in_background: false` — you need the result before transitioning.
+      FOREGROUND with an explicit timeout sized to the command. Never end a turn with a live background shell of your own: wait for a long command in ONE foreground call (Bash timeout up to its maximum), and a call the harness moved to the background is awaited or stopped before the turn ends."
+      Spawn it in the foreground — you need the result before transitioning.
 
       **Anti-patterns:**
       - Running builds in main context (100KB+ noise)

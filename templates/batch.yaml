@@ -349,8 +349,13 @@ states:
       Then follow the file-review workflow states until completion.
       start() returns `SESSION: <id>` — pass that session_id explicitly in every
       subsequent workflow tool call; parallel siblings share the same ppid.
+      Bash: run commands FOREGROUND with an explicit timeout sized to the
+      command. Never end a turn with a live background shell of your own: wait
+      for a long command in ONE foreground call (Bash timeout up to its
+      maximum), and a call the harness moved to the background is awaited or
+      stopped before the turn ends.
       ---
-         Up to 8 agents in ONE message, each `run_in_background: false`;
+         Up to 8 agents in ONE message, each a foreground spawn;
          more batches → next wave. `sessions` → `abort` their orphaned
          child sessions after collecting.
       3. The agent-less lines from step 2, then cross-task seams on top
