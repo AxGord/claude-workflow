@@ -46,3 +46,7 @@ config here → load `preferences-lint`; unavailable too → say so in the repor
 - Never allocate an identifier an external system owns (translation key, DB
   id, ticket number): wire exactly the ids handed over and list the missing
   ones — a guessed id hides behind the fallback and later collides.
+- Text that leaves the machine (a PR description, a comment in another repo):
+  check every claim about OUR code or forks against the repo or memory before
+  publishing. A plausible line like "we ship this in our fork" was false once:
+  the patch had been pulled and never committed.
