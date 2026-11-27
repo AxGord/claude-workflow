@@ -779,7 +779,11 @@ A job's options other than these are its own: a `notes:` text is guidance the ju
 
 `claim` → `plan` and `counts` (execs, no model) → `judge` (one agent) → `judge_check` → `verify` (one independent agent, only for text edits) → `apply` → `record` → `present`.
 
-- **Counts** are scripts: memory orphans, dangling links and the index budget; the hygiene findings; calibration rows and each `model_table` row change's like-for-like evidence (below); triage rows and owed steps; tool-error shapes seen in `min_transcripts` transcripts, and skill usage.
+- **Counts** are scripts: memory orphans, dangling links and the index budget (the link forms and the hub rule are below); the hygiene findings; calibration rows and each `model_table` row change's like-for-like evidence (below); triage rows and owed steps; tool-error shapes seen in `min_transcripts` transcripts, and skill usage.
+- **Memory links.** A memory file links another as `[text](file.md)` or as `[[target]]` (also `[[target|label]]`, `[[target#heading]]`). A `[[target]]` names `target.md`, else the file whose frontmatter `name:` is `target`; a link with a `/` leaves the dir and is not counted.
+  - A topic file is reached, not only linked: an index links a hub, the hub links notes, and every note on any chain of links from an index is no orphan. No config key is needed; a `hubs:` glob would go stale with the project's file names.
+  - A file's `indexes` are the indexes that list it. A file no index lists gets the indexes whose chain reaches it, so one two hubs' chains reach is multi-indexed. A link between two notes is no membership: the walk never continues through a file another index lists. An index's `links` counts its own links of both forms.
+  - A link to no file is dangling, from an index or from any file the walk reached (`index` names that file). A `[[missing]]` link has `target: missing`.
 - **Calibration evidence.** A tuning change is a commit whose diff changes a `model_table` row (the file parsed at the commit and at its parent; a comment or other edit is none; `escalate` and `review` rows are not read).
   - Per changed stage and difficulty band, the counts hold that band's lands on each side, split into process-shape cells: the stages that spent, and no, one or several review rounds.
   - A cell gives n, the median and mean of THAT stage's `spend.by_agent` USD, review rounds, escalations and verdicts (findings with the job's `findings_key`). The whole task's spend is never compared.

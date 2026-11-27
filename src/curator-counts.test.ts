@@ -149,4 +149,70 @@ describe("curator memory job", () => {
     });
     expect(d?.files.find(x => x.name === "b.md")?.description).toBe(false);
   });
+
+  // ENG-CURATOR-MEMORY-LINKS: a project's index links hub files, the hubs link the notes with `[[name]]`.
+  const hubFixture = (): {
+    mem: string;
+    job: ReturnType<typeof parseCuratorConfig>["jobs"][number];
+  } => {
+    const mem = tmp();
+    fs.writeFileSync(path.join(mem, "MEMORY.md"), "- [Hub A](hub_a.md)\n");
+    fs.writeFileSync(
+      path.join(mem, "hub_a.md"),
+      "---\ndescription: hub\n---\n- [[note-x]]\n- [[slug-y|label]]\n- [[slug-y#part]]\n",
+    );
+    fs.writeFileSync(path.join(mem, "note-x.md"), "---\ndescription: x\n---\nX\n");
+    fs.writeFileSync(path.join(mem, "y.md"), "---\nname: slug-y\ndescription: y\n---\nY\n");
+    const job = parseCuratorConfig(`jobs:\n  memory: {dirs: [${mem}]}\n`, "c.yaml", mem).jobs[0];
+    return { mem, job };
+  };
+
+  it("a note reached through a hub by `[[name]]` links (a file name or a frontmatter name) is no orphan and no link is dangling", () => {
+    const { mem, job } = hubFixture();
+    const [d] = memoryCounts(job, mem, undefined);
+    expect(d?.orphans).toEqual([]);
+    expect(d?.dangling).toEqual([]);
+    expect(d?.indexes).toMatchObject([{ name: "MEMORY.md", links: 1 }]);
+    expect(d?.files.find(x => x.name === "y.md")?.indexes).toEqual(["MEMORY.md"]);
+  });
+
+  it("a `[[missing]]` link of a hub is dangling, and a note no chain reaches is still an orphan", () => {
+    const { mem, job } = hubFixture();
+    fs.appendFileSync(path.join(mem, "hub_a.md"), "- [[missing]]\n");
+    fs.writeFileSync(path.join(mem, "lonely.md"), "---\ndescription: l\n---\n[[note-x]]\n");
+    const [d] = memoryCounts(job, mem, undefined);
+    expect(d?.dangling).toEqual([{ index: "hub_a.md", target: "missing" }]);
+    expect(d?.orphans).toEqual(["lonely.md"]);
+  });
+
+  it("a `[[link]]` written in an index counts as its link; a note two hub chains reach is multi-indexed", () => {
+    const { mem, job } = hubFixture();
+    fs.writeFileSync(path.join(mem, "ARCHIVE.md"), "- [Z](hub_z.md)\n- [[nobody]]\n");
+    fs.writeFileSync(path.join(mem, "hub_z.md"), "---\ndescription: z\n---\n- [[note-x]]\n");
+    const [d] = memoryCounts(job, mem, undefined);
+    expect(d?.indexes.find(i => i.name === "ARCHIVE.md")?.links).toBe(2);
+    expect(d?.multiIndexed).toEqual(["note-x.md"]);
+    expect(d?.dangling).toEqual([{ index: "ARCHIVE.md", target: "nobody" }]);
+  });
+
+  it("a direct link wins over a chain: a note one index lists and another's hub reaches belongs to the lister only", () => {
+    const { mem, job } = hubFixture();
+    fs.writeFileSync(path.join(mem, "ARCHIVE.md"), "- [[note-x]]\n");
+    const [d] = memoryCounts(job, mem, undefined);
+    expect(d?.multiIndexed).toEqual([]);
+    expect(d?.files.find(x => x.name === "note-x.md")?.indexes).toEqual(["ARCHIVE.md"]);
+  });
+
+  it("a link from a note of one index to a note another index lists is no membership", () => {
+    const mem = tmp();
+    fs.writeFileSync(path.join(mem, "MEMORY.md"), "- [a1](a1.md)\n");
+    fs.writeFileSync(path.join(mem, "B.md"), "- [b1](b1.md)\n");
+    fs.writeFileSync(path.join(mem, "a1.md"), "---\ndescription: a\n---\nRelated: [[b1]]\n");
+    fs.writeFileSync(path.join(mem, "b1.md"), "---\ndescription: b\n---\nB\n");
+    const job = parseCuratorConfig(`jobs:\n  memory: {dirs: [${mem}]}\n`, "c.yaml", mem).jobs[0];
+    const [d] = memoryCounts(job, mem, undefined);
+    expect(d?.multiIndexed).toEqual([]);
+    expect(d?.files.find(x => x.name === "b1.md")?.indexes).toEqual(["B.md"]);
+    expect(d?.files.find(x => x.name === "a1.md")?.indexes).toEqual(["MEMORY.md"]);
+  });
 });

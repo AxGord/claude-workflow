@@ -32,6 +32,44 @@ import type { LedgerEntry } from "./ledger.js";
 import { owedDueLines, type Queue } from "./queue.js";
 
 const LINK_RE = /\]\(([^)\s]+\.md)\)/g;
+// `[[target]]`, `[[target|label]]`, `[[target#heading]]`: the memory system's own link form (the name slug).
+const WIKI_RE = /\[\[([^\]\n]+)\]\]/g;
+
+/** A link of a memory file: how it is written, and the memory file it names (undefined: it names none). */
+interface MemoryRef {
+  readonly written: string;
+  readonly file: string | undefined;
+}
+
+/** The frontmatter `name:` of a memory file (what a `[[slug]]` link names when no `<slug>.md` exists). */
+function frontName(text: string): string | undefined {
+  const front = /^---\n([\s\S]*?)\n---/.exec(text)?.[1] ?? "";
+  const v = /^name:\s*(.+?)\s*$/m.exec(front)?.[1]?.replace(/^(["'])(.*)\1$/, "$2");
+  return v === undefined || v === "" ? undefined : v;
+}
+
+/** Every link of `text` into the memory dir, both forms; a path outside the dir (`a/b.md`) is not a link of it. */
+function memoryRefs(
+  text: string,
+  names: readonly string[],
+  bySlug: ReadonlyMap<string, string>,
+): MemoryRef[] {
+  const out: MemoryRef[] = [];
+  for (const m of text.matchAll(LINK_RE)) {
+    if (m[1].includes("/")) continue;
+    out.push({ written: m[1], file: names.includes(m[1]) ? m[1] : undefined });
+  }
+  for (const m of text.matchAll(WIKI_RE)) {
+    const target = m[1].split("|")[0].split("#")[0].trim();
+    if (target === "" || target.includes("/")) continue;
+    const named = target.endsWith(".md") ? target : `${target}.md`;
+    out.push({
+      written: target,
+      file: names.includes(named) ? named : bySlug.get(target),
+    });
+  }
+  return out;
+}
 
 // ---- memory ----
 
@@ -40,7 +78,7 @@ export interface MemoryFileFacts {
   readonly bytes: number;
   /** The file has a frontmatter `description:` (what recall works off). */
   readonly description: boolean;
-  /** The index files that link it. */
+  /** The index files that link it; a file no index links is credited to the indexes whose chain of links (index, hub, note) reaches it. */
   readonly indexes: readonly string[];
 }
 
@@ -90,26 +128,62 @@ export function memoryCounts(
     }
     names.sort();
     const idx = indexNames(job, names);
-    const linkedBy = new Map<string, string[]>();
+    const texts = new Map(names.map(n => [n, fs.readFileSync(path.join(dir, n), "utf8")]));
+    const bySlug = new Map<string, string>();
+    for (const [n, t] of texts) {
+      const slug = frontName(t);
+      if (slug !== undefined && !bySlug.has(slug)) bySlug.set(slug, n);
+    }
+    const refsOf = (name: string): MemoryRef[] => memoryRefs(texts.get(name) ?? "", names, bySlug);
+    // A topic file belongs to the indexes that link it. One no index links belongs to the indexes whose chain of
+    // links reaches it (the index links a hub, the hub links the notes); a link between two notes is no membership,
+    // so the walk never continues through a file another index links. Every file the walk reads is checked for
+    // links to nothing.
+    const directBy = new Map<string, Set<string>>();
+    for (const name of idx)
+      for (const ref of refsOf(name))
+        if (ref.file !== undefined && !idx.includes(ref.file))
+          directBy.set(ref.file, (directBy.get(ref.file) ?? new Set<string>()).add(name));
+    const chainBy = new Map<string, Set<string>>();
     const dangling: { index: string; target: string }[] = [];
+    const seenDangling = new Set<string>();
+    const noteDangling = (from: string, ref: MemoryRef): void => {
+      const key = `${from}\0${ref.written}`;
+      if (ref.file !== undefined || seenDangling.has(key)) return;
+      seenDangling.add(key);
+      dangling.push({ index: from, target: ref.written });
+    };
     const indexes = idx.map(name => {
-      const text = fs.readFileSync(path.join(dir, name), "utf8");
-      let links = 0;
-      for (const m of text.matchAll(LINK_RE)) {
-        const target = m[1];
-        if (target.includes("/")) continue;
-        links++;
-        if (!names.includes(target)) dangling.push({ index: name, target });
-        linkedBy.set(target, [...(linkedBy.get(target) ?? []), name]);
+      const text = texts.get(name) ?? "";
+      const direct = refsOf(name);
+      const walked = new Set<string>();
+      const todo: string[] = [];
+      for (const ref of direct) {
+        if (ref.file === undefined) dangling.push({ index: name, target: ref.written });
+        else if (!idx.includes(ref.file) && !walked.has(ref.file)) {
+          walked.add(ref.file);
+          todo.push(ref.file);
+        }
       }
-      return { name, bytes: Buffer.byteLength(text), links };
+      for (let next = todo.pop(); next !== undefined; next = todo.pop()) {
+        for (const ref of refsOf(next)) {
+          noteDangling(next, ref);
+          const f = ref.file;
+          if (f === undefined || idx.includes(f) || walked.has(f)) continue;
+          if (directBy.has(f)) continue;
+          walked.add(f);
+          chainBy.set(f, (chainBy.get(f) ?? new Set<string>()).add(name));
+          todo.push(f);
+        }
+      }
+      return { name, bytes: Buffer.byteLength(text), links: direct.length };
     });
     const files: MemoryFileFacts[] = [];
     const fresh: string[] = [];
     for (const name of names) {
       if (idx.includes(name)) continue;
       const f = path.join(dir, name);
-      const text = fs.readFileSync(f, "utf8");
+      const text = texts.get(name) ?? "";
       const st = fs.statSync(f);
       if ((st.birthtimeMs || st.mtimeMs) > from) fresh.push(name);
       const front = /^---\n([\s\S]*?)\n---/.exec(text)?.[1] ?? "";
@@ -117,7 +191,7 @@ export function memoryCounts(
         name,
         bytes: Buffer.byteLength(text),
         description: /^description:\s*\S/m.test(front),
-        indexes: [...new Set(linkedBy.get(name) ?? [])],
+        indexes: [...(directBy.get(name) ?? chainBy.get(name) ?? [])],
       });
     }
     const main = indexes.find(i => i.name === indexNameOf(job));
