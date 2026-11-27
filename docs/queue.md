@@ -760,7 +760,7 @@ A job's options other than these are its own: a `notes:` text is guidance the ju
 | `memory` | the same, or its index is over `index_budget_bytes` (once it grew since the last run), or `new_files` memory files are new |
 | `calibration` | one model row (`workflow stage model/effort`) has interval-many new lands |
 
-- A land is a task session of the queue's lines that ended complete, one per task id; curator runs are not counted. With no queue, the project's own lines count.
+- A land is a task session of the queue's lines that ended with outcome `completed`, one per task id; curator runs are not counted. With no queue, the project's own lines count.
 - Each run records `found` and `changed` per job. Nothing found doubles the job's interval, up to 40. `high_yield` or more halves it, down to 5. A run recorded again (a retry) tunes nothing twice.
 - The record is `<STATE_DIR>/curator/<project>/state.json`.
 - `wf-curator due [--queue F | --project D] [--json]` is the dry run: each job's interval, count, last run and why it is due; exit 0 when one is.

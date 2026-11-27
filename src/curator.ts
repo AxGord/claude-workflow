@@ -271,7 +271,7 @@ export interface LandScope {
 const isCuratorRun = (e: LedgerEntry): boolean =>
   e.workflow === CURATOR_WORKFLOW || isCuratorLineId(e.task ?? "");
 
-/** The task lines (one per task id) that ended complete after `since` within the scope, curator runs aside. */
+/** The task lines (one per task id) that ended with outcome completed after `since` within the scope, curator runs aside. */
 export function landsSince(
   entries: readonly LedgerEntry[],
   scope: LandScope,
@@ -280,7 +280,7 @@ export function landsSince(
   const from = since === undefined ? Number.NEGATIVE_INFINITY : Date.parse(since);
   const seen = new Map<string, LedgerEntry>();
   for (const e of entries) {
-    if (e.task === undefined || e.outcome !== "complete" || isCuratorRun(e)) continue;
+    if (e.task === undefined || e.outcome !== "completed" || isCuratorRun(e)) continue;
     if (!(Date.parse(e.ended_at) > from)) continue;
     if (scope.ids !== undefined ? !scope.ids.has(e.task) : e.project !== scope.project) continue;
     seen.set(e.task, e);

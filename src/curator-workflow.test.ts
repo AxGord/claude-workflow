@@ -101,7 +101,7 @@ describe("bundled curator workflow", () => {
           JSON.stringify({
             session_id: `s-${task}`,
             workflow: "batch-task",
-            outcome: "complete",
+            outcome: "completed",
             started_at: "2026-11-25T00:00:00Z",
             ended_at: "2026-11-25T01:00:00Z",
             task,

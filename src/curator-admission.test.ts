@@ -64,7 +64,7 @@ function fixture(
           root_session_id: `s-${task}`,
           parent_session_id: null,
           workflow: "batch-task",
-          outcome: "complete",
+          outcome: "completed",
           started_at: "2026-11-25T00:00:00Z",
           ended_at: "2026-11-25T01:00:00Z",
           task,
@@ -187,7 +187,7 @@ describe("curator admission: the engine's own lines", () => {
     );
     fs.appendFileSync(
       path.join(state, "ledger.jsonl"),
-      `${JSON.stringify({ session_id: "s-foo", workflow: "engine-task", outcome: "complete", started_at: "2026-11-25T00:00:00Z", ended_at: "2026-11-25T02:00:00Z", task: "CURATOR-FOO" })}\n`,
+      `${JSON.stringify({ session_id: "s-foo", workflow: "engine-task", outcome: "completed", started_at: "2026-11-25T00:00:00Z", ended_at: "2026-11-25T02:00:00Z", task: "CURATOR-FOO" })}\n`,
     );
     const r = await pickQueue(queue);
     expect(r.curator).toMatch(/^curator: added CURATOR-\d{4}-\d{2}-\d{2}-1 \(hygiene due\)$/);

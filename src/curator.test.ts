@@ -37,7 +37,7 @@ function land(task: string, endedAt: string, stages?: LedgerEntry["stages"]): Le
     parent_session_id: null,
     root_session_id: `s${n}`,
     workflow: "batch-task",
-    outcome: "complete",
+    outcome: "completed",
     started_at: endedAt,
     ended_at: endedAt,
     transitions: 1,

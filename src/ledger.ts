@@ -1,4 +1,4 @@
-import type { SessionState, ShardResult } from "./types.js";
+import type { SessionOutcome, SessionState, ShardResult } from "./types.js";
 import { projectRoot } from "./pool.js";
 import { sessionSegments } from "./timeline.js";
 import { MODEL_KEYS, parseDifficulty, stageKeys, stageOfKey } from "./model-table.js";
@@ -53,7 +53,7 @@ export interface LedgerEntry {
   readonly parent_session_id: string | null;
   readonly root_session_id: string;
   readonly workflow: string | null;
-  readonly outcome: string;
+  readonly outcome: SessionOutcome;
   readonly started_at: string;
   readonly ended_at: string;
   readonly transitions: number;
