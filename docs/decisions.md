@@ -14,4 +14,4 @@ A worker report or wake reaches main when its run was woken by its OWN backgroun
 
 SendMessage to the driver, or the DELIVERY key, does not keep main quiet: the harness sends a run's hand-back and completion notice to main whenever its owner is not running, and the engine cannot wake a driver; read from claude 2.1.332 bytes, not run → ENG-REPORT-ROUTING-DESIGN
 
-gate exit 137 (two engine gates, 2026-11-27): not a pool reap, timeout or abort (lease released by wf-run, no orphan line), memory very unlikely (no kernel kill logged); the tools.test.ts abort test was in flight in both runs, its kill(0) on an empty pid file is suspected, not reproduced → ENG-GATE-SIGKILL-137
+gate exit 137 (two gates, 2026-11-27): not a pool reap, timeout or abort, memory very unlikely (no kernel kill logged); suspect: the tools.test.ts abort test, in flight in both runs, kill(0) on an empty pid file; not reproduced → ENG-GATE-SIGKILL-137
