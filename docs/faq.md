@@ -61,6 +61,10 @@ An agent tried to write the exec-consent record or a workflow (`.yaml`, `.yml`, 
 
 Other files there, a native `.js` workflow for one, pass without this question. A workflow there runs its `exec` states without a consent step, so the plugin's PreToolUse hook (`hooks/trust-write-gate.sh`) makes it a question to you. Confirm only what you asked for; approve a project yourself with `<plugin dir>/scripts/wf-trust <project>` in a terminal (the question prints that path). What the guard covers and does not: [Trusting project workflows](/getting-started#what-consent-does-and-does-not-protect-against).
 
+## Claude Code refused a new memory file with a list of seven rows
+
+The project set `memory_write_gate` in `.claude/workflows/settings.json`, and the agent created a new file under `~/.claude/projects/*/memory/` with no `why-memory:` line in its frontmatter. The agent writes the file again with `why-memory: 7 <why no row 1-6 fits>`, or places the knowledge in a row that fits. Delete the key to turn the gate off. Details and limits: [Memory write gate](/getting-started#memory-write-gate-opt-in).
+
 ## A project install from a git URL does not run
 
 `build/` is gitignored, so a git-sourced plugin has no compiled MCP server. Install from this repository's marketplace (`/plugin marketplace add AxGord/claude-workflow`), npm or a local checkout; see [Getting started](/getting-started#install-channels).

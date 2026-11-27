@@ -354,6 +354,24 @@ It is a speed bump for a confused agent, not a barrier. Not caught: a path built
 
 One known limit is not closed: an agent's Bash can satisfy `wf-trust`'s terminal check through a program that fakes a terminal (`echo yes | script -q /dev/null wf-trust <project>`). It needs a Bash command your permission mode already lets the agent run, and a hook cannot enumerate every wrapper that fakes a terminal.
 
+### Memory write gate (opt-in)
+
+Memory is the last row of the [placement table](https://github.com/AxGord/claude-workflow/blob/master/templates/skills/knowledge-placement/SKILL.md): a lesson goes to a check, a workflow, a skill, a doc or a decision first. A project can make the agent say why none of them fits. In `.claude/workflows/settings.json` at the project root:
+
+```json
+{ "memory_write_gate": "deny" }
+```
+
+`deny` refuses, `ask` asks you. Absent, the key does nothing: no project is gated unless it opts in. The setting is read from the project of the session's working directory (a worktree resolves to its main checkout).
+
+With it on, the PreToolUse hook `hooks/knowledge-write-gate.sh` stops a call that creates a new `.md` file under `~/.claude/projects/*/memory/` (`$CLAUDE_CONFIG_DIR/projects` when set) unless its frontmatter has `why-memory: 7 <why no row 1-6 fits>` or `why-memory: 6 <the map line naming memory as the owner-call home>`. The reason lists the table's seven rows.
+
+- **Not gated:** an edit of an existing file (an index line of `MEMORY.md` included), a new file with no lower-case letter in its name (an index), a file that is not `.md`, and a write to `~/.claude/skills`.
+- **Bash:** the same command walk as the trust gate (redirects, `cp`, `mv`, `tee`, `touch`, interpreters, `sh -c`). A command passes only when its own text carries the `why-memory:` line. In `deny` mode that includes a rename or copy into memory (`mv memory/a.md memory/b.md`, `cp` of a file that already holds the line): it is refused unless the command text carries the line.
+- **Limits:** a speed bump, not a barrier. A path built at run time is not seen. The model's own `Write` to the directory reaches the hook; whether a background memory extraction of Claude Code does is not known, so the curator's memory review is the backstop.
+
+A new hook needs a Claude Code restart.
+
 ## Heavy commands share one thread pool
 
 Builds and test suites from every session on the machine go through one thread pool, so several agents working at once queue for threads instead of choking the machine:

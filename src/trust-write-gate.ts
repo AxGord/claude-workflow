@@ -18,6 +18,9 @@
 // string, a `cd` to such a path), a write by a program the command only starts (`make`, a script
 // file's own code), a move or removal of a parent directory, and the engine's own writes (the
 // server, `wf-trust`, `wf-skills`: no tool call).
+//
+// The command walk is generic over the places it guards (`Guard`, `commandPlace`): the knowledge
+// write gate (`knowledge-write-gate.ts`) walks the same commands for the memory directories.
 import fs from "node:fs";
 import path from "node:path";
 import { basename, splitSegments, type Segment } from "./pool-gate.js";
@@ -43,7 +46,21 @@ interface Guarded {
 
 type Place = "trust" | "global";
 
-const TOOL_PATH: Readonly<Record<string, string>> = {
+/**
+ * What a command walk looks for: `P` names a guarded place. The walk (redirects, `cp` / `mv` / `tee` /
+ * `sed -i`, interpreters, `sh -c`, heredocs, `cd`) is shared with the knowledge write gate, which
+ * guards other paths.
+ */
+export interface Guard<P> {
+  /** The place a canonical absolute path is, or undefined. */
+  readonly at: (canonical: string) => P | undefined;
+  /** The place a text names spelled out (already shell-expanded), or undefined; the path words of it are tried by `at`. */
+  readonly mentionedIn: (expanded: string, cwd: string) => P | undefined;
+  /** Writer commands that cannot create a file and so never ask (`rm` for a guard of creations). */
+  readonly skip?: ReadonlySet<string>;
+}
+
+export const TOOL_PATH: Readonly<Record<string, string>> = {
   Write: "file_path",
   Edit: "file_path",
   MultiEdit: "file_path",
@@ -85,7 +102,7 @@ const WRAPPERS = new Set([
 ]);
 
 /** The path as the filesystem sees it: absolute, with the nearest existing ancestor's symlinks resolved. */
-function canon(p: string): string {
+export function canon(p: string): string {
   const abs = path.resolve(p);
   let head = abs;
   const rest: string[] = [];
@@ -123,14 +140,34 @@ function engineReads(name: string): boolean {
   return n.endsWith(".yaml") || n.endsWith(".yml") || n === PROJECT_SETTINGS_FILE.toLowerCase();
 }
 
-function placeOf(raw: string, cwd: string, env: NodeJS.ProcessEnv, g: Guarded): Place | undefined {
+export function placeOf<P>(
+  raw: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  g: Guard<P>,
+): P | undefined {
   if (raw === "" || raw.startsWith("-")) return undefined;
-  const c = canon(path.resolve(cwd, expand(raw, env)));
-  if (c === g.trust) return "trust";
-  // The directory itself (a move or removal takes every workflow in it) always asks.
-  if (c === g.global) return "global";
-  if (c.startsWith(g.global + path.sep) && engineReads(path.basename(c))) return "global";
-  return undefined;
+  return g.at(canon(path.resolve(cwd, expand(raw, env))));
+}
+
+/** The guard of exec consent: the trust record and the global workflows directory. */
+function trustGuard(g: Guarded): Guard<Place> {
+  return {
+    at(c) {
+      if (c === g.trust) return "trust";
+      // The directory itself (a move or removal takes every workflow in it) always asks.
+      if (c === g.global) return "global";
+      if (c.startsWith(g.global + path.sep) && engineReads(path.basename(c))) return "global";
+      return undefined;
+    },
+    mentionedIn(text, cwd) {
+      const expanded = withoutUnreadFiles(text, g, cwd);
+      if (expanded.includes(TRUST_FILE)) return "trust";
+      for (const dir of [g.global, path.resolve(cwd, g.global)])
+        if (expanded.includes(dir)) return "global";
+      return undefined;
+    },
+  };
 }
 
 /** `text` without the spelled-out paths of files in the global directory that the engine never reads. */
@@ -147,16 +184,15 @@ function withoutUnreadFiles(text: string, g: Guarded, cwd: string): string {
 }
 
 /** Whether a piece of code or text names a guarded path, spelled out (an interpreter's `-e` body, an unparsed command). */
-function mentions(
+function mentions<P>(
   text: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  g: Guarded,
-): Place | undefined {
-  const expanded = withoutUnreadFiles(expand(text, env), g, cwd);
-  if (expanded.includes(TRUST_FILE)) return "trust";
-  for (const dir of [g.global, path.resolve(cwd, g.global)])
-    if (expanded.includes(dir)) return "global";
+  g: Guard<P>,
+): P | undefined {
+  const expanded = expand(text, env);
+  const named = g.mentionedIn(expanded, cwd);
+  if (named) return named;
   for (const m of expanded.matchAll(/[^\s'"`;|&<>()=]+/g)) {
     const p = placeOf(m[0], cwd, env, g);
     if (p) return p;
@@ -212,22 +248,22 @@ const KEYWORDS = new Set([
   "coproc",
 ]);
 
-interface SegmentVerdict {
-  readonly place?: Place;
+interface SegmentVerdict<P> {
+  readonly place?: P;
   /** The directory the following segments run in: a `cd` / `pushd` moves it. */
   readonly cwd: string;
   readonly name: string;
 }
 
-function segmentPlace(
+function segmentPlace<P>(
   seg: Segment,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  g: Guarded,
-): SegmentVerdict {
+  g: Guard<P>,
+): SegmentVerdict<P> {
   const values = seg.words.map(w => w.value);
   const { words, targets } = splitRedirects(values);
-  const stay = (name: string, place?: Place): SegmentVerdict => ({ place, cwd, name });
+  const stay = (name: string, place?: P): SegmentVerdict<P> => ({ place, cwd, name });
   // A redirect writes whatever the command is.
   for (const t of targets) {
     const p = placeOf(t, cwd, env, g);
@@ -244,7 +280,7 @@ function segmentPlace(
   const name = basename(words[k] ?? "");
   const args = words.slice(k + 1);
   const operands = args.filter(a => !a.startsWith("-"));
-  const firstPlace = (list: readonly string[]): SegmentVerdict => {
+  const firstPlace = (list: readonly string[]): SegmentVerdict<P> => {
     for (const a of list) {
       const p = placeOf(a, cwd, env, g);
       if (p) return stay(name, p);
@@ -263,7 +299,7 @@ function segmentPlace(
     const target = t >= 0 ? args[t + 1] : operands[operands.length - 1];
     return target === undefined ? stay(name) : stay(name, placeOf(target, cwd, env, g));
   }
-  if (OPERAND_WRITERS.has(name)) return firstPlace(operands);
+  if (OPERAND_WRITERS.has(name)) return g.skip?.has(name) ? stay(name) : firstPlace(operands);
   if (name === "dd") return firstPlace(args.filter(a => a.startsWith("of=")).map(a => a.slice(3)));
   if (IN_PLACE.has(name) && args.some(a => a === "--in-place" || /^-[A-Za-z]*i/.test(a)))
     return firstPlace(operands);
@@ -313,12 +349,13 @@ function stripHeredocs(command: string): { plain: string; bodies: string[] } {
   return { plain: out.join("\n"), bodies };
 }
 
-function commandPlace(
+/** The first guarded place a Bash command writes (or, for an interpreter, names), or undefined. */
+export function commandPlace<P>(
   command: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
-  g: Guarded,
-): Place | undefined {
+  g: Guard<P>,
+): P | undefined {
   const { plain, bodies } = stripHeredocs(command);
   const segments = splitSegments(plain);
   // An unterminated quote: the shape is not plain enough to read, so any mention asks.
@@ -364,16 +401,17 @@ export function decideTrustWrite(
   const input = payload.tool_input ?? {};
   const cwd = payload.cwd ?? process.cwd();
   const g = guardedPlaces(env, cwd);
+  const guard = trustGuard(g);
   let place: Place | undefined;
   let shown = "";
   if (tool === "Bash") {
     if (typeof input.command !== "string") return undefined;
-    place = commandPlace(input.command, cwd, env, g);
+    place = commandPlace(input.command, cwd, env, guard);
   } else {
     const key = TOOL_PATH[tool];
     const target = key === undefined ? undefined : input[key];
     if (typeof target !== "string") return undefined;
-    place = placeOf(target, cwd, env, g);
+    place = placeOf(target, cwd, env, guard);
     shown = target;
   }
   if (!place) return undefined;

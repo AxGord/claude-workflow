@@ -27,5 +27,5 @@ Read the project's `CLAUDE.md` for a line `Placement: <file> § <heading>`. That
 
 1. Take each lesson alone and walk the rows from 1. Stop at the first that fits; a second part of the same lesson starts the walk again.
 2. A row you cannot write yourself (a tool, a bundled template, the instructions file, a protected `preferences-*` skill) leaves your hands as a proposal: the exact text, the row, the repo. The owner places it.
-3. A memory write cites its row in `why-memory:`. If you cannot say why rows 1 to 6 do not fit, it is not memory.
+3. A memory write cites its row in `why-memory:`. If you cannot say why rows 1 to 6 do not fit, it is not memory. A project may turn on the engine's `memory_write_gate` (`.claude/workflows/settings.json`): a new memory file with no `why-memory: 7|6 <reason>` frontmatter line is then refused with this table; an edit of an existing file is not.
 4. A sweep of existing memory (a cleanup, a curator pass) uses the same rows: an entry that belongs to a row other than 6 or 7 moves there; one that is status or log is deleted.
