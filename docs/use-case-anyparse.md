@@ -51,7 +51,7 @@ Choose how the review goes, and tap a step to read what happens in it.
 
 ## Lessons become new queue lines
 
-A landed line leaves more than a commit. The worker reports what it saw and did not touch; the reviewer adds notes that did not block the merge. After every land the dispatcher goes through those rows, and one rule decides where each goes, so a lesson is neither lost nor allowed to jump the queue.
+A landed line leaves more than a commit. The worker reports what it saw and did not touch; the reviewer adds notes that did not block the merge. After every land the dispatcher goes through those rows, and one rule decides where each goes, so a lesson is neither lost nor allowed to jump the queue. What a tool or a gate can hold becomes a queue line against that tool, not a note.
 
 <UseCaseLessons />
 

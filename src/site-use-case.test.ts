@@ -588,7 +588,7 @@ describe.skipIf(!HAVE_BROWSER)("the other scenes of the use-case page", () => {
             .locator(`.ucs [data-place="${place}"] [data-count]`)
             .getAttribute("data-count"),
         ).toBe(String(LESSONS.filter(l => l.to === place).length));
-      const queued = LESSONS.filter(l => ["high", "normal", "low"].includes(l.to)).length;
+      const queued = LESSONS.filter(l => ["high", "normal", "low", "tool"].includes(l.to)).length;
       expect(await flat(page, ".ucs [data-loop]")).toContain(`${queued} new lines in the queue`);
       expect(await page.locator(".ucs [data-loop] a").getAttribute("href")).toBe(
         "#a-line-enters-the-queue",

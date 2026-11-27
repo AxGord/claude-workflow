@@ -10,6 +10,7 @@ import { parseQueue, planPick, TASK_KEYS } from "./queue.js";
 import {
   ANCHORS,
   EXAMPLE_LINES,
+  LESSON_PLACE_NAMES,
   LESSON_PLACES,
   LESSONS,
   LINE_FIELDS,
@@ -269,5 +270,14 @@ describe("where a lesson goes (LESSONS)", () => {
       expect(l.rule.length).toBeGreaterThan(10);
     }
     expect(LESSONS.find(l => l.to === "backlog")?.rule).toContain("never picked until promoted");
+  });
+
+  it("sends no lesson a tool can hold to memory: the gate lesson is a queue line against the tool", () => {
+    expect(LESSON_PLACES as readonly string[]).not.toContain("note");
+    for (const name of Object.values(LESSON_PLACE_NAMES)) expect(name).not.toMatch(/memory/i);
+    for (const l of LESSONS) expect(l.rule).not.toMatch(/memory/i);
+    const gate = LESSONS.find(l => l.says.includes("the gate must lint the whole scope"));
+    expect(gate?.to).toBe("tool");
+    expect(gate?.rule).toContain("queue line against the tool's owner");
   });
 });

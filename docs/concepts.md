@@ -76,7 +76,7 @@ A process habit the user corrected goes to a skill, not to memory; a row the age
 
 A lesson for a bundled skill is written to your own `learned-<name>` beside it, never into the shipped copy ([Learned skills](#learned-skills-your-lessons-beside-the-shipped-text)).
 
-The batch task workflows have no reflect step by design. A skill edit a worker proposes there is handed to the dispatcher with its lessons (about 4 in 564 lesson blocks so far). What the review rounds of that path teach is not classed by any step: an open question, not solved.
+The batch task workflows have no reflect step by design. A skill edit a worker proposes there is handed to the dispatcher with its lessons (about 4 in 564 lesson blocks so far). A worker's or reviewer's lesson record carries an optional `dest`, the row of the same table it belongs to, and the dispatcher's fold files each group as that row ([lesson records](/queue)).
 
 The `coding` workflow, drawn by the dashboard's own renderer (click a state to read its prompt; the [landing page](/) draws every bundled workflow):
 

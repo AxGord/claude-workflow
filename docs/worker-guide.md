@@ -56,12 +56,17 @@ An exec'd script (`scripts/wf-queue`, which runs `build/queue-cli.js`) is live a
 
 | What | Where |
 |------|-------|
+| A check a tool, hook, test or gate can hold | a vitest pin or a script check, never a prose rule or a memory file |
 | A user-visible change | `CHANGELOG.md`, under `## Unreleased` |
 | Reference for a feature | the page of `docs/` that owns it (`docs/.vitepress/config.mts` lists them) |
 | Build, workflow slice and site internals | `docs/development.md` |
 | A refuted hypothesis | one line appended to `docs/decisions.md` |
 | A rule a worker needs | this file |
 | The map of the code | `CLAUDE.md` |
+| A call of the user | his quote and the date in the slice's queue line |
+| Knowledge about developing the engine that no row above holds | the engine's memory index, one file with a `why-memory:` line citing the row of the `knowledge-placement` table |
+
+This is the engine's map of the bundled `knowledge-placement` table. Status of work (what shipped, what is left) goes to the commit message, never to memory.
 
 Docs pages follow the house style in `docs/development.md`: blocks under 80 words, a table cell under 40.
 

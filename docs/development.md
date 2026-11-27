@@ -95,6 +95,7 @@ A slice started from another project's session loads that project's `CLAUDE.md` 
 
 - The `repro`, `work` and `review` prompts of `engine-task` (and the fresh worker of `rebase_fix`) tell the agent to read `{{context.wt}}/docs/worker-guide.md` and the engine's memory index first, and that the rules of the session's own project (its language, linter, `hxq`, `.hx` gates) do not apply to engine code.
 - The memory index is `~/.claude/projects/<main checkout path with every / and . as ->/memory/MEMORY.md`; the prompt builds the path from `{{context.cwd}}`, so no machine path is committed.
+- The guide's "Where text goes" table is the engine's own placement map: the rows of the bundled `knowledge-placement` table, aimed at this repository. Memory takes only what no earlier row holds, with a `why-memory:` line, and never the status of work.
 - `docs/decisions.md` is the append-only record of refuted hypotheses, one line each. The guide and the record are excluded from the site (`srcExclude`).
 - `src/engine-worker-guide.test.ts` pins these.
 

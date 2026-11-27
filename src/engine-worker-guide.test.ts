@@ -43,6 +43,22 @@ describe("the engine worker guide", () => {
       expect(guide, needle).toContain(needle);
   });
 
+  it("holds the engine's placement map: a check goes to a pin, memory only by the last row, never status", () => {
+    const guide = read("docs/worker-guide.md");
+    for (const needle of [
+      "knowledge-placement",
+      "a vitest pin or a script check, never a prose rule or a memory file",
+      "`why-memory:`",
+      "Status of work (what shipped, what is left) goes to the commit message, never to memory",
+    ])
+      expect(guide, needle).toContain(needle);
+    expect(guide).toContain(
+      "| A call of the user | his quote and the date in the slice's queue line |",
+    );
+    expect(read("docs/development.md")).toContain("the engine's own placement map");
+    expect(read("docs/concepts.md")).not.toContain("an open question, not solved");
+  });
+
   it.each(["repro", "work", "review"])(
     "the %s agent prompt names the guide and the memory index",
     state => {

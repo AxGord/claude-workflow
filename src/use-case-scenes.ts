@@ -521,14 +521,14 @@ export function roundsLane(
 
 // ---- lessons become new queue lines
 
-export const LESSON_PLACES = ["high", "normal", "low", "backlog", "note", "none"] as const;
+export const LESSON_PLACES = ["high", "normal", "low", "backlog", "tool", "none"] as const;
 export type LessonPlace = (typeof LESSON_PLACES)[number];
 export const LESSON_PLACE_NAMES: Readonly<Record<LessonPlace, string>> = {
   high: "queue · high",
   normal: "queue · normal",
   low: "queue · low",
   backlog: "backlog",
-  note: "a memory note",
+  tool: "queue · a check",
   none: "nothing",
 };
 
@@ -570,8 +570,8 @@ export const LESSONS: readonly Lesson[] = [
   {
     says: "A narrow lint run missed a cross-file finding; the gate must lint the whole scope.",
     from: "worker",
-    to: "note",
-    rule: "Not work to queue but something the next worker must know: a note in the project's memory.",
+    to: "tool",
+    rule: "A check a tool or gate can hold is never a note for the next worker to remember: it becomes a queue line against the tool's owner.",
   },
   {
     says: "The test names read well.",

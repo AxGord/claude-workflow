@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The use-case page's scene "lessons become new queue lines": what a landed line left behind, row by row, and the
-// place the project's rule sends each row to: the queue at one of three priorities, the backlog, a memory note, or
-// nowhere. The rows and their rules are `LESSONS` (src/use-case-scenes.ts). This file draws.
+// place the project's rule sends each row to: the queue at one of three priorities, the backlog, a queue line for a
+// check in a tool, or nowhere. The rows and their rules are `LESSONS` (src/use-case-scenes.ts). This file draws.
 import { computed, ref } from "vue";
 import { LESSON_PLACE_NAMES, LESSON_PLACES, LESSONS, type LessonPlace } from "../../../src/use-case-scenes";
 import { DASH_TOKENS } from "./dash-tokens";
@@ -12,7 +12,7 @@ const sent = ref<number[]>([0]);
 
 const lesson = computed(() => LESSONS[chosen.value]);
 const arrived = (place: LessonPlace): number => sent.value.filter(i => LESSONS[i].to === place).length;
-const queued = computed(() => sent.value.filter(i => ["high", "normal", "low"].includes(LESSONS[i].to)).length);
+const queued = computed(() => sent.value.filter(i => ["high", "normal", "low", "tool"].includes(LESSONS[i].to)).length);
 
 function send(i: number): void {
   chosen.value = i;
@@ -127,7 +127,7 @@ function send(i: number): void {
 .p-backlog {
   --c: var(--warn);
 }
-.p-note {
+.p-tool {
   --c: var(--skill);
 }
 .p-none {
