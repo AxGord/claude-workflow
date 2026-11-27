@@ -16,6 +16,7 @@
     "wf-queue": "build/queue-cli.js",
     "wf-trust": "build/trust-cli.js",
     "wf-validate": "build/validate-cli.js",
+    "wf-orphans": "build/orphans.js",
     "wf-skills": "build/skills-cli.js",
     "wf-calibration": "build/calibration-cli.js",
     "wf-curator": "build/curator-cli.js"

@@ -85,10 +85,10 @@ Run `wf-skills remove` (`scripts/wf-skills` of the plugin; see "The `wf-*` comma
 
 ### The `wf-*` commands
 
-`wf-skills`, `wf-queue`, `wf-curator`, `wf-run`, `wf-trust` and `wf-validate` are not on your `PATH` after a plugin install. Run one as `<plugin dir>/scripts/wf-skills` (for a local checkout that is the checkout; `claude plugin list` shows it as `Read from:`), or link them once; the scripts follow the link to find `build/`:
+`wf-skills`, `wf-queue`, `wf-curator`, `wf-run`, `wf-trust`, `wf-validate` and `wf-orphans` are not on your `PATH` after a plugin install. Run one as `<plugin dir>/scripts/wf-skills` (for a local checkout that is the checkout; `claude plugin list` shows it as `Read from:`), or link them once; the scripts follow the link to find `build/`:
 
 ```bash
-for c in wf-skills wf-queue wf-curator wf-run wf-trust wf-validate; do ln -s "<plugin dir>/scripts/$c" ~/.local/bin/$c; done
+for c in wf-skills wf-queue wf-curator wf-run wf-trust wf-validate wf-orphans; do ln -s "<plugin dir>/scripts/$c" ~/.local/bin/$c; done
 ```
 
 `npm install -g claude-mcp-workflow` puts them on the `PATH` instead.
@@ -100,6 +100,13 @@ for c in wf-skills wf-queue wf-curator wf-run wf-trust wf-validate; do ln -s "<p
 - A reference the server only warns about at start (a `sub_workflow` or a required skill that is not there) is a `warn` line and does not change the result.
 - Exit 0 when every file loads (a directory that does not exist is a note, also 0), 1 when a file does not load, 2 on a bad argument.
 - It only reads: no state directory is touched, and the files' `exec` / `fetch` states are checked, never run, so it asks no trust question.
+
+**`wf-orphans <worktree>`** lists the processes still alive inside a worktree: a server, a watcher, a test runner or a detached `nohup` command a worker left behind. Call it from the check or report state of a task flow and refuse to end while it exits 1.
+
+- A process is listed when its working directory is the worktree or below it, or its command line names a path inside it. A sibling that only shares the name as a prefix (`<worktree>-browsers`, `<worktree>.log`) is not inside.
+- One line per process, `pid <n> cwd|cmd <command>`, and exit 1. Exit 0 when nothing is alive there, 2 on a bad argument or a path that is not a directory.
+- The caller's own chain is never listed: the process itself, its ancestors (the exec's shell, the engine, a worker's shell) and what it started to read the process table. Zombies are skipped.
+- It reads `ps` and the working directories (`/proc` on Linux, `lsof` on macOS) and signals nothing: stopping a process stays the caller's.
 
 ## Recommended CLAUDE.md Snippet
 

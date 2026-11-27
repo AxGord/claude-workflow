@@ -25,6 +25,10 @@ A project file (`.claude/workflows/*.yaml`) that declares an `exec` or `fetch` s
 
 After writing or editing a workflow file, run `"$WF_PLUGIN_ROOT/scripts/wf-validate" [<file.yaml | dir>...]` (default: `.claude/workflows` of the cwd; the plugin's `scripts/wf-validate`, also a `wf-validate` bin). It loads each file with the server's own loader and prints `ok <name>` or `fail <file>: <reason>` per file (`warn` lines for a `sub_workflow` or skill that is not there change nothing); exit 0 when every file loads, 1 when one does not, 2 on a bad argument; a directory that does not exist is a note, exit 0. It only reads, and it checks exec/fetch states without running them or asking for trust. A project that tracks its workflows uses it as a pre-commit or gate step: a file the loader refuses stops every session of that workflow.
 
+### Leftover processes of a worktree: `wf-orphans`
+
+A task flow's check or report state that must not end while the worker left something running (a dev server, a watcher, a test runner, a detached `nohup` command) calls `"$WF_PLUGIN_ROOT/scripts/wf-orphans" <worktree>` (also a `wf-orphans` bin) and refuses on exit 1. It lists every process whose working directory is the worktree or below it, or whose command line names a path inside it, one `pid <n> cwd|cmd <command>` line each; exit 0 when none, 2 on a bad argument. It never lists its own caller chain and signals nothing, so the state prints the lines and the worker stops its own processes.
+
 ### Inheritance: `extends:`
 
 A project workflow for a complex project should INHERIT the base process, not copy it:

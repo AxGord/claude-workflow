@@ -302,6 +302,7 @@ async function pack([clone]) {
       "scripts/wf-run",
       "scripts/wf-trust",
       "scripts/wf-validate",
+      "scripts/wf-orphans",
     ];
     const missing = need.filter(f => !files.has(f));
     must(missing.length === 0, `the package lacks ${missing.join(", ")}`);

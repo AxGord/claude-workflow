@@ -330,7 +330,7 @@ else fail wf-skills-add "add lang-python exited $RC" "$LOGS/skills-add.log"; fi
 
 # --- the commands the docs tell the reader to type: not on a fresh PATH; a link makes them so -------------------
 mkdir -p "$T/bin"
-for c in wf-skills wf-queue wf-curator wf-run wf-trust wf-validate; do ln -s "$CLONE/scripts/$c" "$T/bin/$c"; done
+for c in wf-skills wf-queue wf-curator wf-run wf-trust wf-validate wf-orphans; do ln -s "$CLONE/scripts/$c" "$T/bin/$c"; done
 runlog "$LOGS/link.log" in_dir "$PROJ" PATH="$T/bin:$PATH" wf-trust --list
 LINK_RC=$RC
 runlog "$LOGS/link-validate.log" in_dir "$PROJ" PATH="$T/bin:$PATH" wf-validate
