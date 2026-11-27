@@ -14,16 +14,17 @@ judgement with no mechanical net → sonnet/medium for optimize and create,
 opus/high for a skill that decides process; haiku only for locate/extract
 helpers whose output you re-check.
 
-### Where a rule lives (JIT over global)
+### Where a rule lives
 
-- A rule needed at one process moment (spawning, commit, review) goes into
-  that moment's carrier — the workflow state prompt or the skill loaded
-  then — never into a global CLAUDE.md, which keeps only bootstrap,
-  every-reply rules and facts with no carrier (e.g. git identity).
+Load `knowledge-placement` before deciding that a lesson is a skill: its table
+orders tool, workflow, skill, project instructions, docs, a user's call and
+memory, and a skill is only row 3. Three lines are this skill's own:
+
+- A global CLAUDE.md keeps only bootstrap, every-reply rules and facts with no
+  carrier (e.g. git identity); a rule needed at one process moment goes into
+  that moment's carrier (row 2), never into it.
 - Universal tool discipline goes into the distributed carriers (bundled
   skills, workflow templates), never into `preferences-*` (personal taste).
-- A rule a linter can hold goes into the lint config, not into a skill:
-  check the project's `hxq lint --list-rules <files>` before writing it.
 - What only one route needs (writes, self-development, liveness forensics)
   goes into a separate skill or `references/`, not the always-loaded SKILL.md.
 
@@ -279,12 +280,6 @@ User preferences always win — no need to duplicate.
 Example: if preferences-haxe says "use final class", remove any mention
 of final class conventions from lang-haxe.
 
-**Log optimizations:**
-After optimization, note in MEMORY.md:
-- Date optimized
-- Model version optimized for
-- What was removed/kept/updated
-
 ### 9. UPDATE selector domain mappings after creating new skills
 
 **MANDATORY:** After creating or installing any new skill, update the domain mapping
@@ -310,7 +305,7 @@ Before finishing any skill operation:
 - [ ] Follows layered architecture (universal/lang/domain/target)
 - [ ] Only gotchas/pitfalls — no basic patterns Claude already knows
 - [ ] No provenance notes (dates, "verified on X", one-off measurements) — skill content is timeless method, not a change journal
-- [ ] No machine-specific facts (local paths, symlink layouts, this-machine install quirks) in skills that ship with a plugin/template — content must hold for ANY user; machine-specifics belong in memory
+- [ ] No machine-specific facts (local paths, symlink layouts, this-machine install quirks) in skills that ship with a plugin/template — content must hold for ANY user; a machine-specific fact goes where `knowledge-placement` puts it (the user's global CLAUDE.md for every project of the machine, else the project's own row)
 - [ ] If skill is nearly empty → maybe it's not needed
 - [ ] **selector domain mapping updated** (coding-skill-selector skill)
 - [ ] **Bundled twin updated**: if the skill also ships inside a plugin repo

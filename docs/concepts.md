@@ -68,7 +68,9 @@ Agent                       Engine                          Storage
 | `review-push` | Review uncommitted changes, then commit and push to GitHub |
 | `github-init` | Initialize git repo and create private GitHub repository |
 
-Reflection routes each lesson to a skill, project memory or a workflow edit. A lesson bound for memory first passes `home_check`, which asks which bundled skill would have prevented it in a different project, and a process habit the user corrected goes to a skill, not to memory. A workflow suggestion waits for the user's answer before the reflection closes.
+Reflection loads the bundled `knowledge-placement` skill and routes each lesson by its one table, first row that fits: a tool or lint rule, a workflow, a skill, the project's instructions, a doc, a call of the user, and only then memory.
+
+A process habit the user corrected goes to a skill, not to memory; a row the agent cannot write itself (a tool, the instructions file) comes back as a proposal with its text and repo. A workflow suggestion waits for the user's answer before the reflection closes.
 
 A lesson for a bundled skill is written to your own `learned-<name>` beside it, never into the shipped copy ([Learned skills](#learned-skills-your-lessons-beside-the-shipped-text)).
 
@@ -80,9 +82,9 @@ The `coding` workflow, drawn by the dashboard's own renderer (click a state to r
 
 ## Bundled Skills
 
-Skills are reusable knowledge modules loaded by workflows via `Skill()`. The plugin ships 29 of them in two sets, and only the first is copied to your machine:
+Skills are reusable knowledge modules loaded by workflows via `Skill()`. The plugin ships 30 of them in two sets, and only the first is copied to your machine:
 
-- **The default set (14)**: universal, stack-free skills. The SessionStart hook copies them to `~/.claude/skills/` and keeps them current. Edit your local copy to change one: a copy you edited is never overwritten ([how updates and removal work](#updating-and-removing-the-skills)).
+- **The default set (15)**: universal, stack-free skills. The SessionStart hook copies them to `~/.claude/skills/` and keeps them current. Edit your local copy to change one: a copy you edited is never overwritten ([how updates and removal work](#updating-and-removing-the-skills)).
 - **The stack pack (15)**: skills for a language, a domain or a tool. They ship in the same plugin, in `templates/skills-stack/`, which the hook never copies from. Install one with `wf-skills add <name>…` (or all of them with `wf-skills add --all-stack`); from then on it is recorded in the manifest and updated and removed like a default skill. `coding-skill-selector` offers one when the task needs it and it is not installed ([Offers](#stack-skills-are-offered-never-installed-silently)).
 
 ### The default set
@@ -103,6 +105,7 @@ Skills are reusable knowledge modules loaded by workflows via `Skill()`. The plu
 | `skill-manager` | Create, install, update, optimize skills |
 | `web-reading` | Fetch web content via subagents |
 | `cleanup` | Clean .claude directory data |
+| `knowledge-placement` | Where a lesson, rule or fact goes: tool, workflow, skill, project instructions, docs, a user's call or memory; the one order every classification uses |
 
 ### The stack pack
 

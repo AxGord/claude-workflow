@@ -452,6 +452,7 @@ describe("the real bundled sets", () => {
     "coding-skill-selector",
     "debug-bridge-scaffold",
     "debugging",
+    "knowledge-placement",
     "mcp-setup",
     "preferences",
     "skill-manager",
@@ -460,7 +461,7 @@ describe("the real bundled sets", () => {
     "wf-yaml-authoring",
   ];
 
-  it("a fresh start on a scratch HOME copies exactly the 14 universal skills, and the stack pack is the other 15", () => {
+  it("a fresh start on a scratch HOME copies exactly the 15 universal skills, and the stack pack is the other 15", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "wf-skills-real-"));
     try {
       const ctx: SkillsContext = {
@@ -477,7 +478,7 @@ describe("the real bundled sets", () => {
       expect(
         planSkills(ctx, readManifest(ctx.stateDir)).filter(r => r.state === "available"),
       ).toHaveLength(15);
-      expect(shippedSkills(REPO).size).toBe(29);
+      expect(shippedSkills(REPO).size).toBe(30);
     } finally {
       fs.rmSync(base, { recursive: true, force: true });
     }

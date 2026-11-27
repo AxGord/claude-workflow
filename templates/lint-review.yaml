@@ -54,8 +54,9 @@ states:
       ---
       {{context.lint_report}}
       ---
-      1. Fix every error/warning finding now (respect `// noqa` and findings
-         documented as BY-DESIGN in project memory — do not silence those);
+      1. Fix every error/warning finding now (respect `// noqa` and the findings
+         the lint tool itself records as designed, in its baseline or
+         suppression in the project's lint config — do not silence those);
          Info advisories — fix or consciously accept.
       2. A SKIP-only report (no linter for these files) → nothing mechanical
          to act on; correctness rides on the tests that follow.

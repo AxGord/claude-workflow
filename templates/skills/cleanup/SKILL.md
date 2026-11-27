@@ -34,15 +34,15 @@ Offer to remove them — they recreate automatically when Claude Code runs in th
 
 ### Step 4: Memory audit
 
-For each remaining `memory/MEMORY.md`:
+Load the `knowledge-placement` skill. For each remaining `memory/MEMORY.md`:
 1. Read its contents
-2. Check each entry against existing skills — is it already covered?
-3. Check if Claude already knows this without any skill
-4. Present table to user:
+2. Give each entry the first row of the skill's table that fits (the project's
+   own map, if its CLAUDE.md names one, refines the rows)
+3. Present table to user:
 
-| Entry | Duplicates? | Verdict |
+| Entry | Row | Verdict |
 |---|---|---|
-| ... | skill X / common knowledge / project-specific | delete / keep |
+| ... | 1-7 | keep in memory (row 6 or 7) / move to row N / delete (status or log, or common knowledge) |
 
 Only modify after user approval.
 

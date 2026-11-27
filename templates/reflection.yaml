@@ -19,70 +19,47 @@ states:
       - `has_lesson` → found something worth recording
       - `clean` → task went smoothly
     transitions:
-      has_lesson: classify
+      has_lesson: load_placement
       clean: done
+
+  load_placement:
+    skills:
+      - knowledge-placement
+    transitions:
+      continue: classify
 
   classify:
     prompt: |
-      Classify EACH lesson — one lesson may produce multiple actions.
-
-      | Type | Destination | Example |
-      |------|------------|---------|
-      | Factual error, gotcha | Skill (ENRICH) | "Fib(47) overflows Int32" |
-      | Missing domain knowledge | New skill (CREATE) | No skill for gRPC |
-      | Process/approach pattern | Skill (ENRICH) | "Always verify packages" |
-      | The user corrected my approach (not a project fact) | Skill (ENRICH) | "Read the current API spec before blaming the backend" |
-      | Project-specific quirk | MEMORY.md | "Custom ORM, not EF" |
-      | Project build/config | MEMORY.md | "Needs --legacy-peer-deps" |
-      | Workflow friction, concrete fix | Workflow YAML (EVOLVE) | "state X always needs a manual build step → exec state" |
+      Classify EACH lesson with the `knowledge-placement` table you just
+      loaded: first row that fits wins, one lesson may produce several actions.
+      The project's map (the `Placement:` line of its CLAUDE.md) refines it.
 
       **Where a skill lesson lands**: a lesson for a bundled skill goes to
       `learned-<name>` beside it (`~/.claude/skills/learned-<name>/SKILL.md`),
       never into the shipped copy: an edited copy stops receiving the engine's
       updates. A skill of the user's own is edited in place.
 
-      **Bias check**: prefer skills over memory. If a lesson applies beyond this
-      one project (language gotcha, tool behavior, API pattern) → it's a skill,
-      NOT memory. Memory is ONLY for things unique to THIS project.
-
       **Workflows evolve like skills do**: a flow that routed wrong, forced a
       redundant state, or made you repeat a mechanical step by hand is not a
       fixed cost — it's a lesson with a YAML diff as its action.
 
       Choose transition:
-      - `enrich_skill` → update existing skill via skill-manager ENRICH
-      - `create_skill` → systemic gap, create new skill via skill-manager CREATE
-      - `update_memory` → project-specific, write to MEMORY.md
-      - `evolve_workflow` → workflow friction with a CONCRETE fix you're confident
-        about (wrong transition, missing state, mechanical step → exec/fetch state)
-      - `suggest_improvements` → workflow/skill friction, but the fix is uncertain
-        or speculative — present suggestions instead of applying
+      - `enrich_skill` → row 3, a skill exists: update it via skill-manager ENRICH
+      - `create_skill` → row 3, systemic gap: create it via skill-manager CREATE
+      - `update_memory` → row 7, or row 6 when the project's map names memory
+        as the home of the user's calls
+      - `evolve_workflow` → row 2, a CONCRETE fix you're confident about (wrong
+        transition, missing state, mechanical step → exec/fetch state)
+      - `suggest_improvements` → rows 1, 4 and 5 (a tool, the instructions file,
+        a doc: the owner places it), or row 2 when the fix is uncertain or
+        speculative: present the exact text, its row and its repo instead of
+        applying
     transitions:
       enrich_skill: load_skill_manager
       create_skill: load_skill_manager
-      update_memory: home_check
+      update_memory: action
       evolve_workflow: load_workflow_authoring
       suggest_improvements: suggest_improvements
-
-  home_check:
-    prompt: |
-      Before this lesson goes to project memory, one question. Answer it in
-      one line, no more:
-
-      Name the bundled skill this lesson would have prevented in a DIFFERENT
-      project, or `none`.
-
-      A lesson a user corrected in how you work (a check you skipped, an order
-      you got wrong) is usually a skill's rule even when the project it
-      happened in is not: memory holds only what is true of THIS project.
-
-      Choose transition:
-      - `skill` → a bundled skill would have prevented it elsewhere (ENRICH
-        that skill, as in `enrich_skill`)
-      - `none` → no skill fits: it is this project's own fact, write MEMORY.md
-    transitions:
-      skill: load_skill_manager
-      none: action
 
   load_skill_manager:
     skills:
@@ -134,7 +111,8 @@ states:
       - **ENRICH**: identify which skill → research correct answer → use skill-manager ENRICH
         (a bundled skill's lesson is written to `learned-<name>`, never into the shipped copy)
       - **CREATE**: only if systemic gap → use skill-manager CREATE
-      - **MEMORY.md**: write project-specific knowledge to auto-memory
+      - **MEMORY.md**: only a row 6 or 7 lesson; one file, one index line, and a
+        `why-memory: <row> <why no earlier row fits>` line in its frontmatter
 
       After acting, acknowledge the lesson to the user honestly.
 
