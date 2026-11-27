@@ -302,7 +302,7 @@ states:
   run_review_push:
     sub_workflow: review-push
     on_complete: doc_sync
-    on_fail: done
+    on_fail: reflect
 
   quick_commit:
     prompt: |
@@ -323,18 +323,18 @@ states:
       → `done` after commit (and push if requested).
       → `needs_review` if unreviewed changes are mixed in.
     transitions:
-      done: done
+      done: reflect
       needs_review: run_review_push
 
   run_research:
     sub_workflow: web-research
-    on_complete: done
-    on_fail: done
+    on_complete: reflect
+    on_fail: reflect
 
   run_explore:
     sub_workflow: explore
     on_complete: explore_outcome
-    on_fail: done
+    on_fail: reflect
 
   explore_outcome:
     prompt: |
@@ -348,7 +348,7 @@ states:
       Review the synthesized findings and decide.
     transitions:
       plan: plan
-      done: done
+      done: reflect
 
   init_generate:
     prompt: |
@@ -376,8 +376,10 @@ states:
       Answer the user's question or respond to their message directly.
 
       If the user's next message changes scope (coding, research, etc.) → transition `next_task`.
+      A correction of your work, a call of the user, or "remember this" → transition `lesson`.
     transitions:
       next_task: route
+      lesson: reflect
 
   doc_sync:
     digest_on_repeat: true

@@ -233,8 +233,8 @@ states:
         `../backups/slice-logs/lessons-triage.txt` beside the queue; a `triage_file=<path>` on the line names it) are read in a batch,
         every `lessons_every` lands and before a curator run, never per land: `wf-queue <queue> --lessons-take [--triage <path>]`
         prints the file and empties it under the lock a land's append takes (never empty it by hand); each row → a `queue_add` line,
-        a memory note, or nothing. Any other
-        `lessons=<phrase (file)>; …|none` tail is the agents' own follow-ups, copied: turn each into a `queue_add` line, a memory note, or nothing.
+        a placement by the `knowledge-placement` skill (load it; its table says where the row goes), or nothing. Any other
+        `lessons=<phrase (file)>; …|none` tail is the agents' own follow-ups, copied: turn each into a `queue_add` line, a placement by the same skill, or nothing.
         A trailing `decided=<file>` means a decider answered design choices without you: audit that file
         (`## <choice>` / `decision:` / `why:` blocks) and overrule a wrong one with a `queue_add` line.
       - `AWAITING task=<ID> session=<P> question=…` → the task waits for its owner at a human wait state; its queue line is

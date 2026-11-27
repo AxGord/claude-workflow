@@ -52,7 +52,7 @@ Act on a driver's `[Subagent hand-back]` message at once (you record no tokens);
 then needs nothing.
 - **`LANDED <sha> task=<ID> …`** or **`CLOSED task=<ID> …`** (a driver's last line; a project may name the
   field differently, e.g. `slice=<ID>`): the task session ended. Do NOT do what the prompt says about its
-  `lessons=` tail or `decided=` file (a queue line, a memory note, an audit): that is main's, later.
+  `lessons=` tail or `decided=` file (a queue line, a placement by the `knowledge-placement` skill, an audit): that is main's, later.
   ONE call: `transition({session_id: D, transition: "slot_free", set: {tasks: "<without that task>",
   lessons_pending: "<the old value, a newline, this line verbatim>", lands_done: "<the old value, 0 when
   absent, plus 1>"}})` (count a `LANDED` line only; `CLOSED` adds nothing). The reply is the next `dispatch`

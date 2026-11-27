@@ -70,6 +70,8 @@ Agent                       Engine                          Storage
 
 Reflection loads the bundled `knowledge-placement` skill and routes each lesson by its one table, first row that fits: a tool or lint rule, a workflow, a skill, the project's instructions, a doc, a call of the user, and only then memory.
 
+Every end of the `master` workflow but `init` passes through reflection (research, explore, a quick commit and a failed review-push included), and a `chat` turn where the user corrects you, makes a call or says "remember" takes its `lesson` transition into it. The start block says nothing of this.
+
 A process habit the user corrected goes to a skill, not to memory; a row the agent cannot write itself (a tool, the instructions file) comes back as a proposal with its text and repo. A workflow suggestion waits for the user's answer before the reflection closes.
 
 A lesson for a bundled skill is written to your own `learned-<name>` beside it, never into the shipped copy ([Learned skills](#learned-skills-your-lessons-beside-the-shipped-text)).

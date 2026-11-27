@@ -159,7 +159,8 @@ describe("batch-task links (template text)", () => {
       .get("batch")!
       .states.collect.prompt.replace(/\s+/g, " ");
     expect(collect).toContain("`lessons=<phrase (file)>; …|none`");
-    expect(collect).toContain("`queue_add` line, a memory note, or nothing");
+    expect(collect).toContain("`queue_add` line, a placement by the same skill, or nothing");
+    expect(collect).not.toContain("memory note");
   });
 
   it("a driver messaged after its last line resumes from status, and collect relays an orphaned line", () => {

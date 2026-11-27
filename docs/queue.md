@@ -500,7 +500,7 @@ driver:
   - `report.md` / `handoff.md`: `## Follow-up not done`, `## Tool defect found`, `## Open`;
   - `review.md`: `## Notes (non-blocking)`;
   - a fix round or a later review carries the previous file's items forward.
-- Bundled `batch` `collect` turns each prose lesson of a `CLOSED` line into a queue line, a memory note or nothing; a `LANDED` line's records are filed by the script (see "Lesson records").
+- Bundled `batch` `collect` turns each prose lesson of a `CLOSED` line into a queue line, a placement by the `knowledge-placement` skill or nothing; a `LANDED` line's records are filed by the script (see "Lesson records").
 - Records (`lessons=<JSON>` on an answer line) are the other lesson channel, below; the sections above are the prose a `CLOSED` line still copies.
 - The rendered call is also kept in P's context as `driver_call`: after a restart or compaction `status({session_id: P, key: "driver_call"})` re-spawns the driver (bundled `batch` `collect` says so).
 
