@@ -13,3 +13,5 @@ Panel-detach theory (a resume detaches a worker) built no engine, template or wo
 A worker report or wake reaches main when its run was woken by its OWN background shell and its driver had already stopped with nothing live (147 of 156); the same wake with the driver parked or running 3 of 105, SendMessage and spawn-run wakes 5 of 10682 → ENG-WORKER-REPORT-REPEATS-TO-PARENT
 
 SendMessage to the driver, or the DELIVERY key, does not keep main quiet: the harness sends a run's hand-back and completion notice to main whenever its owner is not running, and the engine cannot wake a driver; read from claude 2.1.332 bytes, not run → ENG-REPORT-ROUTING-DESIGN
+
+gate exit 137 (two engine gates, 2026-11-27): not a pool reap, timeout or abort (lease released by wf-run, no orphan line), memory very unlikely (no kernel kill logged); the tools.test.ts abort test was in flight in both runs, its kill(0) on an empty pid file is suspected, not reproduced → ENG-GATE-SIGKILL-137
