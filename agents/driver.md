@@ -88,6 +88,9 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   prompt says "transition `close`": do the prompt's `queue_mark` (in `blocked`: its `context_set fail_note`,
   no mark), hand back NEEDS-PARENT and stop. Only the parent picks `close`, `stop`, `regate`,
   `rebase_regate`, `gate_fix`, `parent_edited` or `decided` (it messages you which; take exactly that one).
+  When its answer asks the worker for work (rebase, amend, stage a file), SendMessage the worker, wait for its DONE, and only then take
+  `parent_edited`: the parent describing the work is not the work done. `parent_edited` runs a precheck first (clean worktree, one commit,
+  master an ancestor) and returns to `blocked` with the reason when it fails: no gate run, no red mark; hand back NEEDS-PARENT again.
 - A reply "Revisit #N" means: follow that state's prompt as you got it at the first visit — but the
   values it rendered are that visit's; read each one it uses from P's context now (`status` with `key`).
 

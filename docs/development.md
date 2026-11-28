@@ -89,6 +89,13 @@ The engine's own slice workflow is a tracked file: `.claude/workflows/engine-tas
 - `regate_gate` has `max_visits: 2` with `on_exhausted: blocked`: a third `regate` runs nothing, and `parent_edited`, `close` or `stop` is the way on.
 - `src/task-blocked-regate-route.test.ts` pins it, with the relay form of the dispatcher (`dispatch-driver.md`, `task-driver.md`, `agents/driver.md`).
 
+**`parent_edited` checks the branch first**
+
+- `parent_edited` from `blocked` goes through `parent_edited_check`, not straight to the gate: the worktree must be clean, the branch exactly one commit over master, and master an ancestor of it.
+- A refusal goes through `parent_edited_refused` back to `blocked` with its reason (`context.precheck_out`, shown in the prompt), no gate run and no red mark. A pass goes to `project_gate_rebased`.
+- A driver whose parent's answer asks the worker for work messages the worker, waits for its DONE, and only then takes `parent_edited`.
+- `src/parent-edited-precheck.test.ts` pins it.
+
 **A gate killed by SIGKILL**
 
 - `project_gate`, `project_gate_rebased` and `regate_gate` exit 137 when `npm run check` was killed (SIGKILL), not 1: a kill is no red test.

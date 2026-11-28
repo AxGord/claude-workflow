@@ -337,6 +337,57 @@ states:
       filed: review_filed
       blocked: blocked
 
+  parent_edited_check:
+    station: false
+    type: exec
+    # The parent's `parent_edited` from `blocked` says the branch is ready; a driver that took it on the parent's
+    # description of work the worker had not done yet sent the line to `gate_failed` (exit 3, a red mark). The branch is read here
+    # first: clean worktree, exactly one commit over master, master an ancestor. Green prints nothing (so `precheck_out` is
+    # emptied) and goes to the gate; any refusal goes through `parent_edited_refused` back to `blocked` with its reason in `precheck_out`, no gate run.
+    # No `cwd`: a wiped worktree must reach this script (a missing cwd fails the spawn).
+    command: |-
+      [ -d "$WT" ] || { echo "worktree $WT is missing"; exit 2; }
+      cd "$WT" || exit 2
+      out=
+      staged=$(git diff --cached --name-only | head -10)
+      [ -z "$staged" ] || out="$out
+      staged files not in the commit:
+      $staged"
+      rest=$(git status --porcelain | grep -v '^[MADRC] ' | head -10)
+      [ -z "$rest" ] || out="$out
+      uncommitted or untracked changes in the worktree:
+      $rest"
+      n=$(git rev-list --count master..HEAD) || exit 2
+      [ "$n" = 1 ] || out="$out
+      $n commits over master, expected one"
+      git merge-base --is-ancestor master HEAD || out="$out
+      not rebased onto master $(git rev-parse --short master)"
+      [ -z "$out" ] || { echo "parent_edited refused, the gate was not run:$out"; exit 3; }
+    env:
+      WT: "{{context.wt}}"
+    timeout: 60000
+    context_set:
+      precheck_out: ""
+    on_timeout: parent_edited_refused
+    cases:
+      "0": project_gate_rebased
+    default: parent_edited_refused
+
+  # context_set runs only after a success, so a refusal is recorded here: the precheck's output goes to `precheck_out`, which the
+  # `blocked` prompt shows. No gate ran and nothing is marked red.
+  parent_edited_refused:
+    station: false
+    type: exec
+    command: |-
+      printf '%s\n' "$REASON"
+    env:
+      REASON: "{{stdout}}"
+    timeout: 20000
+    context_set:
+      precheck_out: "{{stdout}}"
+    on_success: blocked
+    on_error: blocked
+
   project_gate_rebased:
     type: exec
     # The slice's gate after a rebase onto a moved master (the reviewed change unchanged: straight to land, no review visit) in its worktree: exactly one commit over master, a clean tree, `npm run check` green.
@@ -423,6 +474,8 @@ states:
       - 137 (the check was killed by SIGKILL, and the gate already re-ran once on its own) → not a red test, so never `fix`:
         `close` with `reason=gate killed 137`.
       - the failure is outside the slice (master itself red, the environment) → `close` with the reason.
+      - when the parent's answer to a `close` here asks the worker for work, SendMessage the worker, wait for its DONE, and only then take
+        `parent_edited` from `blocked` (its precheck refuses a branch that is dirty, not one commit, or not on master).
     transitions:
       fix: work
       retry: project_gate
@@ -738,7 +791,11 @@ states:
       "failed", note: "<the reason, one line>"})`; keep the worktree {{context.wt}} and the branch for the
       user; then transition it (`stop` when the next lines depend on it).
       On the parent's message that the work is committed and green and it has amended the branch itself (the one
-      missing edit, e.g. a CLAUDE.md row): no queue_mark, transition `parent_edited` (the gate runs, then the land).
+      missing edit, e.g. a CLAUDE.md row): no queue_mark, transition `parent_edited` (a precheck of the branch, then the gate, then the land).
+      When the parent's answer asks the WORKER for work (rebase onto master, amend, stage a file): SendMessage the worker, wait for its
+      DONE, and only then take `parent_edited`; the parent's description of what the worker will do is not the work done. The precheck
+      refuses back to this state, with no gate run and no red mark, unless the worktree is clean, the branch is exactly one commit over
+      master and master is an ancestor of it; what it found is here: {{context.precheck_out}}
       On the parent's message `regate` (the gate went red on a test OUTSIDE the task's diff, the parent names that test,
       and the branch is unchanged and committed): no queue_mark, transition `regate`. The gate runs again on the branch as
       it stands: green goes on as after any green gate (a review visit, then the land), red returns here with its output.
@@ -746,7 +803,7 @@ states:
     transitions:
       close: closed
       stop: stopped
-      parent_edited: project_gate_rebased
+      parent_edited: parent_edited_check
       regate: regate_gate
 
   done:

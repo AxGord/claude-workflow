@@ -58,6 +58,19 @@ states:
     transitions:
       close: closed
       stop: stopped
+      parent_edited: parent_edited_check
+  parent_edited_check:
+    type: exec
+    cases:
+      "0": project_gate_rebased
+    default: parent_edited_refused
+    on_timeout: parent_edited_refused
+    station: false
+  parent_edited_refused:
+    type: exec
+    on_success: blocked
+    on_error: blocked
+    station: false
   done:
     terminal: true
     outcome: complete
