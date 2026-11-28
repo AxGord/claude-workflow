@@ -19,7 +19,7 @@ import {
 import { Pool, formatStatus as formatPoolStatus, projectRoot, resolvePoolDir } from "./pool.js";
 import { withProgress, type ProgressSink } from "./progress.js";
 import { windowNudge } from "./window-nudge.js";
-import { activeParents, staleNote } from "./stale.js";
+import { activeParents, askStanding, askStandingNote, staleNote } from "./stale.js";
 import { scopeVerdict } from "./session-scope.js";
 import {
   RESUME_TOOL,
@@ -822,10 +822,12 @@ export function registerTools(
           ...unshownOwed(engine, sid, body),
           ...unshownRefresh(engine, sid, body),
         ];
+        const ask = engine.askStandingLine(sid);
         const text = [
           ...(starved.length > 0 ? [...starved, ""] : []),
           ...(stale.length > 0 ? [...stale, ""] : []),
           ...(delivered.length > 0 ? [...delivered, ""] : []),
+          ...(ask === undefined ? [] : [ask, ""]),
           ...(unanswered.length > 0 ? [...unanswered, ""] : []),
           ...(suspendedAt
             ? [
@@ -945,7 +947,7 @@ export function registerTools(
     "context_set",
     {
       description:
-        "Save key-value data in the session context for later use. A dispatcher's `tasks` entry (`ID=P driver=<id>`) whose id is not the agent linked with role `driver` to task session P is refused, naming the right id. A task session's `parent_answer` of `hold until_done: <queue id>` or `hold until_cmd: <command>` (optionally `hold deadline=<N>m|h …`, default 1h, at most 4h) holds a task standing at `blocked` until the engine sees the condition met; a `hold` with no condition, or off `blocked`, is refused, and any other answer ends the hold. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch). The key a state's `delivers:` names, written while the session stands at that state, is a DELIVERY: the answer says so, and warns when the session still owns a live pool waiter or lease (stop or await it before your last message).",
+        "Save key-value data in the session context for later use. A dispatcher's `tasks` entry (`ID=P driver=<id>`) whose id is not the agent linked with role `driver` to task session P is refused, naming the right id. A task driver writes `parent_answer_ack` (the first words of the answer) first thing when the parent's answer to its NEEDS-PARENT reached it: the question's `unanswered` mark and its UNANSWERED reminder end there, and status and `sessions` show `answered, acked <time>` for it. A task session's `parent_answer` of `hold until_done: <queue id>` or `hold until_cmd: <command>` (optionally `hold deadline=<N>m|h …`, default 1h, at most 4h) holds a task standing at `blocked` until the engine sees the condition met; a `hold` with no condition, or off `blocked`, is refused, and any other answer ends the hold. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch). The key a state's `delivers:` names, written while the session stands at that state, is a DELIVERY: the answer says so, and warns when the session still owns a live pool waiter or lease (stop or await it before your last message).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
@@ -1196,7 +1198,7 @@ export function registerTools(
     "sessions",
     {
       description:
-        "List all workflow sessions (active shown first, recent inactive limited to 3). [STALE] marks an active session whose state saw no engine call for longer than its stale_after (its agent may be dead or stuck).",
+        "List all workflow sessions (active shown first, recent inactive limited to 3). [STALE] marks an active session whose state saw no engine call for longer than its stale_after (its agent may be dead or stuck). [asks the parent: …] marks a driver's open `ask_parent`: `unanswered <age>`, or `answered, acked <time>` once its driver wrote `parent_answer_ack`.",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({
@@ -1235,11 +1237,13 @@ export function registerTools(
             : "";
         const st = isActive ? engine.staleness(s, parents, now) : undefined;
         const stale = st ? ` [STALE: ${staleNote(st)}]` : "";
+        const askNow = isActive ? askStanding(s, now) : null;
+        const asking = askNow ? ` [asks the parent: ${askStandingNote(askNow)}]` : "";
         const pidInfo =
           args.all && s.context.claude_code_pid !== undefined
             ? ` [pid: ${s.context.claude_code_pid}${s.context.claude_code_pid === pid ? " ★" : ""}]`
             : "";
-        return `  ${s.session_id}: ${stateInfo}${depth}${parent}${suspended}${starved}${stale}${pidInfo} (updated: ${s.updated_at})`;
+        return `  ${s.session_id}: ${stateInfo}${depth}${parent}${suspended}${starved}${stale}${asking}${pidInfo} (updated: ${s.updated_at})`;
       };
 
       const active = sessions.filter(s => s.stack.length > 0);

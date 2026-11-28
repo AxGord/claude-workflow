@@ -178,7 +178,8 @@ Two kinds, never mixed.
   section's items; skip a section whose body is `none`.
 
 ## Resumed after your last line
-If your last line was NEEDS-PARENT and this message answers it, your FIRST call is
+If your last line was NEEDS-PARENT and this message answers it (a `MAIN DECISION` relay or a direct `task=<ID>: …` message), your FIRST call, before anything else and before you relay it to the worker, is
+`context_set({session_id: P, key: "parent_answer_ack", value: "<the first words of the answer>"})`: the engine's mark that the answer reached you, so a worker that is busy with it is not taken for a lost answer. Your next call is
 `context_set({session_id: P, key: "ask_parent", value: ""})` — that is what the map draws as the answer
 (a move of P before it, e.g. the parent's own `transition`, has already answered; the clear is then a no-op).
 The parent may message you after you replied (a relayed worker/reviewer line, a decision). Your run is NOT

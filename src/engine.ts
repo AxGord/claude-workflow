@@ -132,14 +132,17 @@ import { activeSubtree, dispatcherHolds, takeOver, taskEntries, where } from "./
 import { secondRootRefusal } from "./session-scope.js";
 import { actionStateRefusal, runsCommand } from "./trust.js";
 import {
+  ANSWER_ACK_KEY,
   activeParents,
+  askStanding,
+  askStandingNote,
   formatSeconds,
   staleNote,
   staleness,
   unansweredAskLine,
   type Staleness,
 } from "./stale.js";
-import { openAsk } from "./event-fold.js";
+import { ASK_KEY, openAsk } from "./event-fold.js";
 
 /**
  * The moves out of `collect` taken once a task has ended or the window has run dry (the pick then refills or ends
@@ -270,6 +273,14 @@ function driverWaitNote(s: SessionState): string {
     : "";
   if (!last) return deliveredNote === "" ? "" : ` —${deliveredNote.slice(1)}`;
   return ` — the driver may be waiting on its ${last.role} ${last.agent_id}, linked at this step: wait, not gone; check that agent (status, SendMessage to the driver) before any ping; never spawn a driver while it lives${deliveredNote}`;
+}
+
+/** What a STALE line of a session whose driver acked the parent's answer adds: the answer arrived, so the silence is the worker's. */
+function ackedNote(s: SessionState, now: number): string {
+  const st = askStanding(s, now);
+  return st?.kind === "acked"
+    ? ` — the parent's answer reached the driver (acked ${st.acked_at}): this silence is the worker's, not the parent's`
+    : "";
 }
 
 export class Engine {
@@ -1165,7 +1176,7 @@ export class Engine {
       const st = this.staleness(s, parents, now);
       const of = s.parent_session_id ? `, child of ${s.parent_session_id}` : "";
       const agent = s.agent_id ? `, agent ${s.agent_id}` : "";
-      const wait = driverWaitNote(s);
+      const wait = driverWaitNote(s) + ackedNote(s, now);
       if (st)
         lines.push(
           `STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}${wait}`,
@@ -1393,6 +1404,16 @@ export class Engine {
   }
 
   /**
+   * The `PARENT ASK:` line of `sessionId`'s own open `ask_parent`: `unanswered <age>`, or `answered, acked <time>`
+   * once its driver wrote `parent_answer_ack`. Undefined without an open question.
+   */
+  public askStandingLine(sessionId: string, now: number = Date.now()): string | undefined {
+    const s = this._storage.read(sessionId);
+    const st = s ? askStanding(s, now) : null;
+    return s && st ? `PARENT ASK: asked ${st.asked_at}, ${askStandingNote(st)}` : undefined;
+  }
+
+  /**
    * One `UNANSWERED:` line per driver question in `sessionId`'s active sub-tree that has stood open past
    * `ASK_UNANSWERED_AFTER_S`: a decision that never reached its driver stays visible on the next pass.
    */
@@ -1406,7 +1427,10 @@ export class Engine {
         typeof s?.context.parent_answer === "string" && s.context.parent_answer.trim() !== "";
       // a held task waits for its condition, not for an answer: its hold speaks for it until the deadline
       const held = s ? this._holdVerdict(s, now)?.kind === "silent" : false;
-      const line = s && ask && !answered && !held ? unansweredAskLine(s, ask, now) : undefined;
+      // an answer the driver acked reached it: the silence after that is the worker's, which the STALE mark measures
+      const acked = s ? askStanding(s, now)?.kind === "acked" : false;
+      const line =
+        s && ask && !answered && !held && !acked ? unansweredAskLine(s, ask, now) : undefined;
       if (line) lines.push(line);
     }
     return lines;
@@ -1898,11 +1922,15 @@ export class Engine {
       throw new Error(`${difficultyError(value)} (the workflow's model_table maps it)`);
 
     const now = new Date().toISOString();
+    const context = { ...session.context, [key]: value };
+    // an ack answers the question open when it was written: a new question starts unanswered
+    if (key === ASK_KEY && typeof value === "string" && value.trim() !== "")
+      delete context[ANSWER_ACK_KEY];
     return this._withModel(
       {
         ...session,
         ...this._wakeStamp(session, now),
-        context: { ...session.context, [key]: value },
+        context,
         updated_at: now,
         history: [
           ...session.history,

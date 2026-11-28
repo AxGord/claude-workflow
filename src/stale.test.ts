@@ -1,10 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Engine } from "./engine.js";
 import { Executor } from "./executor.js";
 import {
   STALE_AFTER_DEFAULTS,
   STALE_EXEC_GRACE_S,
+  ANSWER_ACK_KEY,
   activeParents,
+  askStanding,
   formatSeconds,
   staleAfter,
   staleness,
@@ -327,5 +331,171 @@ describe("STALE in sessions / status / transition and {{stale_sessions}}", () =>
     await age(storage, run.sessionId, STALE_AFTER_DEFAULTS.prompt + 1);
     expect(engine.staleLines(run.sessionId)).toHaveLength(1);
     expect(engine.staleLines(run.sessionId, true)).toEqual([]);
+  });
+});
+
+// ENG-PARENT-ANSWER-ACK: a driver that got the parent's answer writes `parent_answer_ack`; the question's
+// `unanswered` mark ends there, and what is left idle afterwards is the worker's silence.
+describe("parent_answer_ack: answered and acked versus unanswered", () => {
+  let dir: string | undefined;
+  afterEach(() => {
+    if (dir) cleanupDir(dir);
+    dir = undefined;
+  });
+  const MIN30 = 30 * 60 * 1000;
+
+  async function mount() {
+    const storage = new InMemoryStorage();
+    const result = createTestLoader({
+      run: {
+        initial: "collect",
+        states: { collect: { prompt: "c", transitions: { end: "end" } }, end: { terminal: true } },
+      },
+      task: {
+        initial: "work",
+        states: { work: { prompt: "work", transitions: { end: "end" } }, end: { terminal: true } },
+      },
+    });
+    dir = result.dir;
+    const engine = new Engine(storage, result.loader, new Executor());
+    const handlers = new Map<
+      string,
+      (args: object) => Promise<{ isError?: boolean; content: Array<{ text: string }> }>
+    >();
+    registerTools(
+      { registerTool: (name: string, _cfg: unknown, h: never) => handlers.set(name, h) } as never,
+      engine,
+      {} as never,
+      result.loader,
+      storage,
+    );
+    const call = async (name: string, args: object) =>
+      (await handlers.get(name)!(args)).content[0].text;
+    const run = await engine.start("run");
+    const task = await engine.start("task", undefined, run.sessionId);
+    await engine.setContext(task.sessionId, "task", "T1");
+    await engine.setContext(task.sessionId, "ask_parent", "which design?");
+    return { storage, engine, call, run: run.sessionId, task: task.sessionId };
+  }
+
+  it("answered and acked: no UNANSWERED line at +30 min; answered and not acked: still marked", async () => {
+    const { engine, run, task } = await mount();
+    const later = Date.now() + MIN30;
+    // the parent's answer was relayed and cleared by the dispatcher: the engine holds nothing, the driver said nothing
+    expect(engine.unansweredAskLines(run, later)).toHaveLength(1);
+    await engine.setContext(task, ANSWER_ACK_KEY, "route=work: use the second design");
+    expect(engine.unansweredAskLines(run, later)).toEqual([]);
+  });
+
+  it("an ack older than the question does not answer it, and an empty ack answers nothing", async () => {
+    const { engine, run, task } = await mount();
+    await engine.setContext(task, ANSWER_ACK_KEY, "first answer");
+    await engine.setContext(task, "ask_parent", "and the name?");
+    expect(engine.unansweredAskLines(run, Date.now() + MIN30)).toHaveLength(1);
+    await engine.setContext(task, ANSWER_ACK_KEY, "");
+    expect(engine.unansweredAskLines(run, Date.now() + MIN30)).toHaveLength(1);
+    await engine.setContext(task, ANSWER_ACK_KEY, "second answer");
+    expect(engine.unansweredAskLines(run, Date.now() + MIN30)).toEqual([]);
+  });
+
+  it("askStanding reads `unanswered <age>` before the ack and `answered, acked <time>` after it", async () => {
+    const { storage, engine, task } = await mount();
+    const asked = storage.read(task)!;
+    const before = askStanding(asked, Date.parse(asked.updated_at) + 12 * 60 * 1000);
+    expect(before).toMatchObject({ kind: "unanswered", age_s: 720 });
+    await engine.setContext(task, ANSWER_ACK_KEY, "route=work");
+    expect(askStanding(storage.read(task)!, Date.now())).toMatchObject({
+      kind: "acked",
+      ack: "route=work",
+    });
+  });
+
+  it("an engine-held parent_answer is `answered, not relayed yet`, not unanswered; the ack still wins over it", async () => {
+    const { storage, engine, call, task } = await mount();
+    await engine.setContext(task, "parent_answer", "route=work: second design");
+    expect(askStanding(storage.read(task)!, Date.now())).toMatchObject({ kind: "held" });
+    expect(await call("status", { session_id: task })).toMatch(
+      /^PARENT ASK: asked \S+, answered, not relayed to the driver yet\n/mu,
+    );
+    expect(await call("sessions", { all: true })).toContain(
+      "[asks the parent: answered, not relayed to the driver yet]",
+    );
+    await engine.setContext(task, ANSWER_ACK_KEY, "route=work");
+    expect(askStanding(storage.read(task)!, Date.now())).toMatchObject({ kind: "acked" });
+  });
+
+  it("the ack outlives the driver's clear of ask_parent until a move or a new question", async () => {
+    const { storage, engine, call, run, task } = await mount();
+    await engine.setContext(task, ANSWER_ACK_KEY, "route=work: use the second design");
+    await engine.setContext(task, "ask_parent", "");
+    const status = await call("status", { session_id: task });
+    expect(status).toMatch(/^PARENT ASK: asked \S+, answered, acked \S+: "route=work: use/mu);
+    expect(await call("sessions", { all: true })).toMatch(
+      new RegExp(`${task}: [^\\n]*\\[asks the parent: answered, acked `),
+    );
+    // the clear leaves no open question, so no UNANSWERED line either
+    expect(engine.unansweredAskLines(run, Date.now() + MIN30)).toEqual([]);
+    const cur = storage.read(task)!;
+    await storage.write(task, {
+      ...cur,
+      updated_at: new Date(Date.parse(cur.updated_at) - 2 * MIN30).toISOString(),
+    });
+    expect(engine.staleLines(run, true)[0]).toContain("the parent's answer reached the driver");
+    // a new question is unanswered again
+    await engine.setContext(task, "ask_parent", "and the name?");
+    expect(askStanding(storage.read(task)!, Date.now())).toMatchObject({ kind: "unanswered" });
+    expect(engine.unansweredAskLines(run, Date.now() + MIN30)).toHaveLength(1);
+    // a clear of the new question leaves no standing: the ack belongs to the old one
+    await engine.setContext(task, "ask_parent", "");
+    expect(await call("status", { session_id: task })).not.toContain("PARENT ASK:");
+  });
+
+  it("status and sessions show the standing of the question", async () => {
+    const { engine, call, task } = await mount();
+    const open = await call("status", { session_id: task });
+    expect(open).toMatch(/^PARENT ASK: asked \S+, unanswered \d+s\n/mu);
+    expect(await call("sessions", { all: true })).toMatch(
+      new RegExp(`${task}: [^\\n]*\\[asks the parent: unanswered \\d+s\\]`),
+    );
+    await engine.setContext(task, ANSWER_ACK_KEY, "route=work: use the second design");
+    const acked = await call("status", { session_id: task });
+    expect(acked).toMatch(
+      /^PARENT ASK: asked \S+, answered, acked \S+: "route=work: use the second design"/mu,
+    );
+    expect(acked).not.toContain("unanswered");
+    expect(await call("sessions", { all: true })).toMatch(
+      new RegExp(`${task}: [^\\n]*\\[asks the parent: answered, acked `),
+    );
+  });
+
+  it("a STALE line after the ack says the silence is the worker's; without the ack it says nothing of it", async () => {
+    const { storage, engine, run, task } = await mount();
+    const idle = async (): Promise<string> => {
+      const cur = storage.read(task)!;
+      await storage.write(task, {
+        ...cur,
+        updated_at: new Date(Date.parse(cur.updated_at) - 2 * MIN30).toISOString(),
+      });
+      return engine.staleLines(run, true)[0];
+    };
+    expect(await idle()).not.toContain("acked");
+    await engine.setContext(task, ANSWER_ACK_KEY, "route=work");
+    expect(await idle()).toContain("the parent's answer reached the driver (acked ");
+  });
+
+  it("the three driver instruction files name the ack as the first call on an answer", () => {
+    const root = path.resolve(import.meta.dirname, "..");
+    for (const f of ["agents/driver.md", "templates/drivers/task-driver.md"]) {
+      const md = fs.readFileSync(path.join(root, f), "utf8");
+      expect(md).toContain('key: "parent_answer_ack"');
+      expect(md.indexOf('key: "parent_answer_ack"')).toBeLessThan(
+        md.indexOf('key: "ask_parent", value: ""'),
+      );
+    }
+    const dispatch = fs.readFileSync(
+      path.join(root, "templates/drivers/dispatch-driver.md"),
+      "utf8",
+    );
+    expect(dispatch).toContain("`parent_answer_ack`");
   });
 });

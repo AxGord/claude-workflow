@@ -620,6 +620,11 @@ dispatcher:
 - A parent's answer to a `NEEDS-PARENT` is `context_set({session_id: <session=>, key: "parent_answer", value: "<route or decision>"})` on the task session; the reply names the dispatcher to wake (`SendMessage`, `answer`).
   - `collect` renders each held answer as `PARENT-ANSWER: task=<ID> session=<P> driver=<id>: <text>` (`{{parent_answers}}`) and refuses `slot_free` and `stalled` (`unrelayed`) while one stands.
   - The question is no longer repeated as `UNANSWERED`.
+- A driver that got the answer writes `context_set({session_id: <P>, key: "parent_answer_ack", value: "<first words of the answer>"})` first, before it relays the answer to the worker and before it clears `ask_parent`.
+  - The question is then no longer repeated as `UNANSWERED`, and the engine does not repeat it as `reason=unanswered`: the answer reached the driver.
+  - `status` of the task session shows `PARENT ASK: asked <time>, answered, acked <time>: "<answer>"`. Without an ack it shows `unanswered <age>`, or `answered, not relayed to the driver yet` while the engine holds the parent's answer; `sessions` shows the same as `[asks the parent: …]`.
+  - The acked standing outlives the driver's clear of `ask_parent` (its next call) until the session moves or asks a new question; an empty ack answers nothing.
+  - A STALE line of that session then says the answer reached the driver, so the idle time is the worker's.
   - A `transition` or `status` reply of the dispatching session carries each held `PARENT-ANSWER:` line its body does not already show (a revisit's short reply).
   - The dispatcher sends the driver `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <text>` and clears the key.
   - The driver then reports to the dispatcher, which frees the slot: no driver notification reaches the main conversation.
@@ -650,7 +655,7 @@ dispatcher:
 
 | Message | When | The main conversation's answer |
 |---|---|---|
-| a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task for over 10 minutes) | `context_set` of `parent_answer` on the task session (a route only from `routes=`); the reply names the dispatcher to wake. The engine holds it until relayed (see above) |
+| a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task and no driver acked one for over 10 minutes) | `context_set` of `parent_answer` on the task session (a route only from `routes=`); the reply names the dispatcher to wake. The engine holds it until relayed (see above) |
 | `NEEDS-PARENT task=<ID> session=<P> reason=hold condition met: …` (or `reason=hold <age>, condition not met: …; still hold?` past the deadline) | the condition of the parent's hold on a blocked task is met, or its deadline passed unmet | a route as for any `NEEDS-PARENT`; or `hold` again |
 | `NEEDS-PARENT task=<ID> session=<P> reason=stale …` | a task session stale for `stale_task_after` minutes (queue header, whole number of 1 or more, default 60); `collect` lists it after the `STALE:` line, handed back once per session | `status` of P, answer its driver, or tell the user |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
@@ -774,6 +779,7 @@ The window table has one row per window:
 - A `twin` is a `finished` notice that repeats a hand-back sent to the same recipient within 5 seconds, and is not counted twice.
 - `distinct main` is the messages that reached main, twins left out, and `per 20 tasks` is that over the tasks.
 - `bg wakes` is the runs woken by the worker's own background shell, and how many of those messages went to main.
+- `answers (acked)` is the parent's answers recorded in the window (`context_set` of a non-empty `parent_answer`; the dispatcher's clear is not one) and, in brackets, the `parent_answer_ack` writes of the drivers: an answer with no ack may have been lost on the way.
 
 The wake-source table says what started the worker's run, and where its message went (owner, main, a third agent):
 

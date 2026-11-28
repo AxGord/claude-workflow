@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { ANSWER_ACK_KEY, PARENT_ANSWER_KEY } from "./stale.js";
 
 /** A turn end of an agent: `E` plain text, `H` SubagentHandback, `S` anything that keeps it running. */
 type Mark = "E" | "H" | "S";
@@ -43,7 +44,12 @@ export interface AgentLog {
   readonly sends: { readonly ts: string; readonly to: string }[];
   readonly recv: Received[];
   readonly inputs: Input[];
+  /** The `context_set` calls of the parent's answer to a NEEDS-PARENT (`parent_answer`) and of its driver's ack. */
+  readonly answers: { readonly ts: string; readonly key: AnswerKey }[];
 }
+
+/** The context keys a parent's answer and its driver's acknowledgement travel in. */
+export type AnswerKey = typeof PARENT_ANSWER_KEY | typeof ANSWER_ACK_KEY;
 
 export interface AgentMeta {
   readonly agentType: string;
@@ -60,7 +66,7 @@ export interface ProjectData {
 interface Block {
   readonly type?: string;
   readonly name?: string;
-  readonly input?: { readonly to?: unknown };
+  readonly input?: { readonly to?: unknown; readonly key?: unknown; readonly value?: unknown };
 }
 
 interface TLine {
@@ -84,7 +90,7 @@ function isHarnessLine(line: string): boolean {
   return i >= 0 && i + '"isMeta":true'.length <= 2500;
 }
 
-const emptyLog = (): AgentLog => ({ marks: [], sends: [], recv: [], inputs: [] });
+const emptyLog = (): AgentLog => ({ marks: [], sends: [], recv: [], inputs: [], answers: [] });
 const MAIN = "main";
 /** Records a transcript holds besides the conversation (api request blobs, queue operations, snapshots). */
 const RECORD_PREFIX = /^\{"type":"([a-z-]+)"/;
@@ -140,9 +146,19 @@ export class TranscriptScanner {
     const tools = Array.isArray(content)
       ? (content as Block[]).filter(b => b.type === "tool_use")
       : [];
-    for (const b of tools)
+    for (const b of tools) {
       if (b.name === "SendMessage" && typeof b.input?.to === "string")
         this.log.sends.push({ ts, to: b.input.to });
+      const key = b.input?.key;
+      // a clear (an empty value) is the relay's bookkeeping, not an answer or an ack: the engine reads both the same way
+      const written = typeof b.input?.value === "string" && b.input.value.trim() !== "";
+      if (
+        b.name?.endsWith("context_set") &&
+        written &&
+        (key === PARENT_ANSWER_KEY || key === ANSWER_ACK_KEY)
+      )
+        this.log.answers.push({ ts, key });
+    }
     const code: Mark = tools.some(b => b.name === "SubagentHandback")
       ? "H"
       : o.message?.stop_reason === "end_turn"
@@ -226,6 +242,7 @@ export async function readProject(dir: string): Promise<ProjectData> {
     const log = await scanFile(path.join(dir, f));
     main.sends.push(...log.sends);
     main.recv.push(...log.recv);
+    main.answers.push(...log.answers);
     const sub = path.join(dir, f.slice(0, -".jsonl".length), "subagents");
     if (!fs.existsSync(sub)) continue;
     for (const a of fs.readdirSync(sub).sort()) {
@@ -278,6 +295,12 @@ export interface Dest {
   other: number;
 }
 
+/** The parent's answers to NEEDS-PARENT lines recorded in a window, and the acks the drivers wrote for them. */
+export interface AnswerCensus {
+  recorded: number;
+  acked: number;
+}
+
 export interface WindowCensus {
   from: string | null;
   to: string | null;
@@ -293,6 +316,8 @@ export interface WindowCensus {
   per20: number | null;
   /** Runs woken by their own background shell, and how many of those went to main. */
   bgWakes: Pair;
+  /** `parent_answer` records and `parent_answer_ack` writes in the window: an answer with no ack may be lost on the way. */
+  answers: AnswerCensus;
   sources: Record<WakeSource, Dest>;
 }
 
@@ -565,8 +590,12 @@ export function census(data: ProjectData, project: string, opts: CensusOptions =
       distinctMain: 0,
       per20: null,
       bgWakes: { events: 0, main: 0 },
+      answers: { recorded: 0, acked: 0 },
       sources: newSources(),
     };
+    for (const log of logs.values())
+      for (const a of log.answers)
+        if (inRange(a.ts, lo, hi)) w.answers[a.key === PARENT_ANSWER_KEY ? "recorded" : "acked"]++;
     let oldest = "";
     let latest = "";
     for (const r of rows) {
@@ -626,6 +655,7 @@ export function formatCensus(c: Census): string {
     "distinct main",
     "per 20 tasks",
     "bg wakes",
+    "answers (acked)",
   ];
   const lines: string[][] = [head];
   c.windows.forEach((w, i) =>
@@ -640,6 +670,7 @@ export function formatCensus(c: Census): string {
       String(w.distinctMain),
       rate(w.per20),
       pair(w.bgWakes),
+      `${w.answers.recorded} (${w.answers.acked})`,
     ]),
   );
   out.push(...table(lines));

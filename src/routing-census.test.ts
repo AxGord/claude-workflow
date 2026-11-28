@@ -574,3 +574,33 @@ describe("routing census: the command", () => {
       expect(fs.readFileSync(path.join(ROOT, f), "utf8"), f).toContain("wf-routing-census");
   });
 });
+
+// ENG-PARENT-ANSWER-ACK: the census lists the parent's recorded answers and the acks the drivers wrote for them.
+describe("routing census: parent answers and their acks", () => {
+  const ctx = (key: string, value: string): [string, object] => [
+    "mcp__plugin_workflow_wf__context_set",
+    { session_id: "P", key, value },
+  ];
+
+  it("counts a recorded answer and an ack per window; a relay's clear is no answer", async () => {
+    const dir = project(
+      [
+        asst(at(1), "tool_use", ctx("parent_answer", "route=work")),
+        asst(at(2), "tool_use", ctx("parent_answer", "")),
+        asst(at(3), "tool_use", ctx("parent_answer", "hold until_done: X")),
+        asst(at(4), "tool_use", ctx("parent_answer_ack", "")),
+      ],
+      [
+        driver("d", [
+          prompt(at(0)),
+          asst(at(5), "tool_use", ctx("parent_answer_ack", "route=work")),
+        ]),
+      ],
+    );
+    const c = census(await readProject(dir), dir);
+    expect(c.windows[0].answers).toEqual({ recorded: 2, acked: 1 });
+    const text = formatCensus(c);
+    expect(text).toContain("answers (acked)");
+    expect(text).toMatch(/2 \(1\)/u);
+  });
+});

@@ -1,6 +1,7 @@
 // Stall detection: a session whose state saw no engine call for longer than the state's
 // `stale_after` is STALE — its agent may be dead or stuck. Pure: the engine resolves the state,
 // `sessions` / `status` / the `{{stale_sessions}}` template var print what this decides.
+import { ASK_KEY, openAsk } from "./event-fold.js";
 import { POOL_WAIT_CEILING_FACTOR } from "./types.js";
 import type { SessionState, StateDefinition } from "./types.js";
 
@@ -121,4 +122,75 @@ export function unansweredAskLine(
   const task = typeof s.context.task === "string" ? ` task=${s.context.task}` : "";
   const agent = s.agent_id ? ` driver=${s.agent_id}` : "";
   return `UNANSWERED:${task} session=${s.session_id}${agent} asked=${ask.at} (${formatSeconds(Math.floor((now - at) / 1000))} ago): ${ask.text.trim().slice(0, 300)}`;
+}
+
+/**
+ * The context key a task driver writes, first thing, when the parent's answer to its NEEDS-PARENT reached it
+ * (value: the first words of the answer). It tells a lost answer from a busy worker.
+ */
+export const ANSWER_ACK_KEY = "parent_answer_ack";
+
+/** The context key the parent's answer to a NEEDS-PARENT is recorded in on the task session. */
+export const PARENT_ANSWER_KEY = "parent_answer";
+
+/** Where a driver's question stands: nobody answered it, the parent's answer is held by the engine, or the driver confirmed it has one. */
+export type AskStanding =
+  | { readonly kind: "unanswered"; readonly asked_at: string; readonly age_s: number }
+  | { readonly kind: "held"; readonly asked_at: string }
+  | {
+      readonly kind: "acked";
+      readonly asked_at: string;
+      readonly acked_at: string;
+      readonly ack: string;
+    };
+
+/**
+ * The standing of `s`'s question to the parent at `now`, or null without one. Acked = the ack key holds text and
+ * its `context_set` came after the last move and after a question write: it outlives the driver's clear of
+ * `ask_parent` (its documented next call) until the session moves or asks again (the engine drops the ack key
+ * when a non-empty `ask_parent` is written). Held = no ack, but the engine
+ * holds a non-empty `parent_answer` the dispatcher has not relayed yet. Otherwise an open question is unanswered.
+ */
+export function askStanding(s: Parameters<typeof openAsk>[0], now: number): AskStanding | null {
+  if (s.stack.length === 0) return null;
+  const open = openAsk(s);
+  const ack = s.context[ANSWER_ACK_KEY];
+  // since the last move: the latest ack write, and the question write before it (a new question drops the ack key)
+  let ackIdx = -1;
+  let askedAt: string | undefined;
+  if (typeof ack === "string" && ack.trim() !== "")
+    for (let i = s.history.length - 1; i >= 0; i--) {
+      const h = s.history[i];
+      if (h.from !== undefined && h.to !== undefined) break;
+      if (h.event !== "context_set") continue;
+      if (h.detail === ANSWER_ACK_KEY && ackIdx < 0) ackIdx = i;
+      else if (h.detail === ASK_KEY && ackIdx >= 0) {
+        askedAt = h.at;
+        break;
+      }
+    }
+  if (ackIdx >= 0 && askedAt !== undefined && typeof ack === "string")
+    return {
+      kind: "acked",
+      asked_at: askedAt,
+      acked_at: s.history[ackIdx].at,
+      ack: ack.trim(),
+    };
+  if (!open) return null;
+  const held = s.context[PARENT_ANSWER_KEY];
+  if (typeof held === "string" && held.trim() !== "") return { kind: "held", asked_at: open.at };
+  const at = Date.parse(open.at);
+  return {
+    kind: "unanswered",
+    asked_at: open.at,
+    age_s: Number.isNaN(at) ? 0 : Math.max(0, Math.floor((now - at) / 1000)),
+  };
+}
+
+/** `unanswered 12m` or `answered, acked <time>` — what a status or a session list says of a driver's question. */
+export function askStandingNote(st: AskStanding): string {
+  if (st.kind === "acked") return `answered, acked ${st.acked_at}: "${st.ack.slice(0, 80)}"`;
+  return st.kind === "held"
+    ? "answered, not relayed to the driver yet"
+    : `unanswered ${formatSeconds(st.age_s)}`;
 }

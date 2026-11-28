@@ -83,7 +83,7 @@ then needs nothing.
   once, before any other move: SendMessage that task's driver (the line's `driver=`) EXACTLY
   `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <text>`, the text verbatim; then
   `context_set({session_id: <P>, key: "parent_answer", value: ""})`. The engine refuses `slot_free` and `stalled` until every
-  such key is cleared, and holds the answer until then, so it is never lost. The driver then reports to YOU: its LANDED / CLOSED /
+  such key is cleared, and holds the answer until then, so it is never lost. The driver acks it on the task session (`parent_answer_ack`, first call on the answer): an acked question gets no `UNANSWERED` line, and a STALE line then says the answer arrived, so the silence is the worker's: never relay it twice. The driver then reports to YOU: its LANDED / CLOSED /
   NEEDS-PARENT line is handled as any other, and you free the slot yourself. A SendMessage that fails (the driver is gone) → the
   fresh driver of the bullet "A driver that ended with no last line", then relay to it; clear the key only after the send went.
 - **`OWED-DUE: task=<ID> status=<done|failed> sha=<sha|none>: <text>`** lines the engine appends to a `transition` or `status`
