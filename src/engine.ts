@@ -1340,6 +1340,29 @@ export class Engine {
     return { ...session, context: { ...session.context, [HOLD_KEY]: parsed.hold } };
   }
 
+  /**
+   * A task session of a dispatcher's `tasks` key that ended completed has nothing left to route, so its entry leaves the
+   * key at its end: the dispatcher never waits on the parent for a slot an ended session holds. The driver's last line
+   * still reaches the dispatcher, which frees the slot with `slot_free`. A failed or abandoned end keeps its entry.
+   */
+  private async _dropEndedTask(ended: SessionState): Promise<void> {
+    const parentId = ended.parent_session_id;
+    if (!parentId) return;
+    const entry = new RegExp(`(?:^|\\s)[^\\s=]+=${ended.session_id}(?:\\s+driver=\\S+)?(?=\\s|$)`);
+    await this._storage.update(parentId, cur => {
+      const tasks = cur?.context.tasks;
+      if (!cur || cur.stack.length === 0 || typeof tasks !== "string" || !entry.test(tasks))
+        return null;
+      const rest = tasks.replace(entry, "").trim();
+      try {
+        return this._withKey(cur, "tasks", rest, "engine");
+      } catch {
+        // another entry's driver is refused: the ended session's own entry is not worth failing its end
+        return null;
+      }
+    });
+  }
+
   /** Minutes a task session may stand STALE before it is raised: the dispatcher's queue header key, else the default. */
   private _staleTaskLimit(sessionId: string): number {
     const file = this._storage.read(sessionId)?.context.queue_file;
@@ -3028,6 +3051,7 @@ export class Engine {
       await this._endHuman(session, outcome);
       await this._finalize(updated);
       await this._cascadeAbandonChildren(session.session_id);
+      if (outcome === "complete") await this._dropEndedTask(updated);
       this._pruneTerminal();
       return this._buildStatus(updated, taskOps);
     }

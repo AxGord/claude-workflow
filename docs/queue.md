@@ -640,6 +640,7 @@ dispatcher:
 **What the agent does** (`templates/drivers/dispatch-driver.md`)
 
 - `dispatch`: one `start` per admitted line, the task driver's DRIVER block spawned verbatim, `link_agent`, then `dispatched` with the `tasks` key in the transition's `set`. A `tasks` entry (here or in `context_set`) whose `driver=` is not the agent linked with role `driver` to that task session is refused, and the error names that id; `driver=-` and a session with no linked driver are not checked.
+- `collect`: on a driver's `REPORT` line (a curator or research task whose session ended with nothing to route) it hands the line to the main conversation as a notice and takes `slot_free` with `tasks` in the `set`: no `CLOSED` message of the parent is awaited. The engine drops a task session that ended completed from the dispatcher's `tasks` key at its end (a failed end keeps its entry).
 - `collect`: on a driver's `LANDED` or `CLOSED` line it takes `slot_free` with `tasks` and `lessons_pending` in the `set`; a `CLOSED` line for a `stopped` task also sends `LESSONS` at once.
 - `paused`, on main's message `retry` (`queue_header` names it when it raises the window) it takes `retry` with no `set`; every other message at a state it does not drive stays main's `continue`.
 - `collect`, on main's message `lines added` (sent when `queue_add` / `queue_edit` / `queue_mark` answer `note: a pick would admit N line(s) now…`, or `queue_header` raises the window) it takes `refill` with no `set`: the pick runs again without a land.
@@ -658,6 +659,7 @@ dispatcher:
 | a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task and no driver acked one for over 10 minutes) | `context_set` of `parent_answer` on the task session (a route only from `routes=`); the reply names the dispatcher to wake. The engine holds it until relayed (see above) |
 | `NEEDS-PARENT task=<ID> session=<P> reason=hold condition met: …` (or `reason=hold <age>, condition not met: …; still hold?` past the deadline) | the condition of the parent's hold on a blocked task is met, or its deadline passed unmet | a route as for any `NEEDS-PARENT`; or `hold` again |
 | `NEEDS-PARENT task=<ID> session=<P> reason=stale …` | a task session stale for `stale_task_after` minutes (queue header, whole number of 1 or more, default 60); `collect` lists it after the `STALE:` line, handed back once per session | `status` of P, answer its driver, or tell the user |
+| `REPORT task=<ID> session=<P> see=<file>` | a curator or research task ended with nothing to route; the dispatcher already freed its slot | read the file and tell the user; nothing to answer |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
 | `REFRESH session=<D> old=<agent id> reason=…` | the engine found the dispatcher's context past its bound (see "Refresh") | spawn a fresh dispatcher from `dispatcher_call`, `link_agent` it (role `driver`), `SendMessage` the old one `RETIRE new=<its id>`; nothing to answer |
@@ -857,7 +859,7 @@ A job's options other than these are its own: a `notes:` text is guidance the ju
   - A cell under 5 lands on either side is `thin`; a change of thin cells only is "not enough lands yet".
 - **Judge** writes one plan: each job's `found`, edit ops (`move-index`, `move-file`, `replace`, `revert`), proposals, the user's decisions.
 - **Verify** checks every `replace` before it may be applied. Moves skip it.
-- **Present** hands back `NEEDS-PARENT … reason=curator report ready … see=<present.md>`: done, proposed, decisions.
+- **Present** hands back `REPORT task=<ID> session=<P> see=<present.md>`: done, proposed, decisions. It is a notice: the dispatcher frees the slot itself and the parent answers nothing.
 
 ### Consent and history
 

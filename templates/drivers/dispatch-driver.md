@@ -37,8 +37,7 @@ Follow the prompt's steps for each admitted line, with these rules:
   nothing: spawn its driver from `status({session_id: P, key: "driver_call"})` exactly, then
   `link_agent({session_id: P, agent_id: <the id the Agent call returned>, role: "driver"})`; P goes into `tasks` like a started one.
 - A `CURATOR-…` line (workflow column `curator`) is admitted by the engine when the project's curator jobs are due:
-  start it and spawn its driver like any line. Its last line is a NEEDS-PARENT (`reason=curator report ready`), handed
-  to main as any other.
+  start it and spawn its driver like any line. Its last line is a `REPORT` (§ `collect`): the slot is freed by you.
 - A `start` answer WITHOUT a DRIVER block (a task workflow with no `driver:`) → you never drive a task
   session: keep it in `tasks` as `ID=P driver=main` and, after the transition below, hand back
   `NEEDS-PARENT task=<ID> session=<P> reason=task workflow has no driver: main drives it see=state dispatch`.
@@ -63,6 +62,10 @@ then needs nothing.
   without a question to answer. Where the task workflow's terminal declares `queue_mark:` (bundled `batch-task` and
   its heirs) the engine marked the queue line itself, so no line stays `running`; under another task workflow the line
   may still be `running`: say so in the LESSONS message. The slot is freed either way.
+- **`REPORT task=<ID> session=<P> see=<file>`** (the last line of a curator or research task whose session ended with nothing to route; the
+  engine already dropped it from `tasks`): a notice, nothing is asked of main. Hand the line to main verbatim (§ Hand-backs), then ONE call
+  `transition({session_id: D, transition: "slot_free", set: {tasks: "<without that task>"}})`: the pick fills the slot. Main never answers it,
+  never tells you `CLOSED`; read no file it names.
 - **`AWAITING task=<ID> session=<P> question=…`** (a driver's last line at a human wait): the task waits for its owner and its
   queue line no longer holds a window slot. Hand the line to main verbatim (§ Hand-backs), then ONE call
   `transition({session_id: D, transition: "slot_free", set: {tasks: "<without that task>"}})`: the pick fills the slot. Main
@@ -160,7 +163,7 @@ then needs nothing.
     never handed back, and a NEEDS-PARENT of that driver already handed to main stays handed (the REBOUND line is not
     a new one). A SendMessage that fails (the driver is gone) → the fresh driver of the bullet
     "A driver that ended with no last line". Then carry on from D's state (§ Start, step 3): wake no driver for anything else.
-- **Routing**: `slot_free` only on a LANDED, CLOSED or AWAITING line; `refill` only on main's `lines added` or `answered`. `stalled` only when `tasks` is empty AND the
+- **Routing**: `slot_free` only on a LANDED, CLOSED, REPORT or AWAITING line; `refill` only on main's `lines added` or `answered`, or once after a restart or context reset, only at `collect` (§ After a restart, § Context reset). `stalled` only when `tasks` is empty AND the
   last pick admitted nothing. `stop` only on main's word. Nothing ended → no transition; end the turn.
 - **A task that ended `stopped`**: the prompt's "a task session ended `stopped` → `stop`" is for a dispatcher that
   drives the tasks itself, not for you. Under `batch-task` and its heirs the engine marked its queue line failed, and its driver's last line is
@@ -179,7 +182,7 @@ then needs nothing.
 Hand back HANDOVER (§ Hand-backs) and wait. Main drives D there; its `continue` brings you back. The one
 exception is `paused` and main's message `retry` (§ `collect`): a raised window lifts the pause through you.
 
-## Hand-backs — the only six things main gets
+## Hand-backs — the only seven things main gets
 Each is ONE `SendMessage` to `main` whose message is exactly the text below, and you carry on afterwards: a
 driver's report or main's message resumes you. Claude Code accepts a single `SubagentHandback` per result and
 refuses the second (`one report per result`), so none of these is ever a `SubagentHandback`. "Hand back"
@@ -201,6 +204,7 @@ anywhere in this file means this `SendMessage`.
    spawns the fresh dispatcher and links it; nothing to answer.
 6. An `AWAITING task=<ID> session=<P> question=…` line, a driver's, verbatim. Main asks the user and records the answer with
    `answer({session_id: P, route, text})`; it then messages you `answered`.
+7. A `REPORT task=<ID> session=<P> see=<file>` line, a driver's, verbatim. Main reads the file; nothing to answer.
 Before a LESSONS or HANDOVER message, these calls, in this order:
 `context_set({session_id: D, key: "lessons_handed", value: "<the whole message>"})`, then
 `context_set({session_id: D, key: "lessons_pending", value: ""})`; for a LESSONS message a third,
@@ -234,11 +238,11 @@ A restart kills every agent; main wakes only you. `status({session_id: D})`, the
 SendMessage A "Continue: call status({ session_id: '<P>' }) — your own session, picked up after a restart —
 NOT start(), NOT resume() — then carry on from the state it returns." (the named-child form of
 task-driver.md § After a restart: each driver then wakes its own worker). A SendMessage that fails → the
-fresh driver of § `collect`. Then carry on from D's state; end the turn with the DISPATCHING line.
+fresh driver of § `collect`. A task that ended completed is no longer in `tasks` (the engine drops it at its end), so its last line may have died with the old dispatcher: after the wakes, only when D stands at `collect`, take ONE `refill` (no `set`; § `collect`, main's `lines added`), so a slot it freed is filled; at any other state take none, and a `refill` the engine refuses is never handed back as `refill refused`. Then carry on from D's state; end the turn with the DISPATCHING line.
 
 ## Context reset
 After a context reset your memory is not the truth: read this file again, `status({session_id: D})`,
-`status({session_id: D, key: "tasks"})` and `status({session_id: D, key: "lessons_pending"})`, then carry on.
+`status({session_id: D, key: "tasks"})` and `status({session_id: D, key: "lessons_pending"})`, then, only when D stands at `collect`, take ONE `refill` (no `set`: a completed task's entry is dropped by the engine and its last line may be lost, so a slot it freed is filled; a refusal is never handed back), then carry on.
 The engine refuses a second `start` of a task that already runs under D, so a repeated `dispatch` is safe.
 
 ## Rotation

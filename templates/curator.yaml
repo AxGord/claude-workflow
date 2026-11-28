@@ -276,8 +276,8 @@ states:
   present:
     prompt: |-
       The curator run is recorded; its report is {{context.present}}.
-      Do this in order, each its own call: `context_set({session_id: "{{session_id}}", key: "ask_parent", value: "curator report ready for the user"})`, then transition `done`, then SubagentHandback with EXACTLY this one line (the parent reads the named file and relays it):
-      NEEDS-PARENT task={{context.task}} session={{session_id}} reason=curator report ready, the line is closed and its slot is free see={{context.present}}
+      Do this in order, each its own call: transition `done`, then SubagentHandback with EXACTLY this one line (the parent reads the named file; nothing is asked of it, and the dispatcher frees the slot itself):
+      REPORT task={{context.task}} session={{session_id}} see={{context.present}}
     transitions:
       done: presented
 
@@ -293,7 +293,7 @@ states:
   presented:
     terminal: true
     outcome: complete
-    prompt: "Curator run presented: hand back the NEEDS-PARENT line from the previous step and stop; its slot is the parent's to free."
+    prompt: "Curator run presented: hand back the REPORT line from the previous step and stop; the dispatcher frees the slot."
 
   closed:
     terminal: true

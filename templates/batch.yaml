@@ -223,7 +223,7 @@ states:
       (`role: "driver"`); without one drive P yourself (its `status` shows the answer to take). Add P to `tasks` (step 3).
       A `CURATOR-<date>-<n>` line (workflow column `curator`) is the engine's own: the project's curator jobs are due
       (`.claude/curator.yaml`), and the pick admitted the run into a free slot. Start it like any line; its driver ends
-      with `NEEDS-PARENT … reason=curator report ready … see=<present.md>`, its line already done.
+      with `REPORT task=<ID> session=<P> see=<present.md>`, its line already done.
       Then transition `dispatched` and END your turn: agent notifications wake you in `collect`.
     transitions:
       dispatched: collect
@@ -248,6 +248,9 @@ states:
         `lessons=<phrase (file)>; …|none` tail is the agents' own follow-ups, copied: turn each into a `queue_add` line, a placement by the same skill, or nothing.
         A trailing `decided=<file>` means a decider answered design choices without you: audit that file
         (`## <choice>` / `decision:` / `why:` blocks) and overrule a wrong one with a `queue_add` line.
+      - `REPORT task=<ID> session=<P> see=<file>` (a curator or research task whose session ended with nothing to route; the engine
+        already dropped it from `tasks`) → a notice, no answer expected: update `tasks` without the task, then `slot_free`; the file is the
+        parent's to read, not yours.
       - `AWAITING task=<ID> session=<P> question=…` → the task waits for its owner at a human wait state; its queue line is
         `awaiting` and holds no window slot. Tell the user the question (the dashboard's `Awaiting you` section shows it with its
         links); update `tasks` without the task, then `slot_free`. The user's answer → `answer({session_id: P, route, text: <their
