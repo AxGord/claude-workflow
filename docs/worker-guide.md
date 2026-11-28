@@ -46,6 +46,7 @@ A new state type touches, in order: `types.ts`, `engine.ts`, `tools.ts`, the das
 
 - `templates/skills/` is the bundled copy of the live `~/.claude/skills/`. The live copy is the truth and you cannot write it. Edit the bundled file and name the live sync in your report; `scripts/check-skill-sync.sh` refuses drift in a commit that touches a skill.
 - Every edit of `templates/skills/` or `templates/skills-stack/` needs `npm run skills:history`.
+- A bundled skill's `.md` file never carries one heading line twice (a paste that doubled a section): `src/skills.test.ts` names the file and both lines.
 - Renaming an agent type keeps the old `agents/<name>.md` until drivers spawned under it have ended.
 - A mod `tool.call` hook never changes the call's input: auto mode refuses the call. The engine's own PreToolUse hooks are a separate mechanism.
 

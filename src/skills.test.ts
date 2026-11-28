@@ -18,6 +18,7 @@ import {
   readManifest,
   removeSkills,
   shippedSkills,
+  sourceDir,
   stackSkillNames,
   syncSkills,
   treeDigest,
@@ -529,6 +530,75 @@ describe("the history table of shipped versions", () => {
       .filter(l => /^[0-9a-f]{64} /.test(l));
     expect(lines).toEqual([...lines].sort());
     expect(lines.length).toBeGreaterThan(29);
+  });
+});
+
+/**
+ * The markdown headings (ATX, outside a code fence) that one file carries twice, each as
+ * `file: "<heading>" at line A and line B`. A paste that lands a copy of a section in the same file shows up here.
+ */
+function doubledHeadings(file: string, text: string): string[] {
+  const first = new Map<string, number>();
+  const found: string[] = [];
+  let fence: string | undefined;
+  text.split("\n").forEach((line, i) => {
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (f) {
+      if (fence === undefined) fence = f[1][0];
+      else if (f[1][0] === fence) fence = undefined;
+      return;
+    }
+    if (fence !== undefined || !/^ {0,3}#{1,6}(\s|$)/.test(line)) return;
+    const heading = line.trim();
+    const seen = first.get(heading);
+    if (seen === undefined) first.set(heading, i + 1);
+    else found.push(`${file}: "${heading}" at line ${seen} and line ${i + 1}`);
+  });
+  return found;
+}
+
+describe("a shipped skill file carries no heading twice", () => {
+  // Pasting a block into a skill once left references/ops.md with a 60-line copy of itself: `## Refactoring ops` twice,
+  // 229 -> 289 lines for a one-sentence edit, and no check noticed. No shipped file repeats a heading on purpose, so
+  // there is no exemption: a heading that must recur is written with a different text.
+  it("holds for every .md file of templates/skills and templates/skills-stack", () => {
+    const found: string[] = [];
+    let files = 0;
+    for (const name of shippedSkills(REPO).keys()) {
+      const dir = sourceDir(REPO, name);
+      for (const rel of Object.keys(hashTree(dir))) {
+        if (!rel.endsWith(".md")) continue;
+        files++;
+        found.push(
+          ...doubledHeadings(`${name}/${rel}`, fs.readFileSync(path.join(dir, rel), "utf8")),
+        );
+      }
+    }
+    expect(files).toBeGreaterThan(40);
+    expect(found).toEqual([]);
+  });
+
+  it("names the file and both lines of the pasted hxq ops.md (fixture: the version of the paste)", () => {
+    const text = fs.readFileSync(
+      path.join(REPO, "src", "fixtures", "hxq-ops-doubled-section.md"),
+      "utf8",
+    );
+    expect(doubledHeadings("hxq/references/ops.md", text)).toEqual([
+      'hxq/references/ops.md: "## Refactoring ops (`hxq <op>` — source MUTATION, not query)" at line 3 and line 63',
+    ]);
+  });
+
+  it("passes the repaired hxq ops.md, and reads a heading inside a code fence as text", () => {
+    const repaired = fs.readFileSync(
+      path.join(REPO, "templates", "skills-stack", "hxq", "references", "ops.md"),
+      "utf8",
+    );
+    expect(doubledHeadings("ops.md", repaired)).toEqual([]);
+    const fenced = "# A\n\n```sh\n# comment\n```\n\n```sh\n# comment\n```\n";
+    expect(doubledHeadings("f.md", fenced)).toEqual([]);
+    expect(doubledHeadings("f.md", "# A\ntext\n# A\n")).toEqual([
+      'f.md: "# A" at line 1 and line 3',
+    ]);
   });
 });
 
