@@ -253,6 +253,9 @@ states:
         from `work` `blocked`, from `land_failed` `close` (each leads to `blocked`); then in `blocked`
         `queue_mark` to `failed` with note "<your one-line reason>" and transition `close` (`stop` only when
         you say so). Then decide whether to `queue_add` a follow-up line; anything that needs the user → tell the user, keep the slot. Never take over the task's work.
+        A `reason=hold condition met: …` line is the engine's: a blocked task the parent held (`parent_answer` `hold until_done: <ID>` /
+        `hold until_cmd: <command>`) has its condition met: hand it back once like any NEEDS-PARENT. `reason=hold <age>, condition not met: …;
+        still hold?` is the hold's deadline passed: hand it back each visit. While a hold is unmet and inside its deadline the engine lists no stale line for that task.
       - a worker or reviewer whose spawner is a driver → its driver handles it: ignore it while the driver
         runs. After a restart the line may reach you instead: relay it by SendMessage to the driver linked
         to P. Only when that SendMessage fails (the driver is gone), re-spawn from `driver_call` and send

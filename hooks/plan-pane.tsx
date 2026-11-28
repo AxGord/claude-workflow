@@ -11,7 +11,7 @@ const PERIOD_MS = 15000
 const STALE_MS = 3 * 24 * 3600 * 1000
 
 // Bump the tag when Snapshot changes shape: a reload then declines the old value.
-const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-12' })
+const snap = atom({ plugin: 'workflow', key: 'snapshot' } as const, null, { shape: 'snap-13' })
 const view = atom({ plugin: 'workflow', key: 'view' } as const, 'plan', { shape: 'view-1' })
 /** Whether the pane is open: the band above the prompt hides while it is (the pane holds the same and more). */
 const paneOpen = atom({ plugin: 'workflow', key: 'paneOpen' } as const, false, { shape: 'pane-open-1' })
@@ -102,7 +102,7 @@ async function loadGraph($: any, now: number): Promise<void> {
   graph = next
 }
 
-function parseSession(text: string): Parsed | null {
+export function parseSession(text: string): Parsed | null {
   const j = JSON.parse(text) as Record<string, any>
   const stack = Array.isArray(j.stack) ? j.stack : []
   const claude = typeof j.claude_session_id === 'string' ? j.claude_session_id : ''
@@ -121,6 +121,9 @@ function parseSession(text: string): Parsed | null {
   const agentAt = Date.parse(String(links.at(-1)?.at ?? ''))
   // the parent's step the agent was linked at: recorded only under a session of a `driver:` workflow, so its presence says a stage agent
   const at = j.agent_step as { workflow?: unknown; state?: unknown } | undefined
+  // the parent's hold on a blocked task (`context.parent_hold`): its condition, until the task leaves `blocked`
+  const hold = ctx.parent_hold as { text?: unknown } | undefined
+  const held = state === 'blocked' && typeof hold?.text === 'string' && hold.text !== '' ? hold.text : ''
   return {
     mtime: 0,
     claude,
@@ -137,6 +140,7 @@ function parseSession(text: string): Parsed | null {
       isWorking: Boolean(j.running_exec) || typeof j.agent_id === 'string',
       agent: typeof j.agent_id === 'string' ? j.agent_id : '',
       visit: Number(frame?.state_visits?.[state] ?? 0),
+      ...(held !== '' ? { held } : {}),
       recent: done.slice(-RECENT),
       next: [],
       ...(typeof j.agent_id === 'string' && Number.isFinite(agentAt) ? { agentAt } : {}),

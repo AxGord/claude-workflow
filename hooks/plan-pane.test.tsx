@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { agentIdOf, daySpends, failedSpend, landedUsd, ledgerClosedOf, ledgerLandedOf, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, recentLand, spawnOf, startText } from './plan-pane'
+import { parseSession, agentIdOf, daySpends, failedSpend, landedUsd, ledgerClosedOf, ledgerLandedOf, ledgerParentOf, ledgerRunsOf, ledgerSpendOf, ledgerTotalsOf, landMs, parentUsd, projectDirOf, modelOf, movedTo, poolView, queueView, recentLand, spawnOf, startText } from './plan-pane'
 import { SINGLE_FOLD_LEVELS, SINGLE_FOLD_ORDER, TAB_LINKS, cells, dayOf, dayText, execDeadlineMs, failedHeading, fitCells, foldFlipped, nodeText, paneTree, prioGlyph, doneHeading, spanText, usdText } from './pane-view'
 import type { PaneEl, PaneNode } from './pane-view'
 import type { PoolState, SessionRow, Snapshot, View } from '../types'
@@ -1797,4 +1797,16 @@ test('the pool wait of an exec is read from the .wait file beside its exit-code 
   const texts = (await ui.findAll({ type: 'Text' })).map((t: any) => t.text as string)
   expect(texts).toContain('    ❯ node bin/dev.js slice-gate 1m15s/10m00s +1m10s pool wait')
   await ui.unmount()
+})
+
+// ENG-PARENT-HOLD-UNTIL-CONDITION: a blocked task the parent holds carries its condition on the session row
+test('a session row carries the condition of the parent\'s hold while the task stands at blocked', () => {
+  const file = (state: string, hold?: object) => JSON.stringify({
+    session_id: 's1', stack: [{ workflow: 'engine-task', current_state: state, state_visits: { [state]: 1 } }], active_frame: 0,
+    context: { task: 'T-HELD', ...(hold ? { parent_hold: hold } : {}) }, history: [], started_at: '2026-11-27T10:00:00.000Z',
+  })
+  const hold = { kind: 'until_done', value: 'DEP', text: 'DEP is done', since: '2026-11-27T10:00:00.000Z', deadline_s: 3600 }
+  expect(parseSession(file('blocked', hold))?.row?.held).toBe('DEP is done')
+  expect(parseSession(file('work', hold))?.row?.held).toBeUndefined()
+  expect(parseSession(file('blocked'))?.row?.held).toBeUndefined()
 })

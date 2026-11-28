@@ -82,6 +82,8 @@ export function staleNotice(engine: Engine, sessionId: string): string[] {
   try {
     const lines = engine.staleLines(sessionId, true);
     if (lines.length === 0) return [];
+    // a hold's lines (`NEEDS-PARENT … reason=hold`) are not a stalled agent: the advice below is for STALE ones
+    if (!lines.some(l => l.startsWith("STALE:"))) return lines;
     return [
       ...lines,
       "A STALE session's agent may be dead or stuck: SendMessage it; only a SendMessage that fails with an error means it is gone (no answer, or an ended-without-report notice, is not) → abort its session, or have a new agent continue it from status (the session holds the step).",
@@ -134,6 +136,15 @@ function unshownParentAnswers(engine: Engine, sessionId: string, body: string): 
   }
 }
 
+/** Counts the condition-met hold lines in `text` as handed (`Engine.markHoldsHanded`): called with the reply that is returned. */
+function markHeld(engine: Engine, sessionId: string, text: string): void {
+  try {
+    engine.markHoldsHanded(sessionId, text);
+  } catch {
+    // a notice never fails the call it rides on
+  }
+}
+
 /** The `OWED-DUE:` lines a dispatching session holds, unless `body` already shows them: an owed step stays in view until handed to the parent. */
 function unshownOwed(engine: Engine, sessionId: string, body: string): string[] {
   try {
@@ -170,7 +181,11 @@ function unshownRefresh(engine: Engine, sessionId: string, body: string): string
  */
 function unshownStale(engine: Engine, sessionId: string, body: string): string[] {
   const notice = staleNotice(engine, sessionId);
-  return notice.slice(0, -1).every(line => body.includes(line)) ? [] : notice;
+  return notice
+    .filter(line => !line.startsWith("A STALE session's"))
+    .every(line => body.includes(line))
+    ? []
+    : notice;
 }
 
 interface FormatOptions {
@@ -826,6 +841,7 @@ export function registerTools(
           ...historyBlock,
         ].join("\n");
 
+        markHeld(engine, sid, text);
         return { content: [{ type: "text", text }] };
       } catch (err) {
         return {
@@ -913,6 +929,7 @@ export function registerTools(
             body +
             (notices.length > 0 ? `\n\n${notices.join("\n")}` : "") +
             (status.driverCall ? `\n\n${status.driverCall}` : "");
+          markHeld(engine, sid, text);
           return { content: [{ type: "text", text }] };
         } catch (err) {
           return {
@@ -928,7 +945,7 @@ export function registerTools(
     "context_set",
     {
       description:
-        "Save key-value data in the session context for later use. A dispatcher's `tasks` entry (`ID=P driver=<id>`) whose id is not the agent linked with role `driver` to task session P is refused, naming the right id. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch). The key a state's `delivers:` names, written while the session stands at that state, is a DELIVERY: the answer says so, and warns when the session still owns a live pool waiter or lease (stop or await it before your last message).",
+        "Save key-value data in the session context for later use. A dispatcher's `tasks` entry (`ID=P driver=<id>`) whose id is not the agent linked with role `driver` to task session P is refused, naming the right id. A task session's `parent_answer` of `hold until_done: <queue id>` or `hold until_cmd: <command>` (optionally `hold deadline=<N>m|h …`, default 1h, at most 4h) holds a task standing at `blocked` until the engine sees the condition met; a `hold` with no condition, or off `blocked`, is refused, and any other answer ends the hold. When a following transition reads the key, put it in that transition's `set` (one call), or wait for this call to return before calling transition (separate message, not the same parallel batch). The key a state's `delivers:` names, written while the session stands at that state, is a DELIVERY: the answer says so, and warns when the session still owns a live pool waiter or lease (stop or await it before your last message).",
       annotations: ENGINE_STATE_ONLY,
       inputSchema: z
         .object({

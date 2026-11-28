@@ -1,4 +1,5 @@
 import { isClosingMove } from "./stations.js";
+import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -98,9 +99,21 @@ import {
   markQueue,
   owedDueLines,
   readQueue,
+  resolveRepo,
   staleTaskAfter,
   STALE_TASK_AFTER_DEFAULT_MIN,
 } from "./queue.js";
+import {
+  HOLD_CMD_TIMEOUT_MS,
+  HOLD_KEY,
+  HOLD_STATE,
+  holdOf,
+  holdVerdict,
+  isHoldAnswer,
+  parseHold,
+  type HoldVerdict,
+  type ParentHold,
+} from "./parent-hold.js";
 import {
   DISPATCHER_AFTER_KEY,
   DISPATCHER_AGENT_KEY,
@@ -300,6 +313,10 @@ export class Engine {
   // is this server's own, never one to take over.
   private readonly _inFlight = new Set<string>();
   private readonly _options: EngineOptions;
+  /** `<session>|<hold since>` of the holds whose condition-met line this process handed: the persisted `met_handed` follows. */
+  private readonly _holdHanded = new Set<string>();
+  /** The last answer of a held condition, so one call that renders it three times runs a command once. */
+  private readonly _holdChecked = new Map<string, { at: number; met: boolean }>();
   // The ledger's run times, re-read by its appended tail.
   private _estimates: Estimates | undefined;
 
@@ -1143,15 +1160,23 @@ export class Engine {
     const lines: string[] = [];
     const limit = this._staleTaskLimit(sessionId);
     for (const s of tree) {
+      const hold = descendantsOnly ? this._holdVerdict(s, now) : undefined;
+      if (hold?.kind === "silent") continue;
       const st = this.staleness(s, parents, now);
-      if (!st) continue;
       const of = s.parent_session_id ? `, child of ${s.parent_session_id}` : "";
       const agent = s.agent_id ? `, agent ${s.agent_id}` : "";
       const wait = driverWaitNote(s);
-      lines.push(
-        `STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}${wait}`,
-      );
-      if (descendantsOnly && typeof s.context.task === "string" && st.idle_s >= limit * 60) {
+      if (st)
+        lines.push(
+          `STALE: session ${s.session_id} (${where(s)}${of}${agent}) — ${staleNote(st)}${wait}`,
+        );
+      if (hold) lines.push(hold.line);
+      else if (
+        st &&
+        descendantsOnly &&
+        typeof s.context.task === "string" &&
+        st.idle_s >= limit * 60
+      ) {
         const state = s.stack[s.active_frame].current_state;
         lines.push(
           `NEEDS-PARENT task=${s.context.task} session=${s.session_id} reason=stale ${formatSeconds(st.idle_s)}, no engine call since ${st.since} state=${state} agent=${s.agent_id ?? "none"} see=state collect`,
@@ -1159,6 +1184,112 @@ export class Engine {
       }
     }
     return lines;
+  }
+
+  /**
+   * What the parent's hold on task session `s` means at `now`: undefined without a hold, outside `blocked`, or
+   * once its met condition was handed. Pure but for the command a held `until_cmd` runs (its answer kept 5 s).
+   */
+  private _holdVerdict(s: SessionState, now: number): HoldVerdict | undefined {
+    const hold = holdOf(s.context);
+    const task = s.context.task;
+    if (!hold || typeof task !== "string" || s.stack.length === 0) return undefined;
+    if (s.stack[s.active_frame]?.current_state !== HOLD_STATE) return undefined;
+    const handed =
+      hold.met_handed !== undefined || this._holdHanded.has(`${s.session_id}|${hold.since}`);
+    return holdVerdict(hold, task, s.session_id, this._holdMet(s, hold, now), handed, now);
+  }
+
+  /** Whether the hold's condition holds now; any read or run failure is not met. */
+  private _holdMet(s: SessionState, hold: ParentHold, now: number): boolean {
+    const key = `${s.session_id}|${hold.since}`;
+    const seen = this._holdChecked.get(key);
+    if (seen && Math.abs(now - seen.at) < 5000) return seen.met;
+    let met = false;
+    try {
+      // the task session's own `queue_file`, else its dispatcher's
+      const file =
+        s.context.queue_file ??
+        (s.parent_session_id
+          ? this._storage.read(s.parent_session_id)?.context.queue_file
+          : undefined);
+      const queue = typeof file === "string" ? readQueue(file) : undefined;
+      if (hold.kind === "until_done") {
+        const line = queue?.lines.find(l => l.id === hold.value);
+        met = (line ? line.status : queue?.archived.get(hold.value)) === "done";
+      } else {
+        const own = queue?.lines.find(l => l.id === s.context.task);
+        const cwd =
+          (queue && own ? resolveRepo(queue, own) : null) ??
+          (typeof s.context.project_root === "string" ? s.context.project_root : process.cwd());
+        met =
+          spawnSync("sh", ["-c", hold.value], {
+            cwd,
+            timeout: HOLD_CMD_TIMEOUT_MS,
+            stdio: "ignore",
+          }).status === 0;
+      }
+    } catch {
+      met = false;
+    }
+    this._holdChecked.set(key, { at: now, met });
+    return met;
+  }
+
+  /**
+   * Count the condition-met lines of `sessionId`'s held tasks that stand in `text` as handed: `text` is the reply a
+   * caller is about to receive, so a prompt rendered and thrown away (a `status` with a `key`, the read before a
+   * `transition`) hands nothing, and the next reply that carries the line is the one that does.
+   */
+  public markHoldsHanded(sessionId: string, text: string, now: number = Date.now()): void {
+    for (const id of activeSubtree(this._storage, sessionId).slice(1)) {
+      const s = this._storage.read(id);
+      const v = s ? this._holdVerdict(s, now) : undefined;
+      if (s && v?.kind === "met" && text.includes(v.line)) this._handHold(s);
+    }
+  }
+
+  /** Record that the condition-met line of `s`'s hold is handed: in memory at once, on the session after. */
+  private _handHold(s: SessionState): void {
+    const hold = holdOf(s.context);
+    if (!hold) return;
+    this._holdHanded.add(`${s.session_id}|${hold.since}`);
+    void this._storage
+      .update(s.session_id, cur => {
+        const h = cur && holdOf(cur.context);
+        return cur && h && h.since === hold.since
+          ? {
+              ...cur,
+              context: {
+                ...cur.context,
+                [HOLD_KEY]: { ...h, met_handed: new Date().toISOString() },
+              },
+            }
+          : null;
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * `session` with the hold a `parent_answer` records: the answer `hold ...` stores its condition as `parent_hold`
+   * (refused without one, or outside `blocked`); any other answer ends a hold. The empty clear after a relay leaves it.
+   */
+  private _withHold(session: SessionState, key: string, value: unknown): SessionState {
+    if (key !== "parent_answer" || typeof value !== "string" || value.trim() === "") return session;
+    if (!isHoldAnswer(value)) {
+      if (session.context[HOLD_KEY] === undefined) return session;
+      const context = { ...session.context };
+      delete context[HOLD_KEY];
+      return { ...session, context };
+    }
+    const state = session.stack[session.active_frame]?.current_state;
+    if (typeof session.context.task !== "string" || state !== HOLD_STATE)
+      throw new Error(
+        `hold refused: a hold applies to a task session standing at "${HOLD_STATE}" (this one stands at "${state ?? "none"}")`,
+      );
+    const parsed = parseHold(value, new Date());
+    if ("error" in parsed) throw new Error(parsed.error);
+    return { ...session, context: { ...session.context, [HOLD_KEY]: parsed.hold } };
   }
 
   /** Minutes a task session may stand STALE before it is raised: the dispatcher's queue header key, else the default. */
@@ -1273,7 +1404,9 @@ export class Engine {
       // an answer the engine holds is waiting for the dispatcher, not lost: no repeat of the question
       const answered =
         typeof s?.context.parent_answer === "string" && s.context.parent_answer.trim() !== "";
-      const line = s && ask && !answered ? unansweredAskLine(s, ask, now) : undefined;
+      // a held task waits for its condition, not for an answer: its hold speaks for it until the deadline
+      const held = s ? this._holdVerdict(s, now)?.kind === "silent" : false;
+      const line = s && ask && !answered && !held ? unansweredAskLine(s, ask, now) : undefined;
       if (line) lines.push(line);
     }
     return lines;
@@ -1646,7 +1779,7 @@ export class Engine {
   ): Promise<{ derived: string | undefined; delivery?: Delivery; note?: string }> {
     const session = this._storage.read(sessionId);
     if (!session) throw new Error(`Session "${sessionId}" not found`);
-    const keyed = this._withKey(session, key, value, actor);
+    const keyed = this._withHold(this._withKey(session, key, value, actor), key, value);
     const updated = this._withDelivered(keyed, key, value);
     const delivery = updated.delivery !== keyed.delivery ? updated.delivery : undefined;
 

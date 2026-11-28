@@ -12,6 +12,8 @@ export type SessionRow = {
   agent: string
   /** how many times the session has entered its current state */
   visit: number
+  /** the condition of the parent's hold on this blocked task (`context.parent_hold`); absent: no hold */
+  held?: string
   /** the last moves, oldest first */
   recent: { from: string; to: string; at: number }[]
   /** where the current state can go, from the workflow's graph (`name→target`, exec `code→target`); empty unknown */

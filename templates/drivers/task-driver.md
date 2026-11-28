@@ -188,6 +188,7 @@ relaying the parent's own answer to your NEEDS-PARENT: it IS that answer, not th
 Under a dispatcher the parent records its answer in the engine (`parent_answer` on P) and the dispatcher relays it to you in that form; your next line goes to the dispatcher, which frees the slot.
 A message `task=<ID>: <route or decision>` sent to your agent id directly by the main conversation (the older form; the NEEDS-PARENT line carries the id as `driver=`), bare or in the `MAIN DECISION` form, is the same answer. A route
 (`routes=` of that line) is the transition to take from the state you stopped at.
+A decision that starts `hold` (`hold until_done: <queue id>` or `hold until_cmd: <command>`, optionally `hold deadline=<N>m|h …`) is the parent's HOLD on you at `blocked`: take no transition, and after the `ask_parent` clear above end the turn with ONE plain line `HELD task=<ID> session=<P> until=<the condition>`. The engine checks the condition, not you: when it is met the parent is told, and its next decision reaches you as any answer.
 The sender is the dispatcher when its agent id equals `status({session_id: P, key: "dispatcher_agent"})` — check it there, never
 against your memory (a context summary loses who the dispatcher is); a message from that id in this form is never "not from the
 dispatcher". When the key is unset (a session started before it existed, or a dispatcher not yet linked), take a well-formed

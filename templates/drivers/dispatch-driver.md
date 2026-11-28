@@ -72,6 +72,11 @@ then needs nothing.
   of `status({session_id: <P>, key: "routes"})` (the transitions of P's state, read now, never from memory).
   The driver's own text stays verbatim; a line that already ends with a `driver=` / `routes=` field gets neither again.
   Take no transition; the task keeps its slot. Never answer it yourself, never read the file it names.
+- **`HELD task=<ID> session=<P> until=…`** (a driver's plain line after the parent's `hold` on its blocked task): the task stays,
+  keeping its slot, until its condition is met: take no transition, hand nothing back, relay nothing. The ENGINE checks the condition
+  at each `collect` and lists `NEEDS-PARENT task=<ID> session=<P> reason=hold condition met: …` (once) or, past the hold's deadline,
+  `reason=hold <age>, condition not met: …; still hold?` (each visit): both are NEEDS-PARENT lines like any other (hand back with `driver=` and `routes=`).
+  While a hold is unmet and inside its deadline the engine lists no stale or unanswered line for that task: do not ask its agent where it stands.
 - **Parent answers held by the engine** (`PARENT-ANSWER: task=<ID> session=<P> driver=<id>: <text>` lines under "Parent answers
   the engine holds" in the prompt, also main's message `answer`, on which you read `status({session_id: D})`): main answers a
   NEEDS-PARENT by recording the answer on the task session (`parent_answer`), never by SendMessage to the driver. For EACH line,

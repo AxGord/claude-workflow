@@ -689,7 +689,8 @@ export function paneTree(input: PaneInput): PaneNode {
     const whereOf = (id: string) => {
       const p = pipelineOf.get(id)
       const leaf = p ? leafOf(p.id) : undefined
-      return !p ? 'no pipeline' : leaf && leaf.id !== p.id ? `${p.state} › ${leaf.state}` : p.state
+      const at = !p ? 'no pipeline' : leaf && leaf.id !== p.id ? `${p.state} › ${leaf.state}` : p.state
+      return p?.held ? `${at} · held until ${p.held}` : at
     }
     const sinceOf = (id: string) => {
       const p = pipelineOf.get(id)

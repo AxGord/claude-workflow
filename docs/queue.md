@@ -623,6 +623,13 @@ dispatcher:
   - A `transition` or `status` reply of the dispatching session carries each held `PARENT-ANSWER:` line its body does not already show (a revisit's short reply).
   - The dispatcher sends the driver `MAIN DECISION (quoted, the main conversation's own word): task=<ID>: <text>` and clears the key.
   - The driver then reports to the dispatcher, which frees the slot: no driver notification reaches the main conversation.
+- A blocked task that waits for something is HELD, with a condition the engine checks: `parent_answer` of `hold until_done: <queue id>` (that line reached `done`) or `hold until_cmd: <command>` (run in the task's repo, exit 0 = met).
+  - `hold deadline=<N>m|h until_…` sets how long the stale and `UNANSWERED` reminders stay silent: default 1 hour, at most 4 hours.
+  - A hold with no condition, or on a task not standing at `blocked`, is refused. Any other answer ends the hold; the empty clear after a relay leaves it.
+  - The line keeps its slot. The driver answers `HELD task=<ID> session=<P> until=…`, the dispatcher takes no action on it.
+  - `collect` checks every hold on each visit (a queue read, or the command with a 5 second timeout) and lists `NEEDS-PARENT task=<ID> session=<P> reason=hold condition met: <condition>`. It counts as handed only when a `status` or `transition` reply carrying the line is returned (`met_handed` on the hold, kept over a restart); a prompt that was rendered and dropped hands nothing.
+  - Past the deadline the reminder returns, each visit, as `reason=hold <age>, condition not met: <condition>; still hold?`: a reminder is never silenced for good. A new `hold` restarts the deadline.
+  - The plan pane's running row of a held task reads `held until <condition>`.
 - Unlike `driver:` it records no `agent_step` and changes no wake rule of the session's children. A workflow declares `driver:` or `dispatcher:`, not both; an unknown `after` state fails the load.
 
 **What the agent does** (`templates/drivers/dispatch-driver.md`)
@@ -644,6 +651,7 @@ dispatcher:
 | Message | When | The main conversation's answer |
 |---|---|---|
 | a driver's `NEEDS-PARENT … driver=<id> routes=<a\|b\|c>` line | a task needs a decision (the dispatcher repeats it once, with `reason=unanswered <n>`, when no answer moved the task for over 10 minutes) | `context_set` of `parent_answer` on the task session (a route only from `routes=`); the reply names the dispatcher to wake. The engine holds it until relayed (see above) |
+| `NEEDS-PARENT task=<ID> session=<P> reason=hold condition met: …` (or `reason=hold <age>, condition not met: …; still hold?` past the deadline) | the condition of the parent's hold on a blocked task is met, or its deadline passed unmet | a route as for any `NEEDS-PARENT`; or `hold` again |
 | `NEEDS-PARENT task=<ID> session=<P> reason=stale …` | a task session stale for `stale_task_after` minutes (queue header, whole number of 1 or more, default 60); `collect` lists it after the `STALE:` line, handed back once per session | `status` of P, answer its driver, or tell the user |
 | `LESSONS lands=<n> session=<D>` + the drivers' last lines | every `lessons_every` lands (a queue header key, a whole number of 1 or more, default 5; `queue_next` refuses another value) | judge each line as the `collect` prompt says for a landed task |
 | `HANDOVER session=<D> state=<s> …` | a state it does not drive: `paused`, `pick_failed`, `cross_check`, `report` | drive that state; back at `dispatch` or `collect`, send `continue` |
