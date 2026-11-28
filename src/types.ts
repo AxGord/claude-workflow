@@ -367,6 +367,10 @@ export const StateDefinitionSchema = z
     // "Revisit #N" line, for per-visit data such as an exec's {{stdout}}
     revisit_prompt: z.string().optional(),
 
+    // Names of the prompt's template vars that are a SAFETY SIGNAL (a held window, a gate): the reply of a revisit
+    // (`Revisit #N` / `revisit_prompt` / a digest) carries a one-line notice for each that is non-empty
+    signal_vars: z.array(z.string().regex(/^\w+$/u)).optional(),
+
     // seconds the state may go with no engine call before `sessions` / `status` mark the session
     // STALE (0 = never); unset = the state type's default (`STALE_AFTER_DEFAULTS` in stale.ts)
     stale_after: z.number().int().nonnegative().optional(),

@@ -435,6 +435,20 @@ They come from the session's last action result (`last_action_result` in the ses
 
 Action states can be chained — `exec` → `exec` → `fetch` → `prompt` — up to 20 steps without agent involvement.
 
+### `signal_vars` — a safety signal on a revisit
+
+A revisit's short reply drops the prompt, and with it a `{{var}}` that must not be missed (a held window, a gate). A state lists such vars in `signal_vars`; the reply of a revisit (`Revisit #N`, a `revisit_prompt`, a digest) then adds `SIGNAL <name>: <value>` for each that is non-empty.
+
+- The value is one line (newlines become ` | `), cut at 300 characters with `… (cut; status() shows it whole)`; `none` and an empty value add nothing.
+- A reply that already shows the value as rendered (a `revisit_prompt` rendering it) adds nothing. A full prompt and `status()` show the var itself.
+- Bundled `collect` marks `stderr`, the last pick's admission summary; `pick_failed` marks `stdout` and `stderr`, `paused` marks `stderr` (the pause reason).
+
+```yaml
+collect:
+  signal_vars: [stderr]
+  prompt: "Last pick:\n{{stderr}}\n..."
+```
+
 ### `revisit_prompt` — per-visit data on a revisit
 
 On a revisit of a prompt state the engine sends only "Revisit #N — follow the instructions from your first visit". A state whose prompt carries per-visit data (for example the `{{stdout}}` of the exec before it) can set `revisit_prompt`, a template rendered with the same variables as `prompt`, shown on revisits instead of that line.

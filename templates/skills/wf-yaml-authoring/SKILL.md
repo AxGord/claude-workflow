@@ -138,6 +138,13 @@ latest exec, `{{context.*}}`). Use it when a revisit must carry per-visit data w
 resending the whole prompt. `full_on_revisit` takes precedence; `status()` still returns the
 full prompt. Absent = the generic line. Needs an engine that knows the field.
 
+**signal_vars** (per-state list of var names, prompt states): the prompt vars that are a safety
+signal (a held window, a gate, a failure text: bundled `collect`, `pick_failed` and `paused` mark `stderr`). A revisit's short reply
+(`Revisit #N`, a `revisit_prompt`, a digest) drops the prompt, so it adds one
+`SIGNAL <name>: <value>` line (one line, cut at 300 characters with a pointer to `status()`) for
+each listed var that is non-empty (not `none`) and not already in the reply as rendered. A full prompt or `status()` shows the var itself. Needs an engine that
+knows the key.
+
 **ask: parent** (per-state tag): the state asks its parent a question. Entering it logs an `ask` event (the state name), leaving it an `answer`; the dashboard's event log (`/api/events`) carries the pair. Needs an engine that knows the key. A question from ANY state: a driver sets the context key `ask_parent` (one `context_set`) at a hand-back — it is OPEN while the key holds text and the session has not moved or ended since that write; the session's next move or end (the parent's own `transition` on it) or the key cleared to `""` is the `answer`. A stale key is ignored.
 
 **human** (per prompt state; `{ question, show?, answer_key?, passes?, moved?, stop? }`): a human wait — the task stops for its owner, not an agent. Entering it (an agent's transition or an exec's route) records the rendered question and `show` links on the session; a queue task's line goes `awaiting` and gives its window slot back (it keeps its `touches:`). Each transition is an answer: the owner records one with the `answer` tool or the dashboard's `⏸ Awaiting you` form; a move out without it, or by another route, is refused. The next pick resumes answered lines before any pending one (priority, then the longest wait; a `resume=<P>` row: spawn the driver from `driver_call`, start nothing), and the driver takes the answer's route, the text written into `answer_key` (default `human_answer`). `passes` = the answers that pass the line's `human_gate:` (a gated line's `done` mark is refused until one did); `moved` = the state a passing answer enters first when HEAD moved during the wait; `stop` = a command run once when the session ends (what the wait holds: a preview server). The state's `max_visits` caps the owner's rounds; every other state's `max_visits` counts from the last answer. Not STALE until the answered line is resumed. A `stop` needs exec consent (untrusted project file not loaded; `create` / `modify` refuse it).

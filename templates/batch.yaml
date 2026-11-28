@@ -169,6 +169,8 @@ states:
     default: pick_failed
 
   pick_failed:
+    # a retry that fails again is a new failure: its text must reach the agent on the revisit
+    signal_vars: [stdout, stderr]
     prompt: |-
       The pick failed (exit {{exit_code}}):
       {{stdout}}
@@ -182,6 +184,8 @@ states:
   paused:
     # waits for the user, not for an agent
     stale_after: 0
+    # the pause reason (it changes between pauses) rides on the revisit's reply
+    signal_vars: [stderr]
     prompt: |-
       The queue is paused (`batch_size: 0`) and none of its tasks runs:
       {{stderr}}
@@ -225,6 +229,8 @@ states:
       dispatched: collect
 
   collect:
+    # the pick's summary (a held window, a gate) must reach the agent on a revisit too, where the prompt is not shown
+    signal_vars: [stderr]
     prompt: |-
       Task sessions: `status({session_id: "{{session_id}}", key: "tasks"})` (ID=P). Last pick:
       {{stderr}}

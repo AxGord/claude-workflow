@@ -417,6 +417,12 @@ export function formatStatus(status: StatusResult, opts: Partial<FormatOptions> 
     if (digestable) deliveredFullPrompts.add(digestKey);
   }
 
+  // a short form drops the prompt, and with it a var the state marked as a safety signal
+  if (shortForm) {
+    const shown = parts.join("\n");
+    for (const n of status.signalNotices ?? []) if (!shown.includes(n.value)) parts.push(n.line);
+  }
+
   if (status.capWarning) {
     parts.push("");
     parts.push(`WARNING: ${status.capWarning}`);

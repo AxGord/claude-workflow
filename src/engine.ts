@@ -192,6 +192,8 @@ export interface StatusResult {
   readonly capWarning?: string;
   /** `revisit_prompt` of the state, rendered with the same variables as `prompt`. */
   readonly revisitPrompt?: string;
+  /** One line per non-empty var the state's `signal_vars` names: what a short-form reply must still carry. */
+  readonly signalNotices?: readonly SignalNotice[];
   /**
    * `start` of a workflow with a `driver:` — the Agent call that spawns it (src/driver.ts); under a
    * `dispatcher:` in force, the dispatcher's call: at `start`, and on the reply that leaves its `after` state.
@@ -206,6 +208,41 @@ interface EnteredTarget {
   readonly visits: number;
   /** History detail when the move was rerouted past an exhausted state. */
   readonly exhausted?: string;
+}
+
+export interface SignalNotice {
+  readonly line: string;
+  /** The var's value as the prompt renders it: a reply that already shows it needs no line. */
+  readonly value: string;
+}
+
+/** Longest value a signal notice quotes; the rest is cut, and the line says so. */
+const SIGNAL_NOTICE_MAX = 300;
+const SIGNAL_NOTICE_CUT = "… (cut; status() shows it whole)";
+
+/**
+ * `SIGNAL <var>: <value on one line>` for each of `names` whose value in `vars` is neither empty nor `none`
+ * (the word a lazy list var renders for nothing).
+ */
+export function signalNoticeLines(
+  names: readonly string[] | undefined,
+  vars: Record<string, unknown>,
+): SignalNotice[] | undefined {
+  if (names === undefined || names.length === 0) return undefined;
+  const lines: SignalNotice[] = [];
+  for (const name of names) {
+    const raw = vars[name];
+    if (typeof raw !== "string" && typeof raw !== "number" && typeof raw !== "boolean") continue;
+    const value = String(raw).trim();
+    if (value === "" || value === "none") continue;
+    const flat = value.replace(/\s*\n\s*/gu, " | ");
+    const shown =
+      flat.length > SIGNAL_NOTICE_MAX
+        ? `${flat.slice(0, SIGNAL_NOTICE_MAX)}${SIGNAL_NOTICE_CUT}`
+        : flat;
+    lines.push({ line: `SIGNAL ${name}: ${shown}`, value });
+  }
+  return lines.length > 0 ? lines : undefined;
 }
 
 const MAX_ACTION_CHAIN = 20;
@@ -3514,6 +3551,7 @@ export class Engine {
       capWarning: this._capWarning(session, frame),
       revisitPrompt:
         state?.revisit_prompt === undefined ? undefined : render(state.revisit_prompt, vars),
+      signalNotices: signalNoticeLines(state?.signal_vars, vars),
     };
   }
 }
