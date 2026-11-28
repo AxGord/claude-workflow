@@ -1,12 +1,13 @@
 // The curator's plan (what the judge decided: per-job yield, edit ops, proposals, decisions for the user), its
 // check, and the APPLY step: under the default consent (`edits: propose`) nothing is applied and every op is a
 // proposal; under `edits: direct` the mechanical moves are applied, a text edit only once the verifier passed it and
-// never to memory when it changes a rule's meaning nor to a `preferences-*` skill. Each applied op is one commit of
-// the target's shadow history (curator-history.ts).
+// never to memory when it changes a rule's meaning, to a `preferences-*` skill, nor to a skill that has a bundled
+// copy. Each applied op is one commit of the target's shadow history (curator-history.ts).
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CuratorConfig } from "./curator.js";
-import { historyEdit, historyRevert } from "./curator-history.js";
+import { historyEdit, historyFiles, historyRevert } from "./curator-history.js";
 
 export const OPS = ["move-index", "move-file", "replace", "revert"] as const;
 export type OpName = (typeof OPS)[number];
@@ -183,12 +184,65 @@ function dropLine(file: string, line: string): void {
   fs.writeFileSync(file, lines.join("\n"));
 }
 
+/** The engine checkout (or install) whose `templates/` hold the bundled skills; `src/` and `build/` sit beside it. */
+const ENGINE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/** The bundled copy of a skill (`templates/skills` or `templates/skills-stack`), or undefined when it has none. */
+function bundledCopy(name: string): string | undefined {
+  if (name === "" || name === "..") return undefined;
+  return ["skills", "skills-stack"]
+    .map(set => path.join(ENGINE_ROOT, "templates", set, name))
+    .find(d => fs.existsSync(d));
+}
+
+/** The skill a file of a skills target belongs to (its first path segment under the target). */
+const skillOf = (target: string, file: string): string =>
+  path.relative(path.resolve(target), path.resolve(file)).split(path.sep)[0] ?? "";
+
+/**
+ * Why a change to a skill that has a bundled copy is not applied live: the live copy is the source of truth but the
+ * bundled one is the shipped snapshot, and an edit of one side alone makes `check-skill-sync.sh` report drift and
+ * refuse every engine commit. The curator edits nothing in a repo, so it proposes the edit for an engine-task line
+ * that changes the bundled copy; the land syncs the live one.
+ */
+function bundledRefusal(
+  op: PlanOp,
+  targets: { readonly memory: readonly string[]; readonly skills: readonly string[] },
+  dir?: string,
+): string | null {
+  const touched: Array<[string, string]> = [];
+  const add = (file: string | undefined): void => {
+    if (file === undefined) return;
+    const t = targets.skills.find(s => inside(s, file));
+    if (t !== undefined) touched.push([t, skillOf(t, file)]);
+  };
+  if (op.op === "revert") {
+    const t = targets.skills.find(s => path.resolve(s) === path.resolve(op.target ?? ""));
+    if (t !== undefined) {
+      try {
+        for (const f of historyFiles(t, op.commit as string, dir))
+          touched.push([t, f.split("/")[0] ?? ""]);
+      } catch {
+        // an unknown commit fails in the apply step with its own reason
+      }
+    }
+  } else {
+    add(op.file);
+    add(op.to_dir !== undefined ? path.join(op.to_dir, "x") : undefined);
+  }
+  const hit = touched.find(([, name]) => bundledCopy(name) !== undefined);
+  if (hit === undefined) return null;
+  const set = path.basename(path.dirname(bundledCopy(hit[1]) as string));
+  return `skill ${hit[1]} has a bundled copy: proposed as an engine-task line that edits templates/${set}/${hit[1]}; the land syncs the live copy`;
+}
+
 /** Why an op may not be applied now, or null. */
 function refusal(
   op: PlanOp,
   config: CuratorConfig,
   targets: { readonly memory: readonly string[]; readonly skills: readonly string[] },
   verdicts: Readonly<Record<string, string>>,
+  dir?: string,
 ): string | null {
   if (config.edits !== "direct")
     return "consent: propose (the default; `edits: direct` in the config applies)";
@@ -211,7 +265,7 @@ function refusal(
     if (targets.skills.includes(target) && skill.startsWith("preferences"))
       return "a preferences skill: the user's own taste, proposed only";
   }
-  return null;
+  return bundledRefusal(op, targets, dir);
 }
 
 function message(run: string, op: PlanOp): string {
@@ -311,7 +365,7 @@ export function applyPlan(
   const all = [...targets.memory, ...targets.skills];
   const targetOf = (f: string): string => all.find(t => inside(t, f)) as string;
   for (const op of plan.ops) {
-    const why = refusal(op, config, targets, verdicts);
+    const why = refusal(op, config, targets, verdicts, dir);
     if (why !== null) {
       proposed.push({ id: op.id, job: op.job, why, op });
       continue;

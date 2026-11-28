@@ -102,6 +102,14 @@ export function historyDiff(target: string, rev: string, dir: string = stateDir(
   return git(target, dir, ["show", "--format=%H %s%n%n%b", rev]);
 }
 
+/** The files (relative to the target) one commit touched. */
+export function historyFiles(target: string, rev: string, dir: string = stateDir()): string[] {
+  const sha = git(target, dir, ["rev-parse", "--verify", `${rev}^{commit}`]);
+  return git(target, dir, ["diff-tree", "--no-commit-id", "--name-only", "-r", sha])
+    .split("\n")
+    .filter(f => f !== "");
+}
+
 /**
  * Undo one commit in the target (the others stay): the files it touched are first committed as found (a later hand
  * edit is kept in the history), then the reverse of that commit alone is applied. A revert whose lines were changed
@@ -109,9 +117,7 @@ export function historyDiff(target: string, rev: string, dir: string = stateDir(
  */
 export function historyRevert(target: string, rev: string, dir: string = stateDir()): string {
   const sha = git(target, dir, ["rev-parse", "--verify", `${rev}^{commit}`]);
-  const files = git(target, dir, ["diff-tree", "--no-commit-id", "--name-only", "-r", sha])
-    .split("\n")
-    .filter(f => f !== "");
+  const files = historyFiles(target, sha, dir);
   commitFiles(target, dir, files, "baseline: the files as found before a revert");
   try {
     git(target, dir, ["revert", "--no-edit", sha]);

@@ -863,6 +863,7 @@ A job's options other than these are its own: a `notes:` text is guidance the ju
 
 - `edits: propose` applies nothing: every op is a proposal.
 - `edits: direct` applies moves, and a verified `replace` of a tool skill. A memory edit that changes a rule's meaning and a `preferences-*` skill stay proposals.
+- A change to a skill that has a bundled copy (`templates/skills`, `templates/skills-stack`) is never applied live, in any op (a `revert` of a commit that touched one included): it is a proposal that names the bundled file, for an engine-task line whose land syncs the live copy. A live-only edit would leave `check-skill-sync.sh` reporting drift and refuse every engine commit.
 - Each applied op is one commit of a shadow git directory, `<STATE_DIR>/curator-history/<target>.git`, used with `--work-tree=<target>`. The target never gets a `.git`.
 - `wf-curator history log|diff|revert --target <dir> [--rev <sha>]` reads it or undoes one edit; a revert whose lines changed since is refused.
 - A skills edit names the error shape it should reduce; the next run measures that shape and proposes a revert when it did not go down.
