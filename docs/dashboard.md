@@ -17,6 +17,8 @@ The pane's parts:
 - **Plan** — for a session whose root workflow has a work queue (`context.queue_file`). Its sections, top to bottom:
   - `▶ Running n/window`: each line's pipeline state and time in it.
   - `⏸ Awaiting you (n)`, only while lines wait for their owner (status `awaiting`, § Human waits of [Queue](queue.md#human-waits)), the oldest wait first. Per line: its id, how long it has waited (or `answered <route> · resumes first`), the question, and each link or file to show. These lines hold no slot: they are not in Running.
+    - Each row folds on its own: its header line carries `▾` / `▸`, and folded the row is that one line (bar, kind, id, state), with no question or link.
+    - A row still waiting starts open, an answered one starts folded (nothing is left to answer). A row the person folded or opened keeps that when the answer arrives and across refreshes; its fold key (`await-<id>`) leaves with the wait.
   - `⏭ Next`: lines whose `after:` are done, in the picker's order: priority, then file order.
     - While no line is admittable but lines run, it lists what the running ones unblock instead: the pending lines kept out only by them, in the order the picker admits them once they end.
       - GET `/api/queue` gives each such line `unblockOrder`, from the picker's own pass with the running lines done.

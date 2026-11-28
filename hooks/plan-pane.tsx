@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
 import type { AgentSeen, AwaitingLine, DaySpend, FailedLine, FailedSpend, Land, PoolCounts, PoolLine, PoolState, PoolView, QueueLine, QueueView, SessionRow, Snapshot, View } from '../types'
-import { age, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOfRow, spawnLine, stagesOfState, statusBandTree, TONE, two } from './pane-view'
+import { age, awaitRowToggled, dayOf, DASHBOARD, endLine, FAILED_DAYS, foldFlipped, handBackLine, LAND_DAYS, landDayToggled, movesLine, PANE_TITLE, paneTree, roleOfRow, spawnLine, stagesOfState, statusBandTree, TONE, two } from './pane-view'
 import type { Move, PaneAction, PaneEl, PaneNode } from './pane-view'
 
 const PANE = 'workflow-plan'
@@ -22,7 +22,7 @@ const agentsSeen = atom({ plugin: 'workflow', key: 'agentsSeen' } as const, {}, 
 const poolAtom = atom({ plugin: 'workflow', key: 'pool' } as const, null, { shape: 'pool-1' })
 /** The pool's `held`/`budget` as of the last refresh with the pane open on any tab: the `Pool <held>/<budget>` tab label (null: not read, or the dashboard did not answer). */
 const poolCountsAtom = atom({ plugin: 'workflow', key: 'poolCounts' } as const, null, { shape: 'pool-counts-1' })
-/** The Plan tab sections whose fold the person flipped (running, next, lands, failed) and the `+N more` rows whose list the person opened (`next-more`, `waiting-more`, `sessions-more`): none by default, so all sections show but FOLDED_BY_DEFAULT ones, and every capped list stops at its cap. A Done day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date. */
+/** The Plan tab sections whose fold the person flipped (running, next, lands, failed) and the `+N more` rows whose list the person opened (`next-more`, `waiting-more`, `sessions-more`): none by default, so all sections show but FOLDED_BY_DEFAULT ones, and every capped list stops at its cap. A Done day holds `+lands-DD.MM` (opened) or `-lands-DD.MM` (folded) instead, since its default moves with the date; an Awaiting row holds `+await-<id>` / `-await-<id>` for the same reason (its default flips when the answer arrives). */
 const folded = atom({ plugin: 'workflow', key: 'folded' } as const, [], { shape: 'folded-2' })
 /** The session whose card is open in the Sessions tab ('' none). */
 const expanded = atom({ plugin: 'workflow', key: 'expanded' } as const, '', { shape: 'expanded-1' })
@@ -501,6 +501,12 @@ export function landMs(at: string, now: number): number {
   return t > now + 24 * 3600 * 1000 ? new Date(year - 1, Number(m[2]) - 1, Number(m[1]), Number(m[3]), Number(m[4])).getTime() : t
 }
 
+/** The fold list without the signed keys (`+await-<id>` / `-await-<id>`) of lines that no longer wait: the folded atom does not grow, and a line that waits again starts from its default. */
+export function pruneAwaitFolds(foldedKeys: string[], liveIds: Set<string>): string[] {
+  const gone = (k: string) => /^[+-]await-/.test(k) && !liveIds.has(k.slice('+await-'.length))
+  return foldedKeys.some(gone) ? foldedKeys.filter(k => !gone(k)) : foldedKeys
+}
+
 /** The fold list without the signed keys (`+lands-DD.MM` / `-lands-DD.MM`) of days outside `liveDays`: a key kept past its day would, a year on, fold or open the same DD.MM. An empty `liveDays` (a failed git read) drops nothing. */
 export function pruneLandFolds(foldedKeys: string[], liveDays: Set<string>): string[] {
   if (liveDays.size === 0) return foldedKeys
@@ -842,6 +848,9 @@ async function refresh($: any): Promise<Snapshot> {
   await update($, snap, () => s)
   // a day's fold key leaves with the day: the folded atom does not grow
   await update($, folded, f => pruneLandFolds(f, new Set(s.lands.map(l => l.at.slice(0, 5)))))
+  // an Awaiting row's fold key leaves with the wait; a snapshot with no queue read drops nothing
+  const queue = s.queue
+  if (queue) await update($, folded, f => pruneAwaitFolds(f, new Set((queue.awaiting ?? []).map(a => a.id))))
   // remember each linked agent's slice and where it stood: its session file is gone once the pipeline ends
   const seen: Record<string, AgentSeen> = {}
   for (const r of s.sessions) {
@@ -1233,6 +1242,8 @@ function act($: any, a: PaneAction): Promise<unknown> {
       return update($, folded, f => foldFlipped(f, a.key))
     case 'landDay':
       return update($, folded, f => landDayToggled(f, a.key, a.today))
+    case 'awaitRow':
+      return update($, folded, f => awaitRowToggled(f, a.key, a.answered))
     case 'tab':
       return a.id === 'pool' ? openPool($) : update($, view, () => a.id)
     case 'expand':

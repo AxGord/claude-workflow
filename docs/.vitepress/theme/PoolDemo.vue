@@ -4,7 +4,7 @@
 // `poolStateAt` of src/replay.ts). Play it, or drag the slider; it opens on the busiest moment (the most waiters).
 import { withBase } from "vitepress";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { foldFlipped, landDayToggled, paneTree, type PaneAction } from "../../../hooks/pane-view";
+import { awaitRowToggled, foldFlipped, landDayToggled, paneTree, type PaneAction } from "../../../hooks/pane-view";
 import type { View } from "../../../types";
 import { advance, elapsed, poolCountsAt, poolStateAt, snapshotAt, type ReplayFile } from "../../../src/replay";
 import PaneView from "./PaneView.vue";
@@ -76,6 +76,7 @@ function toggle(): void {
 function act(a: PaneAction): void {
   if (a.kind === "fold") ui.folded = foldFlipped(ui.folded, a.key);
   else if (a.kind === "landDay") ui.folded = landDayToggled(ui.folded, a.key, a.today);
+  else if (a.kind === "awaitRow") ui.folded = awaitRowToggled(ui.folded, a.key, a.answered);
   else if (a.kind === "tab") ui.tab = a.id;
   else if (a.kind === "expand") ui.expanded = ui.expanded === a.id ? "" : a.id;
 }
