@@ -89,6 +89,13 @@ The engine's own slice workflow is a tracked file: `.claude/workflows/engine-tas
 - `regate_gate` has `max_visits: 2` with `on_exhausted: blocked`: a third `regate` runs nothing, and `parent_edited`, `close` or `stop` is the way on.
 - `src/task-blocked-regate-route.test.ts` pins it, with the relay form of the dispatcher (`dispatch-driver.md`, `task-driver.md`, `agents/driver.md`).
 
+**A gate killed by SIGKILL**
+
+- `project_gate`, `project_gate_rebased` and `regate_gate` exit 137 when `npm run check` was killed (SIGKILL), not 1: a kill is no red test.
+- Exit 137 of `project_gate` and `project_gate_rebased` goes to its own `station: false` retry state (`max_visits: 1`, `on_exhausted: gate_failed`) and back to the same gate: one re-run, no parent round. A second kill in the session reaches `gate_failed`, whose prompt names the 137 route.
+- `regate_gate` is not retried: the parent started it and holds its two visits. Its output and `regate_red` name the kill.
+- `src/gate-137-retry.test.ts` pins it.
+
 **The worker guide and the memory index**
 
 A slice started from another project's session loads that project's `CLAUDE.md` and memory, never this repository's. The guide for it is `docs/worker-guide.md`, a file of its own and under 6 KB: this page is too long to read first.

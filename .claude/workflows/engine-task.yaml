@@ -252,6 +252,7 @@ states:
       dirty=$(git status --porcelain)
       [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
       log=$(mktemp); "$CHECK" >"$log" 2>&1; rc=$?
+      if [ "$rc" -eq 137 ]; then tail -20 "$log"; rm -f "$log"; echo "npm run check killed (exit 137, SIGKILL): not a red test"; exit 137; fi
       if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
       grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
       echo "gate green: $(git log --oneline -1)"
@@ -261,7 +262,21 @@ states:
     on_timeout: gate_failed
     cases:
       "0": review_route
+      "137": project_gate_retry
     default: gate_failed
+
+  project_gate_retry:
+    station: false
+    type: exec
+    # The gate's check was killed (exit 137: SIGKILL), which is no red test: the same gate runs once more with no parent round.
+    # A second kill in the session finds this state spent (one visit) and `gate_failed` names it.
+    max_visits: 1
+    on_exhausted: gate_failed
+    command: |-
+      echo "gate killed (exit 137): running it again once"
+    timeout: 20000
+    on_success: project_gate
+    on_error: gate_failed
 
   review_route:
     station: false
@@ -332,6 +347,7 @@ states:
       dirty=$(git status --porcelain)
       [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
       log=$(mktemp); "$CHECK" >"$log" 2>&1; rc=$?
+      if [ "$rc" -eq 137 ]; then tail -20 "$log"; rm -f "$log"; echo "npm run check killed (exit 137, SIGKILL): not a red test"; exit 137; fi
       if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
       grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
       echo "gate green: $(git log --oneline -1)"
@@ -341,13 +357,28 @@ states:
     on_timeout: gate_failed
     cases:
       "0": project_land
+      "137": project_gate_rebased_retry
     default: gate_failed
+
+  project_gate_rebased_retry:
+    station: false
+    type: exec
+    # As project_gate_retry, for the gate after a rebase: one re-run of its own gate, then `gate_failed` names the kill.
+    max_visits: 1
+    on_exhausted: gate_failed
+    command: |-
+      echo "gate killed (exit 137): running it again once"
+    timeout: 20000
+    on_success: project_gate_rebased
+    on_error: gate_failed
 
   regate_gate:
     type: exec
     # The parent's `regate` from `blocked`: the gate of project_gate on the branch as it stands (a red test outside the task's
     # diff, the fix visits spent). Green goes where any green gate goes (review_route: a review visit or the land); red
     # returns to `blocked` through `regate_red`; a third visit follows `on_exhausted` back to `blocked` and runs nothing.
+    # A kill (exit 137) is not retried here: the parent started this regate and holds its two visits, so a silent re-run would
+    # spend one of them unseen. The output names `exit 137, SIGKILL`, and `regate_red` says it is no red test.
     max_visits: 2
     on_exhausted: blocked
     cwd: "{{context.wt}}"
@@ -357,6 +388,7 @@ states:
       dirty=$(git status --porcelain)
       [ -z "$dirty" ] || { echo "refused: the worktree is not clean"; echo "$dirty" | head -10; exit 3; }
       log=$(mktemp); "$CHECK" >"$log" 2>&1; rc=$?
+      if [ "$rc" -eq 137 ]; then tail -20 "$log"; rm -f "$log"; echo "npm run check killed (exit 137, SIGKILL): not a red test"; exit 137; fi
       if [ "$rc" -ne 0 ]; then tail -60 "$log"; rm -f "$log"; echo "npm run check failed (exit $rc)"; exit 1; fi
       grep -a ' Tests ' "$log" | tail -2; rm -f "$log"
       echo "gate green: $(git log --oneline -1)"
@@ -373,6 +405,8 @@ states:
       The gate of {{context.task}}, run again on the unchanged branch, is red (exit {{exit_code}}):
       {{stdout}}
       {{stderr}}
+      Exit 137 (the output says "killed ... SIGKILL") is a kill of the check, not a red test: say so in the NEEDS-PARENT line
+      (`reason=regate killed 137`); the parent may `regate` again while a visit is left.
       Transition `blocked` at once: the parent reads this output there. A driver names it in its NEEDS-PARENT line:
       `reason=regate red`, `see=<the last red line above>`.
     transitions:
@@ -386,6 +420,8 @@ states:
       - 1 (`npm run check` red) or 3 (not one commit / a dirty worktree) → `fix`: the output above is the
         worker's fix round.
       - 124 (timeout) → `retry` once; again → `close`.
+      - 137 (the check was killed by SIGKILL, and the gate already re-ran once on its own) → not a red test, so never `fix`:
+        `close` with `reason=gate killed 137`.
       - the failure is outside the slice (master itself red, the environment) → `close` with the reason.
     transitions:
       fix: work

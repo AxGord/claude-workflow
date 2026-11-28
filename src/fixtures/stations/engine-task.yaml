@@ -79,14 +79,30 @@ states:
     type: exec
     cases:
       "0": review
+      "137": project_gate_retry
     default: gate_failed
     on_timeout: gate_failed
+  project_gate_retry:
+    type: exec
+    on_success: project_gate
+    on_error: gate_failed
+    max_visits: 1
+    on_exhausted: gate_failed
+    station: false
   project_gate_rebased:
     type: exec
     cases:
       "0": project_land
+      "137": project_gate_rebased_retry
     default: gate_failed
     on_timeout: gate_failed
+  project_gate_rebased_retry:
+    type: exec
+    on_success: project_gate_rebased
+    on_error: gate_failed
+    max_visits: 1
+    on_exhausted: gate_failed
+    station: false
   gate_failed:
     transitions:
       fix: work
