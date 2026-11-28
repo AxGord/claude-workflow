@@ -253,3 +253,8 @@ export function scanDoc(md: string): DocScan {
   flush();
   return out;
 }
+
+/** A pid a test may signal: an integer above 1. Check it before a `finally` kill of a pid read from a file (an empty read is 0, the whole process group). */
+export function isSignalablePid(pid: number): boolean {
+  return Number.isInteger(pid) && pid > 1;
+}

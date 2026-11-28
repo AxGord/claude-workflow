@@ -35,7 +35,7 @@ The npm scripts of the engine repo:
 npm run build    # tsc 7 (the `typescript7` alias) → compiles src/ to build/
 npm run dev      # tsc 7 --watch
 npm start        # node build/index.js
-npm test         # vitest run (src/test-git-env.ts, the setup file, points git at no global config so a fixture commit never signs)
+npm test         # vitest run (the setup files: src/test-git-env.ts points git at no global config so a fixture commit never signs; src/test-kill-tripwire.ts refuses a signal to pid 0, 1 or -1 and logs the caller to wf-test-kill-tripwire.log under the OS temp dir)
 npm run check    # tsc 7 --noEmit + format:check + lint + scan + vitest + check:ci (the pre-commit gate)
 npm run check:static   # the first half of check: tsc 7 --noEmit + format:check + lint + scan (serial, ~2 cores)
 npm run check:tests    # the second half: vitest + the pane tests + check:ci (vitest takes WF_THREADS workers when it is set)

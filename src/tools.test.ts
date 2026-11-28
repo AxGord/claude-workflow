@@ -12,7 +12,13 @@ import {
 import { Engine, type StatusResult } from "./engine.js";
 import { Executor } from "./executor.js";
 import { readQueue } from "./queue.js";
-import { InMemoryStorage, createTestLoader, cleanupDir, SIMPLE_WORKFLOW } from "./test-helpers.js";
+import {
+  InMemoryStorage,
+  createTestLoader,
+  cleanupDir,
+  isSignalablePid,
+  SIMPLE_WORKFLOW,
+} from "./test-helpers.js";
 import type { SessionState } from "./types.js";
 
 function makeStatus(overrides: Partial<StatusResult> = {}): StatusResult {
@@ -646,9 +652,15 @@ describe("abort tool kills before queueing", () => {
 
     const { sessionId } = await engine.start("fg");
     const transition = handlers.get("transition")!({ session_id: sessionId, transition: "next" });
-    for (let i = 0; i < 100 && !fs.existsSync(pidFile); i++)
+    // The file exists before the shell has written the pid into it: wait for a whole integer.
+    let grandchild = 0;
+    for (let i = 0; i < 300 && !isSignalablePid(grandchild); i++) {
       await new Promise(r => setTimeout(r, 10));
-    const grandchild = Number(fs.readFileSync(pidFile, "utf8"));
+      grandchild = fs.existsSync(pidFile)
+        ? Number.parseInt(fs.readFileSync(pidFile, "utf8"), 10)
+        : 0;
+    }
+    expect(isSignalablePid(grandchild)).toBe(true);
     try {
       const abort = handlers.get("abort")!({
         session_id: sessionId,
@@ -660,10 +672,12 @@ describe("abort tool kills before queueing", () => {
       expect((await transition).isError).toBe(true);
       expect(storage.read(sessionId)!.outcome).toBe("abandoned");
     } finally {
-      try {
-        process.kill(grandchild, "SIGKILL");
-      } catch {
-        /* gone */
+      if (isSignalablePid(grandchild)) {
+        try {
+          process.kill(grandchild, "SIGKILL");
+        } catch {
+          /* gone */
+        }
       }
       cleanupDir(work);
     }
