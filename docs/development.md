@@ -93,8 +93,9 @@ The engine's own slice workflow is a tracked file: `.claude/workflows/engine-tas
 
 - `parent_edited` from `blocked` goes through `parent_edited_check`, not straight to the gate: the worktree must be clean, the branch exactly one commit over master, and master an ancestor of it.
 - A refusal goes through `parent_edited_refused` back to `blocked` with its reason (`context.precheck_out`, shown in the prompt), no gate run and no red mark. A pass goes to `project_gate_rebased`.
+- A pass on a branch no review round has passed (`context.review_text` empty: the worker blocked at `work`) exits 10 to `parent_edited_unreviewed`, then `project_gate` and `review_route`, so a reviewer reads the branch before the land. A branch with a filed review keeps `project_gate_rebased` and the land.
 - A driver whose parent's answer asks the worker for work messages the worker, waits for its DONE, and only then takes `parent_edited`.
-- `src/parent-edited-precheck.test.ts` pins it.
+- `src/parent-edited-precheck.test.ts` and `src/parent-edited-review.test.ts` pin it.
 
 **A gate killed by SIGKILL**
 

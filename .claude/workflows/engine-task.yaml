@@ -344,6 +344,9 @@ states:
     # description of work the worker had not done yet sent the line to `gate_failed` (exit 3, a red mark). The branch is read here
     # first: clean worktree, exactly one commit over master, master an ancestor. Green prints nothing (so `precheck_out` is
     # emptied) and goes to the gate; any refusal goes through `parent_edited_refused` back to `blocked` with its reason in `precheck_out`, no gate run.
+    # A branch no review round has passed (`review_text` empty: the worker blocked at `work`, say) exits 10 to
+    # `parent_edited_unreviewed`, which runs the ordinary gate and `review_route`: the parent's edit is not a verdict. A branch with a
+    # filed review keeps the straight path to `project_gate_rebased` and the land.
     # No `cwd`: a wiped worktree must reach this script (a missing cwd fails the spawn).
     command: |-
       [ -d "$WT" ] || { echo "worktree $WT is missing"; exit 2; }
@@ -363,15 +366,30 @@ states:
       git merge-base --is-ancestor master HEAD || out="$out
       not rebased onto master $(git rev-parse --short master)"
       [ -z "$out" ] || { echo "parent_edited refused, the gate was not run:$out"; exit 3; }
+      [ -n "$TEXT" ] || exit 10
     env:
       WT: "{{context.wt}}"
+      TEXT: "{{context.review_text}}"
     timeout: 60000
     context_set:
       precheck_out: ""
     on_timeout: parent_edited_refused
     cases:
       "0": project_gate_rebased
+      "10": parent_edited_unreviewed
     default: parent_edited_refused
+
+  parent_edited_unreviewed:
+    station: false
+    type: exec
+    # A success is the only place `context_set` runs, so the stale precheck refusal is cleared here (exit 10 of the precheck is no success).
+    command: |-
+      echo "no review round has passed this branch: the gate, then a review, before the land"
+    timeout: 20000
+    context_set:
+      precheck_out: ""
+    on_success: project_gate
+    on_error: blocked
 
   # context_set runs only after a success, so a refusal is recorded here: the precheck's output goes to `precheck_out`, which the
   # `blocked` prompt shows. No gate ran and nothing is marked red.
@@ -791,7 +809,7 @@ states:
       "failed", note: "<the reason, one line>"})`; keep the worktree {{context.wt}} and the branch for the
       user; then transition it (`stop` when the next lines depend on it).
       On the parent's message that the work is committed and green and it has amended the branch itself (the one
-      missing edit, e.g. a CLAUDE.md row): no queue_mark, transition `parent_edited` (a precheck of the branch, then the gate, then the land).
+      missing edit, e.g. a CLAUDE.md row): no queue_mark, transition `parent_edited` (a precheck of the branch, then the gate, a review when none has passed the branch, then the land).
       When the parent's answer asks the WORKER for work (rebase onto master, amend, stage a file): SendMessage the worker, wait for its
       DONE, and only then take `parent_edited`; the parent's description of what the worker will do is not the work done. The precheck
       refuses back to this state, with no gate run and no red mark, unless the worktree is clean, the branch is exactly one commit over

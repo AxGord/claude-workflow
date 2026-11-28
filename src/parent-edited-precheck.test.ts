@@ -140,7 +140,7 @@ describe("engine-task: parent_edited from blocked checks the branch before the g
     git(WT, "commit", "-q", "--amend", "-a", "--no-edit");
     git(WT, "rebase", "master");
     const ok = await to("parent_edited");
-    expect(ok.history.map(h => h.to)).toContain("project_gate_rebased");
+    expect(ok.history.map(h => h.to)).toContain("project_gate");
     expect(precheckOut()).toBe("");
     expect(gateRuns()).toBe(1);
   }, 60000);
@@ -171,7 +171,7 @@ describe("engine-task: parent_edited from blocked checks the branch before the g
     const { to, gateRuns } = await sandbox();
     const s = await to("parent_edited");
     const path = s.history.map(h => h.to);
-    expect(path, JSON.stringify(path)).toContain("project_gate_rebased");
+    expect(path, JSON.stringify(path)).toContain("project_gate");
     expect(gateRuns()).toBe(1);
   }, 60000);
 });

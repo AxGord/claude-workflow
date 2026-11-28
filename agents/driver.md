@@ -91,6 +91,7 @@ reset). Do what the prompt says, transition, repeat — until the session ends o
   When its answer asks the worker for work (rebase, amend, stage a file), SendMessage the worker, wait for its DONE, and only then take
   `parent_edited`: the parent describing the work is not the work done. `parent_edited` runs a precheck first (clean worktree, one commit,
   master an ancestor) and returns to `blocked` with the reason when it fails: no gate run, no red mark; hand back NEEDS-PARENT again.
+  A branch no review has passed (blocked at `work`) goes through the gate and a `review` first: expect the review prompt, not the land.
 - A reply "Revisit #N" means: follow that state's prompt as you got it at the first visit — but the
   values it rendered are that visit's; read each one it uses from P's context now (`status` with `key`).
 

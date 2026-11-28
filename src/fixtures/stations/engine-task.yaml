@@ -63,8 +63,14 @@ states:
     type: exec
     cases:
       "0": project_gate_rebased
+      "10": parent_edited_unreviewed
     default: parent_edited_refused
     on_timeout: parent_edited_refused
+    station: false
+  parent_edited_unreviewed:
+    type: exec
+    on_success: project_gate
+    on_error: blocked
     station: false
   parent_edited_refused:
     type: exec
